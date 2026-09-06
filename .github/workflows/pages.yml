@@ -1,0 +1,45 @@
+name: Deploy to GitHub Pages
+
+# The committed files ARE the site. There is no build step here: `build-site.js`
+# runs locally against /mnt/project-files/app and its output is committed. This
+# workflow only uploads what is in the repository and publishes it.
+
+on:
+  push:
+    branches: [main]        # change if the default branch is named differently
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. In-progress runs are allowed to finish so a
+# half-uploaded artifact is never published.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # The directory that holds index.html. If this repository keeps the
+          # site in a subdirectory, point this at that subdirectory instead.
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
