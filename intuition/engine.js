@@ -523,6 +523,32 @@
   }
   function setTier(v) { try { localStorage.setItem('tara.tier', v); localStorage.setItem('tara.resolution', v); } catch (e) {} }
 
+  /* 2D | 3D pill (Object Lessons): the same corner control as the app and the 3D
+     pages. It shows only when a finished 3D object lists this film in objects.json. */
+  function dimPill(top) {
+    if (!top || !window.fetch) return;
+    var m = location.pathname.match(/films\/[^\/]+\.html$/); if (!m) return;
+    fetch('../../objects/objects.json').then(function (r) { return r.ok ? r.json() : []; }).then(function (reg) {
+      var hit = null;
+      (Array.isArray(reg) ? reg : []).forEach(function (o) {
+        if (o && o.ready !== false && o.film === m[0] && (!hit || (hit.kind !== 'weekly' && o.kind === 'weekly'))) hit = o;
+      });
+      if (!hit || top.querySelector('.dimp')) return;
+      var st = document.createElement('style');
+      st.textContent = '#ifilm .dimp{display:inline-flex;gap:2px;padding:2px;background:#1b1e25;border:1px solid #2f343e;border-radius:999px;flex:none}' +
+        '#ifilm .dimp span,#ifilm .dimp a{font:600 12.5px/1 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:7px 10px;border-radius:999px;color:#9aa2b1;text-decoration:none}' +
+        '#ifilm .dimp [aria-current]{background:#8fa8ff;color:#1b1e25}' +
+        '@media (max-width:420px){#ifilm .dimp span,#ifilm .dimp a{padding:7px 7px}}';
+      document.head.appendChild(st);
+      var p = document.createElement('div'); p.className = 'dimp';
+      p.setAttribute('role', 'group'); p.setAttribute('aria-label', 'View in 2D or 3D');
+      var a2 = document.createElement('span'); a2.textContent = '2D'; a2.setAttribute('aria-current', 'page');
+      var a3 = document.createElement('a'); a3.textContent = '3D'; a3.href = '../../objects/' + hit.path;
+      a3.title = 'Hold this idea in 3D: ' + hit.title;
+      p.appendChild(a2); p.appendChild(a3); top.appendChild(p);
+    }).catch(function () {});
+  }
+
   /* ------------------------------------------------------------ player */
   var CSS = "html,body{margin:0;height:100%;background:#1c2140;overflow:hidden;-webkit-tap-highlight-color:transparent}" +
     "#ifilm{position:fixed;inset:0;display:flex;flex-direction:column;font:15px/1.35 system-ui,-apple-system,'Segoe UI',sans-serif;color:#fbf6ea}" +
@@ -564,6 +590,7 @@
       '<div class="ctl"><button class="pp" aria-label="Pause">&#10074;&#10074;</button><div class="dots scr"></div><input class="scr" type="range" min="0" step="0.01" aria-label="Scrub">' +
       '<button class="rep" aria-label="Replay" title="Replay">&#8634;</button><button class="skip">Skip<span class="lg"> to play</span> &#9654;</button></div></div>';
     document.body.appendChild(root);
+    dimPill(root.querySelector('.top'));
     var $ = function (s) { return root.querySelector(s); };
     $('.ttl').textContent = cfg.title || '';
     var cv = $('canvas'), ctx = cv.getContext('2d'), stage = $('.stage'), cap = $('.cap'), scr = $('input[type=range]'), dots = $('.dots');
