@@ -23,6 +23,7 @@
   @media (min-width:760px){
     .k-label.k-row{font-size:11.5px}
     .k-label.k-key{font-size:12px; max-width:400px}
+    .k-label.k-note{max-width:400px}
   }
   .k-label.k-tag.k-vert{writing-mode:vertical-rl; text-transform:none; letter-spacing:.02em; font:600 10px/1.1 var(--font)}
 </style>
@@ -32,7 +33,7 @@
 import { run, THREE, J, K, C } from '../kit.js';
 
 /* =========================================================================
-   12 · d06-shelf: "The activation shelf" (W6 deep, ARENA [1.2] TransformerLens)
+   12 · d06-shelf: "The activation shelf" (W6 deep, ARENA [1.1] + [1.2], TransformerLens)
    The cabinet is the ActivationCache that run_with_cache returns for GPT-2 small:
    rows = the 17 hook points of a block in computation order (bottom to top), columns =
    blocks, one index card per token in every drawer. Names and shapes come from the
@@ -143,7 +144,7 @@ const KVH = new Set(['attn.hook_k', 'attn.hook_v']);
 const MAX_NEW = 24;                                 // KV mode: tokens you can add after the prompt
 const COL = {
   carcass: '#e9e1d3', board: '#e4dac8', rail: '#d9cfbd', empty: '#fbf8f2', filled: '#a4c0f2', sel: '#3f74de',
-  twin: '#8fb0ee', edited: '#c7b6f2', fresh: '#6f97e3', ghost: '#ede7dc', kv: '#5f8be0', divider: '#c9bfae', tray: '#efe7da',
+  twin: '#3f74de', edited: '#c7b6f2', fresh: '#6f97e3', ghost: '#ede7dc', kv: '#5f8be0', divider: '#c9bfae', tray: '#efe7da',
   card: '#6f97e3', cardP: C.prob, cardNew: C.data, token: '#7ea2e6', tokenNew: C.data, cube: '#7ea2e6',
 };
 const CAM = {
@@ -200,6 +201,7 @@ function compute(S) {
   st.L = k.mode === 'kv' ? k.seq + st.s : k.seq;
   layout(S);
   st.sel = selIndex(S);
+  st.clipOrd = k.mode === 'hooks' && st.sel >= 0 ? st.ordOf.get(st.sel) : null;
   fitProxy(S);
 }
 
@@ -367,7 +369,7 @@ function rowVis(S) {
   const st = S.state, k = S.knobs, mode = st.rowMode || 'all', cov = st.rowCovered || new Set();
   const must = new Set();
   if (k.mode === 'kv') { must.add(6); must.add(7); }
-  else if (st.sel >= 0) must.add(st.drawers[st.sel].g);
+  else { if (st.sel >= 0) must.add(st.drawers[st.sel].g); if (st.twin != null && st.twin >= 0) must.add(st.drawers[st.twin].g); }
   st.rowLabels.forEach((L, g) => {
     const near = [...must].some((m) => Math.abs(m - g) === 1 && !must.has(g));
     const on = !cov.has(g) && (mode === 'all' || must.has(g) || (mode === 'half' && g % 2 === 0 && !near));
@@ -429,7 +431,7 @@ function labels(S) {
   const st = S.state, k = S.knobs, G = st.geo, T = S.tier, A = st.A;
   const kv = k.mode === 'kv';
   // row names on the label board
-  const selRow = st.sel >= 0 ? st.drawers[st.sel].g : -1;
+  const selRow = st.sel >= 0 ? st.drawers[st.sel].g : -1, twinRow = st.twin != null && st.twin >= 0 ? st.drawers[st.twin].g : -1;
   for (let g = 0; g < NROW; g++) {
     const L = st.rowLabels[g];
     const h = g < 2 ? EMBEDS[g] : g < 19 ? BLOCK[g - 2] : FINAL[g - 19];
@@ -438,7 +440,7 @@ function labels(S) {
     if (st.orderOn && g >= 2 && g < 19) t = `${g - 1} · ${t}`;
     if (kv && KVH.has(h.key)) t = `**${t}**`;
     L.set(t); L._t = t;
-    L.el.classList.toggle('k-on', g === selRow && !kv);
+    L.el.classList.toggle('k-on', (g === selRow || g === twinRow) && !kv);
   }
   rowVis(S);
   // column tags and the hidden blocks
@@ -487,7 +489,7 @@ function kvText(S) {
   if (T === 2) return `**KeyValueCache ${shp}**\n(n_layers, 2, batch, seq_len, n_heads, d_head)\n`
     + (step ? `new token: 1 position, ${w.L} q·k per head\nno cache: ${w.L} positions, ${int(w.L * w.L)} q·k\n` : `prompt: ${P} positions, ${int(P * P)} q·k per head\n`)
     + `so far: ${int(w.posWith)} vs ${int(w.posWithout)} positions, ${int(w.qkWith)} vs ${int(w.qkWithout)} q·k\n2 × 12 × 768 × ${w.L} × ${bytesOf(k)} B = ${mb(b)}${k1}`;
-  return `**KeyValueCache ${shp}**\nk = t.concat([kv_cache_entry[0], k], dim=1)\npos_embed offset n_cached_tokens = ${step ? w.L - 1 : 0}\n`
+  return `**KeyValueCache ${shp}**\nby rule (KeyValueCache.new_empty), not a run\nk = t.concat([kv_cache_entry[0], k], dim=1)\npos_embed offset n_cached_tokens = ${step ? w.L - 1 : 0}\n`
     + `positions ${int(w.posWith)} vs ${int(w.posWithout)}; q·k ${int(w.qkWith)} vs ${int(w.qkWithout)}\nKV ${int(b)} B (${k.dtype})${k1}`;
 }
 
@@ -500,7 +502,7 @@ function note(S) {
     const n = cacheKeys().length, fl = cacheFloats(G.L), b = fl * bytesOf(k);
     t = T === 1 ? `GPT-2 small has 12 blocks, so ${n} drawers in all;\nfor ${G.L} tokens they hold ${(fl / 1e6).toFixed(1)} million numbers`
       : T === 2 ? `${n} entries = 12 blocks × 17 + 4\n${int(fl)} floats = ${mb(b)} (${k.dtype}, seq ${G.L})`
-      : `len(cache) = 12 × 17 + 4 = ${n}; Σ numel = ${int(fl)}\n= L(12(11·768 + 2 + 2·3072 + 24L) + 3·768 + 1), ${mb(b)} ${k.dtype}`;
+      : `len(cache) = 12 × 17 + 4 = ${n}\nΣ numel = L·(12·(11·768 + 2 + 2·3072 + 24L)\n  + 3·768 + 1) = ${int(fl)}, ${mb(b)} ${k.dtype}`;
   } else if (mode === 'order') {
     t = T === 1 ? `a block works bottom to top:\nnorm, attend, add back, norm, MLP, add back`
       : T === 2 ? `resid_mid = resid_pre + attn_out\nresid_post = resid_mid + mlp_out\nblocks.1 resid_pre is blocks.0 resid_post`
@@ -536,10 +538,10 @@ async function runPass(S) {
   st.A.fill = 0; st.A.pull = 0; draw(S);
   const N = st.nOrd;
   if (st.clipOrd != null) {
-    await tw(S, my, 180 + st.clipOrd * 55, (x) => { st.A.fill = x * (st.clipOrd + 1); });
+    await tw(S, my, 180 + st.clipOrd * 45, (x) => { st.A.fill = x * (st.clipOrd + 1); });
     if (!alive(S, my)) return;
     await tw(S, my, 520, (x) => { st.A.clip = Math.sin(x * Math.PI); });
-    await tw(S, my, 180 + (N - st.clipOrd) * 55, (x) => { st.A.fill = st.clipOrd + 1 + x * (N - st.clipOrd); });
+    await tw(S, my, 180 + (N - st.clipOrd) * 45, (x) => { st.A.fill = st.clipOrd + 1 + x * (N - st.clipOrd); });
   } else await tw(S, my, 2200, (x) => { st.A.fill = x * (N + 0.001); });
   if (!alive(S, my)) return;
   st.A.fill = Infinity;
@@ -618,7 +620,7 @@ run({
     { id: 'nobatch', type: 'toggle', wide: true, label: { 1: 'Drop the batch of 1 (cache only)', 2: 'remove_batch_dim (cache only)', 3: 'run_with_cache(..., remove_batch_dim=True)' }, value: false },
     { id: 'edit', type: 'toggle', wide: true, label: { 1: 'Clip swaps in an edit (not just reads)', 2: 'Hook returns an edited activation', 3: 'hook_function returns a tensor' }, value: true },
     { id: 'dtype', type: 'select', label: { 1: 'Number size', 2: 'dtype', 3: 'dtype' }, value: 'fp32', options: [['fp32', 'float32 (4 B)'], ['fp16', 'float16 (2 B)']] },
-    { id: 'go', type: 'button', label: { 1: 'Run the model', 2: 'Run forward', 3: 'forward pass' }, onClick: (S) => { if (S.knobs.mode === 'kv') S.setKnob('mode', 'cache'); else runPass(S); } },
+    { id: 'go', type: 'button', label: { 1: 'Run the model', 2: 'Run forward', 3: 'forward pass' }, onClick: (S) => { if (S.knobs.mode === 'kv') S.setKnob('mode', 'cache'); runPass(S); } },
     { id: 'next', type: 'button', label: { 1: 'Next word', 2: 'Next token', 3: 'next token' }, onClick: (S) => { scene(S, { note: 'kv' }); kvStep(S); } },
     { id: 'reset', type: 'button', label: { 1: 'Start over', 2: 'Start over', 3: 'reset' }, onClick: (S) => { S.state.s = 0; compute(S); fitProxy(S, true); newAnim(S); draw(S); } },
   ],
@@ -693,7 +695,8 @@ run({
       compute(S); fitProxy(S, true); applyTwin(S); draw(S);
       return;
     }
-    if (id === 'mode' || id === 'seq') { st.s = 0; if (id === 'mode') st.noteMode = k.mode === 'kv' ? 'kv' : k.mode === 'hooks' ? 'hook' : 'cache'; }
+    if (id === 'mode' || id === 'seq') { st.s = 0; st.logitsSel = false; if (id === 'mode') st.noteMode = k.mode === 'kv' ? 'kv' : k.mode === 'hooks' ? 'hook' : 'cache'; }
+    if (id === 'mode' && k.mode === 'hooks') { compute(S); applyTwin(S); runPass(S); return; }     // show the clip at work
     if (id === 'layers' || id === 'seq' || id === 'mode') { compute(S); applyTwin(S); newAnim(S); draw(S); return; }
     if (id === 'select' || id === 'hook' || id === 'layer') {
       compute(S); applyTwin(S);
@@ -712,8 +715,8 @@ run({
     const cube = (x, y, z, sx, sy, sz) => J.primitives.cuboid({ size: [sx, sz, sy], center: [x, -z, y] });   // three (x,y,z) -> JSCAD (x,-z,y)
     const D = G.D;
     out.push(cube(0, G.yTop / 2, ZF - D / 2 - 0.02, G.TW, G.yTop, D + 0.04));
-    for (const d of st.drawers) out.push(cube(d.x, d.y + DH / 2, ZF + 0.012, d.w - 0.012, DH, 0.024));
-    out.push(cube(0, G.yTop + 0.03, ZF - D / 2, wOf(CFG.d_vocab), 0.05, D));
+    for (const d of st.drawers) out.push(cube(d.x, d.y + DH / 2, ZF + 0.009, d.w - 0.012, DH, 0.03));      // fronts sink 6 mm into the carcass
+    out.push(cube(0, G.yTop + 0.02, ZF - D / 2, wOf(CFG.d_vocab), 0.05, D));                                 // the logits tray, seated on top
     return out;
   },
 
@@ -721,7 +724,7 @@ run({
     { tag: 'core',
       cap: {
         1: '**One run of the model fills a cabinet.** Every in-between result gets its own labelled drawer, filed in the order it was made. The answer (logits) comes out on top: it is handed back, not filed.',
-        2: '`logits, cache = model.run_with_cache(tokens)`: the cache is a dict of every activation, keyed by hook name. 17 per block (2 of GPT-2 small\'s 12 blocks shown) plus embed, pos_embed and ln_final. The logits are the return value, not a cache key.',
+        2: '`logits, cache = model.run_with_cache(tokens)`: the cache is a dict-like store of every activation, keyed by hook name. 17 per block (2 of GPT-2 small\'s 12 blocks shown) plus embed, pos_embed and ln_final. The logits are the return value, not a cache key.',
         3: '`ActivationCache`: HookPoint name → tensor, 12 × 17 + 4 = 208 keys for GPT-2 small, float32 by default (live size by the plinth). `logits` is returned separately. Shapes here are the ones ARENA prints from its 35-token run.',
       },
       cam: CAM.front,
@@ -741,8 +744,8 @@ run({
     { tag: 'exercise',
       cap: {
         1: '**Tap any drawer to read its label.** Each holds one card per word. In the attention drawer, card n says how much word n looks at each word so far, so the cards grow into a wedge.',
-        2: '`pattern` is (batch, head_index, query_pos, key_pos) = (1, 12, 35, 35): per query, 12 probability rows over earlier keys (the causal mask zeroes the rest, hence the wedge). q, k, v and z are (1, 35, 12, 64): 12 heads × 64 = 768 per token.',
-        3: 'TransformerLens order is (batch, pos, head_index, d_head) for q/k/v/z but (batch, head_index, query_pos, key_pos) for scores and pattern: index heads at dim 1 there, dim 2 here. `hook_attn_scores` is masked with −inf before `hook_pattern`\'s softmax.',
+        2: '`pattern` is (batch, head_index, query_pos, key_pos) = (1, 12, 35, 35): per query, 12 probability rows over the keys up to it (the causal mask zeroes the rest, hence the wedge). q, k, v and z are (1, 35, 12, 64): 12 heads × 64 = 768 per token.',
+        3: 'TransformerLens puts heads at dim 2 for q, k, v and z, (batch, pos, head_index, d_head), but at dim 1 for scores and pattern, (batch, head_index, query_pos, key_pos). `hook_attn_scores` is masked with −inf before `hook_pattern`\'s softmax.',
       },
       cam: CAM.tray,
       set: { mode: 'cache', layers: 2, seq: 35, hook: 'attn.hook_pattern', layer: 0, nobatch: false },
@@ -844,7 +847,7 @@ run({
       options: [{ t: 'Identical: one block\'s output is the next one\'s input', ok: true }, { t: 'resid_pre has the LayerNorm applied' }, { t: 'They differ by the attention output' }, { t: 'Different shapes' }],
       why: { 1: 'Nothing happens between blocks. The last result of block 0 is handed straight to block 1, and both drawers keep a copy.',
         2: 'Block 1 receives block 0\'s resid_post unchanged, so the two keys hold equal tensors (1, 35, 768). LayerNorm happens inside the block, at ln1.',
-        3: 'hook_resid_post(l) and hook_resid_pre(l+1) record the same tensor at the block boundary (ARENA uses either). The LN is inside at blocks.{l}.ln1.' },
+        3: 'hook_resid_post(l) and hook_resid_pre(l+1) record the same tensor at the block boundary (ARENA uses either). LayerNorm happens inside each block, at ln1.' },
       show(S) {
         S.setKnobs({ mode: 'cache', layers: 2, seq: 35, hook: 'hook_resid_pre', layer: 1, nobatch: false });
         scene(S, { note: 'twin', twin: 'resid' }); applyTwin(S); S.fly(CAM.front);
@@ -869,7 +872,7 @@ run({
     { label: 'Map · KV cache', href: '../../index.html#map/node=kv-cache' },
   ],
   remix: 'Build a single-file three.js scene: a plaster apothecary cabinet on a round plinth that is the ActivationCache from TransformerLens\'s run_with_cache on GPT-2 small. Rows, bottom to top, are the 17 hook points of a block in computation order (hook_resid_pre, ln1.hook_scale, ln1.hook_normalized, attn.hook_q, k, v, attn_scores, pattern, z, hook_attn_out, hook_resid_mid, ln2 scale and normalized, mlp.hook_pre, mlp.hook_post, hook_mlp_out, hook_resid_post) with hook_embed and hook_pos_embed below and ln_final on top; columns are blocks.0, blocks.1 and a gap for the other ten. Drawer width is √(floats per token), depth is seq_len, and a pulled drawer holds one index card per token (the pattern drawer\'s cards form the causal wedge). Tap a drawer for its full key, its shorthand cache["pattern", 0] and its shape with dim names; a hooks mode clips a drawer and tints everything downstream violet; a KV mode keeps only k and v, grows a rack of cubes per token and counts work with and without the cache. Logits sit on top as a tray: returned, not cached.',
-  credit: 'Names and shapes: ARENA [1.2] TransformerLens exercises (the activation table printed from `reference_gpt2.run_with_cache`, `utils.get_act_name`, `run_with_hooks`) and ARENA [1.1]\'s `KeyValueCache`, checked in node against that table and an independent Python count. Card-catalogue picture after the library index. Built with three.js and JSCAD.',
+  credit: 'Names and shapes: ARENA [1.1] (the activation table printed from `reference_gpt2.run_with_cache` on its 35-token reference text, and `KeyValueCache`) and [1.2] (`utils.get_act_name`, `run_with_hooks`, hook functions, `remove_batch_dim`), checked in node against that table and an independent Python count. Built with three.js and JSCAD.',
 });
 </script>
 </body>
