@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Leash · Object Lessons</title>
+<meta name="description" content="RLHF on a toy chatbot: a ball climbs a reward model's ramp while a KL leash ties it to the reference model; the truth rises, then falls. Every number computed live.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+  /* the kit's beat chip .k-tag sets min-width:52px; not wanted on 3D tags */
+  .k-label.k-tag{min-width:0; text-transform:none; letter-spacing:.01em; font-size:10.5px}
+  .k-label.k-tag.k-teal{color:color-mix(in srgb, var(--k-aux, #1c9aa0) 82%, var(--ink))}
+  .k-label.k-tag.k-green{color:color-mix(in srgb, var(--k-good, #2f9e6b) 82%, var(--ink))}
+  .k-label.k-tag.k-red{color:color-mix(in srgb, var(--k-grad, #d64545) 82%, var(--ink))}
+  .k-label.k-tag.k-brass{color:color-mix(in srgb, var(--k-brass, #b58a3c) 78%, var(--ink))}
+  /* night museum: the plaster stays light, so light tag text gets a dark halo */
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .k-label.k-tag{text-shadow:0 0 2px var(--paper), 0 0 4px var(--paper), 0 0 7px var(--paper)} }
+  :root[data-theme="dark"] .k-label.k-tag{text-shadow:0 0 2px var(--paper), 0 0 4px var(--paper), 0 0 7px var(--paper)}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   21 · d10-leash: "The leash" (W10 deep, ARENA [2.4] RLHF)
+   A toy chatbot with six possible answers. The floor is a slice of policy
+   space, the plaster is the reward model's score, the colour is the truth,
+   and the red string is the KL leash back to the reference model. The ball
+   does natural-gradient ascent on E[r] − β·KL(π‖π_ref). Every height,
+   colour, contour and readout is computed below; the MATH block is extracted
+   and verified in node and Python (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* Toy world: six completions of ARENA's prefix "This is". The strings are real (their full stops are
+   counted live by reward_fn_char_count); the reference probabilities, the gold (human) scores and the
+   reward model's errors are toy numbers. Everything computed from them below is exact. */
+const ANSWERS = [
+  { s: 'This is my dog.',        ref: 0.31,  gold:  0.6, err: 0   },
+  { s: 'This is a list of the',  ref: 0.30,  gold: -0.2, err: 0   },
+  { s: 'This is it. We won.',    ref: 0.20,  gold:  1.0, err: 0.1 },
+  { s: 'This is the U.S. team.', ref: 0.12,  gold:  0.4, err: 0.3 },
+  { s: 'This is Python 2.7.12.', ref: 0.066, gold: -0.2, err: 0.5 },
+  { s: 'This is......',          ref: 0.004, gold: -1.0, err: 2.5 },
+];
+// ARENA's reward_fn_char_count: the number of '.' in each sample
+const reward_fn_char_count = (samples, char = '.') => samples.map((s) => s.split(char).length - 1);
+const dot = (p, f) => { let a = 0; for (let i = 0; i < p.length; i++) a += p[i] * f[i]; return a; };
+const cov = (p, a, b) => { const ma = dot(p, a), mb = dot(p, b); let c = 0; for (let i = 0; i < p.length; i++) c += p[i] * (a[i] - ma) * (b[i] - mb); return c; };
+// normalize_reward over an infinitely large batch drawn from p: (r - mean) / std under p
+function normalize(f, p) { const m = dot(p, f), sd = Math.sqrt(cov(p, f, f)); return f.map((v) => (v - m) / sd); }
+function logSoftmax(l) {
+  let m = -Infinity; for (const t of l) if (t > m) m = t;
+  let s = 0; for (const t of l) s += Math.exp(t - m);
+  const lz = m + Math.log(s); return l.map((t) => t - lz);
+}
+/* One world: the reward model r and gold, both normalised on the reference policy. 'toy': a learned RM
+   that is gold plus δ times its errors (largest on answers the reference rarely writes). 'dots': ARENA's
+   reward_fn_char_count, normalised. */
+function makeWorld({ delta = 1, rm = 'toy' } = {}) {
+  const ref = ANSWERS.map((a) => a.ref);
+  const lref = ref.map(Math.log);
+  const gold = normalize(ANSWERS.map((a) => a.gold), ref);
+  const dots = reward_fn_char_count(ANSWERS.map((a) => a.s));
+  const raw = rm === 'dots' ? dots : ANSWERS.map((a) => a.gold + delta * a.err);
+  return { ref, lref, gold, r: normalize(raw, ref), dots, kind: rm, delta, corr: cov(ref, normalize(raw, ref), gold) };
+}
+/* The floor. A point (x, s) is the policy "tilt the reference towards the RM by x, then sample at
+   temperature T = e^-s":  pi ∝ (pi_ref · exp(x·r))^(1/T).  Relative to pi_ref that is an exponential
+   family with features (r, log pi_ref) and natural parameters a = x/T, b = 1/T - 1. Home: x = 0, T = 1. */
+const nat = (x, s) => [x * Math.exp(s), Math.exp(s) - 1];
+const unnat = (a, b) => [a / (1 + b), Math.log(1 + b)];
+function policy(W, x, s) {
+  const k = Math.exp(s);
+  const lp = logSoftmax(W.lref.map((l, i) => k * (l + x * W.r[i])));
+  return { lp, p: lp.map(Math.exp) };
+}
+// KL(pi || pi_ref) = sum pi (log pi - log pi_ref): the inner sum of ARENA's calc_kl_penalty
+function klDiv(lp, lq) { let k = 0; for (let i = 0; i < lp.length; i++) k += Math.exp(lp[i]) * (lp[i] - lq[i]); return Math.max(0, k); }
+// everything the object shows at one point. J is the RLHF objective E[r] - beta·KL.
+function measure(W, x, s, beta = 0) {
+  const { lp, p } = policy(W, x, s);
+  const kl = klDiv(lp, W.lref), r = dot(p, W.r), gold = dot(p, W.gold);
+  let top = 0; for (let i = 1; i < p.length; i++) if (p[i] > p[top]) top = i;
+  return { p, lp, kl, r, gold, J: r - beta * kl, top };
+}
+/* Gradients in natural coordinates (a, b), features phi = (r, log pi_ref):
+   dE[f]/dtheta = Cov_pi(phi, f);  dKL/dtheta = Cov_pi(phi, log pi - log pi_ref) (the score term has
+   mean zero).  Fisher F = Cov_pi(phi, phi).  Natural gradient = F^-1 · grad J (solved 2 x 2). */
+function gradients(W, x, s, beta) {
+  const { lp, p } = policy(W, x, s);
+  const g = lp.map((l, i) => l - W.lref[i]);
+  const f = W.r.map((r, i) => r - beta * g[i]);
+  const ga = cov(p, W.r, f), gb = cov(p, W.lref, f);
+  const Faa = cov(p, W.r, W.r), Fab = cov(p, W.r, W.lref), Fbb = cov(p, W.lref, W.lref);
+  const det = Faa * Fbb - Fab * Fab;
+  return { ga, gb, na: (Fbb * ga - Fab * gb) / det, nb: (Faa * gb - Fab * ga) / det, det,
+    pull: cov(p, W.r, W.r), leash: beta * cov(p, W.r, g) };
+}
+/* Training: natural-gradient ascent on J from a start point, the step TRPO computes and PPO approximates.
+   The map ends at x = XMAX (the policy would keep going). */
+const XMIN = -1.5, XMAX = 6.5, SMAX = Math.log(2);
+function train(W, { beta, eta = 0.08, steps = 300, x0 = 0, s0 = 0 }) {
+  let [a, b] = nat(x0, s0);
+  const path = [[x0, s0]];
+  for (let t = 0; t < steps; t++) {
+    const [x, s] = unnat(a, b);
+    const G = gradients(W, x, s, beta);
+    a += eta * G.na; b += eta * G.nb;
+    let [x1, s1] = unnat(a, b);
+    if (x1 > XMAX) { x1 = XMAX; [a, b] = nat(x1, s1); }
+    if (x1 < XMIN) { x1 = XMIN; [a, b] = nat(x1, s1); }
+    path.push([x1, s1]);
+  }
+  return path;
+}
+// closed form: over ALL policies the maximiser of E[r] - beta·KL is pi* ∝ pi_ref·exp(r/beta),
+// which is the floor point x = 1/beta, T = 1; max J = beta·log E_ref[exp(r/beta)]
+function optimum(W, beta) {
+  const lp = logSoftmax(W.lref.map((l, i) => l + W.r[i] / beta));
+  let m = -Infinity; for (const r of W.r) m = Math.max(m, r / beta);
+  const Jmax = beta * (m + Math.log(dot(W.ref, W.r.map((r) => Math.exp(r / beta - m)))));
+  return { lp, p: lp.map(Math.exp), x: 1 / beta, Jmax };
+}
+// the road (T = 1) sampled for the back wall: distance from home d = sqrt(KL), RM score, gold
+function road(W, n = 160) {
+  const out = [];
+  for (let i = 0; i <= n; i++) { const x = XMAX * i / n, m = measure(W, x, 0); out.push({ x, d: Math.sqrt(m.kl), r: m.r, gold: m.gold, kl: m.kl }); }
+  return out;
+}
+const MATH = { ANSWERS, reward_fn_char_count, dot, cov, normalize, logSoftmax, makeWorld, nat, unnat, policy, klDiv, measure, gradients, train, optimum, road, XMIN, XMAX, SMAX };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const XC = 2.5, SX = 0.42, Z0 = 0.3, SZ = 1.15;       // floor: x across (right = towards the RM), s = log(1/T) front (hot) to back (cold)
+const wX = (x) => (x - XC) * SX;
+const wZ = (s) => Z0 - s * SZ;
+const BASE = 0.12, RELIEF = 0.95;                         // plaster heights: each view fills the same relief
+const NX = 80, NS = 16;                                   // grid cells
+const ETA = 0.08, STEPS = 300, TRAIN_MS = 3000;           // natural-gradient steps per run
+const LEVELS = [0.25, 1, 2.25, 4];                        // KL contours: √KL = 0.5, 1, 1.5, 2
+const BETAS = [[1, '1'], [0.5, '½'], [0.25, '¼'], [0.2, '⅕']];
+const BR = 0.075;
+// the back wall (gold and RM score vs √KL along the road)
+const CZ = -1.22, PX0 = -1.34, PW = 2.66, PY0 = 0.86, PH = 1.28;
+const UP = new THREE.Vector3(0, 1, 0);
+const FIG = [wX(XMAX) - 0.1, 0, wZ(-SMAX) + 0.28];         // the guide's spot: front right, by the RM's hack corner
+const CAM = {
+  hero: { pos: [1.0, 5.0, 5.8], target: [0, 0.82, -0.1] },
+  floor: { pos: [0.6, 5.8, 4.6], target: [0, 0.7, 0] },
+  side: { pos: [4.2, 4.5, 4.6], target: [0.2, 0.9, -0.1] },
+  close: { pos: [0.2, 4.8, 4.2], target: [0, 0.85, -0.1], fit: 0.58 },   // a little nearer than the auto fit
+  wall: { pos: [0, 3.0, 5.2], target: [0, 1.35, -0.9], fit: 0.8 },
+};
+const fx = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+const sg = (v, d = 2) => (v > 0.5 * 10 ** -d ? '+' : '') + fx(v, d);
+const pct = (p) => `${Math.round(p * 100)}%`;
+const quote = (i) => `“${ANSWERS[i].s}”`;
+
+function rod(mat, radius, seg = 8) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 1, seg, 1), mat);
+  m.castShadow = true;
+  const d = new THREE.Vector3();
+  m.userData.set = (p, q) => {
+    d.subVectors(q, p);
+    const len = Math.max(d.length(), 1e-6);
+    m.position.copy(p).addScaledVector(d, 0.5);
+    m.quaternion.setFromUnitVectors(UP, d.multiplyScalar(1 / len));
+    m.scale.set(1, len, 1);
+  };
+  return m;
+}
+
+/* ============================================================ the world */
+
+function setWorld(S) {
+  const st = S.state, k = S.knobs;
+  st.W = makeWorld({ delta: k.delta, rm: k.rm });
+  const W = st.W;
+  // grid values (β-independent)
+  const n = (NX + 1) * (NS + 1);
+  st.gx = new Float64Array(NX + 1); st.gs = new Float64Array(NS + 1);
+  for (let i = 0; i <= NX; i++) st.gx[i] = XMIN + (XMAX - XMIN) * i / NX;
+  for (let j = 0; j <= NS; j++) st.gs[j] = -SMAX + 2 * SMAX * j / NS;
+  st.gR = new Float64Array(n); st.gK = new Float64Array(n); st.gG = new Float64Array(n);
+  for (let j = 0; j <= NS; j++) for (let i = 0; i <= NX; i++) {
+    const m = measure(W, st.gx[i], st.gs[j]), q = j * (NX + 1) + i;
+    st.gR[q] = m.r; st.gK[q] = m.kl; st.gG[q] = m.gold;
+  }
+  rescale(S);
+  st.road = road(W, 160);
+  st.contours = contourSegments(S);
+  scaleWall(S);
+}
+/* heights: the shown value (RM score, or J = score − β·KL while the obj toggle morphs in) mapped affinely
+   so that each view fills the same relief; the readouts carry the numbers */
+function rescale(S) {
+  const st = S.state, b = S.knobs.beta, o = st.obj;
+  let lo = Infinity, hi = -Infinity;
+  for (let q = 0; q < st.gR.length; q++) { const v = st.gR[q] - o * b * st.gK[q]; if (v < lo) lo = v; if (v > hi) hi = v; }
+  st.VLO = lo; st.HS = RELIEF / Math.max(1e-6, hi - lo);
+}
+const wY = (S, v) => BASE + (v - S.state.VLO) * S.state.HS;
+const hv = (S, r, kl) => r - S.state.obj * S.knobs.beta * kl;         // displayed value: RM score, or morphing to J
+const surfY = (S, x, s) => { const m = measure(S.state.W, x, s); return wY(S, hv(S, m.r, m.kl)); };
+
+/* ============================================================ the plaster */
+
+function buildSurface(S) {
+  const st = S.state;
+  const n = (NX + 1) * (NS + 1);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  const idx = [];
+  for (let j = 0; j < NS; j++) for (let i = 0; i < NX; i++) {
+    const a = j * (NX + 1) + i, b = a + 1, c = a + NX + 2, d = a + NX + 1;
+    idx.push(a, b, c, a, c, d);
+  }
+  g.setIndex(idx);
+  const mat = new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 0.9, metalness: 0 });
+  mat.shadowSide = THREE.DoubleSide;
+  st.top = new THREE.Mesh(g, mat);
+  const ns = 2 * (NX + NS) * 6;
+  const sgm = new THREE.BufferGeometry();
+  sgm.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ns * 3), 3));
+  sgm.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(ns * 3), 3));
+  st.skirt = new THREE.Mesh(sgm, K.mat.plaster('#e9e2d6'));
+  for (const m of [st.top, st.skirt]) { m.castShadow = true; m.receiveShadow = true; S.root.add(m); }
+  // brass trim round the foot
+  const bm = K.mat.brass(), tw = 0.026, th = 0.06;
+  const x0 = wX(XMIN), x1 = wX(XMAX), zb = wZ(SMAX), zf = wZ(-SMAX);
+  const box = (w, d, x, z) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, th, d), bm); b.position.set(x, th / 2, z); b.castShadow = true; b.receiveShadow = true; S.root.add(b); };
+  box(x1 - x0 + 2 * tw, tw, (x0 + x1) / 2, zf + tw / 2); box(x1 - x0 + 2 * tw, tw, (x0 + x1) / 2, zb - tw / 2);
+  box(tw, zf - zb, x1 + tw / 2, (zb + zf) / 2); box(tw, zf - zb, x0 - tw / 2, (zb + zf) / 2);
+}
+
+const cPl = new THREE.Color(), cGo = new THREE.Color(), cBa = new THREE.Color(), cT = new THREE.Color();
+function tint(S, gold) {
+  const a = S.state.goldAmt;
+  cT.copy(cPl);
+  if (a <= 0) return cT;
+  if (gold >= 0) cT.lerp(cGo, a * 0.8 * Math.min(1, gold / 1.1));
+  else cT.lerp(cBa, a * 0.8 * Math.min(1, -gold / 1.8));
+  return cT;
+}
+function paintSurface(S) {
+  const st = S.state;
+  rescale(S);
+  cPl.set(C.plaster); cGo.set(C.good); cBa.set(C.grad);
+  const pos = st.top.geometry.attributes.position.array, col = st.top.geometry.attributes.color.array;
+  const Y = new Float32Array((NX + 1) * (NS + 1));
+  for (let j = 0; j <= NS; j++) for (let i = 0; i <= NX; i++) {
+    const q = j * (NX + 1) + i, y = wY(S, hv(S, st.gR[q], st.gK[q]));
+    Y[q] = y;
+    pos[3 * q] = wX(st.gx[i]); pos[3 * q + 1] = y; pos[3 * q + 2] = wZ(st.gs[j]);
+    const c = tint(S, st.gG[q]);
+    col[3 * q] = c.r; col[3 * q + 1] = c.g; col[3 * q + 2] = c.b;
+  }
+  const g = st.top.geometry;
+  g.attributes.position.needsUpdate = true; g.attributes.color.needsUpdate = true;
+  g.computeVertexNormals(); g.computeBoundingSphere(); g.computeBoundingBox();
+  // skirts: walk the perimeter, outward quads down to the plinth
+  const per = [];
+  for (let i = 0; i < NX; i++) per.push([i, 0, [0, 0, 1]]);
+  for (let j = 0; j < NS; j++) per.push([NX, j, [1, 0, 0]]);
+  for (let i = NX; i > 0; i--) per.push([i, NS, [0, 0, -1]]);
+  for (let j = NS; j > 0; j--) per.push([0, j, [-1, 0, 0]]);
+  const sp = st.skirt.geometry.attributes.position.array, sn = st.skirt.geometry.attributes.normal.array;
+  let w = 0;
+  const put = (x, y, z, o) => { sp[w] = x; sp[w + 1] = y; sp[w + 2] = z; sn[w] = o[0]; sn[w + 1] = o[1]; sn[w + 2] = o[2]; w += 3; };
+  const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(0, -1, 0), nn = new THREE.Vector3();
+  for (let p = 0; p < per.length; p++) {
+    const [ia, ja, o] = per[p], [ib, jb] = per[(p + 1) % per.length];
+    const ax = wX(st.gx[ia]), az = wZ(st.gs[ja]), ay = Y[ja * (NX + 1) + ia];
+    const bx = wX(st.gx[ib]), bz = wZ(st.gs[jb]), by = Y[jb * (NX + 1) + ib];
+    e1.set(bx - ax, 0, bz - az); nn.crossVectors(e1, e2);
+    if (nn.x * o[0] + nn.z * o[2] >= 0) { put(ax, ay, az, o); put(bx, by, bz, o); put(ax, 0, az, o); put(bx, by, bz, o); put(bx, 0, bz, o); put(ax, 0, az, o); }
+    else { put(ax, ay, az, o); put(ax, 0, az, o); put(bx, by, bz, o); put(bx, by, bz, o); put(ax, 0, az, o); put(bx, 0, bz, o); }
+  }
+  const s2 = st.skirt.geometry;
+  s2.attributes.position.needsUpdate = true; s2.attributes.normal.needsUpdate = true; s2.computeBoundingSphere();
+  placeFloorLines(S);
+  S.invalidate();
+}
+
+/* KL contours by marching squares on the grid; endpoints carry exact (r, KL) for re-heighting */
+function contourSegments(S) {
+  const st = S.state, W = st.W, segs = [];
+  const at = (i, j) => st.gK[j * (NX + 1) + i];
+  const cross = (i0, j0, i1, j1, L) => {
+    const k0 = at(i0, j0), k1 = at(i1, j1), t = (L - k0) / (k1 - k0);
+    const x = st.gx[i0] + (st.gx[i1] - st.gx[i0]) * t, s = st.gs[j0] + (st.gs[j1] - st.gs[j0]) * t;
+    const m = measure(W, x, s);
+    return { x, s, r: m.r, kl: m.kl };
+  };
+  for (const L of LEVELS) for (let j = 0; j < NS; j++) for (let i = 0; i < NX; i++) {
+    const e = [];
+    const edges = [[i, j, i + 1, j], [i + 1, j, i + 1, j + 1], [i + 1, j + 1, i, j + 1], [i, j + 1, i, j]];
+    for (const [a, b, c, d] of edges) { const ka = at(a, b), kc = at(c, d); if ((ka < L) !== (kc < L)) e.push(cross(a, b, c, d, L)); }
+    if (e.length === 2) segs.push([e[0], e[1], L]);
+    else if (e.length === 4) { segs.push([e[0], e[1], L]); segs.push([e[2], e[3], L]); }
+  }
+  return segs;
+}
+
+/* the road (T = 1), the contours, the β ruler, the peg: everything that sits on the plaster */
+function placeFloorLines(S) {
+  const st = S.state;
+  const P = (x, s, r, kl, lift) => new THREE.Vector3(wX(x), wY(S, hv(S, r, kl)) + lift, wZ(s));
+  st.roadLine.set(st.road.filter((q, i) => i % 2 === 0).map((q) => P(q.x, 0, q.r, q.kl, 0.009)));
+  // the road also runs west of home
+  const west = [];
+  for (let i = 0; i <= 12; i++) { const x = XMIN * (1 - i / 12), m = measure(st.W, x, 0); west.push(P(x, 0, m.r, m.kl, 0.009)); }
+  st.roadWest.set(west);
+  const d = new THREE.Object3D(), v = new THREE.Vector3();
+  let n = 0;
+  for (const [a, b] of st.contours) {
+    if (n >= st.ringsMax) break;
+    const p = P(a.x, a.s, a.r, a.kl, 0.008), q = P(b.x, b.s, b.r, b.kl, 0.008);
+    v.subVectors(q, p); const len = Math.max(1e-6, v.length());
+    d.position.copy(p).addScaledVector(v, 0.5); d.quaternion.setFromUnitVectors(UP, v.multiplyScalar(1 / len)); d.scale.set(1, len, 1);
+    d.updateMatrix(); st.rings.setMatrixAt(n++, d.matrix);
+  }
+  st.rings.count = n;
+  st.rings.instanceMatrix.needsUpdate = true; st.rings.computeBoundingSphere();
+  // contour tags where each ring crosses the back edge (cold side), else the road
+  st.ringTags.forEach((t, li) => {
+    const L = LEVELS[li];
+    let spot = null;
+    for (let i = 0; i < NX && !spot; i++) { const q0 = NS * (NX + 1) + i; if ((st.gK[q0] < L) !== (st.gK[q0 + 1] < L) && st.gx[i] > 0) spot = [st.gx[i], SMAX]; }
+    if (!spot) { const rq = st.road.find((q) => q.kl >= L); if (rq) spot = [rq.x, 0]; }
+    t.spot = spot;
+    if (spot) { const m = measure(st.W, spot[0], spot[1]); t.move(P(spot[0], spot[1], m.r, m.kl, 0.02)); }
+  });
+  // β ruler along the front edge: the rest point x = 1/β for each β
+  st.ruler.forEach((t, i) => {
+    const x = 1 / BETAS[i][0], m = measure(st.W, x, -SMAX), p = P(x, -SMAX, m.r, m.kl, 0);
+    t.pin.position.set(p.x, p.y + 0.035, p.z + 0.005);
+    t.tag.move(new THREE.Vector3(p.x, 0.02, p.z + 0.04));
+  });
+  // home peg on the plaster
+  const h0 = wY(S, hv(S, 0, 0));
+  st.peg.position.set(wX(0), h0 + 0.17, wZ(0));
+  st.knob.position.set(wX(0), h0 + 0.36, wZ(0));
+  st.homeTag.move(new THREE.Vector3(wX(0), h0 + 0.4, wZ(0)));
+  // region tags
+  const mh = measure(st.W, 5.6, -0.52), mg = measure(st.W, 5.2, 0.6);
+  st.hackTag.move(P(5.6, -0.52, mh.r, mh.kl, 0.03));
+  st.goodTag.move(P(5.2, 0.6, mg.r, mg.kl, 0.03));
+  const me = measure(st.W, XMAX, 0);
+  st.eastTag.move(P(XMAX, 0, me.r, me.kl, 0.05));
+  st.hotTag.move(new THREE.Vector3(wX(XMIN) + 0.05, 0.03, wZ(-SMAX) + 0.03));
+}
+
+/* ============================================================ the back wall */
+
+function buildWall(S) {
+  const st = S.state;
+  const pan = new THREE.Mesh(new THREE.BoxGeometry(3.24, 1.68, 0.05), K.mat.plaster('#efe8dc'));
+  pan.position.set(0, 0.62 + 0.84, CZ - 0.03); pan.castShadow = true; pan.receiveShadow = true; S.root.add(pan);
+  const bm = K.mat.brass();
+  const bar = (w, h, x, y) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.07), bm); b.position.set(x, y, CZ - 0.03); b.castShadow = true; S.root.add(b); };
+  bar(3.3, 0.035, 0, 0.62); bar(3.3, 0.035, 0, 2.3); bar(0.035, 1.72, -1.635, 1.46); bar(0.035, 1.72, 1.635, 1.46);
+  for (const x of [-1.42, 1.42]) { const leg = rod(bm, 0.018); leg.userData.set(new THREE.Vector3(x, 0, CZ - 0.03), new THREE.Vector3(x, 0.62, CZ - 0.03)); S.root.add(leg); }
+  st.wallZero = rod(K.mat.brass(), 0.007, 6); S.root.add(st.wallZero);
+  st.wallAxis = rod(K.mat.ink(), 0.006, 6); S.root.add(st.wallAxis);
+  st.wallTicks = [0, 1, 2, 3, 4, 5].map(() => { const t = rod(K.mat.ink(), 0.005, 6); S.root.add(t); return t; });
+  st.wallTickTags = [0, 1, 2, 3, 4, 5].map(() => K.label([0, 0, 0], '', { cls: 'tag', anchor: 'top', dy: 3 }));
+  st.rmCurve = K.tube([new THREE.Vector3(), new THREE.Vector3(0.01, 0, 0)], C.aux, 0.014);
+  st.goldCurve = K.tube([new THREE.Vector3(), new THREE.Vector3(0.01, 0, 0)], C.good, 0.016);
+  S.root.add(st.rmCurve.mesh, st.goldCurve.mesh);
+  const ag = new THREE.BufferGeometry();
+  ag.setAttribute('position', new THREE.BufferAttribute(new Float32Array(160 * 6 * 3), 3));
+  ag.setAttribute('color', new THREE.BufferAttribute(new Float32Array(160 * 6 * 3), 3));
+  st.area = new THREE.Mesh(ag, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.34, side: THREE.DoubleSide, depthWrite: false }));
+  st.area.userData.noFit = true; st.area.renderOrder = 2;
+  S.root.add(st.area);
+  st.stopBeads = BETAS.map(() => { const b = K.bead([0, 0, 0], C.brass, 0.032); S.root.add(b); return b; });
+  st.stopTags = BETAS.map(([, t]) => K.label([0, 0, 0], `β ${t}`, { cls: 'tag brass', anchor: 'top', dy: 5 }));
+  st.mark = rod(K.mat.paint(C.prob), 0.008, 6); S.root.add(st.mark);
+  st.markR = K.bead([0, 0, 0], C.prob, 0.036); st.markG = K.bead([0, 0, 0], C.prob, 0.036);
+  S.root.add(st.markR, st.markG);
+  st.rmTag = K.label([0, 0, 0], { 1: 'RM score', 2: 'RM score', 3: 'E[r]' }, { cls: 'tag teal', anchor: 'left', dx: 5 });
+  st.goldTag = K.label([0, 0, 0], { 1: 'the truth', 2: 'gold (truth)', 3: 'E[gold]' }, { cls: 'tag green', anchor: 'left', dx: 5 });
+  st.wallTitle = K.label([PX0 - 0.16, 2.225, CZ], { 1: 'the whole road: further from home →', 2: 'along the road: score vs √KL from home', 3: 'T = 1 road: E_π[·] vs d = √KL(π‖π_ref)' }, { cls: 'tag', anchor: 'left', dx: 0, dy: 0 });
+  st.zeroTag = K.label([0, 0, 0], { 1: 'home level', 2: 'home = 0', 3: 'π_ref: 0' }, { cls: 'tag', anchor: 'right', dx: -5 });
+}
+function scaleWall(S) {
+  const st = S.state, R = st.road;
+  let lo = 0, hi = 0;
+  for (const q of R) { lo = Math.min(lo, q.r, q.gold); hi = Math.max(hi, q.r, q.gold); }
+  st.CLO = Math.floor(lo * 2) / 2 - 0.25; st.CHI = Math.ceil(hi * 2) / 2 + 0.25;
+  st.DMAX = Math.max(2, Math.ceil(R[R.length - 1].d * 2) / 2);
+}
+const pX = (S, d) => PX0 + (d / S.state.DMAX) * PW;
+const pY = (S, v) => PY0 + ((v - S.state.CLO) / (S.state.CHI - S.state.CLO)) * PH;
+function paintWall(S) {
+  const st = S.state, R = st.road, z = CZ + 0.035;
+  const V = (d, v, dz = 0) => new THREE.Vector3(pX(S, d), pY(S, v), z + dz);
+  st.rmCurve.set(R.map((q) => V(q.d, q.r)));
+  st.goldCurve.set(R.map((q) => V(q.d, q.gold, 0.004)));
+  st.wallZero.userData.set(V(0, 0, -0.01), V(st.DMAX, 0, -0.01));
+  st.wallAxis.userData.set(new THREE.Vector3(pX(S, 0), PY0 - 0.06, z - 0.01), new THREE.Vector3(pX(S, st.DMAX), PY0 - 0.06, z - 0.01));
+  st.zeroTag.move(V(0, 0));
+  st.wallTicks.forEach((t, i) => {
+    const d = i * 0.5, ok = d <= st.DMAX + 1e-9;
+    t.visible = ok;
+    if (ok) t.userData.set(new THREE.Vector3(pX(S, d), PY0 - 0.06, z), new THREE.Vector3(pX(S, d), PY0 - 0.02, z));
+    st.wallTickTags[i].move(new THREE.Vector3(pX(S, d), PY0 - 0.07, z));
+    st.wallTickTags[i].set(i === 0 ? '0' : fx(d, 1).replace(/\.0$/, ''));
+    st.wallTickTags[i].tickOk = ok;
+  });
+  // the area between the gold curve and home level: green above, red below
+  const pos = st.area.geometry.attributes.position.array, col = st.area.geometry.attributes.color.array;
+  const g = new THREE.Color(C.good), rd = new THREE.Color(C.grad);
+  let w = 0;
+  const put = (p, c) => { pos[w] = p.x; pos[w + 1] = p.y; pos[w + 2] = p.z; col[w] = c.r; col[w + 1] = c.g; col[w + 2] = c.b; w += 3; };
+  for (let i = 0; i < R.length - 1 && i < 160; i++) {
+    const a = R[i], b = R[i + 1], c = (a.gold + b.gold) / 2 >= 0 ? g : rd;
+    const a0 = V(a.d, 0, -0.006), a1 = V(a.d, a.gold, -0.006), b0 = V(b.d, 0, -0.006), b1 = V(b.d, b.gold, -0.006);
+    put(a0, c); put(b0, c); put(b1, c); put(a0, c); put(b1, c); put(a1, c);
+  }
+  st.area.geometry.setDrawRange(0, w / 3);
+  st.area.geometry.attributes.position.needsUpdate = true; st.area.geometry.attributes.color.needsUpdate = true;
+  st.area.geometry.computeBoundingSphere();
+  // where each β stops (x = 1/β on the road)
+  BETAS.forEach(([b], i) => {
+    const m = measure(st.W, 1 / b, 0), p = V(Math.sqrt(m.kl), m.gold, 0.012);
+    st.stopBeads[i].position.copy(p); st.stopTags[i].move(p);
+  });
+  const last = R[R.length - 1];
+  st.rmTag.move(V(last.d, last.r)); st.goldTag.move(V(last.d, last.gold));
+}
+
+/* ============================================================ the ball, the leash, the pulls */
+
+function buildBall(S) {
+  const st = S.state;
+  st.ball = K.bead([0, 1, 0], C.prob, BR); S.root.add(st.ball);
+  st.trail = K.tube([new THREE.Vector3(), new THREE.Vector3(0.01, 0, 0)], C.prob, 0.012); S.root.add(st.trail.mesh);
+  st.leash = K.tube([new THREE.Vector3(), new THREE.Vector3(0.01, 0, 0)], C.grad, 0.011); S.root.add(st.leash.mesh);
+  st.pullR = K.arrow([0, 0, 0], [0.1, 0, 0], C.aux, { r: 0.016 }); S.root.add(st.pullR.group);
+  st.pullL = K.arrow([0, 0, 0], [-0.1, 0, 0], C.grad, { r: 0.016 }); S.root.add(st.pullL.group);
+  st.readout = K.label([0, 2.33, CZ - 0.03], '', { cls: 'readout', anchor: 'bottom', dy: -6 });   // scoreboard on the wall
+}
+const pathAt = (P, u) => {
+  const last = P.length - 1, k = Math.min(Math.floor(u), last), f = Math.min(1, u - k);
+  if (k >= last) return { x: P[last][0], s: P[last][1], k: last };
+  return { x: P[k][0] + (P[k + 1][0] - P[k][0]) * f, s: P[k][1] + (P[k + 1][1] - P[k][1]) * f, k };
+};
+function drawBall(S) {
+  const st = S.state, k = S.knobs, W = st.W;
+  const at = pathAt(st.path, st.u);
+  const m = measure(W, at.x, at.s, k.beta);
+  const y = wY(S, hv(S, m.r, m.kl));
+  st.ball.position.set(wX(at.x), y + BR, wZ(at.s));
+  st.shown = { x: at.x, s: at.s, m, k: at.k };
+  // trail along the landings so far
+  const pts = [];
+  const kk = Math.min(at.k, st.path.length - 1);
+  for (let i = 0; i <= kk; i += 3) { const [x, s] = st.path[i], mm = measure(W, x, s); pts.push(new THREE.Vector3(wX(x), wY(S, hv(S, mm.r, mm.kl)) + 0.014, wZ(s))); }
+  pts.push(new THREE.Vector3(wX(at.x), y + 0.014, wZ(at.s)));
+  if (pts.length < 2) pts.push(pts[0].clone().add(new THREE.Vector3(1e-4, 0, 0)));
+  st.trail.set(pts);
+  st.trail.mesh.visible = pts[0].distanceTo(pts[pts.length - 1]) > 0.02;
+  // the leash: tied to the peg's knob; taut in proportion to its pull, unhooked at β = 0
+  const knob = st.knob.position, b = st.ball.position;
+  const G = gradients(W, at.x, at.s, k.beta);
+  const [na, nb] = nat(at.x, at.s);
+  const leashPull = k.beta * Math.hypot(na, nb);          // |natural-gradient pull of β·KL| = β·|(a, b)|
+  if (k.beta <= 0) {
+    const L = [];
+    for (let i = 0; i <= 10; i++) { const t = i / 10; L.push(new THREE.Vector3(knob.x + 0.13 * t, knob.y - 0.3 * Math.sin(t * Math.PI / 2) - 0.02 * t, knob.z + 0.1 * t)); }
+    st.leash.set(L);
+  } else {
+    const sag = 0.16 / (1 + 3 * leashPull), L = [];
+    for (let i = 0; i <= 14; i++) { const t = i / 14; L.push(new THREE.Vector3(knob.x + (b.x - knob.x) * t, knob.y + (b.y - knob.y) * t - 4 * sag * t * (1 - t), knob.z + (b.z - knob.z) * t)); }
+    st.leash.set(L);
+  }
+  // the two pulls on the ball, in natural-gradient units (RM: always 1 along the road; leash: β·x)
+  const show = st.cfg.forces && (Math.hypot(at.x, at.s) > 0.05 || k.beta > 0);
+  st.pullR.show(!!show); st.pullL.show(!!show && k.beta > 0 && leashPull > 1e-3);
+  if (show) {
+    const L0 = 0.3, yy = y + BR + 0.02;
+    // RM pull = natural gradient of E[r] = (1, 0) in (a, b); leash = −β·(a, b); mapped to the floor
+    const toFloor = (da, db) => { const bb = nb, aa = na; const dx = da / (1 + bb) - aa * db / ((1 + bb) * (1 + bb)), ds = db / (1 + bb); return new THREE.Vector3(dx * SX, 0, -ds * SZ); };
+    const vr = toFloor(1, 0), vl = toFloor(-k.beta * na, -k.beta * nb);
+    const base = new THREE.Vector3(b.x, yy, b.z);
+    const lr = Math.min(1.2, L0 * vr.length() / SX), ll = Math.min(1.2, L0 * vl.length() / SX);
+    if (vr.lengthSq() > 1e-12) st.pullR.set(base.clone().addScaledVector(vr.normalize(), 0.05), base.clone().addScaledVector(vr, 0.05 + lr));
+    if (vl.lengthSq() > 1e-12) st.pullL.set(base.clone().addScaledVector(vl.normalize(), 0.05), base.clone().addScaledVector(vl, 0.05 + ll));
+  }
+  void G;
+  // back-wall marker (on the road only)
+  const onRoad = Math.abs(at.s) < 1e-6;
+  st.mark.visible = st.markR.visible = st.markG.visible = onRoad && st.cfg.marker !== false;
+  if (onRoad) {
+    const d = Math.sqrt(m.kl), z = CZ + 0.05;
+    st.mark.userData.set(new THREE.Vector3(pX(S, d), PY0 - 0.04, z - 0.012), new THREE.Vector3(pX(S, d), PY0 + PH + 0.02, z - 0.012));
+    st.markR.position.set(pX(S, d), pY(S, m.r), z); st.markG.position.set(pX(S, d), pY(S, m.gold), z);
+    st.markG.visible = st.markG.visible && S.knobs.gold;
+  }
+  readout(S);
+  S.invalidate();
+}
+
+function readout(S) {
+  const st = S.state, v = st.shown, k = S.knobs;
+  if (!v) return;
+  const m = v.m, g = k.gold, edge = v.x >= XMAX - 1e-9;
+  const says = `${quote(m.top)} ${pct(m.p[m.top])}`;
+  if (S.tier === 1) {
+    st.readout.set(`**RM score ${sg(m.r)}**${g ? ` · truth ${sg(m.gold)}` : ''}\nsays ${says}${edge ? '\n(edge of the map: it would keep going)' : ''}`);
+  } else if (S.tier === 2) {
+    st.readout.set(`**RM ${sg(m.r, 3)}**${g ? ` · gold ${sg(m.gold, 3)}` : ''} · KL ${fx(m.kl, 3)}\n${says}${edge ? ' · map edge' : ''}`);
+  } else {
+    const T = Math.exp(-v.s);
+    st.readout.set(`**E[r] ${sg(m.r, 3)} · KL ${fx(m.kl, 3)} · J ${sg(m.J, 3)}**\n${g ? `gold ${sg(m.gold, 3)} · ` : ''}x ${fx(v.x, 3)} · T ${fx(T)} · step ${v.k}`);
+  }
+}
+
+/* ---------------- a small animation queue (cancellable; instant under ?shot=1) */
+function play(S, phases) {
+  const st = S.state;
+  if (st.done) { const d = st.done; st.done = null; d(); }
+  st.q = phases.slice(); st.qt0 = null;
+  if (S.shot) {
+    for (const p of phases) p.fn(1);
+    st.q = [];
+    S.invalidate();
+    return Promise.resolve();
+  }
+  if (st.q.length) st.q[0].fn(0);
+  S.invalidate();
+  return new Promise((res) => { st.done = res; });
+}
+const ph = (ms, fn) => ({ ms, fn });
+const ease = (f) => (f < 0.5 ? 2 * f * f : 1 - 2 * (1 - f) * (1 - f));
+function holdPhase(ms) { return ph(ms, () => {}); }
+function trainPhase(S, ms = TRAIN_MS) { return ph(ms, (f) => { S.state.u = f * STEPS; drawBall(S); }); }
+function morphPhase(S, from, to, ms = 1300) { return ph(ms, (f) => { S.state.obj = from + (to - from) * ease(f); paintSurface(S); drawBall(S); }); }
+function goldPhase(S, from, to, ms = 1100) { return ph(ms, (f) => { S.state.goldAmt = from + (to - from) * ease(f); paintSurface(S); }); }
+function homePhase(S) { return ph(1, () => { const st = S.state; st.path = [st.start.slice()]; st.u = 0; drawBall(S); }); }
+
+function compute(S) {
+  const st = S.state, k = S.knobs;
+  st.path = train(st.W, { beta: k.beta, eta: ETA, steps: STEPS, x0: st.start[0], s0: st.start[1] });
+}
+function trainRun(S, pre = 250) {
+  const st = S.state;
+  compute(S);
+  st.u = 0;
+  return play(S, [ph(1, () => { st.u = 0; drawBall(S); }), holdPhase(pre), trainPhase(S)]);
+}
+function atRest(S) { const st = S.state; compute(S); st.u = STEPS; drawBall(S); }
+
+/* visibility per scene / toggles */
+function applyVis(S) {
+  const st = S.state, o = st.cfg, k = S.knobs;
+  st.goldCurve.mesh.visible = k.gold; st.area.visible = k.gold; st.goldTag.show(k.gold && o.wallTags !== false);
+  st.rmTag.show(o.wallTags !== false);
+  st.stopBeads.forEach((b) => { b.visible = k.gold && !!o.stops; });
+  st.stopTags.forEach((t) => t.show(k.gold && !!o.stops));
+  st.ruler.forEach((t) => { t.pin.visible = !!o.ruler; t.tag.show(!!o.ruler); });
+  st.ringTags.forEach((t) => t.show(!!o.rings && !!t.spot));
+  st.hackTag.show(!!o.regions && k.gold && k.rm === 'toy'); st.goodTag.show(!!o.regions && k.gold);
+  st.homeTag.show(o.home !== false);
+  st.eastTag.show(!!o.axes); st.hotTag.show(!!o.axes);
+  st.wallTitle.show(!!o.wall);
+  st.zeroTag.show(!!o.wall);
+  st.wallTickTags.forEach((t) => t.show(!!t.tickOk && !!o.wall));
+  const btn = document.querySelector('.k-knob-button .k-btn');
+  if (btn) btn.textContent = goLabel(S);
+  dimKnobs(S);
+}
+function goLabel(S) {
+  const s0 = S.state.start || [0, 0], home = Math.hypot(s0[0], s0[1]) < 1e-9;
+  return home ? { 1: 'Train (walk the ball)', 2: 'Train from home: 300 steps', 3: 'Run 300 natural-gradient steps' }[S.tier]
+    : { 1: 'Train from your spot', 2: 'Train from the tapped spot', 3: '300 NPG steps from (x₀, T₀)' }[S.tier];
+}
+function dimKnobs(S) {   // the kit cannot dim knobs; grey the ones that do nothing right now
+  const dim = (id, on) => { const el = document.getElementById('k-' + id); const row = el && el.closest('.k-knob'); if (row) row.style.opacity = on ? '0.42' : ''; };
+  dim('delta', S.knobs.rm === 'dots');
+}
+
+/* scene configuration shared by beats and predictions */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.cfg = o;
+  st.start = [0, 0];
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || FIG, o.face || [wX(0), 0.9, wZ(0)]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: typeof o.at === 'function' ? o.at(S) : o.at });
+    if (S.shot) doPose(); else setTimeout(doPose, 520);
+  } else st.fig.group.visible = false;
+  applyVis(S);
+}
+const ballWorld = (S) => S.state.ball.getWorldPosition(new THREE.Vector3());
+
+/* ================================================================== run() */
+
+run({
+  id: 'd10-leash', num: '21', week: 10, kind: 'deep',
+  title: 'The leash',
+  subtitle: 'RLHF climbs a learned reward; the KL leash stops it running past the truth.',
+  back2d: '#week-10',
+  film: 'deep-w10-ppo-rlhf',
+  plinth: { r: 2.22, h: 0.14 },
+  fit: innerWidth / innerHeight < 0.8 ? 1.1 : 1,   // phone: the slab, not the empty plinth rim, fills the width
+
+  knobs: [
+    { id: 'beta', type: 'range', label: { 1: 'Leash strength β', 2: 'KL coefficient β', 3: 'β (on the whole answer\'s KL)' },
+      min: 0, max: 1, step: 0.05, value: 0.5, fmt: (v) => v.toFixed(2) },
+    { id: 'delta', type: 'range', label: { 1: 'How wrong the RM is on rare answers', 2: 'RM error on rare answers δ', 3: 'δ in r = gold + δ·err (toy)' },
+      min: 0, max: 2, step: 0.1, value: 1, fmt: (v) => v.toFixed(1) },
+    { id: 'rm', type: 'select', wide: true, label: { 1: 'Reward', 2: 'Reward', 3: 'reward_fn' }, value: 'toy',
+      options: [['toy', { 1: 'A learned reward model (toy)', 2: 'Toy reward model: gold + δ·error', 3: 'toy RM: z(gold + δ·err) on π_ref' }],
+        ['dots', { 1: 'ARENA\'s full-stop counter', 2: 'ARENA: reward_fn_char_count (full stops)', 3: 'reward_fn_char_count, normalised on π_ref' }]] },
+    { id: 'gold', type: 'toggle', label: { 1: 'Show the truth', 2: 'Show gold (true preference)', 3: 'Show gold reward' }, value: true },
+    { id: 'obj', type: 'toggle', label: { 1: 'Height: score minus leash cost', 2: 'Height = RM − β·KL', 3: 'Height J = E[r] − β·KL' }, value: false },
+    { id: 'go', type: 'button', wide: true, label: (S) => goLabel(S), onClick: (S) => trainRun(S, 120) },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.q = []; st.cfg = {}; st.obj = 0; st.goldAmt = 1; st.start = [0, 0]; st.u = 0;
+    buildSurface(S);
+    // lines on the plaster
+    st.roadLine = K.tube([new THREE.Vector3(), new THREE.Vector3(0.01, 0, 0)], C.ink, 0.0065); S.root.add(st.roadLine.mesh);
+    st.roadWest = K.tube([new THREE.Vector3(), new THREE.Vector3(0.01, 0, 0)], C.ink, 0.0045); S.root.add(st.roadWest.mesh);
+    st.ringsMax = 1400;
+    st.rings = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.0065, 0.0065, 1, 5, 1), K.mat.brass(), st.ringsMax);
+    st.rings.castShadow = false; st.rings.userData.noFit = true; S.root.add(st.rings);   // instanced unit segments: base box at the origin
+    st.ringTags = LEVELS.map((L) => K.label([0, 0, 0], { 1: `√KL ${fx(Math.sqrt(L), 1).replace(/\.0$/, '')}`, 2: `√KL ${fx(Math.sqrt(L), 1).replace(/\.0$/, '')}`, 3: `KL ${L}` }, { cls: 'tag brass', anchor: 'bottom', dy: -3 }));
+    const brass = K.mat.brass();
+    st.ruler = BETAS.map(([, t]) => {
+      const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.07, 8), brass); pin.castShadow = true; S.root.add(pin);
+      return { pin, tag: K.label([0, 0, 0], { 1: `β ${t}`, 2: `β = ${t}`, 3: `x = 1/β, β ${t}` }, { cls: 'tag brass', anchor: 'top', dy: 4 }) };
+    });
+    st.peg = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.03, 0.34, 12), brass); st.peg.castShadow = true; S.root.add(st.peg);
+    st.knob = new THREE.Mesh(new THREE.SphereGeometry(0.038, 16, 12), brass); st.knob.castShadow = true; S.root.add(st.knob);
+    st.homeTag = K.label([0, 0, 0], { 1: 'home: the starting model', 2: 'home: reference model π_ref', 3: 'π_ref (x = 0, T = 1)' }, { cls: 'tag brass', anchor: 'bottom', dy: -4 });
+    st.hackTag = K.label([0, 0, 0], { 1: 'RM\'s favourite: “This is......”', 2: 'RM\'s top answer, people\'s worst', 3: 'argmax r: “This is......”' }, { cls: 'tag red', anchor: 'top', dy: 6 });
+    st.goodTag = K.label([0, 0, 0], { 1: 'people\'s favourite', 2: 'people\'s top: “This is it. We won.”', 3: 'argmax gold: “This is it. We won.”' }, { cls: 'tag green', anchor: 'bottom', dy: -6 });
+    st.eastTag = K.label([0, 0, 0], { 1: 'leans into what the RM likes →', 2: 'x: tilt towards the RM →', 3: 'x (π ∝ π_ref·e^{x·r}) →' }, { cls: 'tag', anchor: 'right', dx: -2, dy: -12 });
+    st.hotTag = K.label([0, 0, 0], { 1: 'front: more random · back: surer', 2: 'front: temperature 2 · back: ½', 3: 'T = 2 (front) … ½ (back)' }, { cls: 'tag', anchor: 'top', dy: 5 });
+    buildWall(S);
+    buildBall(S);
+    st.fig = K.figure();
+    S.root.add(st.fig.group);
+    st.fig.group.traverse((m) => { m.userData.noFit = true; });   // the guide never changes the framing
+    st.fig.group.visible = false;
+    // tap the plaster to drop the ball there and train from it
+    K.pick(st.top, (h) => {
+      const p = S.root.worldToLocal(h.point.clone());
+      const x = Math.min(XMAX, Math.max(XMIN, p.x / SX + XC)), s = Math.min(SMAX, Math.max(-SMAX, (Z0 - p.z) / SZ));
+      st.start = [x, s];
+      applyVis(S);
+      trainRun(S, 350);
+    });
+  },
+
+  rebuild(S, id) {
+    const st = S.state, k = S.knobs;
+    if (id === '*') {
+      if (st.done) { const d = st.done; st.done = null; d(); }
+      st.q = [];
+      st.obj = k.obj ? 1 : 0; st.goldAmt = k.gold ? 1 : 0;
+      setWorld(S); paintSurface(S); paintWall(S);
+      st.start = [0, 0]; st.path = [[0, 0]]; st.u = 0;
+      applyVis(S); drawBall(S);
+      return;
+    }
+    if (id === 'beta') { if (st.obj > 0) paintSurface(S); applyVis(S); trainRun(S, 120); return; }
+    if (id === 'delta' || id === 'rm') { setWorld(S); paintSurface(S); paintWall(S); applyVis(S); trainRun(S, 200); return; }
+    if (id === 'gold') { applyVis(S); play(S, [goldPhase(S, st.goldAmt, k.gold ? 1 : 0)]).then(() => drawBall(S)); drawBall(S); return; }
+    if (id === 'obj') { applyVis(S); play(S, [morphPhase(S, st.obj, k.obj ? 1 : 0)]); return; }
+  },
+
+  frame(S, t) {
+    const st = S.state;
+    if (!st.q.length) return false;
+    if (st.qt0 == null) st.qt0 = t;
+    for (;;) {
+      const p = st.q[0], f = ((t - st.qt0) * 1000) / p.ms;
+      if (f < 1) { p.fn(Math.max(0, f)); return true; }
+      p.fn(1);
+      st.q.shift();
+      st.qt0 += p.ms / 1000;
+      if (!st.q.length) { if (st.done) { const d = st.done; st.done = null; d(); } return false; }
+      st.q[0].fn(0);
+    }
+  },
+
+  onTier(S) {
+    readout(S); applyVis(S); drawBall(S);
+  },
+
+  solids(S) {
+    const st = S.state;
+    const J3 = (v) => [v.x, -v.z, v.y];
+    const out = [surfaceSolid(S)];
+    // the peg, the ball, the back wall with its gold curve (printable)
+    out.push(J.primitives.cylinder({ radius: 0.03, height: 0.36, center: J3(new THREE.Vector3(wX(0), wY(S, hv(S, 0, 0)) + 0.18, wZ(0))), segments: 16 }));
+    out.push(J.primitives.sphere({ radius: BR, center: J3(st.ball.position), segments: 16 }));
+    out.push(J.primitives.cuboid({ size: [3.24, 0.05, 1.68], center: [0, -(CZ - 0.03), 0.62 + 0.84] }));
+    for (const x of [-1.42, 1.42]) out.push(J.primitives.cylinder({ radius: 0.02, height: 0.62, center: [x, -(CZ - 0.03), 0.31], segments: 12 }));
+    const gpts = st.road.filter((q, i) => i % 4 === 0).map((q) => J3(new THREE.Vector3(pX(S, q.d), pY(S, q.gold), CZ + 0.02)));
+    const tube = K.tubeSolid(gpts, 0.02, 8); if (tube) out.push(tube);
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**Every spot on this slab is a version of a chatbot.** The brass peg is home, the model you start with. Height is a reward model\'s score for its answers. RLHF walks the model uphill.',
+        2: '**RLHF:** people pick the better of two answers; a reward model (RM) learns to predict their picks; RL (PPO) moves the policy towards answers the RM scores high. Left to right: the policy tilted towards the RM\'s scores. Front to back: sampled hotter or colder.',
+        3: 'Floor point (x, T): π ∝ (π_ref·e^{x·r})^{1/T}, r the RM score normalised on π_ref; home x = 0, T = 1. Height E_π[r]. The RM is fit to human pairwise choices (Bradley-Terry). Toy: six completions of ARENA\'s prefix "This is", with toy probabilities and scores.',
+      },
+      cam: CAM.hero,
+      set: { rm: 'toy', delta: 1, beta: 0.5, gold: false, obj: false },
+      enter(S) {
+        scene(S, { axes: true, figure: 'point', at: () => new THREE.Vector3(wX(0), 1.0, wZ(0)), marker: false });
+        const st = S.state; st.path = [[0, 0]]; st.u = 0; drawBall(S);
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Now the truth.** Colour shows what people really think: green good, red bad. Near home the RM agrees with them. Far out it is wrong, and its highest ground is a red corner.',
+        2: 'The RM learned from answers the reference model writes often, so near home height and colour rise together (correlation 0.90 on its samples). Its errors sit on rare answers: "This is......", 0.4% of samples, gets the RM\'s top score and people\'s lowest.',
+        3: 'gold = toy human scores; r = gold + δ·err (toy errors, largest on rare answers), both normalised on π_ref: corr(r, gold) = 0.90 under π_ref, yet argmax r = "This is......" (π_ref 0.004). An RM is only trustworthy where its training data came from.',
+      },
+      cam: CAM.floor,
+      set: { rm: 'toy', delta: 1, beta: 0.5, gold: true, obj: false },
+      enter(S) {
+        scene(S, { regions: true, marker: false });
+        const st = S.state; st.goldAmt = 0; paintSurface(S); st.path = [[0, 0]]; st.u = 0; drawBall(S);
+        play(S, [holdPhase(500), goldPhase(S, 0, 1, 1500)]);
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Let go of the leash (β = 0) and train.** The RM score climbs all the way, but the ground turns red: 82% of answers become "This is......". Goodhart\'s law: a target stops being a measure.',
+        2: 'With β = 0 nothing holds the policy: it runs to the edge of the map, 82% "This is......". The RM score ends at +2.0, its best; the truth at −2.1, far below home (0). Goodhart: "when a measure becomes a target, it ceases to be a good measure" (Strathern\'s phrasing).',
+        3: 'β = 0: maximise E_π[r] alone. Natural-gradient steps move x at constant speed; π → argmax r, KL → −log 0.004 = 5.5 nats. At the map edge (x = 6.5) E[r] = +2.02, E[gold] = −2.10: reward hacking, i.e. overoptimising a proxy.',
+      },
+      cam: CAM.side,
+      set: { rm: 'toy', delta: 1, beta: 0, gold: true, obj: false },
+      enter(S) {
+        scene(S, { figure: 'shrug', face: [wX(3), 0.9, wZ(0)] });
+        trainRun(S, 600);
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Clip the leash on (β = 0.5).** Wandering from home now costs points. The ball stops where the RM\'s pull equals the leash\'s pull: 70% "This is it. We won.", still on green.',
+        2: 'RLHF maximises RM score − β·KL(π‖π_ref). KL: how surprised the old model is by the new one\'s answers. In KL units the RM pulls with a steady force, the leash like a spring (β × distance), so the ball stops at x = 1/β. Subtract the leash and the ramp becomes a hill: the ball is on top.',
+        3: 'Over all policies the maximiser is π* ∝ π_ref·exp(r/β): x = 1/β, T = 1, max = β·log E_π_ref[e^{r/β}]. Here the natural gradient F⁻¹∇J is exactly (1 − βa, −βb), a = x/T, b = 1/T − 1 (TRPO computes it, PPO approximates it), so x → 1/β geometrically.',
+      },
+      cam: CAM.close,
+      set: { rm: 'toy', delta: 1, beta: 0.5, gold: true, obj: false },
+      enter(S) {
+        scene(S, { forces: true, ruler: true });
+        const st = S.state; st.start = [0, 0]; compute(S); st.u = 0; drawBall(S);
+        play(S, [holdPhase(500), trainPhase(S), holdPhase(700), ph(1, () => { S.setKnob('obj', true, { silent: true }); applyVis(S); }), morphPhase(S, 0, 1, 1500), holdPhase(900)]);
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The back wall shows the whole road.** Further from home the RM score keeps rising while the truth rises, then falls. Real reward models do this too (Gao et al. 2022). The leash picks where you stop.',
+        2: 'Across: √KL, the distance from home. Teal: RM score; green: the truth. Beads: where β = 1, ½, ¼, ⅕ stop. Gao, Schulman & Hilton 2022 measured this shape with real reward models, and found a KL penalty acts like early stopping: same curve, earlier stop.',
+        3: 'Gao et al. 2022: gold(d) ≈ d(α − β_RL·log d) for RL and d(α − β_bon·d) for best-of-n, d = √KL(π‖π_init), with coefficients smooth in RM size; the KL penalty changed where runs converged, not the gold-vs-KL frontier. The toy curve here is exact.',
+      },
+      cam: CAM.wall,
+      set: { rm: 'toy', delta: 1, beta: 0.25, gold: true, obj: false },
+      enter(S) {
+        scene(S, { stops: true, wall: true, home: false });
+        trainRun(S, 600);
+      } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**In ARENA [2.4] the reward counts full stops** (`reward_fn_char_count`). Swap it in, drop the leash, and the model collapses into "This is......", as ARENA\'s kl_coef = 0.0 test warns.',
+        2: '`calc_kl_penalty`: `log_softmax` both logits, `probs = logprobs.exp()`, `kl_div = (probs * (logprobs - ref_logprobs)).sum(-1)`, return `kl_coef * kl_div.mean()`. Then `total_objective_function = ppo_objective_fn - kl_penalty`. RLHFArgs: kl_coef 2.5, gen_len 30.',
+        3: 'Sum over d_vocab, mean over batch and positions: kl_coef 2.5 on the per-token mean is β ≈ 2.5/30 ≈ 0.08 on a whole 30-token answer (KL adds over tokens). normalize_reward: (r − mean)/(std + 1e-5) per batch (here once, on π_ref). The value head reads the final residual stream.',
+      },
+      cam: CAM.hero,
+      set: { rm: 'dots', delta: 1, beta: 0, gold: true, obj: false },
+      enter(S) {
+        scene(S, { regions: false });
+        trainRun(S, 600);
+      } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Is this the best recipe?** Open question. Reward model + PPO + a KL leash trained InstructGPT. Newer methods skip the RL loop (DPO) or the critic (GRPO). Reward hacking is not solved.',
+        2: 'Current method: RM + PPO + KL penalty (InstructGPT, Ouyang et al. 2022). Emerging: DPO solves the same β-objective straight from preference pairs, GRPO drops the critic, RLAIF swaps people for AI feedback. Reward hacking (flattery, padding) is active research.',
+        3: 'DPO (Rafailov et al. 2023) inverts π* ∝ π_ref·e^{r/β}: r = β·log(π/π_ref) + const, fit by Bradley-Terry. GRPO (Shao et al. 2024): group baselines plus a KL term. Sycophancy: Sharma et al. 2023; length: Singhal et al. 2023. KL in the reward or in the loss: inconsequential here.',
+      },
+      cam: CAM.hero,
+      set: { rm: 'toy', delta: 1, beta: 0.5, gold: true, obj: false },
+      enter(S) {
+        scene(S, {});
+        atRest(S);
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Teaching to the test, sales targets, any number that becomes a goal (Goodhart\'s law). And a dog on an elastic lead: free to roam, pulled back harder the further it goes.',
+        2: 'Goodhart everywhere: test scores vs learning, KPIs vs the business, clicks vs value. The leash everywhere: weight decay pulls weights towards zero, fine-tunes stay near their base model, trust regions (PPO\'s clip in The sanded saddle) keep steps where the estimate holds.',
+        3: 'Regularise towards a prior: weight decay (a Gaussian prior), KL-regularised RL and control as inference, the free-energy form E[r] − β·KL with π* ∝ prior·e^{r/β} (a Bayesian posterior, a Boltzmann distribution), TRPO and PPO. Proxy gaming: Goodhart, Campbell\'s law, specification gaming.',
+      },
+      cam: CAM.hero,
+      set: { rm: 'toy', delta: 1, beta: 0.5, gold: true, obj: false },
+      enter(S) {
+        scene(S, { figure: 'cheer', ruler: true });
+        trainRun(S, 500);
+      } },
+  ],
+
+  predict: [
+    { q: { 1: 'Leash off (β = 0). Where does the ball end up?',
+        2: 'β = 0: where does training take the policy?',
+        3: 'kl_coef = 0. Where does natural-gradient ascent on E[r] end?' },
+      options: [{ t: 'At the far edge, saying "This is......": RM score up, truth down', ok: true }, { t: 'On the greenest spot' },
+        { t: 'It stays home: nothing pushes it' }, { t: 'Halfway, where the ramp flattens' }],
+      why: { 1: 'Nothing holds it back, so it keeps chasing the RM\'s favourite answer, which people hate. The RM score is at its best and the truth at its worst.',
+        2: 'Without the KL term only E[r] counts, and it grows all the way to argmax r = "This is......": 82% of answers at the map edge, gold −2.1 against 0 at home.',
+        3: 'E[r] increases monotonically along the road (dE[r]/dx = Var_π(r) > 0), so ascent never stops: π → δ(argmax r), KL → −log π_ref(hack) = 5.5 nats. The map edge stops it at x = 6.5.' },
+      show(S) {
+        S.setKnobs({ rm: 'toy', delta: 1, beta: 0, gold: true, obj: false });
+        scene(S, {}); S.fly(CAM.side);
+        return trainRun(S, 300);
+      } },
+    { q: { 1: 'A very strong leash (β = 1). Where does the ball stop?',
+        2: 'β = 1: where does the policy come to rest?',
+        3: 'β = 1: argmax of E[r] − β·KL on this floor?' },
+      options: [{ t: 'A short way out: it still moves, just not far', ok: true }, { t: 'Exactly at home' },
+        { t: 'At the far edge' }, { t: 'On the greenest spot' }],
+      why: { 1: 'At home the leash is slack but the reward still pulls, so the ball always leaves home. A strong leash just stops it early: 50% "This is it. We won.".',
+        2: 'KL is flat at home (zero slope) while the RM\'s slope is not, so any finite β moves the policy. It rests at x = 1/β = 1: RM +0.78, gold +0.67.',
+        3: 'π* ∝ π_ref·e^{r/β}, i.e. x = 1/β = 1, T = 1, with J* = β·log E_π_ref[e^{r/β}] = 0.432. Only β → ∞ keeps π = π_ref.' },
+      show(S) {
+        S.setKnobs({ rm: 'toy', delta: 1, beta: 1, gold: true, obj: false });
+        scene(S, { forces: true, ruler: true }); S.fly(CAM.close);
+        return trainRun(S, 300);
+      } },
+    { q: { 1: 'As the leash-free ball walks out, what do the two scores on the back wall do?',
+        2: 'Along a β = 0 run, what happens to the RM score and to gold?',
+        3: 'Shape of E[r](d) and E[gold](d) along the road, d = √KL?' },
+      options: [{ t: 'RM score keeps rising; the truth rises, then falls', ok: true }, { t: 'Both rise together' },
+        { t: 'Both rise, then both fall' }, { t: 'The RM score falls; the truth rises' }],
+      why: { 1: 'Near home the RM is right, so both climb. Far out the RM is wrong about rare answers, so its score keeps climbing while the truth drops.',
+        2: 'The RM tracks gold where π_ref has data (corr 0.90), so gold first rises (peak +0.81 near x = 1.8), then falls below home once "This is......" takes over.',
+        3: 'E[r] rises monotonically; E[gold] is unimodal, peaking at d ≈ 0.8: the Goodhart curve Gao et al. fit as d(α − β_RL·log d). β only picks the stopping point d(1/β).' },
+      show(S) {
+        S.setKnobs({ rm: 'toy', delta: 1, beta: 0, gold: true, obj: false });
+        scene(S, { stops: true }); S.fly(CAM.wall);
+        return trainRun(S, 300);
+      } },
+    { q: { 1: 'What does the leash (the KL) actually measure?',
+        2: 'What does KL(π‖π_ref) measure?',
+        3: 'KL(π‖π_ref) = ?' },
+      options: [{ t: 'How surprised the old model is, on average, by the new model\'s answers', ok: true }, { t: 'How many weights have changed' },
+        { t: 'How much reward was gained' }, { t: 'How often the two models give the same top answer' }],
+      why: { 1: 'It samples answers from the new model and asks how much likelier the new model made them than the old one did, on average. Far from home, the old model is shocked.',
+        2: 'KL = E_{y~π}[log π(y) − log π_ref(y)]: the extra log-probability the new policy gives its own answers. It is zero only when the two agree, and it ignores weights entirely.',
+        3: 'Σ_y π(y)·log(π(y)/π_ref(y)) ≥ 0: reverse KL, mode-seeking, infinite if π puts mass where π_ref has none. ARENA computes it per token over d_vocab, then means over batch and positions.' },
+      show(S) {
+        S.setKnobs({ rm: 'toy', delta: 1, beta: 0.5, gold: true, obj: false });
+        scene(S, { rings: true }); S.fly(CAM.floor);
+        return trainRun(S, 300);
+      } },
+    { q: { 1: 'Halve the leash from β = 0.5 to 0.25. Where does the ball stop now?',
+        2: 'β from 0.5 to 0.25: where is the new rest point?',
+        3: 'β: 0.5 → 0.25. New argmax, and its gold?' },
+      options: [{ t: 'Twice as far out, just past the truth\'s peak', ok: true }, { t: 'In the same place' },
+        { t: 'A little further, still at the peak' }, { t: 'At the far edge' }],
+      why: { 1: 'The leash\'s pull grows with distance, so a leash half as strong holds the ball twice as far out, and there the truth has started to fall.',
+        2: 'The rest point is x = 1/β: 2 becomes 4. Gold falls from +0.80 to −0.13, just below home: past the peak at x ≈ 1.8.',
+        3: 'π* ∝ π_ref·e^{r/β}: halving β doubles the tilt, x* = 4, KL 2.17 nats, E[gold] = −0.13. The toy peak sits at β ≈ 0.56; there is no β that is safe for every RM.' },
+      show(S) {
+        S.setKnobs({ rm: 'toy', delta: 1, beta: 0.25, gold: true, obj: false });
+        scene(S, { ruler: true, stops: true }); S.fly(CAM.hero);
+        return trainRun(S, 300);
+      } },
+    { q: { 1: 'Swap in ARENA\'s full-stop counter and take the leash off. What does the model end up saying?',
+        2: 'reward_fn_char_count with kl_coef = 0.0: what does the policy collapse to?',
+        3: 'reward_fn_char_count, kl_coef = 0.0, prefix "This is": the limit policy?' },
+      options: [{ t: '"This is......"', ok: true }, { t: '"This is it. We won." (two full stops, and good)' },
+        { t: '"This is the U.S. team."' }, { t: 'A mix of all six answers' }],
+      why: { 1: 'Six full stops beat every other answer, so a reward that only counts dots drives the model onto the dots: exactly what ARENA\'s test run shows.',
+        2: 'Counting dots correlates only weakly with quality here (0.39), so gold barely rises before it falls; with no KL term π collapses onto the max-count answer.',
+        3: 'argmax count = "This is......" (6); π → δ there, KL → 5.5 nats. ARENA: "the model should have collapsed into producing reward-maximizing output like This is......".' },
+      show(S) {
+        S.setKnobs({ rm: 'dots', delta: 1, beta: 0, gold: true, obj: false });
+        scene(S, {}); S.fly(CAM.hero);
+        return trainRun(S, 300);
+      } },
+  ],
+
+  where: {
+    1: 'Teaching to the test, sales targets, any number that becomes a goal (Goodhart\'s law). And any leash back to something known: a dog on an elastic lead, a diet you adjust a little at a time.',
+    2: 'Goodhart: test scores vs learning, KPIs vs the business, clicks vs value. The leash: weight decay, fine-tunes kept near their base model, trust regions (PPO\'s clip, TRPO), distillation towards a teacher.',
+    3: 'KL-regularised objectives E[r] − β·KL (control as inference, free energy, π* ∝ prior·e^{r/β}), weight decay as a Gaussian prior, TRPO/PPO trust regions; proxy gaming as Goodhart, Campbell\'s law and specification gaming.',
+  },
+  links: [
+    { label: 'Film · PPO & RLHF, deep', href: '../../intuition/films/deep-w10-ppo-rlhf.html' },
+    { label: 'Film · W10 PPO & RLHF', href: '../../intuition/films/w10-ppo-rlhf.html' },
+    { label: 'Week 10 pack', href: '../../index.html#week-10' },
+    { label: 'Demo · RLHF overoptimisation', href: '../../index.html#demo/rlhf-overoptimisation' },
+    { label: 'Case · RLHF', href: '../../index.html#cases/rlhf' },
+    { label: 'Case · RLHF KL penalty', href: '../../index.html#cases/rlhf-kl-penalty' },
+    { label: 'Case · reward shaping', href: '../../index.html#cases/reward-shaping' },
+    { label: 'Map · RLHF', href: '../../index.html#map/node=rlhf' },
+    { label: 'Map · reward model', href: '../../index.html#map/node=reward-model' },
+    { label: 'Map · KL penalty', href: '../../index.html#map/node=rlhf-kl-penalty' },
+    { label: 'Map · reference model', href: '../../index.html#map/node=reference-model' },
+    { label: 'Map · reward hacking', href: '../../index.html#map/node=reward-hacking' },
+    { label: 'Map · KL divergence', href: '../../index.html#map/node=kl-divergence' },
+    { label: 'Object · The sanded saddle (PPO)', href: 'w10-saddle.html' },
+  ],
+  remix: 'Build a single-file three.js scene about RLHF\'s KL leash. Toy chatbot with six answers to the prefix "This is": "This is my dog." (π_ref 0.31, gold 0.6, RM error 0), "This is a list of the" (0.30, −0.2, 0), "This is it. We won." (0.20, 1.0, 0.1), "This is the U.S. team." (0.12, 0.4, 0.3), "This is Python 2.7.12." (0.066, −0.2, 0.5), "This is......" (0.004, −1.0, 2.5). Normalise gold and the reward r = gold + δ·error to mean 0, std 1 under π_ref. A long plaster slab is the policy slice π ∝ (π_ref·e^{x·r})^{1/T}, x from −1.5 to 6.5 left to right, T from 2 (front) to 0.5 (back); height E_π[r], colour E_π[gold] (green good, red bad), brass contour lines of KL(π‖π_ref) at 0.25, 1, 2.25, 4, a brass peg at home (x = 0, T = 1). An amber ball does natural-gradient ascent on E[r] − β·KL (x ← x + 0.08·(1 − βx)), tied to the peg by a red string, and stops at x = 1/β, where π* ∝ π_ref·e^{r/β}. Behind it, a wall plots E[r] (teal) and E[gold] (green, filled) against √KL along the road: the RM score keeps rising, gold rises then falls.',
+  credit: 'Names and defaults: ARENA [2.4] RLHF: calc_kl_penalty line for line (log_softmax, probs·(logprobs − ref_logprobs) summed over d_vocab, kl_coef · mean), RLHFArgs (kl_coef 2.5, gen_len 30, prefix "This is", normalize_reward), total_objective_function = ppo_objective_fn − kl_penalty, reward_fn_char_count and its kl_coef = 0.0 collapse. RLHF: Christiano et al. 2017; Stiennon et al. 2020; Ouyang et al. 2022 (InstructGPT). The Goodhart curve: Gao, Schulman & Hilton 2022, "Scaling Laws for Reward Model Overoptimization". The closed form π* ∝ π_ref·exp(r/β) as used by DPO (Rafailov et al. 2023); natural gradient: Kakade 2001, TRPO (Schulman et al. 2015). Goodhart\'s law in Marilyn Strathern\'s 1997 phrasing. Toy data: the six answers\' reference probabilities, gold scores and RM errors are made up; the full-stop counts, every height, colour, contour, curve and readout are computed live. Built with three.js and JSCAD.',
+});
+
+/* watertight STL solid of the slab as shown (JSCAD is z-up: three (x, y, z) -> JSCAD (x, -z, y)) */
+function surfaceSolid(S) {
+  const st = S.state, W1 = NX + 1;
+  const points = [], faces = [];
+  for (let j = 0; j <= NS; j++) for (let i = 0; i <= NX; i++) {
+    const q = j * W1 + i;
+    points.push([wX(st.gx[i]), -wZ(st.gs[j]), wY(S, hv(S, st.gR[q], st.gK[q]))]);
+  }
+  for (let j = 0; j < NS; j++) for (let i = 0; i < NX; i++) {
+    const a = j * W1 + i, b = a + 1, cc = a + 1 + W1, d = a + W1;
+    faces.push([a, b, cc], [a, cc, d]);
+  }
+  const per = [];
+  for (let i = 0; i < NX; i++) per.push([i, 0]);
+  for (let j = 0; j < NS; j++) per.push([NX, j]);
+  for (let i = NX; i > 0; i--) per.push([i, NS]);
+  for (let j = NS; j > 0; j--) per.push([0, j]);
+  const bIdx = new Map();
+  const bottom = (i, j) => { const key = j * W1 + i; if (!bIdx.has(key)) { bIdx.set(key, points.length); points.push([points[key][0], points[key][1], 0]); } return bIdx.get(key); };
+  for (let p = 0; p < per.length; p++) {
+    const [ia, ja] = per[p], [ib, jb] = per[(p + 1) % per.length];
+    faces.push([ja * W1 + ia, bottom(ia, ja), bottom(ib, jb), jb * W1 + ib]);
+  }
+  const c0 = points.length;
+  points.push([wX((XMIN + XMAX) / 2), -Z0, 0]);
+  for (let p = 0; p < per.length; p++) {
+    const [ia, ja] = per[p], [ib, jb] = per[(p + 1) % per.length];
+    faces.push([c0, bottom(ib, jb), bottom(ia, ja)]);
+  }
+  return J.primitives.polyhedron({ points, faces, orientation: 'outward' });
+}
+</script>
+</body>
+</html>

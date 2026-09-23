@@ -1,0 +1,1132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The pole and the Q-surface · Object Lessons</title>
+<meta name="description" content="Gym's real CartPole physics on a brass rail: balance it yourself, then watch a 144-cell Q-table learn it live, read its decision boundary off the floor, and see why DQN swaps the table for a network.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+  .k-label.k-tag{min-width:0}            /* the kit's beat chip .k-tag sets min-width:52px; not for 3D tags */
+  .k-label.k-tag.k-rw{text-transform:none; letter-spacing:0; font:700 11px/1.15 var(--font); background:var(--wash); padding:2px 6px; border-radius:6px}
+  .k-label.k-tag.k-lft{color:color-mix(in srgb, var(--k-dir) 82%, var(--ink))}
+  .k-label.k-tag.k-rgt{color:color-mix(in srgb, var(--k-aux) 82%, var(--ink))}
+  .k-label.k-tag.k-bad{color:var(--k-grad)}
+  .k-label.k-tag.k-rule{color:color-mix(in srgb, var(--k-brass) 78%, var(--ink)); text-transform:none; letter-spacing:0; font:700 10.5px/1.1 var(--font)}
+  /* push pads: live only while you drive; inside .k-app so the card (z 6) and sheets (z 7) cover them */
+  .cp-push{position:absolute; z-index:4; width:66px; height:66px; margin:0; padding:0; border-radius:50%;
+    border:1px solid var(--rule); background:var(--wash); color:var(--ink); box-shadow:var(--shadow-s);
+    display:none; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+    font:700 22px/1 var(--font); cursor:pointer; touch-action:none; user-select:none; -webkit-user-select:none;
+    -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); -webkit-touch-callout:none}
+  .cp-push small{font:700 9.5px/1 var(--font); letter-spacing:.06em; text-transform:uppercase; color:var(--muted)}
+  .cp-push.on{display:flex}
+  .cp-push.l[data-held="1"]{background:color-mix(in srgb, var(--k-dir) 24%, var(--surface)); border-color:var(--k-dir)}
+  .cp-push.r[data-held="1"]{background:color-mix(in srgb, var(--k-aux) 24%, var(--surface)); border-color:var(--k-aux)}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   19 · d09-cartpole: "The pole and the Q-surface" (W9 deep dive, ARENA [2.1] + [2.2.1])
+   The cart runs Gymnasium v0.29.0's CartPole equations and constants verbatim (euler, tau 0.02).
+   The floor is the whole Q-table of a toy tabular Q-learner (12 x 12 cells of (theta, theta_dot)),
+   trained IN THE PAGE with ARENA's QLearning update and linear_schedule, seeded (default seed 8), so
+   ?shot=1 is deterministic. The smooth view is 25 Gaussian bumps per action, weighted-least-squares fitted to
+   that table (labelled illustrative: fitted, not RL-trained). Nothing trains on page load: training
+   starts from beat 2, the Train toggle, or a prediction. Checked in node against an independent
+   Lagrangian derivation, a Python transcription of Gym's step and a numpy replay (LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* ---- CartPole: Gymnasium v0.29.0 gymnasium/envs/classic_control/cartpole.py, its constants and its
+   default "euler" integrator (ARENA links this exact file; its CartPole-gpu ports it). ---- */
+const CP = {
+  gravity: 9.8, masscart: 1.0, masspole: 0.1, total_mass: 1.1, length: 0.5 /* half the pole */,
+  polemass_length: 0.05, force_mag: 10.0, tau: 0.02,
+  theta_threshold_radians: 12 * 2 * Math.PI / 360, x_threshold: 2.4, max_episode_steps: 500,
+};
+/* ---- sin, cos and exp in plain + − × ÷, so every engine trains bit-identically. The JS spec does not pin
+   Math.sin down to the last bit (Chrome's V8 and node's differ), and CartPole is chaotic: a 1e-16 nudge
+   becomes a different table after a few hundred episodes. Taylor series after fdlibm's range reduction;
+   they match Math.sin / Math.cos / Math.exp to within 2 ulp (checked in node). ---- */
+const PIO2_1 = 1.57079632673412561417e+00, PIO2_1T = 6.07710050650619224932e-11, INV_PIO2 = 6.36619772367581382433e-01;
+const LN2_HI = 6.93147180369123816490e-01, LN2_LO = 1.90821492927058770002e-10, INV_LN2 = 1.44269504088896338700e+00;
+const fact = (n) => { let f = 1; for (let i = 2; i <= n; i++) f *= i; return f; };   // exact up to 18!
+const [S3, S5, S7, S9, S11, S13, S15, S17] = [3, 5, 7, 9, 11, 13, 15, 17].map((n) => ((n - 1) / 2 % 2 ? -1 : 1) / fact(n));
+const [C2, C4, C6, C8, C10, C12, C14, C16, C18] = [2, 4, 6, 8, 10, 12, 14, 16, 18].map((n) => (n / 2 % 2 ? -1 : 1) / fact(n));
+const [E2, E3, E4, E5, E6, E7, E8, E9, E10, E11, E12, E13] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13].map((n) => 1 / fact(n));
+const POW2 = (() => { const t = new Float64Array(129); t[64] = 1; for (let k = 1; k <= 64; k++) { t[64 + k] = t[63 + k] * 2; t[64 - k] = t[65 - k] / 2; } return t; })();
+const sin_r = (r, z) => r + r * z * (S3 + z * (S5 + z * (S7 + z * (S9 + z * (S11 + z * (S13 + z * (S15 + z * S17)))))));   // |r| <= pi/4, z = r^2
+const cos_r = (z) => 1 + z * (C2 + z * (C4 + z * (C6 + z * (C8 + z * (C10 + z * (C12 + z * (C14 + z * (C16 + z * C18))))))));
+let SIN = 0, COS = 0;   // sincos() writes here: no allocation inside the physics loop
+function sincos(x) {
+  const k = Math.round(x * INV_PIO2), r = (x - k * PIO2_1) - k * PIO2_1T, z = r * r, s = sin_r(r, z), c = cos_r(z), q = ((k % 4) + 4) % 4;
+  if (q === 0) { SIN = s; COS = c; } else if (q === 1) { SIN = c; COS = -s; } else if (q === 2) { SIN = -s; COS = -c; } else { SIN = -c; COS = s; }
+}
+function det_sincos(x) { sincos(x); return [SIN, COS]; }
+const det_sin = (x) => det_sincos(x)[0], det_cos = (x) => det_sincos(x)[1];
+function det_exp(x) {
+  if (x < -700) return 0; if (x > 700) return Infinity;
+  const k = Math.round(x * INV_LN2), r = (x - k * LN2_HI) - k * LN2_LO;
+  const e = 1 + r + r * r * (E2 + r * (E3 + r * (E4 + r * (E5 + r * (E6 + r * (E7 + r * (E8 + r * (E9 + r * (E10 + r * (E11 + r * (E12 + r * E13)))))))))));
+  if (k >= -64 && k <= 64) return e * POW2[k + 64];
+  let s = 1; for (let i = k; i > 0; i--) s *= 2; for (let i = k; i < 0; i++) s /= 2;   // exact powers of two
+  return e * s;
+}
+
+function cartpole_step(state, force) {
+  // state = [x, x_dot, theta, theta_dot] -> the next state (a new array; float64 throughout)
+  const [x, x_dot, theta, theta_dot] = state;
+  sincos(theta); const sintheta = SIN, costheta = COS;
+  const temp = (force + CP.polemass_length * theta_dot * theta_dot * sintheta) / CP.total_mass;
+  const thetaacc = (CP.gravity * sintheta - costheta * temp) /
+    (CP.length * (4.0 / 3.0 - CP.masspole * costheta * costheta / CP.total_mass));
+  const xacc = temp - CP.polemass_length * thetaacc * costheta / CP.total_mass;
+  return [x + CP.tau * x_dot, x_dot + CP.tau * xacc, theta + CP.tau * theta_dot, theta_dot + CP.tau * thetaacc];
+}
+function cartpole_step_inplace(st, force) {
+  // the same arithmetic, written into the Float64Array st (no allocation: training runs ~10^5 steps)
+  const x = st[0], x_dot = st[1], theta = st[2], theta_dot = st[3];
+  sincos(theta); const sintheta = SIN, costheta = COS;
+  const temp = (force + CP.polemass_length * theta_dot * theta_dot * sintheta) / CP.total_mass;
+  const thetaacc = (CP.gravity * sintheta - costheta * temp) /
+    (CP.length * (4.0 / 3.0 - CP.masspole * costheta * costheta / CP.total_mass));
+  const xacc = temp - CP.polemass_length * thetaacc * costheta / CP.total_mass;
+  st[0] = x + CP.tau * x_dot; st[1] = x_dot + CP.tau * xacc; st[2] = theta + CP.tau * theta_dot; st[3] = theta_dot + CP.tau * thetaacc;
+}
+function cartpole_terminated(s) {
+  return s[0] < -CP.x_threshold || s[0] > CP.x_threshold ||
+    s[2] < -CP.theta_threshold_radians || s[2] > CP.theta_threshold_radians;
+}
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+class CartPole {
+  // action 0 = push left (-force_mag), 1 = push right (+force_mag), as in Gym. force(0) is the
+  // human's hands-off moment (ARENA's browser demo adds the same hidden no-op; the agent never gets it).
+  constructor(seed = 0) { this.rand = mulberry32(seed); this.state = new Float64Array(4); this.reset(); }
+  reset() {
+    const r = this.rand, st = this.state;
+    for (let i = 0; i < 4; i++) st[i] = -0.05 + 0.1 * r();   // np_random.uniform(-0.05, 0.05, size=(4,))
+    this.t = 0; this.done = false; this.terminated = false; this.truncated = false;
+    return st;
+  }
+  force(F) {
+    cartpole_step_inplace(this.state, F); this.t += 1;
+    const terminated = cartpole_terminated(this.state);
+    const truncated = !terminated && this.t >= CP.max_episode_steps;   // CartPole-v1's TimeLimit(500)
+    this.terminated = terminated; this.truncated = truncated; this.done = terminated || truncated;
+    return 1.0;   // +1 every step, the falling step included (v0.29)
+  }
+  step(action) { return this.force(action === 1 ? CP.force_mag : -CP.force_mag); }
+}
+
+/* ---- ARENA [2.2.1]'s epsilon schedule, the same formula (the page counts episodes, not env steps) ---- */
+function linear_schedule(current_step, start_e, end_e, exploration_fraction, total_timesteps) {
+  return start_e + (end_e - start_e) * Math.min(current_step / (exploration_fraction * total_timesteps), 1);
+}
+
+/* ---- the toy: tabular Q-learning (ARENA [2.1] QLearning.observe) on 12 x 12 cells of (theta, theta_dot) ---- */
+const BINS = {
+  theta: { n: 12, lo: -CP.theta_threshold_radians, hi: CP.theta_threshold_radians },   // 2 degrees a cell
+  theta_dot: { n: 12, lo: -2.0, hi: 2.0 },                                              // 1/3 rad/s a cell; the end cells catch the rest
+};
+function bin_uniform(v, b) { const k = Math.floor((v - b.lo) / (b.hi - b.lo) * b.n); return k < 0 ? 0 : k >= b.n ? b.n - 1 : k; }
+function obs_to_state(o) { return bin_uniform(o[2], BINS.theta) * BINS.theta_dot.n + bin_uniform(o[3], BINS.theta_dot); }
+const NUM_STATES = BINS.theta.n * BINS.theta_dot.n;   // 144: the table never sees x or x_dot
+const RING = 300;                                      // the last transitions, kept for the picture of a replay buffer
+
+class QLearner {
+  constructor({ seed = 8, lr = 0.1, gamma = 0.99, start_e = 1.0, end_e = 0.02, exploration_fraction = 0.5, total_episodes = 600 } = {}) {
+    Object.assign(this, { seed, lr, gamma, start_e, end_e, exploration_fraction, total_episodes });
+    this.Q = new Float64Array(NUM_STATES * 2);         // AgentConfig(optimism=0): Q starts at 0
+    this.tries = new Uint32Array(NUM_STATES * 2);      // how often each (cell, action) was updated
+    this.rand = mulberry32(seed * 7919 + 17);
+    this.env = new CartPole(seed);
+    this.episode = 0; this.lengths = []; this.ends = []; this.steps = 0;
+    this.ring = new Float32Array(2 * RING); this.ringN = 0;
+    this.lastS = -1; this.lastA = 0; this.lastQ0 = 0; this.lastNext = 0; this.lastQ1 = 0; this.lastTerm = false;
+    this.s = -1; this.n = 0; this.eps = start_e;   // no episode running yet
+  }
+  epsilon() { return linear_schedule(this.episode, this.start_e, this.end_e, this.exploration_fraction, this.total_episodes); }
+  greedy(s) { const q = this.Q; return q[2 * s + 1] > q[2 * s] ? 1 : 0; }   // ties -> 0, like np.argmax
+  get_action(s, eps) { return this.rand() < eps ? (this.rand() < 0.5 ? 0 : 1) : this.greedy(s); }
+  observe(s, a, r, s2, terminated) {
+    // Q[s,a] += lr * (r + gamma * max_a' Q[s',a'] * (1 - terminated) - Q[s,a]): no bootstrapping past a fall;
+    // truncation at 500 still bootstraps (ARENA [2.2.1]: d = terminated, not truncated)
+    const q = this.Q, next = terminated ? 0 : Math.max(q[2 * s2], q[2 * s2 + 1]);
+    const q0 = q[2 * s + a], td = r + this.gamma * next - q0;
+    q[2 * s + a] = q0 + this.lr * td;
+    this.tries[2 * s + a] += 1;
+    this.lastS = s; this.lastA = a; this.lastQ0 = q0; this.lastNext = next; this.lastQ1 = q[2 * s + a]; this.lastTerm = terminated;
+    return td;
+  }
+  begin() {   // a new episode: reset the env, fix this episode's epsilon
+    this.eps = this.epsilon(); this.s = obs_to_state(this.env.reset()); this.n = 0;
+  }
+  step(record) {   // one env step and one Q update; true when that step ended the episode
+    if (this.s < 0) this.begin();
+    const env = this.env, st = env.state, s = this.s, a = this.get_action(s, this.eps);
+    const k = (this.ringN++ % RING) * 2; this.ring[k] = st[2]; this.ring[k + 1] = st[3];
+    const before = record ? Array.from(st) : null;
+    const reward = env.step(a);
+    const s2 = obs_to_state(st);
+    const td = this.observe(s, a, reward, s2, env.terminated);
+    if (record) record.push({ obs: before, a, reward, o2: Array.from(st), terminated: env.terminated, truncated: env.truncated, s, s2, td });
+    this.s = s2; this.n += 1; this.steps += 1;
+    if (!env.done) return false;
+    this.episode += 1; this.lengths.push(this.n); this.s = -1;
+    this.ends.push(env.truncated ? 'cap' : Math.abs(st[0]) > CP.x_threshold ? 'track' : 'fall');
+    return true;
+  }
+  run_episode(record) { while (!this.step(record)); return this.lengths[this.lengths.length - 1]; }   // finishes the current one
+}
+const TEST_SEEDS = Array.from({ length: 20 }, (_, i) => 1000 + i);
+function eval_policy(pol, seeds = TEST_SEEDS) {
+  // lengths of fresh greedy episodes (no exploration); pol(state) -> 0 | 1
+  return seeds.map((sd) => { const env = new CartPole(sd); let n = 0;
+    while (!env.done) { env.step(pol(env.state)); n++; } return n; });
+}
+const table_policy = (L) => (st) => L.greedy(obs_to_state(st));
+
+/* ---- the smooth view: per action, 25 Gaussian bumps on a 5 x 5 grid over (u, v) = (theta / 12 deg,
+   theta_dot / 2 rad/s), i.e. a one-layer network with fixed features whose output weights are fitted to the
+   table by weighted least squares (weight = how often that cell and action were updated; a small ridge).
+   2 x 25 numbers stand in for 144 x 2 cells, and give a value between and beyond the visited cells. ---- */
+const RBF_K = 5, RBF_SIG = 0.35, P_FEAT = RBF_K * RBF_K, RIDGE = 0.01;
+function rbf_features(u, v) {
+  const f = new Array(P_FEAT);
+  for (let i = 0; i < RBF_K; i++) for (let j = 0; j < RBF_K; j++) {
+    const du = u - (-1 + 2 * i / (RBF_K - 1)), dv = v - (-1 + 2 * j / (RBF_K - 1));
+    f[i * RBF_K + j] = det_exp(-(du * du + dv * dv) / (2 * RBF_SIG * RBF_SIG));
+  }
+  return f;
+}
+function uv_of(theta, theta_dot) {
+  const u = theta / CP.theta_threshold_radians, v = theta_dot / BINS.theta_dot.hi;
+  return [u < -1 ? -1 : u > 1 ? 1 : u, v < -1 ? -1 : v > 1 ? 1 : v];
+}
+function cell_uv(s) { const it = Math.floor(s / BINS.theta_dot.n), iw = s % BINS.theta_dot.n;
+  return [(it + 0.5) / BINS.theta.n * 2 - 1, (iw + 0.5) / BINS.theta_dot.n * 2 - 1]; }
+function fit_action(L, a) {
+  const A = Array.from({ length: P_FEAT }, () => new Float64Array(P_FEAT)), b = new Float64Array(P_FEAT);
+  for (let s = 0; s < NUM_STATES; s++) {
+    const w = L.tries[2 * s + a]; if (!w) continue;
+    const [u, v] = cell_uv(s), f = rbf_features(u, v), y = L.Q[2 * s + a];
+    for (let i = 0; i < P_FEAT; i++) { b[i] += w * f[i] * y; for (let j = 0; j < P_FEAT; j++) A[i][j] += w * f[i] * f[j]; }
+  }
+  let tr = 0; for (let i = 0; i < P_FEAT; i++) tr += A[i][i];
+  for (let i = 0; i < P_FEAT; i++) A[i][i] += RIDGE * (tr / P_FEAT) + 1e-9;   // ridge: 1% of the mean diagonal keeps bumps over empty cells near 0
+  return solve_linear(A, b);
+}
+function fit_pair(L) { return [fit_action(L, 0), fit_action(L, 1)]; }
+function dot_feat(c, u, v) {   // c . rbf_features(u, v), same order of operations, without the array
+  let s = 0;
+  for (let i = 0; i < RBF_K; i++) { const du = u - (-1 + 2 * i / (RBF_K - 1));
+    for (let j = 0; j < RBF_K; j++) { const dv = v - (-1 + 2 * j / (RBF_K - 1)); s += c[i * RBF_K + j] * det_exp(-(du * du + dv * dv) / (2 * RBF_SIG * RBF_SIG)); } }
+  return s;
+}
+function fit_q(fit, a, theta, theta_dot) { const [u, v] = uv_of(theta, theta_dot); return dot_feat(fit[a], u, v); }
+const fit_policy = (fit) => (st) => (fit_q(fit, 1, st[2], st[3]) > fit_q(fit, 0, st[2], st[3]) ? 1 : 0);
+function update_kernel(u, v, u0, v0) {
+  // one gradient step on a linear-in-features model, c += lr * td * phi(s0), changes every value by
+  // lr * td * phi(s) . phi(s0): this returns phi(s) . phi(s0) / (phi(s0) . phi(s0)), the share each point moves
+  const f = rbf_features(u, v), g = rbf_features(u0, v0); let a = 0, b = 0;
+  for (let i = 0; i < P_FEAT; i++) { a += f[i] * g[i]; b += g[i] * g[i]; }
+  return a / b;
+}
+function solve_linear(A, b) {
+  const n = b.length, M = A.map((r, i) => [...r, b[i]]);
+  for (let k = 0; k < n; k++) {
+    let p = k; for (let i = k + 1; i < n; i++) if (Math.abs(M[i][k]) > Math.abs(M[p][k])) p = i;
+    [M[k], M[p]] = [M[p], M[k]];
+    for (let i = k + 1; i < n; i++) { const f = M[i][k] / M[k][k]; for (let j = k; j <= n; j++) M[i][j] -= f * M[k][j]; }
+  }
+  const x = new Float64Array(n);
+  for (let i = n - 1; i >= 0; i--) { let s = M[i][n]; for (let j = i + 1; j < n; j++) s -= M[i][j] * x[j]; x[i] = s / M[i][i]; }
+  return x;
+}
+
+/* ---- same code, eight seeds (default settings): how often does the toy end with a perfect policy? ---- */
+function train_seed(seed, episodes = 600) {
+  const L = new QLearner({ seed, total_episodes: episodes });
+  for (let e = 0; e < episodes; e++) L.run_episode();
+  const g = eval_policy(table_policy(L));
+  return { seed, mean: g.reduce((x, y) => x + y, 0) / g.length, full: g.filter((x) => x === CP.max_episode_steps).length };
+}
+// MATH-END
+
+/* ============================================================ display setup */
+
+const SC = 2 / 3;                                   // world units per metre: the ±2.4 m track spans ±1.6
+const RAIL = { y: 0.74, z: -1.06, rod: 1.82, gap: 0.075 };
+const CART = { w: 0.4 * SC, h: 0.24 * SC, d: 0.22, wheel: 0.032 };   // Gym renderer proportions (0.4 m x 0.24 m)
+const PIVOT_Y = RAIL.y + 2 * CART.wheel + CART.h;
+const POLE = 2 * CP.length * SC;                    // the whole 1 m pole
+const NT = BINS.theta.n, NW = BINS.theta_dot.n;
+const CELL = 0.215, HALF = CELL * NT / 2, ZC = 0.4, BASE = 0.03;
+const H0 = 0.03, HK = 0.0058;                       // bar height = 0.03 + 0.0058 V, V = max_a Q in [0, ~100]
+const SKY = { n: 60, z: -1.6, half: 1.34, h: 0.6, base: 0.03 };
+const E_TOTAL = 600, SEED0 = 8, TRAIL = 16, SMOOTH_N = 40;
+const LEFT = new THREE.Color(C.dir), RIGHT = new THREE.Color(C.aux), PLASTER = new THREE.Color('#ece5d8');
+const LEFT_P = PLASTER.clone().lerp(LEFT, 0.62), RIGHT_P = PLASTER.clone().lerp(RIGHT, 0.75), UNSEEN = new THREE.Color('#cfc7b8');
+const MILD = new THREE.Color('#ebe4d6');           // both shoves score about the same: the colour fades toward this
+const GAP_FULL = 20, PLATEAU = 20;                // full colour at |Q(s,→) − Q(s,←)| ≥ 20; brass only between squares with V ≥ 20
+const sideColour = (gap, out) => out.copy(MILD).lerp(gap > 0 ? RIGHT_P : LEFT_P, 0.25 + 0.75 * Math.min(1, Math.abs(gap) / GAP_FULL));
+const GREEN_P = PLASTER.clone().lerp(new THREE.Color(C.good), 0.62), PALE = new THREE.Color('#d6cdbd');
+const fx = (v, d = 2) => { const s = (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d); return s.replace('-', '−'); };
+const sg = (v, d = 2) => (v > 0 ? '+' : '') + fx(v, d);
+const deg = (r) => r * 180 / Math.PI;
+const ARW = ['←', '→'];
+
+const CAM = {
+  hero: { pos: [0.9, 4.1, 6.9], target: [0, 0.5, -0.1] },
+  cart: { pos: [0.3, 1.45, 2.6], target: [0, 0.98, -1.06], fit: 0.5 },
+  // a close-up on the floor; a landscape screen needs room above it for the cart's readout, so it zooms less
+  floor: { pos: [0.5, 4.3, 5.7], target: [0, 0.32, 0.3], get fit() { return innerWidth < innerHeight ? 0.98 : 0.64; } },
+  side: { pos: [-2.6, 3.6, 6.2], target: [0, 0.5, -0.1] },
+  back: { pos: [1.2, 3.1, 6.6], target: [0, 0.55, -0.6] },
+  sky: { pos: [0.6, 3.6, 4.2], target: [0, 0.45, -1.3], fit: 0.95 },
+};
+
+/* ------------------------------------------------------------ floor mapping */
+const cellX = (it) => (it + 0.5 - NT / 2) * CELL;
+const cellZ = (iw) => ZC - (iw + 0.5 - NW / 2) * CELL;      // spinning right (theta_dot > 0) = far side
+const uX = (u) => u * HALF, vZ = (v) => ZC - v * HALF;
+const hOf = (V) => H0 + HK * Math.max(0, Math.min(100, V));
+const _o = new THREE.Object3D(), _c = new THREE.Color(), _v = new THREE.Vector3(), ZAX = new THREE.Vector3(0, 0, 1);
+function inst(S, geo, mat, n, shadow = true) {
+  const m = new THREE.InstancedMesh(geo, mat, n);
+  m.castShadow = shadow; m.receiveShadow = true; m.frustumCulled = false; m.userData.noFit = true;
+  m.count = 0; S.root.add(m); return m;
+}
+const seen = (L, s) => L.tries[2 * s] + L.tries[2 * s + 1] > 0;
+const vOf = (L, s) => Math.max(L.Q[2 * s], L.Q[2 * s + 1]);
+
+/* the height of the floor under a continuous (theta, theta_dot), in the current view */
+function floorY(S, th, w) {
+  const st = S.state;
+  if (st.view === 'smooth' && st.fit) return BASE + hOf(Math.max(fit_q(st.fit, 0, th, w), fit_q(st.fit, 1, th, w)));
+  const s = obs_to_state([0, 0, th, w]), L = st.L;
+  return BASE + (seen(L, s) ? hOf(vOf(L, s)) : 0.012);
+}
+function floorXZ(th, w) { const [u, v] = uv_of(th, w); return [uX(u), vZ(v)]; }
+
+/* ----------------------------------------------------------------- the floor */
+function paintTable(S) {
+  const st = S.state, L = st.L, bars = st.bars, E = st.edges;
+  for (let s = 0; s < NUM_STATES; s++) {
+    const it = Math.floor(s / NW), iw = s % NW, on = seen(L, s);
+    const h = on ? hOf(vOf(L, s)) : 0.012;
+    _o.position.set(cellX(it), BASE + h / 2, cellZ(iw)); _o.scale.set(CELL * 0.92, h, CELL * 0.92); _o.updateMatrix();
+    bars.setMatrixAt(s, _o.matrix);
+    bars.setColorAt(s, !on ? UNSEEN : sideColour(L.Q[2 * s + 1] - L.Q[2 * s], _c));
+  }
+  bars.count = NUM_STATES; bars.instanceMatrix.needsUpdate = true; bars.instanceColor.needsUpdate = true;
+  // the decision boundary: shared edges between squares whose greedy actions differ, on the plateau (V >= 20 both sides)
+  let n = 0;
+  const top = (s) => BASE + hOf(vOf(L, s)) + 0.008, plat = (s) => seen(L, s) && vOf(L, s) >= PLATEAU;
+  for (let it = 0; it < NT; it++) for (let iw = 0; iw < NW; iw++) {
+    const s = it * NW + iw; if (!plat(s)) continue;
+    if (it + 1 < NT) { const r = s + NW; if (plat(r) && L.greedy(r) !== L.greedy(s)) {
+      _o.position.set(cellX(it) + CELL / 2, Math.max(top(s), top(r)), cellZ(iw)); _o.scale.set(0.022, 0.022, CELL + 0.022); _o.updateMatrix(); E.setMatrixAt(n++, _o.matrix); } }
+    if (iw + 1 < NW) { const r = s + 1; if (plat(r) && L.greedy(r) !== L.greedy(s)) {
+      _o.position.set(cellX(it), Math.max(top(s), top(r)), cellZ(iw) - CELL / 2); _o.scale.set(CELL + 0.022, 0.022, 0.022); _o.updateMatrix(); E.setMatrixAt(n++, _o.matrix); } }
+  }
+  E.count = n; E.instanceMatrix.needsUpdate = true;
+  st.nEdges = n;
+}
+function ensureFit(S) {
+  const st = S.state;
+  if (!st.fit || st.fitStale) { st.fit = fit_pair(st.L); st.fitStale = false; st.fitScore = null; }
+  return st.fit;
+}
+function fitScore(S) {
+  const st = S.state; ensureFit(S);
+  if (!st.fitScore) { const g = eval_policy(fit_policy(st.fit)); st.fitScore = { mean: g.reduce((a, b) => a + b, 0) / g.length, full: g.filter((x) => x === CP.max_episode_steps).length }; }
+  return st.fitScore;
+}
+function smoothGrid(S, fn) {   // fn(u, v) on the (SMOOTH_N + 1)^2 grid of the smooth sheet, into a new array
+  const G = SMOOTH_N, out = new Float64Array((G + 1) * (G + 1));
+  for (let j = 0; j <= G; j++) for (let i = 0; i <= G; i++) out[j * (G + 1) + i] = fn(i / G * 2 - 1, j / G * 2 - 1);
+  return out;
+}
+function paintSmooth(S, bump = null, amp = 0) {
+  const st = S.state, fit = ensureFit(S), G = SMOOTH_N, g = st.smooth.geometry;
+  const pos = g.attributes.position.array, col = g.attributes.color.array, D = st.smoothD, V = st.smoothV;
+  if (st.gridFit !== fit) { st.gridL = smoothGrid(S, (u, v) => dot_feat(fit[0], u, v)); st.gridR = smoothGrid(S, (u, v) => dot_feat(fit[1], u, v)); st.gridFit = fit; }
+  for (let j = 0; j <= G; j++) for (let i = 0; i <= G; i++) {
+    const u = i / G * 2 - 1, v = j / G * 2 - 1, k = j * (G + 1) + i;
+    const qL = st.gridL[k], qR = st.gridR[k];
+    const y = BASE + hOf(Math.max(qL, qR)) + (bump ? amp * bump[k] : 0);
+    pos[3 * k] = uX(u); pos[3 * k + 1] = y; pos[3 * k + 2] = vZ(v);
+    D[k] = qR - qL; V[k] = Math.max(qL, qR);
+    sideColour(qR - qL, _c); col[3 * k] = _c.r; col[3 * k + 1] = _c.g; col[3 * k + 2] = _c.b;
+  }
+  g.attributes.position.needsUpdate = true; g.attributes.color.needsUpdate = true; g.computeVertexNormals();
+  // brass boundary: the zero set of Q(s,->) - Q(s,<-), by marching squares on the same grid, on the plateau (V >= 20)
+  const E = st.sEdges; let n = 0;
+  const P = (k) => _v.set(pos[3 * k], pos[3 * k + 1], pos[3 * k + 2]).clone();
+  const cross = (a, b) => { const t = D[a] / (D[a] - D[b]); return P(a).lerp(P(b), t); };
+  for (let j = 0; j < G; j++) for (let i = 0; i < G; i++) {
+    const a = j * (G + 1) + i, b = a + 1, c = a + G + 2, d = a + G + 1;   // corners in order around the quad
+    if (Math.min(V[a], V[b], V[c], V[d]) < PLATEAU) continue;
+    const pts = [];
+    for (const [p, q] of [[a, b], [b, c], [c, d], [d, a]]) if ((D[p] > 0) !== (D[q] > 0)) pts.push(cross(p, q));
+    for (let m = 0; m + 1 < pts.length && n < st.sEdgesCap; m += 2) {
+      const p0 = pts[m], p1 = pts[m + 1], len = p0.distanceTo(p1); if (len < 1e-5) continue;
+      _o.position.copy(p0).add(p1).multiplyScalar(0.5); _o.position.y += 0.012;
+      _o.quaternion.setFromUnitVectors(ZAX, _v.copy(p1).sub(p0).normalize());
+      _o.scale.set(0.02, 0.02, len + 0.02); _o.updateMatrix(); E.setMatrixAt(n++, _o.matrix);
+    }
+    _o.quaternion.identity();
+  }
+  E.count = n; E.instanceMatrix.needsUpdate = true;
+  st.nEdges = n;
+}
+function paintFloor(S) {
+  const st = S.state, sm = st.view === 'smooth';
+  st.bars.visible = st.edges.visible = !sm;
+  st.smooth.visible = st.sEdges.visible = sm;
+  if (sm) paintSmooth(S); else paintTable(S);
+  paintDots(S);
+  placeBead(S);
+}
+function paintDots(S) {
+  const st = S.state, L = st.L, D = st.dots;
+  if (!st.showDots) { D.count = 0; D.visible = false; return; }
+  const n = Math.min(RING, L.ringN);
+  for (let i = 0; i < n; i++) {
+    const th = L.ring[2 * i], w = L.ring[2 * i + 1], [x, z] = floorXZ(th, w);
+    _o.position.set(x, floorY(S, th, w) + 0.022, z); _o.scale.setScalar(1); _o.updateMatrix(); D.setMatrixAt(i, _o.matrix);
+  }
+  D.count = n; D.visible = n > 0; D.instanceMatrix.needsUpdate = true;
+}
+
+/* ------------------------------------------------------------ the skyline */
+function paintSky(S) {
+  const st = S.state, B = st.sky, L = st.L;
+  if (st.skyMode === 'seeds') {
+    const res = st.seedsRun ? st.seedsRun.res : [];
+    const w = 2 * SKY.half / 8;
+    for (let i = 0; i < 8; i++) {
+      const r = res[i], h = r ? Math.max(0.01, SKY.h * r.mean / CP.max_episode_steps) : 0.004;
+      _o.position.set(-SKY.half + w * (i + 0.5), SKY.base + h / 2, SKY.z); _o.scale.set(w * 0.72, h, 0.1); _o.updateMatrix();
+      B.setMatrixAt(i, _o.matrix); B.setColorAt(i, r && r.full === TEST_SEEDS.length ? GREEN_P : PALE);
+      st.seedTags[i].move([-SKY.half + w * (i + 0.5), SKY.base + h + 0.05, SKY.z]);
+    }
+    B.count = 8; st.epsLine.mesh.visible = false;
+  } else {
+    const w = 2 * SKY.half / SKY.n; let n = 0;
+    for (let j = 0; j < SKY.n; j++) {
+      const blk = L.lengths.slice(j * 10, j * 10 + 10); if (!blk.length) break;
+      const m = blk.reduce((a, b) => a + b, 0) / blk.length, h = Math.max(0.006, SKY.h * m / CP.max_episode_steps);
+      _o.position.set(-SKY.half + w * (j + 0.5), SKY.base + h / 2, SKY.z); _o.scale.set(w * 0.8, h, 0.08); _o.updateMatrix();
+      B.setMatrixAt(n, _o.matrix); B.setColorAt(n, GREEN_P); n++;
+    }
+    B.count = n; st.epsLine.mesh.visible = st.showEps;
+  }
+  B.instanceMatrix.needsUpdate = true; if (B.instanceColor) B.instanceColor.needsUpdate = true;
+  for (const t of st.seedTags) t.show(st.skyMode === 'seeds' && st.tagsOn);
+}
+function epsPoints(S) {
+  const L = S.state.L, pts = [];
+  for (let j = 0; j <= SKY.n; j++) {
+    const e = linear_schedule(j * 10, L.start_e, L.end_e, L.exploration_fraction, L.total_episodes);
+    pts.push([-SKY.half + 2 * SKY.half * j / SKY.n, SKY.base + SKY.h * e + 0.012, SKY.z + 0.07]);
+  }
+  return pts;
+}
+
+/* ---------------------------------------------------------------- the cart */
+function placeCart(S, state, F) {
+  const st = S.state, x = state[0] * SC, th = state[2];
+  st.cart.position.x = x;
+  st.pivot.rotation.z = -th;                           // theta > 0: the top of the pole leans to +x (right)
+  st.cartTop.position.set(x, PIVOT_Y + POLE + 0.1, RAIL.z);
+  const show = F !== 0 && F != null;
+  st.pushL.show(show && F < 0); st.pushR.show(show && F > 0);
+  if (show) {
+    const y = RAIL.y + CART.wheel * 2 + CART.h * 0.5, z = RAIL.z + CART.d / 2 + 0.02, s = Math.sign(F);
+    const a = [x - s * (CART.w / 2 + 0.26), y, z], b = [x - s * (CART.w / 2 + 0.03), y, z];
+    (F < 0 ? st.pushL : st.pushR).set(a, b);
+  }
+}
+function placeBead(S) {
+  const st = S.state, e = st.sim.env.state, th = e[2], w = e[3], [x, z] = floorXZ(th, w);
+  st.bead.position.set(x, floorY(S, th, w) + 0.05, z);
+  st.bead.visible = st.trailTube.mesh.visible = st.beadOn;
+  if (st.trail.length > 1) st.trailTube.set(st.trail.map((p) => { const [tx, tz] = floorXZ(p[0], p[1]); return [tx, floorY(S, p[0], p[1]) + 0.035, tz]; }));
+  else st.trailTube.set([]);
+}
+function pushTrail(S, state) {
+  const tr = S.state.trail; tr.push([state[2], state[3]]); if (tr.length > TRAIL) tr.shift();
+}
+
+/* ------------------------------------------------------------ the readouts */
+function driverName(S, T) {
+  const sm = S.state.view === 'smooth';
+  return T === 1 ? (sm ? 'the smooth fit' : 'the table') : T === 2 ? (sm ? 'fitted bumps' : 'greedy table') : (sm ? 'argmax_a f_a(θ, θ̇)' : 'argmax_a Q[s]');
+}
+function qLine(S) {
+  const st = S.state, T = S.tier, e = st.sim.env.state, th = e[2], w = e[3];
+  if (st.view === 'smooth' && st.fit) {
+    const qL = fit_q(st.fit, 0, th, w), qR = fit_q(st.fit, 1, th, w), a = qR > qL ? 1 : 0;
+    return T === 1 ? `the smooth fit says: push ${ARW[a]}` : T === 2 ? `fitted Q(s,←) = ${fx(qL, 1)} · Q(s,→) = ${fx(qR, 1)} → ${ARW[a]}`
+      : `f(s) = [${fx(qL, 2)}, ${fx(qR, 2)}] (25-bump fit) → ${ARW[a]}`;
+  }
+  const L = st.L, s = obs_to_state(e), it = Math.floor(s / NW), iw = s % NW;
+  if (!seen(L, s)) return T === 1 ? 'a blank square: both scores 0' : T === 2 ? 'Q(s,·) = 0, 0: never visited → ← (tie)' : `Q[s] = [0, 0], s = (${it}, ${iw}) unvisited → argmax 0`;
+  const qL = L.Q[2 * s], qR = L.Q[2 * s + 1], a = L.greedy(s);
+  return T === 1 ? `this square says: push ${ARW[a]}` : T === 2 ? `Q(s,←) = ${fx(qL, 1)} · Q(s,→) = ${fx(qR, 1)} → ${ARW[a]}`
+    : `Q[s] = [${fx(qL, 2)}, ${fx(qR, 2)}], s = (${it}, ${iw}) → ${ARW[a]}`;
+}
+function cartText(S) {
+  const st = S.state, sim = st.sim, env = sim.env, T = S.tier, e = env.state, lab = st.cartLab;
+  if (st.mode === 'you' && !sim.running && !sim.pause) {
+    lab.set(T === 3 ? '**Hold ◀ / ▶ (keys ← → or A D)**\nF = ±10 N while held, 0 otherwise' : '**Hold ◀ or ▶ to push**\nkeys: ← → or A D');
+    return;
+  }
+  if (sim.pause && sim.why) {
+    const n = env.t;
+    const why = sim.why === 'cap' ? (T === 1 ? `**500 steps: the most there is**` : `**Return 500: truncated at the cap**`)
+      : sim.why === 'track' ? (T === 1 ? `**Off the end of the track** after ${n} steps` : `**Off the track at step ${n}** (|x| > 2.4 m)`)
+        : (T === 1 ? `**The pole fell** after ${n} steps` : `**Fell at step ${n}** (|θ| > 12°)`);
+    lab.set(why + (T === 1 ? `\nscore ${n}` : `\nreturn ${n} = +1 × ${n} steps`));
+    return;
+  }
+  const who = st.mode === 'you' ? 'you' : driverName(S, T), q = st.qOn ? '\n' + qLine(S) : '';
+  if (T === 1) lab.set((st.mode === 'you' ? `**${(env.t * CP.tau).toFixed(1)} s balanced**` : `**${who[0].toUpperCase() + who.slice(1)} drives: ${(env.t * CP.tau).toFixed(1)} s**`) + `\nscore ${env.t} (+1 a step)` + q);
+  else if (T === 2) lab.set(`**step ${env.t} · return ${env.t}** (${who})\nθ = ${sg(deg(e[2]), 1)}°, θ̇ = ${sg(e[3], 2)} rad/s` + q);
+  else lab.set(`**t = ${env.t}, G = ${env.t}** · π: ${who}\n[x, v, θ, ω] = [${fx(e[0])}, ${fx(e[1])}, ${fx(e[2], 3)}, ${fx(e[3])}]` + q);
+}
+function tdText(S) {
+  const st = S.state, L = st.L, T = S.tier, lab = st.tdLab;
+  if (st.tdNote) { lab.show(true); lab.set(st.tdNote); st.tdMark.visible = false; return; }
+  if (!st.tdOn || L.lastS < 0) { lab.show(false); st.tdMark.visible = false; return; }
+  const s = L.lastS, a = L.lastA, it = Math.floor(s / NW), iw = s % NW;
+  st.tdMark.position.set(cellX(it), BASE + hOf(vOf(L, s)) + 0.004, cellZ(iw)); st.tdMark.visible = st.view === 'table';
+  lab.show(true);
+  const q0 = L.lastQ0, nx = L.lastNext, q1 = L.lastQ1;
+  lab.set(T === 1 ? `**Latest nudge: red square, push ${ARW[a]}**\n${fx(q0, 2)} → ${fx(q1, 2)}${L.lastTerm ? ' (it fell: no future)' : ''}`
+    : T === 2 ? `**TD update at the red square, Q(s,${ARW[a]})${L.lastTerm ? ', it fell' : ''}**\n${fx(q0, 2)} + 0.1 × (1 + 0.99 × ${fx(nx, 2)} − ${fx(q0, 2)}) = ${fx(q1, 2)}`
+      : `**Q[s,${a}] += lr·δ**, δ = r + γ·max Q[s′]${L.lastTerm ? '·0 (terminated)' : ''} − Q[s,a]\n= 1 + 0.99 × ${fx(nx, 3)} − ${fx(q0, 3)} = ${sg(1 + 0.99 * nx - q0, 3)}`);
+}
+function skyText(S) {
+  const st = S.state, L = st.L, T = S.tier, lab = st.skyLab;
+  if (!st.skyOn) { lab.show(false); return; }
+  lab.show(true);
+  if (st.skyNote) { lab.set(st.skyNote); return; }
+  if (st.skyMode === 'seeds') {
+    const r = st.seedsRun ? st.seedsRun.res : [], k = r.filter((x) => x.full === TEST_SEEDS.length).length;
+    if (r.length < 8) { lab.set(T === 1 ? `**Training seed ${r.length + 1} of 8…**` : `**Same code, seed ${r.length + 1} of 8…**`); return; }
+    lab.set(T === 1 ? `**${k} of 8 learned it perfectly**\nbars: seeds 1–8, same code, new luck`
+      : T === 2 ? `**${k} of 8 seeds perfect** (20 test runs each)\nbars: seeds 1–8; height = mean length`
+        : `**${k}/8 seeds: 20/20 test episodes at 500**\nseeds 1–8 × 600 episodes; test seeds 1000–1019`);
+    return;
+  }
+  const n = L.episode, last = L.lengths.slice(-10), m = last.length ? last.reduce((a, b) => a + b, 0) / last.length : 0, eps = L.epsilon();
+  if (n === 0) { lab.set(T === 1 ? '**Scoreboard: empty**\none bar per 10 games' : T === 2 ? '**Episode lengths: none yet**\none bar per 10 episodes' : '**lengths: []**\nbar = mean of 10 episodes; amber = ε'); return; }
+  lab.set(T === 1 ? `**Game ${n} of ${E_TOTAL}**\nlast 10 lasted ${m.toFixed(0)} steps`
+    : T === 2 ? `**Episode ${n} / ${E_TOTAL} · ε = ${fx(eps, 2)}**\nmean length, last 10: ${m.toFixed(0)}`
+      : `**episode ${n}, ε = linear_schedule(${n}, …) = ${fx(eps, 3)}**\nmean len (last 10) ${m.toFixed(1)}, steps ${L.steps}`);
+}
+function paintTexts(S) { cartText(S); tdText(S); skyText(S); }
+
+/* ------------------------------------------------------------ the simulation */
+function driverAction(S, state) {
+  const st = S.state;
+  if (st.view === 'smooth') return fit_policy(ensureFit(S))(state);
+  return st.L.greedy(obs_to_state(state));
+}
+function resetEpisode(S) {
+  const st = S.state, sim = st.sim;
+  sim.env.reset(); sim.pause = 0; sim.why = null; sim.acc = 0; sim.lastF = 0;
+  sim.running = st.mode === 'agent';
+  st.trail.length = 0; pushTrail(S, sim.env.state);
+  placeCart(S, sim.env.state, 0); placeBead(S); paintTexts(S);
+}
+function endEpisode(S) {
+  const st = S.state, sim = st.sim, env = sim.env;
+  sim.running = false; sim.pause = 1.5;
+  sim.why = env.truncated ? 'cap' : Math.abs(env.state[0]) > CP.x_threshold ? 'track' : 'fall';
+  st.pushHeld = 0; paintPushPads(S);
+  paintTexts(S);
+}
+function simTick(S, dt) {
+  const st = S.state, sim = st.sim;
+  if (sim.pause > 0) { sim.pause -= dt; if (sim.pause <= 0) resetEpisode(S); return true; }
+  if (!sim.running) return false;
+  sim.acc += dt * S.knobs.speed;
+  let n = 0;
+  while (sim.acc >= CP.tau && n < 12) {
+    sim.acc -= CP.tau; n++;
+    let F;
+    if (st.mode === 'you') F = st.pushHeld * CP.force_mag;
+    else F = driverAction(S, sim.env.state) === 1 ? CP.force_mag : -CP.force_mag;
+    sim.env.force(F); sim.lastF = F;
+    pushTrail(S, sim.env.state);
+    if (sim.env.done) { placeCart(S, sim.env.state, 0); endEpisode(S); break; }
+  }
+  if (n && sim.running) { placeCart(S, sim.env.state, sim.lastF); placeBead(S); cartText(S); }
+  else if (n) placeBead(S);
+  return true;
+}
+/* shot mode (and reveals): run a fixed number of steps now, deterministically, and hold the picture */
+function holdSim(S, { seed = 1000, set = null, steps = 0, forces = null, show = null } = {}) {
+  const st = S.state, sim = st.sim;
+  sim.env = new CartPole(seed); if (set) sim.env.state.set(set);
+  sim.running = false; sim.pause = 0; sim.why = null; sim.acc = 0;
+  st.trail.length = 0; pushTrail(S, sim.env.state);
+  let F = 0;
+  for (let i = 0; i < steps && !sim.env.done; i++) {
+    F = forces ? forces(i) * CP.force_mag : (driverAction(S, sim.env.state) === 1 ? CP.force_mag : -CP.force_mag);
+    sim.env.force(F); pushTrail(S, sim.env.state);
+  }
+  sim.lastF = show ?? F;
+  if (sim.env.done) sim.why = sim.env.truncated ? 'cap' : Math.abs(sim.env.state[0]) > CP.x_threshold ? 'track' : 'fall';
+  sim.pause = sim.env.done ? (S.shot ? 1e9 : 3) : 0;          // a held ending stays on screen a while
+  placeCart(S, sim.env.state, sim.lastF); placeBead(S); paintTexts(S);
+}
+function setMode(S, mode) {
+  const st = S.state;
+  st.mode = mode; st.pushHeld = 0;
+  st.sim.env = new CartPole(mode === 'you' ? 3 + (st.youN = (st.youN || 0) + 1) : 1000);
+  resetEpisode(S);
+  paintPushPads(S);
+  S.invalidate();
+}
+
+/* -------------------------------------------------------------- training */
+function freshTable(S, seed = S.state.seed) {
+  const st = S.state;
+  st.seed = seed; st.endE = S.knobs.end_e; st.tableKey = `${seed}:${S.knobs.end_e}`;
+  st.L = new QLearner({ seed, end_e: S.knobs.end_e, total_episodes: E_TOTAL });
+  st.fit = null; st.fitStale = true; st.fitScore = null;
+  st.epsLine.set(epsPoints(S));
+}
+function trainTo(S, n) { const L = S.state.L; while (L.episode < Math.min(n, E_TOTAL)) L.run_episode(); S.state.fitStale = true; }
+function startTraining(S) {
+  const st = S.state;
+  if (st.L.episode >= E_TOTAL) freshTable(S);
+  st.training = true; S.setKnob('train', true, { silent: true });
+  if (st.mode !== 'agent') setMode(S, 'agent');
+  S.invalidate();
+}
+function stopTraining(S) { S.state.training = false; S.setKnob('train', false, { silent: true }); }
+function trainTick(S) {
+  const st = S.state, L = st.L, per = S.knobs.speed >= 1 ? 4 : S.knobs.speed >= 0.5 ? 2 : 1;
+  // about `per` episodes a frame, counted in env steps, so a frame usually stops mid-episode (the TD note then shows
+  // an ordinary update, not always the fall); where frames stop never changes the table
+  const last = L.lengths.slice(-10), m = last.length ? last.reduce((a, b) => a + b, 0) / last.length : 20;
+  for (let i = 0, n = Math.max(20, Math.round(per * m)); i < n && L.episode < E_TOTAL; i++) L.step();
+  st.fitStale = true;
+  paintFloor(S); paintSky(S); skyText(S);
+  if (st.tdOn && (st.tdClock = (st.tdClock || 0) + 1) % 8 === 1) tdText(S);
+  if (L.episode >= E_TOTAL) { stopTraining(S); if (st.tdOn) tdText(S); return false; }
+  return true;
+}
+function seedsTick(S) {
+  const r = S.state.seedsRun;
+  if (r.res.length < 8) r.res.push(train_seed(r.res.length + 1, E_TOTAL));
+  paintSky(S); skyText(S);
+  return r.res.length < 8;
+}
+function runSeeds(S) {
+  const st = S.state;
+  st.skyMode = 'seeds';
+  if (!st.seedsRun || st.seedsRun.res.length < 8) st.seedsRun = st.seedsRun || { res: [] };
+  if (S.shot) while (st.seedsRun.res.length < 8) st.seedsRun.res.push(train_seed(st.seedsRun.res.length + 1, E_TOTAL));
+  paintSky(S); skyText(S); S.invalidate();
+}
+
+/* ----------------------------------------------------------- push pads */
+function press(S, d) {
+  const st = S.state; if (st.mode !== 'you') return;
+  st.pushHeld = d;
+  if (!st.sim.running && !st.sim.pause) { st.sim.running = true; st.sim.acc = 0; }
+  paintPushPads(S); S.invalidate();
+}
+function release(S, d) { const st = S.state; if (st.pushHeld === d) { st.pushHeld = 0; paintPushPads(S); } }
+function paintPushPads(S) {
+  const st = S.state, on = st.mode === 'you' && st.padsOn;
+  for (const [b, d] of [[st.padL, -1], [st.padR, 1]]) { b.classList.toggle('on', on); b.dataset.held = st.pushHeld === d ? '1' : '0'; }
+  layoutPads(S);
+}
+function layoutPads(S) {
+  const st = S.state, card = document.querySelector('.k-card'), app = document.querySelector('.k-app');
+  if (!card || !app) return;
+  const cr = card.getBoundingClientRect(), ar = app.getBoundingClientRect();
+  if (ar.width < 760) {
+    const bottom = ar.bottom - cr.top + 12;
+    Object.assign(st.padL.style, { left: '14px', right: 'auto', bottom: bottom + 'px' });
+    Object.assign(st.padR.style, { right: '14px', left: 'auto', bottom: bottom + 'px' });
+  } else {
+    Object.assign(st.padL.style, { left: (cr.right - ar.left + 28) + 'px', right: 'auto', bottom: '26px' });
+    Object.assign(st.padR.style, { right: '28px', left: 'auto', bottom: '26px' });
+  }
+}
+
+/* ------------------------------------------------------------ scene helper */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.qOn = !!o.q; st.tdOn = !!o.td; st.skyNote = null; st.tdNote = null; st.skyOn = o.sky !== false; st.showDots = !!o.dots; st.showEps = o.eps ?? true;
+  st.skyMode = o.seeds ? 'seeds' : 'curve';
+  st.padsOn = true; st.beadOn = o.bead !== false;
+  st.tagsOn = o.tags !== false;
+  for (const t of st.axisTags) t.show(!!o.axes);
+  st.endTag.show(!!o.ends);
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || [-1.95, 0, 0.55], o.face || [0, 0.8, -0.6]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.at ? (typeof o.at === 'function' ? o.at(S) : o.at) : undefined });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  paintFloor(S); paintSky(S); paintTexts(S);
+  S.invalidate();
+}
+function wait(S, ms) { return S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)); }
+const poleTop = (S) => S.state.cartTop.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, -0.1, 0));
+/* beats and reveals that need a trained table get one now (about 20 ms): the same seed gives the same table */
+function trained(S) {
+  const st = S.state;
+  if (st.training) stopTraining(S);
+  if (st.L.episode < E_TOTAL) trainTo(S, E_TOTAL);
+}
+function defaults(S) {   // beats 3+ show the default run: seed 8, end_e 0.02, trained from scratch that way
+  const st = S.state;
+  if (st.tableKey !== `${SEED0}:0.02`) freshTable(S, SEED0);
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'd09-cartpole', num: '19', week: 9, kind: 'deep',
+  title: 'The pole and the Q-surface',
+  subtitle: 'Balance a pole yourself, then watch a Q-table learn it and see why DQN swaps the table for a network.',
+  back2d: '#week-09',
+  film: 'deep-w09-dqn',
+  plinth: { r: 2.25, h: 0.14 },
+  fit: 1.18,
+
+  knobs: [
+    { id: 'train', type: 'toggle', label: { 1: 'Learn (600 games)', 2: 'Train, 600 episodes', 3: 'Q-learning, 600 episodes' }, value: false },
+    { id: 'fresh', type: 'button', label: { 1: 'Start over, new luck', 2: 'New table (next seed)', 3: 'Q ← 0, seed += 1' },
+      onClick: (S) => { const st = S.state; stopTraining(S); freshTable(S, st.seed + 1); paintFloor(S); paintSky(S); paintTexts(S);
+        K.toast(`Fresh table, seed ${st.seed}: press Train`); } },
+    { id: 'end_e', type: 'range', label: { 1: 'Randomness at the end', 2: 'Final ε (end_e)', 3: 'end_e' }, min: 0, max: 1, step: 0.01, value: 0.02, fmt: (v) => v.toFixed(2) },
+    { id: 'view', type: 'select', label: { 1: 'The floor shows', 2: 'Floor', 3: 'Q view' }, value: 'table',
+      options: [['table', { 1: 'The table (blocks)', 2: 'Table: 144 cells', 3: 'Q table, 12 × 12 × 2' }],
+        ['smooth', { 1: 'A smooth fit', 2: 'Smooth fit (Gaussian bumps)', 3: 'RBF fit, 5 × 5 per action' }]] },
+    { id: 'speed', type: 'select', label: { 1: 'Speed', 2: 'Speed', 3: 'sim speed' }, value: 0.5,
+      options: [[0.25, { 1: 'Slow (¼)', 2: '×¼', 3: '×0.25' }], [0.5, { 1: 'Half speed', 2: '×½', 3: '×0.5' }], [1, { 1: 'Real time', 2: '×1, 50 steps/s', 3: '×1 (τ = 0.02 s)' }]] },
+    { id: 'you', type: 'button', label: { 1: 'My turn', 2: 'You drive', 3: 'Human policy' }, onClick: (S) => { stopTraining(S); setMode(S, 'you'); } },
+    { id: 'watch', type: 'button', label: { 1: 'Let it drive', 2: 'Watch the agent', 3: 'Greedy rollout' }, onClick: (S) => { setMode(S, 'agent'); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.mode = 'you'; st.view = 'table'; st.pushHeld = 0; st.trail = []; st.seed = SEED0; st.qOn = false; st.tdOn = false;
+    st.skyOn = true; st.showDots = false; st.showEps = true; st.skyMode = 'curve'; st.padsOn = true; st.tagsOn = true; st.beadOn = true;
+    st.sim = { env: new CartPole(3), running: false, pause: 0, why: null, acc: 0, lastF: 0 };
+
+    /* floor: base, bars, boundary, smooth sheet, replay dots, live bead + trail */
+    const base = new THREE.Mesh(new THREE.BoxGeometry(2 * HALF + 0.12, BASE, 2 * HALF + 0.12), K.mat.plaster('#e6dfd2'));
+    base.position.set(0, BASE / 2, ZC); base.receiveShadow = true; base.castShadow = true; S.root.add(base);
+    st.bars = inst(S, new THREE.BoxGeometry(1, 1, 1), K.mat.plaster('#ffffff'), NUM_STATES);
+    for (let i = 0; i < NUM_STATES; i++) st.bars.setColorAt(i, UNSEEN);
+    st.edges = inst(S, new THREE.BoxGeometry(1, 1, 1), K.mat.brass(), 2 * NT * NW, false);
+    const G = SMOOTH_N, sg0 = new THREE.BufferGeometry(), N = (G + 1) * (G + 1), idx = [];
+    sg0.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3 * N), 3));
+    sg0.setAttribute('color', new THREE.BufferAttribute(new Float32Array(3 * N), 3));
+    for (let j = 0; j < G; j++) for (let i = 0; i < G; i++) { const a = j * (G + 1) + i, b = a + 1, c = a + G + 2, d = a + G + 1; idx.push(a, d, b, b, d, c); }
+    sg0.setIndex(idx);
+    st.smooth = new THREE.Mesh(sg0, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide }));
+    st.smooth.castShadow = true; st.smooth.receiveShadow = true; st.smooth.frustumCulled = false; st.smooth.userData.noFit = true; st.smooth.visible = false;
+    S.root.add(st.smooth);
+    st.smoothD = new Float64Array(N); st.smoothV = new Float64Array(N);
+    st.sEdgesCap = 8 * G;
+    st.sEdges = inst(S, new THREE.BoxGeometry(1, 1, 1), K.mat.brass(), st.sEdgesCap, false);
+    st.dots = inst(S, new THREE.SphereGeometry(0.026, 10, 8), K.mat.paint(C.data), RING, false);
+    st.bead = K.bead([0, 0.2, ZC], C.data, 0.05); S.root.add(st.bead);
+    st.trailTube = K.tube([], C.data, 0.007); st.trailTube.mesh.userData.noFit = true; S.root.add(st.trailTube.mesh);
+    // an invisible box so the kit's auto-fit sees the floor's full footprint (instanced meshes are skipped)
+    const proxy = new THREE.Mesh(new THREE.BoxGeometry(2 * HALF + 0.12, 0.7, 2 * HALF + 0.12), new THREE.MeshBasicMaterial({ visible: false }));
+    proxy.position.set(0, 0.35, ZC); S.root.add(proxy);
+
+    /* the rail: two brass rods on posts, red stops at ±2.4 m */
+    const rodGeo = new THREE.CylinderGeometry(0.014, 0.014, 2 * RAIL.rod, 12).rotateZ(Math.PI / 2);
+    for (const dz of [-RAIL.gap, RAIL.gap]) { const r = new THREE.Mesh(rodGeo, K.mat.brass()); r.position.set(0, RAIL.y, RAIL.z + dz); r.castShadow = true; S.root.add(r); }
+    const postGeo = new THREE.BoxGeometry(0.07, RAIL.y + 0.02, 2 * RAIL.gap + 0.08);
+    for (const sx of [-1, 1]) {
+      const p = new THREE.Mesh(postGeo, K.mat.plaster('#e9e2d5')); p.position.set(sx * (RAIL.rod + 0.02), (RAIL.y + 0.02) / 2, RAIL.z); p.castShadow = p.receiveShadow = true; S.root.add(p);
+      const stop = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.09, 2 * RAIL.gap + 0.05), K.mat.paint(C.grad));
+      stop.position.set(sx * (CP.x_threshold * SC + CART.w / 2 + 0.015), RAIL.y + 0.045, RAIL.z); stop.castShadow = true; S.root.add(stop);
+    }
+    const mid = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.03, 2 * RAIL.gap + 0.05), K.mat.brass()); mid.position.set(0, RAIL.y + 0.01, RAIL.z); S.root.add(mid);
+
+    /* the cart and pole */
+    st.cart = new THREE.Group(); st.cart.position.set(0, 0, RAIL.z); S.root.add(st.cart);
+    const BoxG = THREE.RoundedBoxGeometry || null;
+    const body = new THREE.Mesh(BoxG ? new BoxG(CART.w, CART.h, CART.d, 3, 0.025) : new THREE.BoxGeometry(CART.w, CART.h, CART.d), K.mat.plaster('#f1eadf'));
+    body.position.y = RAIL.y + 2 * CART.wheel + CART.h / 2; body.castShadow = body.receiveShadow = true; st.cart.add(body);
+    const wheelGeo = new THREE.CylinderGeometry(CART.wheel, CART.wheel, 0.03, 16).rotateX(Math.PI / 2);
+    for (const wx of [-CART.w * 0.3, CART.w * 0.3]) for (const dz of [-RAIL.gap, RAIL.gap]) {
+      const w = new THREE.Mesh(wheelGeo, K.mat.ink()); w.position.set(wx, RAIL.y + CART.wheel, dz); w.castShadow = true; st.cart.add(w);
+    }
+    st.pivot = new THREE.Group(); st.pivot.position.y = PIVOT_Y; st.cart.add(st.pivot);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, POLE, 14).translate(0, POLE / 2, 0), K.mat.paint('#9a6a3e'));
+    pole.castShadow = true; st.pivot.add(pole);
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 12), K.mat.paint('#9a6a3e')); knob.position.y = POLE; knob.castShadow = true; st.pivot.add(knob);
+    const hinge = new THREE.Mesh(new THREE.SphereGeometry(0.026, 14, 10), K.mat.brass()); st.pivot.add(hinge);
+    // the ±12° limit, as two faint brass whiskers fixed to the cart
+    for (const sgn of [-1, 1]) {
+      const wk = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, 0.34, 6).translate(0, 0.17, 0), K.mat.brass());
+      wk.position.set(0, PIVOT_Y, -0.02); wk.rotation.z = -sgn * CP.theta_threshold_radians; st.cart.add(wk);
+    }
+    st.cartTop = new THREE.Object3D(); S.root.add(st.cartTop);
+    st.pushL = K.arrow([0, 0, 0], [0.1, 0, 0], C.dir, { r: 0.02 }); st.pushR = K.arrow([0, 0, 0], [0.1, 0, 0], C.aux, { r: 0.02 });
+    S.root.add(st.pushL.group, st.pushR.group); st.pushL.show(false); st.pushR.show(false);
+
+    /* the skyline: one bar per 10 episodes, a brass line at the 500 cap, the amber ε plan */
+    const sb = new THREE.Mesh(new THREE.BoxGeometry(2 * SKY.half + 0.1, SKY.base, 0.16), K.mat.plaster('#e6dfd2'));
+    sb.position.set(0, SKY.base / 2, SKY.z); sb.castShadow = sb.receiveShadow = true; S.root.add(sb);
+    st.sky = inst(S, new THREE.BoxGeometry(1, 1, 1), K.mat.plaster('#ffffff'), SKY.n);
+    st.sky.setColorAt(0, GREEN_P);
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(2 * SKY.half + 0.06, 0.012, 0.012), K.mat.brass());
+    cap.position.set(0, SKY.base + SKY.h + 0.006, SKY.z + 0.05); S.root.add(cap);
+    for (const sx of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(0.012, SKY.h + 0.01, 0.012), K.mat.brass()); p.position.set(sx * (SKY.half + 0.03), SKY.base + (SKY.h + 0.01) / 2, SKY.z + 0.05); S.root.add(p); }
+    st.epsLine = K.tube([], C.prob, 0.009); st.epsLine.mesh.userData.noFit = true; S.root.add(st.epsLine.mesh);
+    const skyProxy = new THREE.Mesh(new THREE.BoxGeometry(2 * SKY.half, SKY.h + 0.05, 0.16), new THREE.MeshBasicMaterial({ visible: false }));
+    skyProxy.position.set(0, (SKY.h + 0.05) / 2, SKY.z); S.root.add(skyProxy);
+
+    /* labels */
+    st.cartLab = K.label(st.cartTop, '', { cls: 'readout', prio: 3 });
+    st.tdAt = new THREE.Object3D(); st.tdAt.position.set(HALF * 0.45, 0.05, ZC + HALF + 0.16); S.root.add(st.tdAt);
+    st.tdLab = K.label(st.tdAt, '', { cls: 'note', anchor: 'top', dy: 6, prio: 2 }); st.tdLab.show(false);
+    st.tdMark = new THREE.Group();
+    for (const [sx, sz, px, pz] of [[CELL, 0.018, 0, -CELL / 2], [CELL, 0.018, 0, CELL / 2], [0.018, CELL, -CELL / 2, 0], [0.018, CELL, CELL / 2, 0]]) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.018, 0.02, sz), K.mat.paint(C.grad)); m.position.set(px, 0.01, pz); st.tdMark.add(m);
+    }
+    st.tdMark.visible = false; S.root.add(st.tdMark);
+    st.skyAt = new THREE.Object3D(); st.skyAt.position.set(-SKY.half + 0.2, SKY.base + SKY.h + 0.04, SKY.z); S.root.add(st.skyAt);
+    st.skyLab = K.label(st.skyAt, '', { cls: 'note', prio: 1 });
+    st.axisTags = [
+      K.label([-HALF - 0.05, 0.06, ZC], { 1: 'leans left', 2: 'θ < 0: leans ←', 3: 'θ = −12°' }, { cls: 'tag rw lft', anchor: 'right', dx: -2 }),
+      K.label([HALF + 0.05, 0.06, ZC], { 1: 'leans right', 2: 'θ > 0: leans →', 3: 'θ = +12°' }, { cls: 'tag rw rgt', anchor: 'left', dx: 2 }),
+      K.label([-HALF * 0.5, 0.06, ZC + HALF + 0.06], { 1: 'near: falling left · far: falling right', 2: 'θ̇: spinning ← near, → far', 3: 'θ̇ ∈ [−2, 2] rad/s, near → far' }, { cls: 'tag rule', anchor: 'top', dy: 4 }),
+    ];
+    st.endTag = K.label([CP.x_threshold * SC + 0.12, RAIL.y + 0.1, RAIL.z], { 1: 'end of track', 2: 'x = 2.4 m: out', 3: '|x| > 2.4 ⇒ terminated' }, { cls: 'tag rw bad', anchor: 'left', dx: 2 });
+    st.seedTags = Array.from({ length: 8 }, (_, i) => K.label([0, 0, SKY.z], `${i + 1}`, { cls: 'tag rw', anchor: 'bottom', dy: -2 }));
+    for (const t of st.seedTags) t.show(false);
+
+    st.fig = K.figure(); st.fig.group.visible = false; S.root.add(st.fig.group);
+
+    /* push pads + keys (keys only while you drive; otherwise ← → keep stepping beats) */
+    const host = document.querySelector('.k-app') || document.body;
+    const pad = (cls, glyph, word, d) => {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'cp-push ' + cls;
+      b.innerHTML = `<span aria-hidden="true">${glyph}</span><small>${word}</small>`; b.setAttribute('aria-label', `push ${d < 0 ? 'left' : 'right'}`);
+      const down = (e) => { e.preventDefault(); try { b.setPointerCapture(e.pointerId); } catch (x) { /* ok */ } press(S, d); };
+      const up = () => release(S, d);
+      b.addEventListener('pointerdown', down); b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); b.addEventListener('lostpointercapture', up);
+      b.addEventListener('contextmenu', (e) => e.preventDefault());
+      host.appendChild(b); return b;
+    };
+    st.padL = pad('l', '◀', 'push', -1); st.padR = pad('r', '▶', 'push', 1);
+    const keyDir = (e) => (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A' ? -1 : e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D' ? 1 : 0);
+    addEventListener('keydown', (e) => {
+      if (S.state.mode !== 'you' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target; if (t && t.closest && t.closest('input, textarea, select')) return;
+      const d = keyDir(e); if (!d) return;
+      e.preventDefault(); e.stopPropagation();
+      if (!e.repeat || S.state.pushHeld !== d) press(S, d);
+    }, true);
+    addEventListener('keyup', (e) => { const d = keyDir(e); if (d) release(S, d); }, true);
+    addEventListener('blur', () => { S.state.pushHeld = 0; paintPushPads(S); });
+    addEventListener('resize', () => layoutPads(S));
+    const card = document.querySelector('.k-card'); if (card && window.ResizeObserver) new ResizeObserver(() => layoutPads(S)).observe(card);
+
+    freshTable(S, SEED0);
+  },
+
+  rebuild(S, id) {
+    const st = S.state, ch = new Set(S.changed || [id]);
+    if (ch.has('end_e') && S.knobs.end_e !== st.endE) {
+      st.endE = st.L.end_e = S.knobs.end_e; st.epsLine.set(epsPoints(S));
+      st.tableKey = st.L.episode > 0 ? 'mixed' : `${st.seed}:${S.knobs.end_e}`;
+    }
+    if (ch.has('view')) { st.view = S.knobs.view; if (st.view === 'smooth') ensureFit(S); }
+    if (id === 'train') { if (S.knobs.train) startTraining(S); else stopTraining(S); }
+    paintFloor(S); paintSky(S); paintTexts(S);
+    if (id === 'view' && st.view === 'smooth') {
+      const f = fitScore(S);
+      K.toast(`Smooth fit drives: ${f.full}/20 test runs reach 500`);
+    }
+  },
+
+  frame(S, t, dt) {
+    const st = S.state;
+    if (S.shot) return false;                           // screenshots: every picture is computed at beat time
+    let busy = false;
+    if (st.training) busy = trainTick(S) || busy;
+    if (st.seedsRun && st.skyMode === 'seeds' && st.seedsRun.res.length < 8) busy = seedsTick(S) || busy;
+    busy = simTick(S, dt) || busy;
+    return busy;
+  },
+
+  onTier(S) { paintTexts(S); },
+
+  solids(S) {
+    const st = S.state, L = st.L, out = [];
+    const cub = (sx, sy, sz, x, y, z) => J.primitives.cuboid({ size: [sx, sz, sy], center: [x, -z, y] });   // three (x, y, z) -> JSCAD (x, -z, y)
+    out.push(cub(2 * HALF + 0.12, BASE, 2 * HALF + 0.12, 0, BASE / 2, ZC));
+    for (let s = 0; s < NUM_STATES; s++) {
+      const it = Math.floor(s / NW), iw = s % NW, h = seen(L, s) ? hOf(vOf(L, s)) : 0.012;
+      out.push(cub(CELL * 0.92, h + 0.002, CELL * 0.92, cellX(it), BASE + h / 2 - 0.001, cellZ(iw)));
+    }
+    for (const sx of [-1, 1]) out.push(cub(0.07, RAIL.y + 0.02, 2 * RAIL.gap + 0.08, sx * (RAIL.rod + 0.02), (RAIL.y + 0.02) / 2, RAIL.z));
+    out.push(cub(2 * RAIL.rod + 0.1, 0.03, 2 * RAIL.gap + 0.03, 0, RAIL.y, RAIL.z));
+    const x = st.sim.env.state[0] * SC, th = st.sim.env.state[2];
+    out.push(cub(CART.w, CART.h + 2 * CART.wheel - 0.01, CART.d, x, RAIL.y + 0.01 + (CART.h + 2 * CART.wheel - 0.01) / 2, RAIL.z));
+    let pole = J.primitives.cylinder({ radius: 0.022, height: POLE, segments: 16, center: [0, 0, POLE / 2] });
+    pole = J.transforms.rotateY(th, pole);                 // JSCAD y = -three z: +theta tips the top toward +x
+    out.push(J.transforms.translate([x, -RAIL.z, PIVOT_Y - 0.005], pole));
+    out.push(cub(2 * SKY.half + 0.1, SKY.base, 0.16, 0, SKY.base / 2, SKY.z));
+    const w = 2 * SKY.half / SKY.n;
+    for (let j = 0; j < SKY.n; j++) {
+      const blk = L.lengths.slice(j * 10, j * 10 + 10); if (!blk.length) break;
+      const h = Math.max(0.006, SKY.h * blk.reduce((a, b) => a + b, 0) / blk.length / CP.max_episode_steps);
+      out.push(cub(w * 0.8, h + 0.002, 0.08, -SKY.half + w * (j + 0.5), SKY.base + h / 2 - 0.001, SKY.z));
+    }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**Your turn.** Hold ◀ or ▶ (keys ← →) to shove the cart. Keep the pole within 12° and the cart on its track. Every step it stays up scores +1, up to 500. The agent gets the same deal.',
+        2: '**CartPole, with Gym\'s real physics.** The state is 4 numbers: cart position x, speed ẋ, pole angle θ, spin θ̇. Two actions: shove left or right with 10 N, 50 times a second. +1 per step alive; it ends past 12°, past 2.4 m, or at 500 steps. Your "no push" is a human extra.',
+        3: '`CartPole-v1`, Gymnasium 0.29 `cartpole.py` (euler, τ = 0.02 s): obs `[x, v, θ, ω]`, `Discrete(2)` → F = ±10 N; m_cart 1.0, m_pole 0.1, half-length 0.5. `terminated`: |θ| > 12° or |x| > 2.4; `truncated`: t = 500. r = +1 per step. Your hands-off no-op is not in its action space.',
+      },
+      cam: CAM.cart,
+      set: { view: 'table', end_e: 0.02, speed: 0.5 },
+      enter(S) {
+        const st = S.state; stopTraining(S); st.view = 'table';
+        setMode(S, 'you');
+        scene(S, { figure: 'point', figAt: [-2.0, 0, -0.35], face: [0, 0.9, -1.05], at: poleTop, ends: true, sky: false, bead: false, eps: false });
+        if (S.shot) { holdSim(S, { seed: 1, steps: 34, forces: (i) => (i < 30 ? 0 : 1), show: CP.force_mag }); st.sim.running = true; cartText(S); paintPushPads(S); st.padR.dataset.held = '1'; }
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Learning by trial.** The floor is its notebook: 144 squares, one per mix of lean and spin, a score per shove. After every step it nudges the score it used toward "reward now + best score next".',
+        2: '**Q-learning.** Each square s = (θ, θ̇) holds Q(s,←) and Q(s,→): expected future reward. After each step, Q(s,a) ← Q(s,a) + 0.1 × (r + 0.99 × max Q(s′) − Q(s,a)); the bracket is the TD error. It acts at random with probability ε (amber), which falls from 1 to 0.02.',
+        3: 'ARENA [2.1] `QLearning.observe`: `Q[s,a] += lr * (r + gamma * max(Q[s\']) - Q[s,a])`, here ×(1 − terminated) on the bootstrap; lr 0.1, γ 0.99, Q₀ = 0. ε = `linear_schedule(episode, 1.0, 0.02, 0.5, 600)`. Watkins 1989; Sutton & Barto §6.5. Toy: s = 12 × 12 bins of (θ, θ̇), seed 8.',
+      },
+      cam: CAM.hero,
+      set: { view: 'table', end_e: 0.02 },
+      enter(S) {
+        const st = S.state; st.view = 'table';
+        freshTable(S, SEED0);
+        if (S.shot) { trainTo(S, 150); for (let i = 0; i < 30 || st.L.lastTerm; i++) st.L.step(); scene(S, { td: true, axes: true }); setMode(S, 'agent'); holdSim(S, { seed: 1000, steps: 40 }); tdText(S); }
+        else { scene(S, { td: true, axes: true }); startTraining(S); }
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**What it learned.** Height: how long it expects to stay up from there. Colour: the shove it prefers, violet left, teal right, pale if both score alike. Falling right? Shove right, as with a broom.',
+        2: '**The Q-surface.** Height is V(s) = maxₐ Q(s,a): a plateau where it can balance, lowland where the pole is doomed. Colour is the greedy action, violet ← and teal →, paler where Q(s,←) ≈ Q(s,→). Brass marks where the choice flips: shove the way the pole leans or spins. The blue bead is the live state.',
+        3: 'V(s) = maxₐ Q(s,a) ≤ 1/(1 − γ) = 100; colour = argmax (ties → ←, like np.argmax), faded by |Q(s,→) − Q(s,←)|/20; brass where the argmax flips between cells with V ≥ 20. Decisive cells (gap ≥ 10) follow θ + 0.2 s·θ̇ > 0 ⇒ → (23 of 25, seed 8): bang-bang control learned from reward alone.',
+      },
+      cam: CAM.floor,
+      set: { view: 'table', end_e: 0.02 },
+      enter(S) {
+        const st = S.state; st.view = 'table'; defaults(S); trained(S);
+        scene(S, { q: true, axes: true });
+        setMode(S, 'agent');
+        if (S.shot) holdSim(S, { seed: 1000, steps: 157 });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Blocks versus a smooth guess.** The table knows only squares it visited; grey ones are blank. A smooth surface fitted through it (25 soft bumps per shove) answers everywhere, and it can drive too.',
+        2: '**Why DQN uses a network.** A table can\'t cover continuous states: add x and ẋ at this detail and it needs 12⁴ = 20,736 squares, most never visited. A function shares: nearby states get nearby values (David Silver\'s lecture 6). Shown: 25 Gaussian bumps per action, fitted to the table; illustrative, not RL-trained.',
+        3: 'Tabular: one parameter per (s, a), no sharing. Here f_a = w_a·φ(θ, θ̇), φ = 25 Gaussian bumps on a 5 × 5 grid, w_a by ridge-weighted least squares on the table: 50 parameters. ARENA\'s `QNetwork([4], 2, [120, 84])` learns its 10,934 by TD from [x, v, θ, ω] instead.',
+      },
+      cam: CAM.floor,
+      set: { view: 'smooth', end_e: 0.02 },
+      enter(S) {
+        const st = S.state; st.view = 'smooth'; defaults(S); trained(S); ensureFit(S);
+        scene(S, { q: true, axes: true, figure: 'think', figAt: [-2.0, 0, 0.9], face: [0, 0.3, 0.5] });
+        setMode(S, 'agent');
+        if (S.shot) holdSim(S, { seed: 1001, steps: 121 });
+        const f = fitScore(S);
+        const g = eval_policy(table_policy(st.L)), tf = g.filter((x) => x === CP.max_episode_steps).length;
+        st.skyNote = ({ 1: `**The smooth fit drives: ${f.full} of 20 runs reach 500**\nthe table: ${tf} of 20`, 2: `**The fit as the policy: ${f.full}/20 runs hit 500**\nmean ${f.mean.toFixed(0)} steps; the table: ${tf}/20`, 3: `**argmax f_a: ${f.full}/20 at the cap, mean ${f.mean.toFixed(1)}**\ntest seeds 1000–1019; table ${tf}/20` }); skyText(S);
+      } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**DQN\'s three tricks.** A memory of recent moves, studied in random handfuls (dots: the last 300). A frozen copy of itself to aim at, refreshed at times. Randomness that starts at 100% and fades (amber).',
+        2: 'ARENA\'s DQN: a `ReplayBuffer` of 10,000 transitions (dots: this toy\'s last 300), sampled in random batches of 512 so updates aren\'t correlated; a target network, a lagged copy that computes max Q(s′); ε from `linear_schedule` (amber); a `QNetwork` [120, 84] for the table.',
+        3: '`DQNArgs`: buffer_size 10_000, batch_size 512, trains_per_target_update 50, lr 5e-3, γ 0.99, ε 1.0 → 0.02 over 10% of 300_000 steps. `training_step`: td = r + γ·max Q_target(s′)·(1 − terminated) − Q(s,a); loss = td².mean(). Mask `terminated`, never `truncated`.',
+      },
+      cam: CAM.back,
+      set: { view: 'table', end_e: 0.02 },
+      enter(S) {
+        const st = S.state; st.view = 'table'; defaults(S); trained(S);
+        scene(S, { dots: true, q: false, bead: false });
+        setMode(S, 'agent');
+        if (S.shot) holdSim(S, { seed: 1002, steps: 90 });
+      } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**The honest part.** Same code, eight seeds of luck: some end perfect, some don\'t (bars). Q-learning is jumpy. Chatbots are trained with other methods (PPO, GRPO). Learn DQN for its ideas.',
+        2: '**Contested: is DQN worth learning?** LLM RL uses policy gradients (PPO, GRPO); Karpathy (Pong from Pixels): most people prefer them. Q-learning chases its own estimates and can forget what it knew (ARENA: catastrophic forgetting). Worth keeping: TD errors, replay, targets.',
+        3: 'Deadly triad (Sutton & Barto §11.3): approximation + bootstrapping + off-policy ⇒ possible divergence; replay and target nets are patches. RLHF/RLVR use PPO/GRPO (W10). Inconsequential for applied work: DQN vs Double/Dueling/Rainbow details.',
+      },
+      cam: CAM.sky,
+      set: { view: 'table', end_e: 0.02 },
+      enter(S) {
+        const st = S.state; st.view = 'table'; defaults(S); trained(S);
+        scene(S, { seeds: true, figure: 'shrug', figAt: [1.95, 0, -0.2], face: [0, 0.4, -1.4] });
+        setMode(S, 'agent');
+        runSeeds(S);
+        if (S.shot) holdSim(S, { seed: 1003, steps: 64 });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else.** You do this balancing a broom on your palm. So do Segways, rockets landing upright and thermostats: measure, compare, push back. Learning that rule from reward alone is the RL part.',
+        2: 'Anywhere a controller reads a state and pushes back: Segways and rocket landings (inverted pendulums), thermostats and cruise control (PID, which ARENA notes would solve CartPole from the physics), walking robots. Q-learning\'s twist: learn the rule from reward alone.',
+        3: 'Control theory solves CartPole model-based (LQR/PID on the linearised dynamics); RL does it model-free. The same TD machinery: TD-Gammon (1992), DQN on Atari (2015), AlphaZero\'s value head (ARENA [2.5]) and PPO\'s critic (W10).',
+      },
+      cam: CAM.hero,
+      set: { view: 'table', end_e: 0.02, speed: 1 },
+      enter(S) {
+        const st = S.state; st.view = 'table'; defaults(S); trained(S);
+        scene(S, { q: false, figure: 'cheer', figAt: [-2.0, 0, -0.35], face: [0, 0.9, -1.05] });
+        setMode(S, 'agent');
+        if (S.shot) holdSim(S, { seed: 1004, steps: 230 });
+      } },
+  ],
+
+  predict: [
+    { q: { 1: 'The pole leans right and is falling further right. Which way does the trained agent shove the cart?',
+        2: 'θ = +2.9°, θ̇ = +0.2 rad/s: leaning and falling right. Which action is greedy in the trained table?',
+        3: 'Trained table, s ∋ (θ, θ̇) = (+0.05, +0.2). argmaxₐ Q(s, a)?' },
+      options: [{ t: 'Right: get the cart back under the pole', ok: true }, { t: 'Left: push away from the fall' }, { t: 'Either: both score the same there' }],
+      why: { 1: 'Right, like a broom on your palm: move your hand toward where it is falling. That square is teal. The cart darts right, the pole swings back, and the balancing carries on.',
+        2: 'Push right. Accelerating the cart right swings the pole back left (the pivot moves under it). The square for (+2.9°, +0.2) is teal: Q(s,→) > Q(s,←), by the numbers on the floor.',
+        3: 'π(s) = → (teal). From here the greedy table recovers and runs to the cap. From (+5°, +0.6) the first push is still → but it drops the pole within ~10 steps: it rarely visited such states, so their Q-values are poor.' },
+      show(S) {
+        S.setKnobs({ view: 'table', end_e: 0.02 }); const st = S.state; st.view = 'table'; defaults(S); trained(S);
+        scene(S, { q: true, axes: true }); setMode(S, 'agent');
+        holdSim(S, { seed: 1000, set: [0, 0, 0.05, 0.2], steps: 0, show: CP.force_mag });
+        if (!S.shot) { st.sim.pause = 0; st.sim.running = false; setTimeout(() => { st.sim.running = true; S.invalidate(); }, 1400); }
+        S.fly(CAM.floor);
+        return wait(S, 2600);
+      } },
+    { q: { 1: 'Make it act at random forever (randomness stays 100%) and let it train for 600 games. What happens to how long it lasts?',
+        2: 'Set end_e = 1: ε stays 1 (every action random) for all 600 episodes. What do the episode lengths do?',
+        3: 'end_e = 1.0 (ε ≡ 1) for 600 episodes of Q-learning. Episode lengths, and the table\'s own greedy policy?' },
+      options: [{ t: 'They stay short: it never uses what it learns', ok: true }, { t: 'They grow anyway, just more slowly' }, { t: 'They fall to almost nothing' }],
+      why: { 1: 'They stay near 22 steps, pure luck. The twist: the table did learn. Let it drive on its own scores afterwards and it lasts about 227 steps. It learned; it just never used what it learned.',
+        2: 'Mean length stays ≈ 22 (random play). But Q-learning is off-policy: its target uses max Q(s′), not the action taken, so the table still improves: greedy on it lasts ≈ 227 steps. Exploring without exploiting wastes the knowledge.',
+        3: 'Behaviour policy uniform, target policy greedy: Q-learning still estimates Q* on the visited region (off-policy). Mean length 22.5; greedy on the table ≈ 227 over test seeds 1000–1019. Shows why ε decays: exploit what you know.' },
+      show(S) {
+        S.setKnobs({ view: 'table', end_e: 1 }); const st = S.state; st.view = 'table';
+        freshTable(S, SEED0); trainTo(S, E_TOTAL);
+        const m = st.L.lengths.reduce((a, b) => a + b, 0) / st.L.lengths.length, g = eval_policy(table_policy(st.L)), gm = g.reduce((a, b) => a + b, 0) / g.length;
+        scene(S, { axes: true, eps: true }); setMode(S, 'agent');
+        st.skyNote = ({ 1: `**Always random: ${m.toFixed(0)} steps a game**\nits own scores, used: ${gm.toFixed(0)}`, 2: `**ε ≡ 1: mean length ${m.toFixed(1)}**\ngreedy on this table: ${gm.toFixed(0)} steps`, 3: `**ε ≡ 1: mean len ${m.toFixed(2)}**\ngreedy(Q) on test seeds: mean ${gm.toFixed(1)}` }); skyText(S);
+        if (S.shot) holdSim(S, { seed: 1000, steps: 120 });
+        S.fly(CAM.sky);
+        return wait(S, 1200);
+      } },
+    { q: { 1: 'DQN keeps a frozen copy of itself just to compute its targets. Why bother?',
+        2: 'Why does DQN compute max Q(s′) with a lagged target network instead of the network it is training?',
+        3: 'Why a target network (synced every trains_per_target_update steps) in DQN\'s TD target?' },
+      options: [{ t: 'Otherwise every update also moves the target it is chasing', ok: true }, { t: 'To save memory' }, { t: 'To make it explore more' }],
+      why: { 1: 'A network is one smooth surface: nudge it at one state and the neighbours move too, including the next state, whose value is the target. The bump is one nudge. A frozen copy holds the target still.',
+        2: 'One gradient step at s changes every output: the bump is how far each point of the fitted surface moves. At s′, 0.02 s later, it moves almost as much as at s, so the target runs away. The frozen copy stops the chase for 50 steps.',
+        3: 'For f = wᵀφ, Δw = αδφ(s) ⇒ Δf(x) = αδ·φ(x)ᵀφ(s), a bump around s. For the next state φ(s′)ᵀφ(s)/‖φ(s)‖² ≈ 1, so bootstrapped targets chase themselves. The target network (Mnih et al. 2015) freezes max Q(s′) between syncs.' },
+      show(S) {
+        S.setKnobs({ view: 'smooth', end_e: 0.02 }); const st = S.state; st.view = 'smooth'; defaults(S); trained(S); ensureFit(S);
+        scene(S, { q: false, axes: true }); setMode(S, 'agent');
+        holdSim(S, { seed: 1000, steps: 60 });
+        const e = st.sim.env.state, [u0, v0] = uv_of(e[2], e[3]);
+        const nxt = cartpole_step(Array.from(e), driverAction(S, e) === 1 ? CP.force_mag : -CP.force_mag), [u1, v1] = uv_of(nxt[2], nxt[3]);
+        const share = update_kernel(u1, v1, u0, v0);
+        const amp = 0.22, bump = smoothGrid(S, (u, v) => update_kernel(u, v, u0, v0));
+        st.tdAt.position.copy(st.bead.position);
+        st.tdNote = ({ 1: `**One nudge at the blue bead**\nthe next state moves ${Math.round(share * 100)}% as much`, 2: `**Shape of one update at s**\nat s′ (0.02 s later): ${Math.round(share * 100)}% of the change at s`, 3: `**Δf(x) ∝ φ(x)ᵀφ(s)**\nφ(s′)ᵀφ(s)/‖φ(s)‖² = ${share.toFixed(3)}` }); tdText(S);
+        const go = (k) => { paintSmooth(S, bump, amp * k); placeBead(S); S.invalidate(); };
+        if (S.shot) { go(1); return Promise.resolve(); }
+        return S.stage.tween(900, go).then(() => wait(S, 1300)).then(() => S.stage.tween(900, (k) => go(1 - k))).then(() => { st.tdNote = null; tdText(S); paintFloor(S); });
+      } },
+    { q: { 1: 'Each step the pole stays up scores +1, and a game stops at 500 steps. What is the best possible score?',
+        2: 'CartPole-v1: +1 per step, a 500-step time limit. What is the maximum (undiscounted) return?',
+        3: 'Maximum episode return in CartPole-v1 (v0.29 pays 1.0 on the terminal step too)?' },
+      options: [{ t: '500', ok: true }, { t: '499' }, { t: 'About 99, because of discounting' }],
+      why: { 1: '500: one point per step, the last one included. The table\'s own scores top out below 100 instead, because it discounts: a point 100 steps away counts only 0.99¹⁰⁰ ≈ 0.37.',
+        2: '500, then it is truncated. Q-values are discounted sums, so they head for 1 + 0.99 + 0.99² + … ≈ 100, as ARENA points out. Hitting the time limit is not failure: DQN masks only `terminated`.',
+        3: 'G = Σ₁⁵⁰⁰ 1 = 500 (TimeLimit truncation). Q → Σγᵗ ≤ 1/(1 − γ) = 100 (ARENA: (1 − γ⁵⁰⁰)/(1 − γ) ≈ 100). Bootstrapping through truncation (d = terminated only): the state has no clock, so the cut at 500 must not look like a fall.' },
+      show(S) {
+        S.setKnobs({ view: 'table', end_e: 0.02 }); const st = S.state; st.view = 'table'; defaults(S); trained(S);
+        scene(S, { q: true }); setMode(S, 'agent');
+        holdSim(S, { seed: 1000, steps: CP.max_episode_steps });
+        S.fly(CAM.hero);
+        return wait(S, 1200);
+      } },
+    { q: { 1: 'Train the same code eight times, changing only the random seed. How many end with a perfect balancer?',
+        2: 'Same code, same settings, seeds 1 to 8, 600 episodes each. How many seeds end with a policy that lasts 500 steps on all 20 test runs?',
+        3: 'Seeds 1–8, defaults (lr 0.1, ε 1 → 0.02 over 300 episodes). Count of seeds whose greedy policy scores 20/20 at the cap?' },
+      options: [{ t: 'All 8: same code, same result' }, { t: 'About 5 of 8', ok: true }, { t: 'None: 600 games is too few' }],
+      why: { 1: 'Five of eight. Only the luck of the early random moves differs, and it decides which squares get learned well. That is why RL results are reported over many seeds.',
+        2: '5 of 8. Early exploration decides which cells get visited, and bootstrapping locks early mistakes in. Seed 4 barely learns (51 steps on average); seeds 1 and 6 come close, not all the way. RL papers report many seeds; one lucky run proves little.',
+        3: '5/8 (seeds 2, 3, 5, 7, 8 at 20/20; 23 of seeds 1–40). Variance comes from ε-exploration and bootstrapped targets; Henderson et al. (2018), "Deep RL that matters", documents the same for DQN-scale methods.' },
+      show(S) {
+        S.setKnobs({ view: 'table', end_e: 0.02 }); const st = S.state; st.view = 'table'; defaults(S); trained(S);
+        scene(S, { seeds: true }); setMode(S, 'agent');
+        runSeeds(S);
+        if (S.shot) holdSim(S, { seed: 1003, steps: 64 });
+        S.fly(CAM.sky);
+        return new Promise((res) => { const tick = () => { const r = st.seedsRun; if (!r || r.res.length >= 8) res(); else setTimeout(tick, 100); }; tick(); });
+      } },
+  ],
+
+  where: {
+    1: 'Anywhere something reads a state and pushes back: balancing a broom, Segways, rockets landing upright, thermostats. Learning the rule from reward instead of from physics is the reinforcement-learning part.',
+    2: 'Control loops (PID thermostats, cruise control, Segways, rocket landings), game AI (TD-Gammon, Atari DQN), and inside LLM training: PPO\'s critic (W10) learns V(s) with the same TD error.',
+    3: 'Model-based control (LQR, MPC) vs model-free RL; TD learning and dopamine (Schultz 1997); DQN (Mnih 2015) → Double/Dueling/Rainbow; the critic in PPO/actor-critic; AlphaZero\'s value head (ARENA [2.5]).' },
+  links: [
+    { label: 'Film · W9 deep dive: DQN', href: '../../intuition/films/deep-w09-dqn.html' },
+    { label: 'Film · W9 RL', href: '../../intuition/films/w9-rl.html' },
+    { label: 'Week 9 pack', href: '../../index.html#week-09' },
+    { label: 'Demo · RL foundations & DQN', href: '../../index.html#demo/rl-foundations-dqn' },
+    { label: 'Case · DQN', href: '../../index.html#cases/dqn' },
+    { label: 'Case · replay buffer', href: '../../index.html#cases/replay-buffer' },
+    { label: 'Case · Q-learning', href: '../../index.html#cases/q-learning' },
+    { label: 'Map · DQN', href: '../../index.html#map/node=dqn' },
+    { label: 'Map · Q-network', href: '../../index.html#map/node=q-network' },
+    { label: 'Map · replay buffer', href: '../../index.html#map/node=replay-buffer' },
+    { label: 'Map · target network', href: '../../index.html#map/node=target-network' },
+    { label: 'Map · TD error', href: '../../index.html#map/node=td-error' },
+    { label: 'Map · ε-greedy', href: '../../index.html#map/node=epsilon-greedy' },
+    { label: 'Object · the value terrain', href: 'w09-terrain.html' },
+  ],
+  remix: 'Build a single-file three.js page: Gymnasium 0.29\'s CartPole (g 9.8, cart 1.0 kg, pole 0.1 kg, half-length 0.5 m, F = ±10 N, τ = 0.02 s, euler; temp = (F + m·l·θ̇²·sinθ)/M, θ̈ = (g·sinθ − cosθ·temp)/(l·(4/3 − m·cos²θ/M)), ẍ = temp − m·l·θ̈·cosθ/M; ends at |θ| > 12°, |x| > 2.4 m or 500 steps, +1 per step) on a rail, with hold-to-push buttons. Add tabular Q-learning on 12 × 12 bins of (θ ∈ ±12°, θ̇ ∈ ±2 rad/s): Q ← Q + 0.1(r + 0.99·max Q(s′)·(1 − terminated) − Q), ε-greedy with ε linear from 1 to 0.02 over 300 of 600 episodes, a seeded RNG, and draw the table as 144 columns of height max_a Q coloured by argmax (violet ←, teal →), paler where the two Q-values are close, with a brass line where the argmax changes between squares worth at least 20, a bar chart of episode lengths, and a toggle that replaces the table with 25 Gaussian bumps per action (5 × 5 grid, σ = 0.35 in units of 12° and 2 rad/s) whose weights are fitted to the table by weighted ridge least squares. Write sin, cos and exp as polynomials so every browser trains bit-identically.',
+  credit: 'Physics: Gymnasium v0.29.0 classic_control/cartpole.py (euler), after Barto, Sutton & Anderson (1983) and Florian (2007); ARENA [2.2] links it and ports it as CartPole-gpu. Names: ARENA [2.1] QLearning, AgentConfig; ARENA [2.2.1] linear_schedule, QNetwork, ReplayBuffer, DQNArgs, DQNAgent, DQNTrainer, catastrophic forgetting. Q-learning: Watkins (1989); Sutton & Barto §6.5, §11.3. DQN: Mnih et al. (2015). "Pong from Pixels": Karpathy (2016). Function approximation: David Silver\'s RL lecture 6. Seeds: Henderson et al. (2018). Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>
