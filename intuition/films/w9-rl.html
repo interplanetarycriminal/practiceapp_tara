@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>What is this square worth</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+/*MATH*/
+var GR = 4, GC = 5, START_S = 15, GOAL_S = 19, DR = [-1, 0, 1, 0], DC = [0, 1, 0, -1], ARW = ['↑', '→', '↓', '←'];
+function mkWorld(cliffs) { var c = {}; (cliffs || [16, 17, 18]).forEach(function (s) { c[s] = 1; }); return { cliff: c }; }
+function isTerm(w, s) { return s === GOAL_S || !!w.cliff[s]; }
+function stepEnv(w, s, a) {
+  var r = Math.floor(s / GC), c = s % GC, r2 = r + DR[a], c2 = c + DC[a];
+  if (r2 < 0 || r2 >= GR || c2 < 0 || c2 >= GC) { r2 = r; c2 = c; }
+  var s2 = r2 * GC + c2, rew = s2 === GOAL_S ? 1 : w.cliff[s2] ? -1 : 0;
+  return { s2: s2, r: rew, done: isTerm(w, s2) };
+}
+function zeros() { var Q = []; for (var s = 0; s < GR * GC; s++) Q.push([0, 0, 0, 0]); return Q; }
+function maxQ(q) { return Math.max(q[0], q[1], q[2], q[3]); }
+function argmaxR(q, rnd) { var m = maxQ(q), b = []; for (var a = 0; a < 4; a++) if (q[a] >= m - 1e-12) b.push(a); return b[Math.floor(rnd() * b.length)]; }
+function valueIter(w, gamma, K) {
+  var V = [], v = new Array(GR * GC).fill(0); V.push(v.slice());
+  for (var k = 0; k < K; k++) { var n = v.slice();
+    for (var s = 0; s < GR * GC; s++) { if (isTerm(w, s)) { n[s] = 0; continue; } var best = -1e9;
+      for (var a = 0; a < 4; a++) { var e = stepEnv(w, s, a), q = e.r + (e.done ? 0 : gamma * v[e.s2]); if (q > best) best = q; } n[s] = best; }
+    v = n; V.push(v.slice()); }
+  return V;
+}
+// one epsilon-greedy episode of Q-learning or SARSA; logs every update
+function episode(w, Q, o, rnd, log) {
+  var s = START_S, pick = function (s) { return rnd() < o.eps ? Math.floor(rnd() * 4) : argmaxR(Q[s], rnd); }, a = pick(s), n = 0, G = 0;
+  while (n < 60) {
+    var e = stepEnv(w, s, a), a2 = e.done ? 0 : pick(e.s2);
+    var boot = e.done ? 0 : (o.algo === 'sarsa' ? Q[e.s2][a2] : maxQ(Q[e.s2]));
+    var old = Q[s][a], td = e.r + o.gamma * boot - old;
+    Q[s][a] = old + o.lr * td;
+    if (log) log.push({ s: s, a: a, r: e.r, s2: e.s2, done: e.done, boot: boot, old: old, td: td, nw: Q[s][a] });
+    G += e.r; n++; s = e.s2; a = a2; if (e.done) break;
+  }
+  return { G: G, n: n };
+}
+function greedyPath(w, Q, maxn) {
+  var s = START_S, p = [s], seen = {}; seen[s] = 1;
+  for (var i = 0; i < (maxn || 20); i++) { if (isTerm(w, s)) break; var q = Q[s], a = q.indexOf(maxQ(q)); if (maxQ(q) === 0 && q[0] === 0 && q[1] === 0 && q[2] === 0 && q[3] === 0) return { p: p, ok: false };
+    s = stepEnv(w, s, a).s2; p.push(s); if (seen[s]) return { p: p, ok: false }; seen[s] = 1; }
+  return { p: p, ok: s === GOAL_S };
+}
+// REINFORCE on a 3-armed dance floor
+function softmax(z) { var m = Math.max.apply(null, z), e = z.map(function (v) { return Math.exp(v - m); }), S = e.reduce(function (a, b) { return a + b; }, 0); return e.map(function (v) { return v / S; }); }
+function reinforce(n, lr, seed) {
+  var rnd = seed, th = [0, 0, 0], CHEER = [0.3, 1.0, 0.6], out = [], base = 0;
+  for (var i = 0; i < n; i++) { var p = softmax(th), u = rnd(), a = u < p[0] ? 0 : u < p[0] + p[1] ? 1 : 2, R = CHEER[a] + (rnd() - .5) * .4, A = R - base;
+    out.push({ p: p.slice(), a: a, R: R, b: base, th: th.slice() });
+    for (var k = 0; k < 3; k++) th[k] += lr * A * ((k === a ? 1 : 0) - p[k]);
+    base = 0.8 * base + 0.2 * R; }
+  out.push({ p: softmax(th), th: th.slice() });
+  return out;
+}
+/*ENDMATH*/
+
+  /* ---------------- precomputed honest runs (tiny, so done once at load) ---------------- */
+  var W0 = mkWorld(), GAMMA = 0.9, VI = valueIter(W0, GAMMA, 8);
+  function train(algo, seed, n, eps) {
+    var Q = zeros(), r = F.rng(seed), log = [], epStart = [], snaps = [];
+    for (var e = 0; e < n; e++) { epStart.push(log.length); snaps.push(Q.map(function (q) { return q.slice(); })); episode(W0, Q, { eps: eps, lr: 0.5, gamma: GAMMA, algo: algo }, r, log); }
+    epStart.push(log.length); snaps.push(Q.map(function (q) { return q.slice(); }));
+    return { Q: Q, log: log, epStart: epStart, snaps: snaps, path: greedyPath(W0, Q) };
+  }
+  var QL = train('q', 'ql-film', 400, 0.1), SA = train('sarsa', 'sarsa-film', 400, 0.1);
+  // a readable early episode: reaches the goal, some non-zero TD errors
+  var EP = 0; (function () { var best = -1; for (var e = 3; e < 250; e++) { var a0 = QL.epStart[e], L0 = QL.log.slice(a0, QL.epStart[e + 1]); if (L0[L0.length - 1].r <= 0 || L0.length > 8) continue;
+      var sc = L0.slice(0, 5).filter(function (x) { return Math.abs(x.td) > 1e-3; }).length; if (sc > best) { best = sc; EP = e; } } if (best >= 0) return;
+    for (e = 3; e < 120; e++) { var a = QL.epStart[e], b = QL.epStart[e + 1], L = QL.log.slice(a, b), nz = L.filter(function (x) { return Math.abs(x.td) > 1e-9; }).length; if (L[L.length - 1].r > 0 && L.length <= 9 && nz >= 3) { EP = e; return; } } EP = 20; })();
+  var DANCE = reinforce(40, 0.35, F.rng('dance-floor'));
+  window.__w9 = { qPath: QL.path, sPath: SA.path, ep: EP, V: VI[8] };
+
+  /* ---------------- layout: board on top (phone) or left (desktop), readouts beside ---------------- */
+  var L = {};
+  function lay(W, H) {
+    L.por = H > W * 1.05;
+    if (L.por) { L.cs = Math.min((W - 28) / GC, H * .52 / GR); L.gx = (W - GC * L.cs) / 2; L.gy = Math.max(16, (H - GR * L.cs - 240) * .3); L.px = 12; L.py = L.gy + GR * L.cs + 18; L.pw = W - 24; }
+    else { L.cs = Math.min(H * .8 / GR, W * .5 / GC); L.gx = W * .05; L.gy = (H - GR * L.cs) / 2; L.px = L.gx + GC * L.cs + 30; L.py = L.gy; L.pw = W - L.px - 16; }
+    return L;
+  }
+  function tc(s) { return [L.gx + (s % GC + .5) * L.cs, L.gy + (Math.floor(s / GC) + .5) * L.cs]; }
+  function sName(s) { return '(' + Math.floor(s / GC) + ',' + (s % GC) + ')'; }
+  function fx(v) { return (v < 0 ? '−' : '') + Math.abs(v).toFixed(2); }
+
+  function bg(ctx, W, H, t) { F.sky(ctx, W, H, P.night, '#2b3163'); F.stars(ctx, W, H, t, 'w9', 50); }
+  var GB = ['#cfe0a8', '#bdd494'];
+  function board(ctx, t, o) {
+    o = o || {}; var w = o.world || W0, cs = L.cs;
+    F.paper(ctx, L.gx + GC * cs / 2, L.gy + GR * cs / 2, GC * cs + 16, GR * cs + 16, '#5b6b3a', { seed: 'boardbg', blur: 10 });
+    for (var s = 0; s < GR * GC; s++) {
+      var p = tc(s), col = s === GOAL_S ? P.butter : w.cliff[s] ? '#34304a' : s === START_S ? P.sky : GB[(s + Math.floor(s / GC)) % 2];
+      F.paper(ctx, p[0], p[1], cs - 5, cs - 5, col, { seed: 'tile' + s, shadow: false, grainA: .5 });
+      if (w.cliff[s]) { ctx.save(); ctx.strokeStyle = 'rgba(200,190,240,.5)'; ctx.lineWidth = 1.5; ctx.beginPath(); for (var k = 0; k < 3; k++) { var yy = p[1] - cs * .2 + k * cs * .2; ctx.moveTo(p[0] - cs * .3, yy); for (var j = 1; j <= 6; j++) ctx.lineTo(p[0] - cs * .3 + j * cs * .1, yy + (j % 2 ? -3 : 3)); } ctx.stroke(); ctx.restore(); }
+    }
+    var fs = Math.max(10, cs * .17);
+    if (!o.noLabels) {
+      var g = tc(GOAL_S); F.hand(ctx, '+1', g[0], g[1] + cs * .3, fs, '#7a5a10', { seed: 'goal' });
+      Object.keys(w.cliff).forEach(function (c) { var q = tc(+c); F.hand(ctx, '−1', q[0], q[1] + cs * .3, fs, P.pink, { seed: 'cl' + c }); });
+      if (!o.noCliffWord && w === W0) { var m = tc(17); F.hand(ctx, 'cliff', m[0], m[1] - cs * .02, fs * 1.1, P.lav, { seed: 'cliffw' }); }
+    }
+    if (o.Q) for (s = 0; s < GR * GC; s++) { if (w.cliff[s] || s === GOAL_S) continue; qTri(ctx, s, o.Q[s], o.qA == null ? 1 : o.qA); }
+    if (o.V) for (s = 0; s < GR * GC; s++) { if (w.cliff[s] || s === GOAL_S) continue; var q2 = tc(s), v = o.V[s];
+      F.lantern(ctx, q2[0], q2[1] - cs * .06, cs * .15, clamp(v, 0, 1), t);
+      F.hand(ctx, fx(v), q2[0], q2[1] + cs * .3, fs, v > 0 ? '#2d4a1e' : P.ink, { font: F.MONO, seed: 'v' + s, wobble: .2 }); }
+    if (o.arrows) for (s = 0; s < GR * GC; s++) { if (w.cliff[s] || s === GOAL_S) continue; var qq = o.arrows[s], mx = maxQ(qq); if (Math.abs(mx) < 1e-6 && qq.every(function (z) { return Math.abs(z) < 1e-6; })) continue;
+      var a = qq.indexOf(mx), c0 = tc(s); F.arrow(ctx, c0[0] - DC[a] * cs * .16, c0[1] - DR[a] * cs * .16, c0[0] + DC[a] * cs * .2, c0[1] + DR[a] * cs * .2, o.arrowCol || P.chalk, Math.max(2, cs * .045), 'ga' + s); }
+    if (g && t != null) F.glow(ctx, g[0], g[1], cs * .6, 'rgba(255,220,120,.5)', .6 + .3 * Math.sin(t * 3));
+  }
+  function qTri(ctx, s, q, A) {
+    var c = tc(s), h = L.cs * .44; ctx.save();
+    for (var a = 0; a < 4; a++) {
+      var v = q[a]; if (Math.abs(v) < 1e-4) continue; ctx.globalAlpha = A * clamp(Math.abs(v) * 1.1, .12, .85);
+      ctx.fillStyle = v > 0 ? '#3f8f5a' : '#c2455a'; ctx.beginPath(); ctx.moveTo(c[0], c[1]);
+      var dx = DC[a], dy = DR[a], px = -dy, py = dx; ctx.lineTo(c[0] + (dx + px) * h, c[1] + (dy + py) * h); ctx.lineTo(c[0] + (dx - px) * h, c[1] + (dy - py) * h); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+  // a boxy paper robot (Game Boy RPG hero)
+  function robot(ctx, x, y, s, t, o) {
+    o = o || {}; var bob = Math.sin(t * 6) * s * .03;
+    ctx.save(); ctx.translate(x, y + bob);
+    ctx.strokeStyle = P.ink; ctx.lineWidth = Math.max(1.2, s * .05); ctx.beginPath(); ctx.moveTo(0, -s * .62); ctx.lineTo(0, -s * .8); ctx.stroke();
+    ctx.fillStyle = o.tip || P.red; ctx.beginPath(); ctx.arc(0, -s * .83, s * .07, 0, 6.283); ctx.fill();
+    F.paper(ctx, 0, -s * .42, s * .56, s * .38, o.head || '#d9dbe8', { seed: 'rhead', shadow: false });
+    ctx.fillStyle = P.ink; ctx.fillRect(-s * .15, -s * .47, s * .08, s * .09); ctx.fillRect(s * .07, -s * .47, s * .08, s * .09);
+    F.paper(ctx, 0, -s * .05, s * .5, s * .36, o.body || P.orange, { seed: 'rbody', shadow: false });
+    ctx.fillStyle = P.butter; ctx.fillRect(-s * .08, -s * .1, s * .16, s * .08);
+    ctx.fillStyle = P.ink; ctx.fillRect(-s * .18, s * .13, s * .1, s * .12); ctx.fillRect(s * .08, s * .13, s * .1, s * .12);
+    ctx.restore();
+  }
+  function readout(ctx, x, y, lines, maxW, sz0) {
+    var sz = sz0 || (maxW < 420 ? 13 : 17), w = 0; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    if (w + 22 > maxW) { sz = Math.max(9, Math.floor(sz * (maxW - 22) / w)); ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore(); }
+    var h = lines.length * sz * 1.35 + 14;
+    F.paper(ctx, x + (w + 22) / 2, y + h / 2, w + 22, h, 'rgba(22,26,53,.9)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 11, y + 8 + i * sz * 1.35); }); ctx.restore();
+    return h;
+  }
+  function tdLines(u) {
+    return [['Q(s,a) += α·(r + γ·max Q(s′) − Q(s,a))', P.mint],
+      ['s=' + sName(u.s) + ' a=' + ARW[u.a] + ' r=' + (u.r > 0 ? '+1' : u.r < 0 ? '−1' : '0') + ' s′=' + sName(u.s2) + (u.done ? ' (end)' : ''), P.chalk],
+      ['= ' + fx(u.old) + ' + 0.5·(' + (u.r < 0 ? '−1' : u.r) + ' + 0.9·' + fx(u.boot) + ' − ' + fx(u.old) + ')', P.butter],
+      ['= ' + fx(u.old) + ' + 0.5·(' + fx(u.td) + ') = ' + fx(u.nw), P.butter]];
+  }
+  function question(ctx, W, H, a, text) {
+    if (a <= 0) return; var sz = W < 500 ? 16 : 20, st = tc(START_S);
+    ctx.save(); ctx.globalAlpha = a;
+    var nx = L.por ? W * .5 : L.px + 150, ny = L.por ? L.py + 34 : L.gy + GR * L.cs - 40;
+    F.note(ctx, text || 'what is this square worth?', nx, ny, sz, { rot: -.03, seed: 'q9' });
+    F.arrow(ctx, nx - (L.por ? 60 : 130), ny - (L.por ? 20 : 0), st[0] + (L.por ? 0 : L.cs * .3), st[1] + L.cs * .3, P.chalk, 2.5, 'qarrow');
+    ctx.restore();
+  }
+  function onTile(ctx, s, text, col) { var p = tc(s); F.paper(ctx, p[0], p[1] - L.cs * .28, L.cs * .7, L.cs * .3, col || P.butter, { seed: 'tag' + text, rot: -.06, shadow: false }); F.hand(ctx, text, p[0], p[1] - L.cs * .28, L.cs * .17, P.ink, { seed: 'tg' + text }); }
+  function lbl(ctx, text, x, y, color, sz) { F.hand(ctx, text, x, y, sz || 16, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.75)', seed: text }); }
+
+  /* ---------------- the story ---------------- */
+  var WALK = [0, 1, 1, 2]; // up, right, right, down: the environment decides what that means
+  function walkState(l) { var s = START_S, hist = []; for (var i = 0; i < WALK.length; i++) { if (l < 1 + i * 1.1) break; var e = stepEnv(W0, s, WALK[i]); hist.push({ s: s, a: WALK[i], r: e.r, s2: e.s2, done: e.done }); s = e.s2; } return hist; }
+  function lerpTile(a, b, f) { var p = tc(a), q = tc(b); return [lerp(p[0], q[0], F.ease.inOut(f)), lerp(p[1], q[1], F.ease.inOut(f))]; }
+
+  var chapters = [
+    { name: 'the wish', start: 0, dur: 6, cap: {
+        1: 'A little paper robot lives on a board game. It wants the <b>gold square</b>. Nobody tells it the way. Three squares are a <b>cliff</b>.',
+        2: 'Reinforcement learning: no labelled answers, only <b>rewards</b>. +1 at the goal, −1 off the cliff, 0 everywhere else. The robot must work out the rest.',
+        3: 'A 4×5 cliff-walk MDP: deterministic moves, walls bounce you back, goal and cliff are terminal, γ = 0.9. The question on the start tile is V(s₀).' },
+      draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t); var p = tc(START_S); robot(ctx, p[0], p[1] + L.cs * .25, L.cs * .75, t); question(ctx, W, H, ramp(l, .5, 1.5));
+        F.plane(ctx, lerp(-30, W + 30, l / 6), L.gy + 10 + Math.sin(l * 2) * 8, 11, .1, P.cream); } },
+    { name: 'the loop', start: 6, dur: 6, cap: {
+        1: 'The robot can only try things. It picks a move, the board answers with where it landed and a reward. Right now it is just wandering, and oops, it walks off the cliff.',
+        2: 'The <b>agent–environment loop</b>: agent sends an action a; environment returns the next state s′ and reward r. Repeat until the episode ends.',
+        3: 'Each step yields an experience (s, a, r, s′, done). Everything that follows (Bellman, TD, replay, policy gradients) is a way of squeezing those tuples.' },
+      draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t);
+        var h = walkState(l), cur = h.length ? h[h.length - 1] : null, f = cur ? clamp((l - (1 + (h.length - 1) * 1.1)) / .5, 0, 1) : 0, p = cur ? lerpTile(cur.s, cur.s2, f) : tc(START_S);
+        var fell = cur && cur.r < 0 && f >= 1; robot(ctx, p[0], p[1] + L.cs * .25 + (fell ? Math.min(40, (l - 5.1) * 60) : 0), L.cs * .75 * (fell ? Math.max(.2, 1 - (l - 5.1)) : 1), t);
+        if (fell) lbl(ctx, 'aaaah', p[0], p[1] - L.cs * .5, P.pink, L.cs * .25);
+        var lines = [['agent  ──  a  ──▶  environment', P.butter], ['agent  ◀── s′, r ──  environment', P.mint]];
+        h.forEach(function (x, i) { lines.push(['t=' + i + '  a=' + ARW[x.a] + '  s′=' + sName(x.s2) + '  r=' + (x.r < 0 ? '−1' : x.r) + (x.done ? '  done' : ''), x.r < 0 ? P.pink : P.chalk]); });
+        readout(ctx, L.px, L.py, lines, L.pw);
+      } },
+    { name: 'values ripple', start: 12, dur: 8, cap: {
+        1: 'Clever trick: start at the gold square and work <b>backwards</b>. A square next to the goal is worth almost 1. The one before that, a bit less. The lanterns light up like a ripple.',
+        2: 'The <b>Bellman equation</b>: a square is worth the best reward-plus-next-square-value you can get from it. Discount γ = 0.9 makes far-away gold worth a little less.',
+        3: 'Value iteration V_{k+1}(s) = max_a [r + γV_k(s′)], sweep k = 0…8 shown live. Converges to γ^(d−1) for distance d: V(s₀) = 0.9⁵ ≈ 0.59 via the safe edge.' },
+      draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t);
+        var k = Math.min(8, Math.floor(ramp(l, .3, 6.8) * 8 + 1e-6)), V = VI[k]; board(ctx, t, { V: V });
+        var hl = [14, 8, 2, 6, 10][Math.floor(l / 1.6) % 5], best = -9, ba = 0; for (var a = 0; a < 4; a++) { var e = stepEnv(W0, hl, a), q = e.r + (e.done ? 0 : GAMMA * VI[Math.max(0, k - 1)][e.s2]); if (q > best) { best = q; ba = a; } }
+        var e2 = stepEnv(W0, hl, ba), p = tc(hl); ctx.save(); ctx.strokeStyle = P.pink; ctx.lineWidth = 3; ctx.strokeRect(p[0] - L.cs * .46, p[1] - L.cs * .46, L.cs * .92, L.cs * .92); ctx.restore();
+        readout(ctx, L.px, L.py, [['sweep k = ' + k, P.chalk], ['V(s) = max_a [ r + γ·V(s′) ]', P.mint], ['V' + sName(hl) + ' = ' + (e2.r ? '1' : '0') + ' + 0.9·' + fx(e2.done ? 0 : VI[Math.max(0, k - 1)][e2.s2]) + ' = ' + fx(V[hl]) + '  (' + ARW[ba] + ')', P.butter]], L.pw);
+        var s0 = tc(START_S); robot(ctx, s0[0] - L.cs * .3, s0[1] + L.cs * .3, L.cs * .45, t);
+        if (k >= 8) question(ctx, W, H, ramp(l, 7, 7.6), 'worth 0.9⁵ ≈ ' + VI[8][START_S].toFixed(2) + '!');
+      } },
+    { name: 'Q-learning', start: 20, dur: 9, cap: {
+        1: 'But usually nobody hands you the map of rewards. So the robot learns by <b>walking</b>. After each step it nudges its guess for "that move from that square" toward what it just saw.',
+        2: '<b>Q-learning</b>: Q(s,a) = how good move a is from square s. Each step, the TD error (surprise) nudges it. Green wedges = good moves, red = bad. Then a fast-forward of 400 episodes.',
+        3: 'Tabular Q-learning, α = 0.5, ε = 0.1, Q₀ = 0. Every number is the real update from a seeded run. Off-policy: the target uses max Q(s′), not the move you will actually take.' },
+      draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t);
+        var a = QL.epStart[EP], b = QL.epStart[EP + 1], n = b - a, slowEnd = Math.min(5.2, .4 + n * 1.0), u, Q, rp;
+        if (l < slowEnd) {
+          var i = clamp(Math.floor((l - .4) / 1.0), 0, n - 1), fr = clamp((l - .4 - i * 1.0) / .45, 0, 1); u = QL.log[a + i];
+          Q = QL.snaps[EP].map(function (q) { return q.slice(); }); for (var j = a; j < a + i; j++) Q[QL.log[j].s][QL.log[j].a] = QL.log[j].nw; if (fr >= 1) Q[u.s][u.a] = u.nw;
+          board(ctx, t, { Q: Q }); rp = lerpTile(u.s, u.s2, fr); robot(ctx, rp[0], rp[1] + L.cs * .25, L.cs * .6, t);
+          readout(ctx, L.px, L.py, [['episode ' + EP + '  step ' + i, P.chalk]].concat(tdLines(u)), L.pw);
+        } else {
+          var e = Math.min(400, EP + 1 + Math.floor(Math.pow(ramp(l, slowEnd, 8.2), 1.6) * (399 - EP))); Q = QL.snaps[e];
+          board(ctx, t, { Q: Q, arrows: l > 7 ? Q : null }); u = QL.log[QL.epStart[e] - 1];
+          if (l > 7.3) pathLine(ctx, QL.path.p, P.butter, t);
+          readout(ctx, L.px, L.py, [['fast-forward: episode ' + e + ' / 400', P.chalk]].concat(tdLines(u)), L.pw);
+        }
+      } },
+    { name: 'SARSA', start: 29, dur: 5, cap: {
+        1: 'A cautious cousin learns from the moves it <b>really</b> makes, stumbles included. Knowing it sometimes trips, it walks the long way round, far from the edge.',
+        2: '<b>SARSA</b> updates toward Q(s′, a′) for the move it actually takes next. With 10% random moves, the cliff edge is risky, so it learns the safer path. Q-learning (yellow) hugs the edge.',
+        3: 'On-policy target r + γQ(s′,a′) vs off-policy r + γ max Q(s′). Q-learning learns the optimal greedy path but earns less while exploring; SARSA optimises the ε-greedy policy it runs.' },
+      draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t, { Q: SA.Q, qA: .5, arrows: SA.Q, arrowCol: P.lav });
+        pathLine(ctx, QL.path.p, P.butter, t, ramp(l, 0, .8)); pathLine(ctx, SA.path.p, P.lav, t, ramp(l, .8, 1.8), 6);
+        var k = Math.floor(ramp(l, 1, 4.5) * (SA.path.p.length - 1)), sp = tc(SA.path.p[k]); robot(ctx, sp[0], sp[1] + L.cs * .25, L.cs * .55, t, { body: P.lav });
+        readout(ctx, L.px, L.py, [['Q-learning path: ' + (QL.path.p.length - 1) + ' steps (edge)', P.butter], ['SARSA path:      ' + (SA.path.p.length - 1) + ' steps (safe)', P.lav], ['SARSA: Q(s,a) += α·(r + γ·Q(s′,a′) − Q(s,a))', P.mint]], L.pw);
+      } },
+    { name: 'DQN', start: 34, dur: 9, cap: {
+        1: 'Big worlds have too many squares for a table. So we swap the table for a small <b>brain</b> that guesses. Every step becomes a Polaroid in a shoebox, and it studies a random handful of old memories at a time.',
+        2: '<b>DQN</b>: a neural net outputs Q for every move. A <b>replay buffer</b> (shoebox) stores experiences; random minibatches break up correlated streaks. A frozen <b>target network</b> copy keeps the goalposts still.',
+        3: 'td = r + γ(1−done)·max_a′ Q_target(s′,a′) − Q(s,a); loss = mean td². Here the "networks" are Q snapshots from the real run (online at episode 25, target frozen at episode 15); batches are real sampled transitions.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); dqn(ctx, t, l, W, H); } },
+    { name: 'policy gradient', start: 43, dur: 7, cap: {
+        1: 'A different idea: skip the scores, just learn <b>what to do</b>. A dancer tries moves; whatever gets the crowd cheering, she does a bit more often.',
+        2: '<b>Policy gradient</b>: nudge the log-probability of each action up in proportion to how much better than usual (the baseline) its reward was. The bars are her real probabilities.',
+        3: 'REINFORCE with a running-mean baseline: θ += lr·(R − b)·∇θ log π(a), softmax policy over 3 moves, lr = 0.35. Same idea powers PPO next week.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); dance(ctx, t, l, W, H); } },
+    { name: 'where it stops being true', start: 50, dur: 5, cap: {
+        1: 'Honest bit: real worlds are far too big to list every square, and rewards are usually rare, late and noisy. Our little board is a toy.',
+        2: 'Real problems: huge or continuous state spaces (no table), sparse delayed rewards, and a network\'s guesses can feed on themselves and blow up.',
+        3: 'Function approximation + bootstrapping + off-policy data (the "deadly triad") can diverge; DQN\'s replay and target net are patches, not guarantees.' },
+      draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t, { Q: QL.Q, arrows: QL.Q });
+        var p = ramp(l, .4, 1.4); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 1.2, 2); var sz = W < 500 ? 14 : 19, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .2;
+          F.hand(ctx, 'Go: ~10¹⁷⁰ squares', x, y - sz * 1.5, sz, P.ink, { seed: 'go', rot: -.6 }); F.hand(ctx, 'no table fits', x + sz * .8, y, sz, P.ink, { seed: 'nt', rot: -.6 }); ctx.restore(); }
+      } },
+    { name: 'the code', start: 55, dur: 6, cap: {
+        1: 'Every nudge you watched is one line of code.',
+        2: 'The tiles become the ARENA update rules you write in [2.1] and [2.2]: tabular Q-learning, then DQN with a replay buffer and target network.',
+        3: 'ARENA 2.1 <code>QLearning.observe</code>, 2.2 <code>DQNTrainer.training_step</code> with <code>ReplayBuffer</code>, <code>q_network</code>, <code>target_network</code>.' },
+      draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); ctx.globalAlpha = .2; board(ctx, t); ctx.globalAlpha = 1; codeCards(ctx, l, W, H, [
+          ['Q-learning  [2.1]', ['Q[s, a] += lr * (r', '    + gamma * Q[s2].max() - Q[s, a])'], P.butter],
+          ['DQN  [2.2]', ['td_error = rewards + gamma * target_max', '    * (1 - terminated) - predicted_q_vals', 'loss = td_error.pow(2).mean()'], P.teal],
+          ['policy gradient', ['loss = -(logprob * (R - b)).mean()'], P.pink]]); } },
+    { name: 'why it matters', start: 61, dur: 4.5, cap: {
+        1: 'The robot will chase exactly the number we wrote, not what we had in mind. That is the whole safety problem in one board game.',
+        2: 'The reward we write is what gets optimised, not what we meant. Looking inside the learner is how we check the difference.',
+        3: 'Reward misspecification and goal misgeneralisation both start here; interpretability on RL agents (e.g. probing Q-nets) is how we catch them.' },
+      draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t, { arrows: QL.Q }); pathLine(ctx, QL.path.p, P.butter, t);
+        var g = tc(GOAL_S); robot(ctx, g[0], g[1] + L.cs * .25, L.cs * .7, t);
+        var sz = W < 500 ? 16 : 22; ctx.save(); ctx.globalAlpha = ramp(l, .2, 1);
+        F.note(ctx, 'the reward we write is what\ngets optimised, not what we meant', W / 2, L.por ? L.py + 60 : H * .5, sz, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore(); } }
+  ];
+
+  function pathLine(ctx, p, col, t, a, off) {
+    a = a == null ? 1 : a; if (a <= 0) return; off = off || 0; ctx.save(); ctx.globalAlpha = a; ctx.strokeStyle = col; ctx.lineWidth = Math.max(3, L.cs * .06); ctx.setLineDash([L.cs * .12, L.cs * .08]); ctx.lineCap = 'round';
+    ctx.beginPath(); p.forEach(function (s, i) { var c = tc(s); if (i) ctx.lineTo(c[0] + off, c[1] + off); else ctx.moveTo(c[0] + off, c[1] + off); }); ctx.stroke(); ctx.restore();
+  }
+  function codeCards(ctx, l, W, H, cards) {
+    var sz = W < 500 ? 13 : 17, y = H * .08;
+    cards.forEach(function (C, j) {
+      var a = ramp(l, j * 1.2, j * 1.2 + .8); if (a <= 0) return;
+      ctx.save(); ctx.globalAlpha = a; var h = C[1].length * sz * 1.5 + sz * 2.2;
+      var w = Math.min(W - 16, Math.max.apply(null, C[1].map(function (s) { return F.textW(ctx, s, sz, F.MONO); })) + 34);
+      F.paper(ctx, W / 2, y + h / 2, w, h, P.cream, { seed: 'code' + j, rot: (j - 1) * .012 });
+      F.hand(ctx, C[0], W / 2 - w / 2 + 12, y + sz, sz * .95, '#6b5a9a', { align: 'left', seed: C[0] });
+      C[1].forEach(function (s, i) { F.hand(ctx, s, W / 2 - w / 2 + 12, y + sz * 2.3 + i * sz * 1.5, sz, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: s, reveal: ramp(l, j * 1.2 + .2 + i * .3, j * 1.2 + 1 + i * .3) }); });
+      ctx.fillStyle = C[2]; ctx.fillRect(W / 2 - w / 2 + 4, y + 6, 4, h - 12);
+      ctx.restore(); y += h + 14;
+    });
+  }
+
+  /* ---------------- DQN: shoebox of Polaroids, online net and frozen target ---------------- */
+  var ON_EP = 25, TG_EP = 15, POOL = QL.log.slice(QL.epStart[TG_EP], QL.epStart[ON_EP]);
+  function batchAt(k) { var r = F.rng('batch' + k), b = []; for (var i = 0; i < 4; i++) { var u = POOL[Math.floor(r() * POOL.length)], Qo = QL.snaps[ON_EP], Qt = QL.snaps[TG_EP], tgt = u.done ? 0 : maxQ(Qt[u.s2]); b.push({ u: u, tgt: tgt, pred: Qo[u.s][u.a], td: u.r + GAMMA * tgt - Qo[u.s][u.a] }); } return b; }
+  window.__w9.batchAt = batchAt; window.__w9.QL = QL;
+  function miniNet(ctx, x, y, w, h, t, col, label, frozen) {
+    F.paper(ctx, x, y, w, h, col, { seed: 'net' + label, rot: frozen ? .02 : -.02 });
+    var layers = [2, 4, 4, 4], nx = [];
+    for (var i = 0; i < layers.length; i++) { var col2 = []; for (var j = 0; j < layers[i]; j++) col2.push([x - w * .36 + i * w * .24, y - h * .12 + (j - (layers[i] - 1) / 2) * h * .16]); nx.push(col2); }
+    ctx.save(); ctx.strokeStyle = 'rgba(42,41,52,.35)'; ctx.lineWidth = 1;
+    for (i = 0; i < nx.length - 1; i++) nx[i].forEach(function (a) { nx[i + 1].forEach(function (b) { ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }); });
+    nx.forEach(function (c, i) { c.forEach(function (p, j) { ctx.fillStyle = frozen ? '#9fc3e6' : (Math.sin(t * 4 + i + j) > 0 ? '#ffd27a' : P.cream); ctx.beginPath(); ctx.arc(p[0], p[1], Math.max(3, h * .045), 0, 6.283); ctx.fill(); ctx.stroke(); }); });
+    ctx.restore();
+    F.hand(ctx, label, x, y + h * .36, Math.max(11, h * .1), P.ink, { seed: 'nl' + label });
+    if (frozen) { ctx.save(); ctx.strokeStyle = '#e8f4ff'; ctx.lineWidth = 2; var sx = x + w * .38, sy = y - h * .34; for (var k = 0; k < 3; k++) { var an = k * Math.PI / 3; ctx.beginPath(); ctx.moveTo(sx - Math.cos(an) * 8, sy - Math.sin(an) * 8); ctx.lineTo(sx + Math.cos(an) * 8, sy + Math.sin(an) * 8); ctx.stroke(); } ctx.restore(); }
+  }
+  function polaroid(ctx, x, y, s, u, rot, extra) {
+    F.paper(ctx, x, y + (extra ? s * .08 : 0), s, s * (extra ? 1.36 : 1.2), P.cream, { seed: 'pol' + u.s + u.a, rot: rot || 0 });
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot || 0);
+    var m = s * .8, gx = -m / 2, gy = -s * .5, c = m / GC;
+    ctx.fillStyle = '#9fb77a'; ctx.fillRect(gx, gy, m, c * GR);
+    ctx.fillStyle = '#34304a'; ctx.fillRect(gx + c, gy + 3 * c, 3 * c, c); ctx.fillStyle = P.butter; ctx.fillRect(gx + 4 * c, gy + 3 * c, c, c);
+    var a = [gx + (u.s % GC + .5) * c, gy + (Math.floor(u.s / GC) + .5) * c], b = [gx + (u.s2 % GC + .5) * c, gy + (Math.floor(u.s2 / GC) + .5) * c];
+    ctx.fillStyle = P.orange; ctx.beginPath(); ctx.arc(a[0], a[1], c * .3, 0, 6.283); ctx.fill();
+    ctx.strokeStyle = P.ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    ctx.restore();
+    var fz = Math.max(9, s * .14);
+    F.hand(ctx, ARW[u.a] + ' r=' + (u.r < 0 ? '−1' : u.r > 0 ? '+1' : '0'), x, y + (extra ? s * .3 : s * .4), fz, P.ink, { seed: 'pc' + u.s + u.a, font: F.MONO, bold: false, wobble: .2 });
+    if (extra) F.hand(ctx, extra, x, y + s * .3 + fz * 1.15, fz, extra.indexOf('−') >= 0 ? '#b0304a' : '#2d6a3e', { seed: 'px' + extra, font: F.MONO, wobble: .2 });
+  }
+  function dqn(ctx, t, l, W, H) {
+    var por = H > W * 1.05, nw = por ? W * .44 : Math.min(260, W * .2), nh = nw * .62;
+    var onX = por ? W * .27 : W * .2, tgX = por ? W * .73 : W * .2, onY = por ? 70 : H * .25, tgY = por ? 70 : H * .62;
+    miniNet(ctx, onX, onY, nw, nh, t, P.butter, 'Q-network', false);
+    miniNet(ctx, tgX, tgY, nw, nh, t, '#d6e6f5', 'target (frozen)', true);
+    // shoebox
+    var bx = por ? W / 2 : W * .5, by = por ? onY + nh / 2 + 110 : H * .42, bw = por ? W * .62 : Math.min(360, W * .26), bh = bw * .42;
+    for (var i = 0; i < 9; i++) { var u = POOL[(i * 7) % POOL.length], fl = ramp(l, i * .25, i * .25 + .8), sx = por ? W * .5 : W * .2, sy = por ? -20 : -20;
+      if (fl < 1) polaroid(ctx, lerp(sx, bx - bw * .3 + (i % 5) * bw * .15, fl), lerp(sy, by - bh * .3, fl), por ? 34 : 44, u, (i - 4) * .12);
+      else polaroid(ctx, bx - bw * .32 + (i % 5) * bw * .16, by - bh * .45 - (i > 4 ? 8 : 0), por ? 34 : 44, u, (i - 4) * .12); }
+    F.paper(ctx, bx, by + bh * .1, bw, bh, '#c98a5a', { seed: 'shoebox' });
+    F.hand(ctx, 'replay buffer', bx, by + bh * .1, Math.max(13, bh * .22), '#3b2414', { seed: 'rb' });
+    F.paper(ctx, bx, by - bh * .4, bw * 1.04, bh * .12, '#a86c42', { seed: 'lid', rot: -.05 - .08 * Math.sin(Math.min(l, 3) * 1.5) });
+    // sampled minibatch
+    var k = Math.floor(Math.max(0, l - 2.5) / 2.2), b = batchAt(k), bs = por ? W * .2 : Math.min(90, W * .07), yb = por ? by + bh * .8 + bs * .7 : H * .42;
+    if (l > 2.5) {
+      var loss = 0; b.forEach(function (x, j) { loss += x.td * x.td; var px = por ? W * (.14 + j * .24) : W * (.72 + (j % 2) * .13), py = por ? yb : H * .2 + Math.floor(j / 2) * bs * 1.6, fr = clamp((l - 2.5 - k * 2.2) / .6, 0, 1);
+        polaroid(ctx, lerp(bx, px, F.ease.out(fr)), lerp(by, py, F.ease.out(fr)), bs, x.u, (j - 1.5) * .06, 'td=' + (x.td >= 0 ? '+' : '−') + Math.abs(x.td).toFixed(2)); });
+      loss /= 4;
+      var ry = por ? yb + bs * .9 : H * .62, rx = por ? 12 : W * .6;
+      readout(ctx, rx, ry, [['random minibatch #' + (k + 1) + ' of 4 memories', P.chalk], ['td = r + γ·max Q_target(s′) − Q(s,a)', P.mint], ['loss = mean(td²) = ' + loss.toFixed(4), P.butter]], por ? W - 24 : W * .38);
+    }
+  }
+  /* ---------------- policy gradient: the dancer ---------------- */
+  var MOVES = ['the robot', 'moonwalk', 'macarena'], MCOL = [P.sky, P.pink, P.butter];
+  function dance(ctx, t, l, W, H) {
+    var por = H > W * 1.05, k = Math.min(40, Math.floor(l * 6.2)), d = DANCE[k], p = d.p, a = d.a == null ? 1 : d.a;
+    var sx = por ? W / 2 : W * .3, sy = por ? H * .36 : H * .6;
+    F.paper(ctx, sx, sy + 8, por ? W * .7 : W * .34, 22, '#7a5a8a', { seed: 'stage' });
+    F.glow(ctx, sx, sy - 40, 120, 'rgba(255,200,230,.35)', 1);
+    F.person(ctx, sx + Math.sin(t * 5) * (a === 1 ? 10 : 2), sy, por ? 80 : 110, t * (a === 0 ? 1.8 : 1), { walk: true, coat: MCOL[a], scarf: P.orange, lantern: false, face: a === 1 ? -1 : 1 });
+    var cheer = d.R || 0; for (var i = 0; i < 9; i++) { var hx = sx + (i - 4) * (por ? W * .09 : W * .04), hy = sy + 60 + (i % 2) * 12 - Math.max(0, Math.sin(t * 10 + i)) * cheer * 10; F.blob(ctx, hx, hy, 11, ['#e0c3a8', '#b88a6a', '#f2d6c0'][i % 3], { seed: 'crowd' + i, jit: .3 }); }
+    lbl(ctx, cheer > .8 ? 'WOOO!' : cheer > .5 ? 'yeah!' : 'meh', sx + (por ? W * .3 : W * .12), sy - (por ? 70 : 110), P.butter, por ? 18 : 24);
+    // probability bars
+    var bx = por ? 24 : W * .55, by = por ? sy + 110 : H * .18, bw = por ? W - 48 : W * .38, bh = por ? 26 : 34;
+    MOVES.forEach(function (m, j) { var y = by + j * (bh + 12); F.paper(ctx, bx + bw / 2, y + bh / 2, bw, bh, 'rgba(255,255,255,.12)', { seed: 'bar' + j, shadow: false });
+      ctx.fillStyle = MCOL[j]; ctx.fillRect(bx + 3, y + 4, (bw - 6) * p[j], bh - 8);
+      F.hand(ctx, m + '  π=' + p[j].toFixed(2), bx + 10, y + bh / 2, bh * .5, P.ink, { align: 'left', seed: 'mv' + j }); if (j === a && d.R != null) lbl(ctx, '◀ tried', bx + bw - 30, y + bh / 2, P.chalk, bh * .5); });
+    if (d.R != null) readout(ctx, bx, by + 3 * (bh + 12) + 6, [['step ' + k + '  tried: ' + MOVES[a], P.chalk], ['R = ' + d.R.toFixed(2) + '  baseline b = ' + d.b.toFixed(2), P.butter], ['θ += lr·(R − b)·∇θ log π(a)', P.mint]], por ? W - 48 : W * .4);
+  }
+
+  /* ---------------- coda: now you drive ---------------- */
+  var C = { gamma: 0.9, eps: 0.1, algo: 'q', cliffs: [16, 17, 18], w: null, Q: null, ep: 0, acc: 0, last: null, rnd: null, lastG: 0, walkT: 0 };
+  function codaReset() { C.w = mkWorld(C.cliffs); C.Q = zeros(); C.ep = 0; C.acc = 0; C.last = null; C.rnd = F.rng('coda' + C.cliffs.join()); }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:14px">' +
+        '<span>Tap a square to add or remove cliff.</span>' +
+        '<select aria-label="Algorithm" style="font:inherit;border-radius:8px;padding:3px"><option value="q">Q-learning</option><option value="sarsa">SARSA</option></select>' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:150px">γ <input class="g" type="range" min="0.5" max="0.99" step="0.01" value="' + C.gamma + '" style="flex:1"> <b class="gv"></b></label>' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:150px">ε <input class="e" type="range" min="0" max="0.5" step="0.01" value="' + C.eps + '" style="flex:1"> <b class="ev"></b></label></div>';
+      var sel = panel.querySelector('select'), g = panel.querySelector('.g'), e = panel.querySelector('.e'), gv = panel.querySelector('.gv'), ev = panel.querySelector('.ev');
+      var upd = function () { C.gamma = +g.value; C.eps = +e.value; gv.textContent = C.gamma.toFixed(2); ev.textContent = C.eps.toFixed(2); };
+      upd(); sel.value = C.algo; sel.onchange = function () { C.algo = sel.value; codaReset(); };
+      g.oninput = function () { upd(); codaReset(); }; e.oninput = function () { upd(); codaReset(); };
+      codaReset();
+    },
+    down: function (x, y, api) {
+      lay(api.W, api.H); var c = Math.floor((x - L.gx) / L.cs), r = Math.floor((y - L.gy) / L.cs); if (c < 0 || c >= GC || r < 0 || r >= GR) return;
+      var s = r * GC + c; if (s === START_S || s === GOAL_S) return; var i = C.cliffs.indexOf(s); if (i >= 0) C.cliffs.splice(i, 1); else C.cliffs.push(s);
+      codaReset(); api.audio.blip(i >= 0 ? 520 : 330);
+    },
+    draw: function (ctx, t, W, H, api, dt) {
+      lay(W, H); bg(ctx, W, H, t);
+      C.acc += dt * 40; while (C.acc >= 1 && C.ep < 3000) { var log = []; var res = episode(C.w, C.Q, { eps: C.eps, lr: 0.5, gamma: C.gamma, algo: C.algo }, C.rnd, log); C.last = log[log.length - 1]; C.lastG = res.G; C.ep++; C.acc -= 1; }
+      board(ctx, t, { world: C.w, Q: C.Q, arrows: C.Q, noCliffWord: true });
+      var gp = greedyPath(C.w, C.Q, 24); if (gp.ok) pathLine(ctx, gp.p, C.algo === 'q' ? P.butter : P.lav, t);
+      var k = gp.ok ? Math.floor((t * 2.5) % gp.p.length) : 0, rp = tc(gp.p[k]); robot(ctx, rp[0], rp[1] + L.cs * .25, L.cs * .55, t, { body: C.algo === 'q' ? P.orange : P.lav });
+      var V = C.Q.map(maxQ), lines = [['episode ' + C.ep + '  ' + (C.algo === 'q' ? 'Q-learning' : 'SARSA') + '  γ=' + C.gamma.toFixed(2) + ' ε=' + C.eps.toFixed(2), P.chalk],
+        ['V(start) = max Q = ' + fx(V[START_S]) + '   last return ' + (C.lastG > 0 ? '+1' : C.lastG < 0 ? '−1' : '0'), P.butter],
+        [gp.ok ? 'greedy path: ' + (gp.p.length - 1) + ' steps to the gold' : 'greedy path: not found yet', gp.ok ? P.mint : P.pink]];
+      if (C.last) lines = lines.concat(tdLines(C.last).slice(1).map(function (x) { return [x[0].replace('0.9·', C.gamma.toFixed(2) + '·'), x[1]]; }));
+      readout(ctx, L.px, L.py, lines, L.pw);
+    }
+  };
+
+  F.play({
+    title: 'W9 · What is this square worth?',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: RL foundations & DQN', href: '../../index.html#demo/rl-foundations-dqn' },
+      { label: 'Week 9 pack', href: '../../index.html#week-09' },
+      { label: 'Map: Q-learning', href: '../../index.html#map/node=q-learning' },
+      { label: 'Map: DQN', href: '../../index.html#map/node=dqn' },
+      { label: 'Case: Q-learning', href: '../../index.html#cases/q-learning' },
+      { label: 'Case: replay buffer', href: '../../index.html#cases/replay-buffer' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>

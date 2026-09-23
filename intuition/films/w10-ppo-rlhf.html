@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>How far can I trust this step</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, lerp = F.lerp;
+
+/*MATH*/
+function softmax(z) { var m = Math.max.apply(null, z), e = z.map(function (v) { return Math.exp(v - m); }), S = e.reduce(function (a, b) { return a + b; }, 0); return e.map(function (v) { return v / S; }); }
+function clip(x, a, b) { return x < a ? a : x > b ? b : x; }
+// PPO clipped surrogate for one action (per-sample term)
+function ppoTerm(r, A, eps) { return Math.min(r * A, clip(r, 1 - eps, 1 + eps) * A); }
+// d/d r of the clipped term (0 where the clip is active)
+function ppoDr(r, A, eps) { var u = r * A, c = clip(r, 1 - eps, 1 + eps) * A; return u <= c ? A : 0; }
+// gradient ascent on logits for the taken action a (the policy's own step)
+function ppoSteps(th0, a, A, eps, lr, n, noClip) {
+  var old = softmax(th0), th = th0.slice(), out = [];
+  for (var k = 0; k <= n; k++) { var p = softmax(th), r = p[a] / old[a], L = noClip ? r * A : ppoTerm(r, A, eps), g = noClip ? A : ppoDr(r, A, eps);
+    out.push({ p: p, r: r, L: L, g: g });
+    for (var j = 0; j < th.length; j++) th[j] += lr * g * r * ((j === a ? 1 : 0) - p[j]); }
+  return out;
+}
+// GAE on a short trajectory
+function gae(rew, V, gamma, lam) { var n = rew.length, d = [], A = new Array(n), g = 0;
+  for (var t = 0; t < n; t++) d.push(rew[t] + gamma * V[t + 1] - V[t]);
+  for (t = n - 1; t >= 0; t--) { g = d[t] + gamma * lam * g; A[t] = g; } return { d: d, A: A }; }
+// postcards: token-level toy LM, reward model from preferences, KL-regularised optimum
+var TOK = ['wish you were here', 'the sea is lovely', 'miss you', 'wonderful', '!'], NT = TOK.length, LEN = 6;
+var PREF = [0.23, 0.21, 0.21, 0.27, 0.08], VAL = [1.2, 1.0, 1.1, 0.1, 0];
+function trueU(c) { // what the person actually likes: variety, one or two "!", no shouting, no repeats
+  var n = new Array(NT).fill(0); c.forEach(function (i) { n[i]++; }); var u = 0;
+  for (var i = 0; i < NT - 1; i++) if (n[i]) u += VAL[i] - 0.3 * (n[i] - 1);
+  u += n[4] >= 1 ? 0.9 : 0; u -= 0.6 * Math.max(0, n[4] - 2); return u; }
+function counts(c) { var n = new Array(NT).fill(0); c.forEach(function (i) { n[i]++; }); return n; }
+function sampleCard(pi, us) { return us.map(function (u) { var s = 0; for (var i = 0; i < NT; i++) { s += pi[i]; if (u < s) return i; } return NT - 1; }); }
+function uniforms(rnd, m) { var U = []; for (var k = 0; k < m; k++) { var row = []; for (var j = 0; j < LEN; j++) row.push(rnd()); U.push(row); } return U; }
+// Bradley-Terry reward model r(x) = w . counts(x), fit by gradient ascent on log sigma(r_win - r_lose)
+function fitRM(pairs, steps, lr) { var w = new Array(NT).fill(0), hist = [w.slice()];
+  for (var k = 0; k < steps; k++) { var g = new Array(NT).fill(0), ll = 0;
+    pairs.forEach(function (pr) { var d = 0, i; for (i = 0; i < NT; i++) d += w[i] * (pr.win[i] - pr.lose[i]); var s = 1 / (1 + Math.exp(-d)); ll += Math.log(s + 1e-12); for (i = 0; i < NT; i++) g[i] += (1 - s) * (pr.win[i] - pr.lose[i]); });
+    for (var i = 0; i < NT; i++) w[i] += lr * g[i] / pairs.length; hist.push(w.slice()); hist[hist.length - 1].ll = ll / pairs.length; }
+  return hist; }
+function makePairs(rnd, n) { var P = [], U = uniforms(rnd, 2 * n); for (var k = 0; k < n; k++) { var a = sampleCard(PREF, U[2 * k]), b = sampleCard(PREF, U[2 * k + 1]), ua = trueU(a), ub = trueU(b); if (ua === ub) continue;
+    P.push({ a: a, b: b, win: counts(ua > ub ? a : b), lose: counts(ua > ub ? b : a), aWins: ua > ub }); } return P; }
+function piBeta(w, beta) { return softmax(PREF.map(function (p, i) { return Math.log(p) + w[i] / beta; })); }
+function klTok(pi, ref) { var s = 0; for (var i = 0; i < pi.length; i++) if (pi[i] > 0) s += pi[i] * Math.log(pi[i] / ref[i]); return s; }
+function evalBeta(w, beta, U) { var pi = piBeta(w, beta), proxy = 0, tru = 0; U.forEach(function (us) { var c = sampleCard(pi, us), n = counts(c), r = 0; for (var i = 0; i < NT; i++) r += w[i] * n[i]; proxy += r; tru += trueU(c); });
+  return { pi: pi, kl: LEN * klTok(pi, PREF), proxy: proxy / U.length, tru: tru / U.length }; }
+/*ENDMATH*/
+
+  /* ---------------- precomputed honest pieces ---------------- */
+  var TRAJ = { rew: [0, 0.1, 0, 0.2, 1], V: [0.4, 0.45, 0.5, 0.55, 0.7, 0], gamma: 0.99, lam: 0.95 };
+  var G = gae(TRAJ.rew, TRAJ.V, TRAJ.gamma, TRAJ.lam);
+  var TH0 = [0.2, 0, -0.1], ADV = 0.8, EPS = 0.2, PPO = ppoSteps(TH0, 0, ADV, EPS, 0.15, 16), RAW = ppoSteps(TH0, 0, ADV, EPS, 0.15, 16, true);
+  var PAIRS = makePairs(F.rng('prefs'), 80), RMH = fitRM(PAIRS, 400, 1.0), WRM = RMH[RMH.length - 1];
+  var UC = uniforms(F.rng('cards'), 600);
+  var BETAS = []; for (var bi = 0; bi <= 60; bi++) BETAS.push(Math.exp(Math.log(3) + (Math.log(0.07) - Math.log(3)) * bi / 60));
+  var CURVE = BETAS.map(function (b) { var e = evalBeta(WRM, b, UC); e.beta = b; return e; });
+  var BEST = CURVE.reduce(function (a, b) { return b.tru > a.tru ? b : a; });
+  window.__w10 = { w: WRM, best: { beta: BEST.beta, tru: BEST.tru, kl: BEST.kl }, last: { beta: CURVE[60].beta, tru: CURVE[60].tru, proxy: CURVE[60].proxy }, ppo: PPO.map(function (s) { return +s.r.toFixed(3); }), gae: G };
+
+  function cardText(c) { var s = '', prev = null; c.forEach(function (i) { var w = TOK[i];
+      if (w === '!') s += '!'; else if (!s) s = w.charAt(0).toUpperCase() + w.slice(1); else if (prev === '!') s += ' ' + w.charAt(0).toUpperCase() + w.slice(1); else s += ', ' + w; prev = w; });
+    return s; }
+  function wrap(s, n) { var out = [], line = ''; s.split(' ').forEach(function (w) { if ((line + ' ' + w).trim().length > n) { out.push(line.trim()); line = w; } else line += ' ' + w; }); if (line.trim()) out.push(line.trim()); return out; }
+  function f2(v) { return (v < 0 ? '−' : '') + Math.abs(v).toFixed(2); }
+  function f3(v) { return (v < 0 ? '−' : '') + Math.abs(v).toFixed(3); }
+
+  /* ---------------- scenery ---------------- */
+  function bg(ctx, W, H, t, warm) { F.sky(ctx, W, H, warm ? '#3b2f4f' : P.night, warm ? '#7a5a6a' : '#454a86'); F.stars(ctx, W, H * .5, t, 'w10', 30); }
+  function ridgeY(x, W, H) { var u = x / W; return H * (.62 - .18 * Math.sin(u * 2.4 + .3) - .05 * Math.sin(u * 9)); }
+  function ridge(ctx, W, H, t) {
+    F.paper(ctx, W * .3, H * .75, W * .9, H * .7, '#5b5486', { seed: 'mtn1', rot: .08, shadow: false });
+    ctx.save(); ctx.beginPath(); ctx.moveTo(0, H); for (var x = 0; x <= W; x += 8) ctx.lineTo(x, ridgeY(x, W, H)); ctx.lineTo(W, H); ctx.closePath();
+    ctx.fillStyle = '#8f88cf'; ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 14; ctx.fill(); ctx.shadowBlur = 0; ctx.fillStyle = F.grain(ctx); ctx.globalAlpha = .5; ctx.fill(); ctx.restore();
+    ctx.save(); ctx.strokeStyle = P.chalk; ctx.globalAlpha = .6; ctx.lineWidth = 2; ctx.beginPath(); for (x = 0; x <= W; x += 8) { if (x) ctx.lineTo(x, ridgeY(x, W, H)); else ctx.moveTo(x, ridgeY(x, W, H)); } ctx.stroke(); ctx.restore();
+  }
+  function fog(ctx, W, H, t, a) { for (var i = 0; i < 7; i++) { var x = ((i * 173 + t * (12 + i * 3)) % (W + 300)) - 150, y = H * (.4 + (i % 4) * .1); F.glow(ctx, x, y, 110 + i * 12, 'rgba(235,235,250,.55)', (a == null ? .8 : a)); } }
+  function climber(ctx, x, W, H, t, o) { F.person(ctx, x, ridgeY(x, W, H) + 2, Math.max(34, Math.min(W, H) * .1), t, o || { walk: true, coat: P.teal, scarf: P.orange }); }
+  function readout(ctx, x, y, lines, maxW, sz0) {
+    var sz = sz0 || (maxW < 420 ? 13 : 17), w = 0; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    if (w + 22 > maxW) { sz = Math.max(9, Math.floor(sz * (maxW - 22) / w)); ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore(); }
+    var h = lines.length * sz * 1.35 + 14;
+    F.paper(ctx, x + (w + 22) / 2, y + h / 2, w + 22, h, 'rgba(22,26,53,.9)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 11, y + 8 + i * sz * 1.35); }); ctx.restore();
+    return h;
+  }
+  function lbl(ctx, text, x, y, color, sz) { F.hand(ctx, text, x, y, sz || 16, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.75)', seed: text }); }
+  function por(W, H) { return H > W * 1.05; }
+  function question(ctx, W, H, a, text) { if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; var sz = W < 500 ? 16 : 21;
+    F.paper(ctx, W < 500 ? W * .5 : W * .5, W < 500 ? 46 : 64, W < 500 ? W * .86 : 520, W < 500 ? 62 : 80, '#e9dcb8', { seed: 'map', rot: -.02 });
+    ctx.save(); ctx.strokeStyle = 'rgba(120,90,50,.35)'; ctx.setLineDash([4, 5]); ctx.beginPath(); ctx.moveTo(W * .5 - (W < 500 ? W * .3 : 180), W < 500 ? 60 : 84); ctx.bezierCurveTo(W * .45, W < 500 ? 30 : 40, W * .55, W < 500 ? 70 : 90, W * .5 + (W < 500 ? W * .35 : 220), W < 500 ? 34 : 44); ctx.stroke(); ctx.restore();
+    F.hand(ctx, text || 'how far can I trust this step?', W / 2, W < 500 ? 46 : 64, sz, P.ink, { seed: 'q10', reveal: a }); ctx.restore(); }
+  // Nokia 3310 signal bars: how much trust radius is left
+  function nokia(ctx, x, y, s, bars, label) {
+    F.paper(ctx, x, y, s * 2.4, s * 1.7, '#b7c48a', { seed: 'nokia', rot: .03 });
+    for (var i = 0; i < 4; i++) { ctx.fillStyle = i < bars ? '#2f3a1f' : 'rgba(47,58,31,.18)'; var bh = s * (.25 + i * .22); ctx.fillRect(x - s * .9 + i * s * .42, y + s * .45 - bh, s * .3, bh); }
+    if (label) F.hand(ctx, label, x + s * .1, y - s * .62, Math.max(10, s * .32), '#2f3a1f', { seed: 'nk' + label, font: F.MONO, bold: false });
+  }
+  // the clipped objective plotted over the ratio r, with live markers
+  function clipPlot(ctx, x, y, w, h, A, eps, marks, o) {
+    o = o || {}; F.paper(ctx, x + w / 2, y + h / 2, w + 16, h + 16, P.cream, { seed: 'plot' + Math.round(w), rot: -.01 });
+    var r0 = .4, r1 = 2.0, ymin = Math.min(A * r1, A * r0, 0) * 1.05, ymax = Math.max(A * r1, A * r0, 0) * 1.05 + .05;
+    var X = function (r) { return x + 10 + (r - r0) / (r1 - r0) * (w - 20); }, Y = function (v) { return y + h - 18 - (v - ymin) / (ymax - ymin) * (h - 30); };
+    ctx.save(); ctx.fillStyle = 'rgba(124,198,192,.22)'; ctx.fillRect(X(1 - eps), y + 4, X(1 + eps) - X(1 - eps), h - 20);
+    ctx.strokeStyle = 'rgba(42,41,52,.4)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(r0), Y(0)); ctx.lineTo(X(r1), Y(0)); ctx.moveTo(X(1), y + 4); ctx.lineTo(X(1), y + h - 16); ctx.stroke();
+    ctx.setLineDash([5, 5]); ctx.strokeStyle = P.red; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(r0), Y(A * r0)); ctx.lineTo(X(r1), Y(A * r1)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = P.ink; ctx.lineWidth = 3.5; ctx.beginPath(); for (var k = 0; k <= 160; k++) { var r = r0 + (r1 - r0) * k / 160, v = ppoTerm(r, A, eps); if (k) ctx.lineTo(X(r), Y(v)); else ctx.moveTo(X(r), Y(v)); } ctx.stroke();
+    ctx.restore();
+    var fs = Math.max(10, Math.min(14, w * .035));
+    F.hand(ctx, 'r', X(r1) - 6, Y(0) + (A > 0 ? 10 : -10), fs, P.ink, { seed: 'rax' }); F.hand(ctx, '1', X(1), y + h - 8, fs, P.ink, { seed: 'one' });
+    F.hand(ctx, '1−ε', X(1 - eps), y + 12, fs, '#3a7a74', { seed: 'lo' }); F.hand(ctx, '1+ε', X(1 + eps), y + 12, fs, '#3a7a74', { seed: 'hi' });
+    F.hand(ctx, 'A ' + (A > 0 ? '> 0' : '< 0') + ' = ' + A.toFixed(2), x + 14, y + (A > 0 ? 14 : h - 30), fs, P.ink, { align: 'left', seed: 'Alab' + (A > 0) });
+    if (!o.noLegend) F.hand(ctx, 'no clip: r·A', X(A > 0 ? 1.62 : .7), Y(A * (A > 0 ? 1.62 : .7)) - (A > 0 ? 14 : -14), fs, P.red, { seed: 'nclip' });
+    (marks || []).forEach(function (m) { var r = Math.min(r1, Math.max(r0, m.r)), v = m.raw ? A * r : ppoTerm(r, A, eps); ctx.save(); ctx.fillStyle = m.c; ctx.strokeStyle = P.ink; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(X(r), Y(v), m.s || 7, 0, 6.283); ctx.fill(); ctx.stroke(); ctx.restore(); });
+    return { X: X, Y: Y, r0: r0, r1: r1 };
+  }
+  function postcard(ctx, x, y, w, text, o) {
+    o = o || {}; var h = w * .62; F.paper(ctx, x, y, w, h, o.col || P.cream, { seed: 'pc' + (o.seed || ''), rot: o.rot || 0 });
+    ctx.save(); ctx.translate(x, y); ctx.rotate(o.rot || 0);
+    ctx.fillStyle = P.pink; ctx.fillRect(w * .32, -h * .42, w * .12, h * .2);
+    var fs = o.fs || Math.max(11, w * .07), lines = wrap(text, Math.max(12, Math.floor((w * .7) / (fs * .48))));
+    if (lines.length > 4) { fs *= .85; lines = wrap(text, Math.max(12, Math.floor((w * .7) / (fs * .48)))); }
+    lines.slice(0, 5).forEach(function (l, i) { F.hand(ctx, l, -w * .44, -h * .3 + i * fs * 1.2, fs, '#2e3a7a', { align: 'left', seed: 'pl' + l + i }); });
+    if (o.score != null) F.hand(ctx, o.score, -w * .44, h * .38, Math.max(10, Math.min(fs * .9, w * .05)), o.scoreCol || '#6b5a9a', { align: 'left', seed: 'sc' + o.score, font: F.MONO, bold: false });
+    ctx.restore();
+  }
+  function tokenBars(ctx, x, y, w, rows, title) {
+    // rows: [label, value, max, color, value2?]
+    var rh = Math.max(20, Math.min(30, w * .07)), h = rows.length * (rh + 6) + (title ? rh + 6 : 6);
+    F.paper(ctx, x + w / 2, y + h / 2, w, h, 'rgba(22,26,53,.88)', { seed: 'tb' + rows.length, shadow: false });
+    if (title) F.hand(ctx, title, x + 10, y + rh * .6, rh * .55, P.butter, { align: 'left', seed: 'tt' + title });
+    rows.forEach(function (r, i) { var yy = y + (title ? rh + 6 : 6) + i * (rh + 6), lw = w * .44, bw = w - lw - 16, z = x + lw + 8 + bw / 2;
+      F.hand(ctx, r[0], x + 10, yy + rh / 2, Math.min(rh * .5, 14), P.chalk, { align: 'left', seed: 'tk' + r[0], bold: false });
+      ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.fillRect(x + lw + 8, yy + 3, bw, rh - 6);
+      if (r[4] != null) { ctx.fillStyle = 'rgba(200,200,230,.45)'; ctx.fillRect(x + lw + 8, yy + rh / 2, bw * Math.min(1, r[4] / r[2]), rh / 2 - 3); }
+      var v = r[1] / r[2]; ctx.fillStyle = r[3]; if (r[5]) { ctx.fillRect(z, yy + 5, Math.max(-1, Math.min(1, v)) * bw / 2, rh - 10); ctx.fillStyle = P.chalk; ctx.fillRect(z - 1, yy + 2, 2, rh - 4); }
+      else ctx.fillRect(x + lw + 8, yy + 4, bw * Math.min(1, v), (r[4] != null ? rh / 2 - 4 : rh - 8)); });
+    return h;
+  }
+  function eggs(ctx, x1, x2, y, s, t, kl, o) {
+    o = o || {};
+    // the KL string: slack when policy and reference agree, taut when they differ
+    var sag = Math.max(0, 40 - kl * 18) * (s / 40), mx = (x1 + x2) / 2;
+    ctx.save(); ctx.strokeStyle = kl > 2 ? P.red : P.butter; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(x1 + s * .8, y); ctx.quadraticCurveTo(mx, y + sag * 2, x2 - s * .8, y); ctx.stroke(); ctx.restore();
+    F.egg(ctx, x1, y, s, t, { clear: .15, buttons: true });
+    F.egg(ctx, x2, y, s, t, { clear: .5, features: [{ x: -.3, y: -.2 }, { x: .3, y: .1, c: 'rgba(243,179,195,.9)' }] });
+    F.hand(ctx, 'reference', x1, y + s * 1.35, Math.max(11, s * .32), P.chalk, { seed: 'refl' }); F.hand(ctx, 'policy', x2, y + s * 1.35, Math.max(11, s * .32), P.chalk, { seed: 'poll' });
+    if (o.ice) { ctx.save(); ctx.strokeStyle = '#e8f4ff'; ctx.lineWidth = 2; for (var k = 0; k < 3; k++) { var an = k * Math.PI / 3; ctx.beginPath(); ctx.moveTo(x1 - s * .8 - Math.cos(an) * 8, y - s - Math.sin(an) * 8); ctx.lineTo(x1 - s * .8 + Math.cos(an) * 8, y - s + Math.sin(an) * 8); ctx.stroke(); } ctx.restore(); }
+  }
+  function gaoPlot(ctx, x, y, w, h, upto, cur) {
+    F.paper(ctx, x + w / 2, y + h / 2, w + 12, h + 12, P.cream, { seed: 'gao' + Math.round(w), rot: .01 });
+    var kmax = 12, X = function (kl) { return x + 12 + Math.sqrt(kl / kmax) * (w - 24); }, Y = function (v) { return y + h - 16 - (v + .5) / 4.2 * (h - 30); };
+    ctx.save(); ctx.strokeStyle = 'rgba(42,41,52,.35)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x + 12, Y(0)); ctx.lineTo(x + w - 10, Y(0)); ctx.stroke();
+    [['proxy', P.orange, 'proxy'], ['tru', '#3a7a74', 'tru']].forEach(function (s) { ctx.strokeStyle = s[1]; ctx.lineWidth = 3; ctx.beginPath(); for (var i = 0; i <= upto; i++) { var c = CURVE[i]; if (i) ctx.lineTo(X(c.kl), Y(c[s[2]])); else ctx.moveTo(X(c.kl), Y(c[s[2]])); } ctx.stroke(); });
+    if (cur) { ctx.fillStyle = P.ink; [cur.proxy, cur.tru].forEach(function (v) { ctx.beginPath(); ctx.arc(X(cur.kl), Y(v), 5, 0, 6.283); ctx.fill(); }); }
+    ctx.restore();
+    var fs = Math.max(10, Math.min(14, w * .04));
+    F.hand(ctx, 'reward model score', x + 14, y + 14, fs, '#b8601f', { align: 'left', seed: 'gp' }); F.hand(ctx, 'what people actually like', x + 14, y + 14 + fs * 1.3, fs, '#3a7a74', { align: 'left', seed: 'gt' });
+    F.hand(ctx, '√KL from reference →', x + w - 12, y + h - 6, fs, P.ink, { align: 'right', seed: 'gx' });
+  }
+
+  /* ---------------- the story ---------------- */
+  function betaAt(u) { var i = Math.max(0, Math.min(60, Math.round(u * 60))); return i; }
+  var chapters = [
+    { name: 'the wish', start: 0, dur: 6, cap: {
+        1: 'A climber on a foggy ridge wants to get higher, fast. But in fog, one big confident stride can go straight over the edge.',
+        2: 'Last week we learned to push up whatever got rewarded. This week: how <b>big</b> each push may be, and later, whose reward we are chasing.',
+        3: 'Policy-gradient updates are only trustworthy near the policy that collected the data. PPO bounds the step; RLHF adds a leash to a reference model.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); ridge(ctx, W, H, t); climber(ctx, W * (.2 + l * .02), W, H, t); fog(ctx, W, H, t, .9); question(ctx, W, H, ramp(l, .5, 2));
+        F.plane(ctx, lerp(W + 30, -30, l / 6), H * .3, 11, 3.2, P.cream); } },
+    { name: 'the coach', start: 6, dur: 8, cap: {
+        1: 'A coach walks alongside and guesses how well each stretch will go. After each step, the climber asks: was that <b>better or worse than the coach expected?</b>',
+        2: '<b>Actor-critic</b>: the critic predicts V(s). The <b>advantage</b> A = r + γV(s′) − V(s) says how much better than expected a step went. Lanterns = the critic\'s V.',
+        3: 'δ_t = r_t + γV(s_{t+1}) − V(s_t); GAE A_t = Σ (γλ)^k δ_{t+k}, γ = 0.99, λ = 0.95, computed live on a 5-step trajectory.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); ridge(ctx, W, H, t); fog(ctx, W, H, t, .35);
+        var n = 5, k = Math.min(n - 1, Math.floor(l / 1.4)), xs = []; for (var i = 0; i <= n; i++) xs.push(W * (.1 + i * .16));
+        for (i = 0; i <= n; i++) F.lantern(ctx, xs[i], ridgeY(xs[i], W, H) - 44, Math.max(8, W * .02), TRAJ.V[i] || .05, t);
+        var fr = Math.min(1, (l - k * 1.4) / 1), cx = lerp(xs[k], xs[k + 1], F.ease.inOut(fr)); climber(ctx, cx, W, H, t);
+        F.person(ctx, cx - W * .08, ridgeY(cx - W * .08, W, H) + 2, Math.max(30, Math.min(W, H) * .085), t, { walk: true, coat: P.lav, scarf: P.butter, lantern: false });
+        lbl(ctx, 'V = ' + TRAJ.V[k].toFixed(2), cx - W * .08, ridgeY(cx, W, H) - Math.min(W, H) * .2, P.lav, W < 500 ? 14 : 18);
+        var lines = [['t=' + k + '  r=' + TRAJ.rew[k] + '  V(s)=' + TRAJ.V[k].toFixed(2) + '  V(s′)=' + TRAJ.V[k + 1].toFixed(2), P.chalk],
+          ['δ = r + γV(s′) − V(s) = ' + f3(G.d[k]), P.butter], ['GAE advantage A_' + k + ' = ' + f3(G.A[k]), P.mint]];
+        readout(ctx, 12, por(W, H) ? H * .72 : 16, lines, W - 24); } },
+    { name: 'PPO clip', start: 14, dur: 12, cap: {
+        1: 'The step went well, so do it more. But only a <b>little</b> more: once the new habit is 20% stronger than the old one, the push switches off. Fewer signal bars = less trust left.',
+        2: '<b>PPO</b>: ratio r = π_new(a)/π_old(a). Objective min(r·A, clip(r, 1−ε, 1+ε)·A). Past 1+ε the line goes <b>flat</b>: zero gradient, so the update stops. Red dots: no clip, runs away.',
+        3: 'ε = 0.2, A = +0.8, gradient ascent on logits (lr 0.15). The clip bounds r relative to the policy that sampled the data (not to a reference model). With A < 0 the floor is at 1 − ε.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); var p = por(W, H);
+        var k = Math.min(16, Math.floor(ramp(l, .6, 10) * 16 + 1e-6)), s = PPO[k], raw = RAW[k];
+        var pw = p ? W - 40 : Math.min(640, W * .55), ph = p ? H * .4 : H * .62, px = p ? 20 : W * .06, py = p ? 20 : H * .14;
+        clipPlot(ctx, px, py, pw, ph, ADV, EPS, [{ r: raw.r, c: P.red, raw: true, s: 6 }, { r: s.r, c: P.butter, s: 9 }]);
+        var bars = Math.max(0, Math.min(4, Math.ceil(4 * (1 + EPS - s.r) / EPS - 1e-9)));
+        var nx = p ? W - 56 : px + pw + 70, ny = p ? py + ph + 44 : py + 30; nokia(ctx, nx, ny, p ? 26 : 34, bars, bars ? 'trust' : 'no bars');
+        var lines = [['step ' + k + '   π_old(a)=' + PPO[0].p[0].toFixed(3), P.chalk], ['r = π_new/π_old = ' + s.p[0].toFixed(3) + '/' + PPO[0].p[0].toFixed(3) + ' = ' + s.r.toFixed(3), P.butter],
+          ['L = min(r·A, clip(r,0.8,1.2)·A) = ' + s.L.toFixed(3), P.mint], ['∂L/∂r = ' + s.g.toFixed(2) + (s.g ? '  (still pushing)' : '  (clipped: flat, stop)'), s.g ? P.chalk : P.pink],
+          ['no clip: r = ' + raw.r.toFixed(3) + ' and climbing', P.red]];
+        readout(ctx, p ? 12 : px + pw + 30, p ? py + ph + 84 : py + 90, lines, p ? W - 24 : W - (px + pw + 46));
+        if (p) { var ry = py + ph + 84 + lines.length * 17 + 90; if (ry < H - 10) F.person(ctx, W * .5 + (s.r - 1) * W * .8, ry, 50, t, { walk: s.g !== 0, coat: P.teal, scarf: P.orange }); } } },
+    { name: 'reward model', start: 26, dur: 8, cap: {
+        1: 'New scene: the mind egg writes postcards. People can\'t score them out of 10, but they can say which of two they like better. A judge learns from those picks.',
+        2: '<b>RLHF step 1</b>: a <b>reward model</b> learns from human comparisons. Bradley–Terry: P(A beats B) = σ(r_A − r_B). The bars are the judge\'s learned word weights.',
+        3: 'Linear RM r(x) = w·counts(x), fit by gradient ascent on log σ(r_win − r_lose) over ' + PAIRS.length + ' real pairs sampled from π_ref, labelled by a hidden "true" utility.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t, true); var p = por(W, H), k = Math.min(PAIRS.length - 1, Math.floor(l / 1.3)), pr = PAIRS[k], step = Math.min(400, Math.floor(ramp(l, .3, 7.5) * 400)), w = RMH[step];
+        var cw = p ? W * .44 : Math.min(300, W * .22), cy = p ? 24 + cw * .31 : H * .25;
+        var ra = 0, rb = 0, na = counts(pr.a), nb = counts(pr.b); for (var i = 0; i < NT; i++) { ra += w[i] * na[i]; rb += w[i] * nb[i]; }
+        postcard(ctx, p ? W * .26 : W * .2, cy, cw, cardText(pr.a), { seed: 'A' + k, rot: -.04, score: 'r=' + f2(ra) });
+        postcard(ctx, p ? W * .74 : W * .45, cy, cw, cardText(pr.b), { seed: 'B' + k, rot: .03, score: 'r=' + f2(rb) });
+        var wx = pr.aWins ? (p ? W * .26 : W * .2) : (p ? W * .74 : W * .45); lbl(ctx, '♥ preferred', wx, cy + cw * .42, P.pink, p ? 15 : 20);
+        var rows = TOK.map(function (tk, i) { return ['“' + tk + '”', w[i], 1, w[i] >= 0 ? P.mint : P.pink, null, true]; });
+        var by = p ? cy + cw * .55 : H * .5; var h = tokenBars(ctx, p ? 12 : W * .08, by, p ? W - 24 : W * .45, rows, 'judge\'s word weights w  (step ' + step + ')');
+        var pA = 1 / (1 + Math.exp(-(ra - rb)));
+        readout(ctx, p ? 12 : W * .6, p ? by + h + 12 : H * .2, [['P(A ≻ B) = σ(r_A − r_B) = ' + pA.toFixed(2), P.butter], ['loss = −log σ(r_win − r_lose)', P.mint], ['mean log-lik = ' + (w.ll != null ? w.ll.toFixed(3) : '−0.693'), P.chalk]], p ? W - 24 : W * .36);
+        F.egg(ctx, p ? W - 40 : W * .8, p ? H - 60 : H * .7, p ? 28 : 50, t, { clear: .3 }); } },
+    { name: 'no leash', start: 34, dur: 9, cap: {
+        1: 'Now the egg writes whatever the judge scores highest, nothing holding it back. The cards get nicer, then it finds the judge loves "!" and it all goes <b>!!!!!!</b>',
+        2: '<b>Reward over-optimisation</b>: the judge\'s score (orange) keeps rising; what people like (teal) peaks, then falls. Goodhart\'s law, live.',
+        3: 'π_β ∝ π_ref·exp(w/β), the exact optimum of E[r] − β·KL per token; β slides 3 → 0.07. Proxy rises monotonically; true utility peaks at KL ≈ ' + BEST.kl.toFixed(1) + ' nats, then collapses (cf. Gao et al. 2022).' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t, true); var p = por(W, H), i = betaAt(ramp(l, .5, 8)), c = CURVE[i], card = sampleCard(c.pi, UC[3]);
+        var gw = p ? W - 40 : Math.min(560, W * .42), gh = p ? H * .34 : H * .6, gx = p ? 20 : W * .52, gy = p ? 16 : H * .15;
+        gaoPlot(ctx, gx, gy, gw, gh, i, c);
+        var cw = p ? W * .62 : Math.min(340, W * .26), cx = p ? W * .6 : W * .26, cy = p ? gy + gh + cw * .42 + 18 : H * .35;
+        var sp = 0, nn = counts(card); for (var j = 0; j < NT; j++) sp += WRM[j] * nn[j];
+        postcard(ctx, cx, cy, cw, cardText(card), { seed: 'hack', rot: -.03, score: 'judge ' + f2(sp) + '  people ' + f2(trueU(card)), fs: Math.max(11, cw * .065) });
+        F.egg(ctx, p ? W * .14 : cx - cw * .75, cy + 10, p ? 30 : 46, t, { clear: .4, features: [{ x: 0, y: 0, c: c.tru < 1.5 ? 'rgba(232,116,124,.9)' : 'rgba(255,220,120,.9)' }] });
+        readout(ctx, 12, p ? cy + cw * .36 + 12 : H * .62, [['β = ' + c.beta.toFixed(2) + '   KL = ' + c.kl.toFixed(2) + ' nats', P.chalk], ['judge score  E[r] = ' + f2(c.proxy), P.orange], ['people like E[U] = ' + f2(c.tru), P.mint], ['π("!") = ' + c.pi[4].toFixed(2) + '  (ref ' + PREF[4].toFixed(2) + ')', P.butter]], p ? W - 24 : W * .4); } },
+    { name: 'the leash', start: 43, dur: 7, cap: {
+        1: 'Fix: tie the egg to a frozen copy of its old self with a string. It can wander toward nicer postcards, but the further it strays, the harder the string pulls back.',
+        2: 'The <b>KL penalty</b> to a frozen <b>reference model</b>: maximise reward − β·KL(π‖π_ref). This leash belongs to RLHF; PPO\'s clip is a separate, short-term trust region.',
+        3: 'KL = Σ π log(π/π_ref) per token, summed over 6 tokens. At β = ' + BEST.beta.toFixed(2) + ' true utility is maximal here; ARENA subtracts <code>kl_coef</code>·KL from the PPO objective.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t, true); var p = por(W, H), i = CURVE.indexOf(BEST), c = CURVE[Math.round(lerp(60, i, F.ease.out(ramp(l, .2, 3))))], card = sampleCard(c.pi, UC[3]);
+        var es = p ? 36 : 56, ey = p ? 70 : H * .22; eggs(ctx, p ? W * .2 : W * .1, p ? W * .8 : W * .36, ey, es, t, c.kl, { ice: true });
+        var cw = p ? W * .7 : Math.min(340, W * .26); postcard(ctx, p ? W / 2 : W * .23, p ? ey + es * 1.8 + cw * .31 : H * .6, cw, cardText(card), { seed: 'leash', rot: .02, fs: Math.max(11, cw * .065) });
+        var rows = TOK.map(function (tk, j) { return ['“' + tk + '”', c.pi[j], .9, P.butter, PREF[j]]; });
+        var by = p ? ey + es * 1.8 + cw * .62 + 12 : H * .12, h = tokenBars(ctx, p ? 12 : W * .55, by, p ? W - 24 : W * .4, rows, 'π (yellow) vs π_ref (grey)');
+        var kl = 0; for (var j = 0; j < NT; j++) kl += c.pi[j] * Math.log(c.pi[j] / PREF[j]);
+        readout(ctx, p ? 12 : W * .55, by + h + 10, [['KL = 6·Σ π·log(π/π_ref) = ' + (6 * kl).toFixed(2), P.butter], ['reward − β·KL = ' + f2(c.proxy) + ' − ' + c.beta.toFixed(2) + '·' + c.kl.toFixed(2) + ' = ' + f2(c.proxy - c.beta * c.kl), P.mint], ['people like E[U] = ' + f2(c.tru), P.chalk]], p ? W - 24 : W * .4); } },
+    { name: 'where it stops being true', start: 50, dur: 5, cap: {
+        1: 'Honest bit: real judges are big neural networks trained on thousands of human choices, and they can be fooled in ways far subtler than "!!!".',
+        2: 'Real reward models are learned, imperfect and exploitable; the KL leash only slows over-optimisation, it does not remove it. Humans disagree too.',
+        3: 'Here the true utility is known, so we can see the peak. In practice it is not: you watch held-out human evals and stop early. Scaling RM size moves the peak, it does not delete it.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t, true); var p = por(W, H); gaoPlot(ctx, p ? 20 : W * .2, p ? 16 : H * .12, p ? W - 40 : W * .6, p ? H * .38 : H * .6, 60, null);
+        var q = ramp(l, .4, 1.4); F.cornerFlip(ctx, W, H, q, P.cream);
+        if (q > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 1.2, 2); var sz = W < 500 ? 14 : 19, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .2;
+          F.hand(ctx, 'real judges are nets', x, y - sz * 1.5, sz, P.ink, { seed: 'rj', rot: -.6 }); F.hand(ctx, 'and can be fooled', x + sz * .8, y, sz, P.ink, { seed: 'cf', rot: -.6 }); ctx.restore(); } } },
+    { name: 'the code', start: 55, dur: 6, cap: {
+        1: 'The ridge and the leash are a few lines of code each.',
+        2: 'You write these in ARENA [2.3] PPO and [2.4] RLHF: the clipped surrogate objective, then the KL penalty against the reference model.',
+        3: 'ARENA <code>calc_clipped_surrogate_objective</code> (clip_coef = ε) and <code>calc_kl_penalty</code>; RLHF total objective = ppo_objective_fn − kl_penalty (ARENA\'s toy reward counts ".", same trap as our "!").' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); codeCards(ctx, l, W, H, [
+          ['PPO clip  [2.3]', ['prob_ratio = t.exp(logits_diff)', 'clipped = t.clip(prob_ratio,', '    1 - clip_coef, 1 + clip_coef)', '    * mb_advantages', 't.minimum(prob_ratio * mb_advantages,', '    clipped).mean()'], P.butter],
+          ['RLHF leash  [2.4]', ['kl_div = (probs * (logprobs', '    - ref_logprobs)).sum(-1)', 'total_objective_function =', '    ppo_objective_fn - kl_penalty'], P.teal]]); } },
+    { name: 'why it matters', start: 61, dur: 4.5, cap: {
+        1: 'A leash to what we understand keeps training safe. And the judge we build is what gets optimised, so we had better look inside it.',
+        2: 'A leash to what we understand keeps training safe. The reward model is the thing being optimised against, so it is also a thing to inspect and steer.',
+        3: 'KL-to-reference keeps the policy in a region where our interpretability of the base model still applies; reward-model probing is how over-optimisation gets caught early.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); ridge(ctx, W, H, t); climber(ctx, W * .7, W, H, t, { walk: false, coat: P.teal, scarf: P.orange });
+        var p = por(W, H); eggs(ctx, W * (p ? .22 : .3), W * (p ? .5 : .45), H * (p ? .42 : .38), p ? 26 : 38, t, BEST.kl);
+        var sz = W < 500 ? 16 : 22; ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'a leash to what we understand\nkeeps training safe', W / 2, W < 500 ? 50 : 70, sz, { color: P.pink, seed: 'steer10', rot: .02 }); ctx.restore(); } }
+  ];
+  function codeCards(ctx, l, W, H, cards) {
+    var sz = W < 500 ? 13 : 18, y = H * .06;
+    cards.forEach(function (C, j) {
+      var a = ramp(l, j * 1.6, j * 1.6 + .8); if (a <= 0) return;
+      ctx.save(); ctx.globalAlpha = a; var h = C[1].length * sz * 1.5 + sz * 2.2;
+      var w = Math.min(W - 12, Math.max.apply(null, C[1].map(function (s) { return F.textW(ctx, s, sz, F.MONO); })) + 30);
+      F.paper(ctx, W / 2, y + h / 2, w, h, P.cream, { seed: 'code' + j, rot: (j - .5) * .012 });
+      F.hand(ctx, C[0], W / 2 - w / 2 + 12, y + sz, sz * .95, '#6b5a9a', { align: 'left', seed: C[0] });
+      C[1].forEach(function (s, i) { F.hand(ctx, s, W / 2 - w / 2 + 12, y + sz * 2.3 + i * sz * 1.5, sz, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: s, reveal: ramp(l, j * 1.6 + .2 + i * .25, j * 1.6 + 1 + i * .25) }); });
+      ctx.fillStyle = C[2]; ctx.fillRect(W / 2 - w / 2 + 4, y + 6, 4, h - 12);
+      ctx.restore(); y += h + 16;
+    });
+  }
+
+  /* ---------------- coda: now you drive ---------------- */
+  var C = { eps: 0.2, beta: 0.7, A: 0.8, r: 1.35, drag: false, plot: null };
+  function codaLayout(W, H) { var p = por(W, H); return p ? { p: p, px: 16, py: 12, pw: W - 32, ph: Math.min(200, H * .33) } : { p: p, px: W * .05, py: H * .08, pw: Math.min(560, W * .42), ph: H * .5 }; }
+  function setR(x, W, H) { var L = codaLayout(W, H); C.r = Math.max(.4, Math.min(2, .4 + (x - L.px - 10) / (L.pw - 20) * 1.6)); }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:14px">' +
+        '<span>Drag on the plot to set r.</span><button class="asg" style="font:inherit;border-radius:8px;padding:3px 10px">A &gt; 0</button>' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:150px">ε <input class="e" type="range" min="0.05" max="0.5" step="0.01" value="' + C.eps + '" style="flex:1"> <b class="ev"></b></label>' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:150px">β <input class="b" type="range" min="' + Math.log10(0.07) + '" max="' + Math.log10(3) + '" step="0.01" value="' + Math.log10(C.beta) + '" style="flex:1"> <b class="bv"></b></label></div>';
+      var e = panel.querySelector('.e'), b = panel.querySelector('.b'), ev = panel.querySelector('.ev'), bv = panel.querySelector('.bv'), asg = panel.querySelector('.asg');
+      var upd = function () { C.eps = +e.value; C.beta = Math.pow(10, +b.value); ev.textContent = C.eps.toFixed(2); bv.textContent = C.beta.toFixed(2); };
+      upd(); e.oninput = upd; b.oninput = upd; asg.onclick = function () { C.A = -C.A; asg.innerHTML = C.A > 0 ? 'A &gt; 0' : 'A &lt; 0'; };
+    },
+    down: function (x, y, api) { var L = codaLayout(api.W, api.H); if (y >= L.py - 10 && y <= L.py + L.ph + 10 && x >= L.px && x <= L.px + L.pw) { C.drag = true; setR(x, api.W, api.H); api.audio.blip(600); } },
+    move: function (x, y, api, pressed) { if (C.drag && pressed) setR(x, api.W, api.H); },
+    up: function () { C.drag = false; },
+    draw: function (ctx, t, W, H, api, dt) {
+      bg(ctx, W, H, t, true); var L = codaLayout(W, H), p = L.p;
+      clipPlot(ctx, L.px, L.py, L.pw, L.ph, C.A, C.eps, [{ r: C.r, c: P.red, raw: true, s: 5 }, { r: C.r, c: P.butter, s: 9 }], { noLegend: p });
+      var Lv = ppoTerm(C.r, C.A, C.eps), g = ppoDr(C.r, C.A, C.eps), cl = Math.min(Math.max(C.r, 1 - C.eps), 1 + C.eps);
+      var h1 = readout(ctx, p ? 12 : L.px, L.py + L.ph + 14, [['r=' + C.r.toFixed(2) + '  clip(r)=' + cl.toFixed(2) + '  A=' + C.A.toFixed(1), P.chalk], ['L = min(' + (C.r * C.A).toFixed(3) + ', ' + (cl * C.A).toFixed(3) + ') = ' + Lv.toFixed(3), P.butter], ['∂L/∂r = ' + g.toFixed(2) + (g ? '  gradient flows' : '  clipped: no push'), g ? P.mint : P.pink]], p ? W - 24 : L.pw);
+      var e = evalBeta(WRM, C.beta, UC), card = sampleCard(e.pi, UC[3]), sp = 0, nn = counts(card); for (var j = 0; j < NT; j++) sp += WRM[j] * nn[j];
+      var cw = p ? W * .56 : Math.min(300, W * .2), cy = p ? L.py + L.ph + h1 + 22 + cw * .31 : H * .86 - cw * .1, cx = p ? W * .62 : W * .42;
+      postcard(ctx, cx, cy, cw, cardText(card), { seed: 'coda', rot: -.02, fs: Math.max(11, cw * .065) });
+      F.egg(ctx, p ? W * .15 : cx - cw * .75, cy, p ? 26 : 40, t, { clear: .4, features: [{ x: 0, y: 0, c: e.tru < 1.5 ? 'rgba(232,116,124,.9)' : 'rgba(255,220,120,.9)' }] });
+      if (!p) gaoPlot(ctx, W * .55, H * .08, Math.min(560, W * .4), H * .5, 60, e);
+      readout(ctx, p ? 12 : W * .55, p ? cy + cw * .31 + 10 : H * .66, [['β=' + C.beta.toFixed(2) + '  KL=' + e.kl.toFixed(2) + '  π("!")=' + e.pi[4].toFixed(2), P.chalk], ['judge E[r]=' + f2(e.proxy) + '  people E[U]=' + f2(e.tru), e.tru < 1.5 ? P.pink : P.mint], ['reward − β·KL = ' + f2(e.proxy - C.beta * e.kl), P.butter]], p ? W - 24 : W * .4 - 20);
+    }
+  };
+
+  F.play({
+    title: 'W10 · How far can I trust this step?',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: policy gradients & PPO', href: '../../index.html#demo/policy-gradients-ppo' },
+      { label: 'Demo: RLHF over-optimisation', href: '../../index.html#demo/rlhf-overoptimisation' },
+      { label: 'Week 10 pack', href: '../../index.html#week-10' },
+      { label: 'Map: PPO clip', href: '../../index.html#map/node=ppo-clipped-surrogate' },
+      { label: 'Map: reward hacking', href: '../../index.html#map/node=reward-hacking' },
+      { label: 'Case: PPO clipped surrogate', href: '../../index.html#cases/ppo-clipped-surrogate' },
+      { label: 'Case: RLHF KL penalty', href: '../../index.html#cases/rlhf-kl-penalty' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
