@@ -552,7 +552,9 @@
   function el(tag, attrs, html) { var e = document.createElement(tag); for (var k in attrs || {}) e.setAttribute(k, attrs[k]); if (html != null) e.innerHTML = html; return e; }
 
   function play(cfg) {
-    var st = el('style'); st.textContent = CSS; document.head.appendChild(st);
+    var st = el('style'); st.textContent = CSS +
+      /* long deep dives have 15+ chapter dots: let dots shrink so the scrub bar stays usable on a phone */
+      '#ifilm .dots{flex:0 1 auto;min-width:0}#ifilm .dots i{flex:0 1 9px;min-width:4px}#ifilm input[type=range]{min-width:96px}'; document.head.appendChild(st);
     var root = el('div', { id: 'ifilm' });
     root.innerHTML = '<div class="top"><a class="back" href="' + (cfg.back || '../index.html') + '">&larr; films</a><div class="ttl"></div>' +
       '<div class="tiers" role="group" aria-label="Caption depth"><button data-t="1" title="Plain">1</button><button data-t="2" title="Generalist">2</button><button data-t="3" title="Expert">3</button></div>' +
