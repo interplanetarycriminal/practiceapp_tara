@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Attention writes to the notebook</title>
+<meta name="theme-color" content="#1c2140">
+<style>
+#predict{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(18,20,44,.72);z-index:5;padding:16px;box-sizing:border-box}
+#predict.on{display:flex}
+#predict .card{background:#fbf6ea;color:#2a2934;border-radius:6px;max-width:420px;width:100%;padding:16px 16px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);transform:rotate(-.6deg);font:15px/1.35 system-ui,-apple-system,'Segoe UI',sans-serif}
+#predict h3{margin:0 0 4px;font:700 19px 'Comic Neue','Segoe Print','Bradley Hand','Chalkboard SE','Comic Sans MS',cursive}
+#predict p{margin:0 0 10px;font-size:14px;color:#4a4858}
+#predict .opts{display:grid;gap:7px}
+#predict .opts button{font:inherit;text-align:left;background:#f7e3a0;color:#2a2934;border:0;border-radius:8px;padding:9px 11px;min-height:40px;cursor:pointer}
+#predict .opts button.skipq{background:#e6e1f2;text-align:center}
+#predict .fb{margin-top:10px;font-weight:600;min-height:1.2em}
+</style>
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /* ================= the real tiny transformer: d_model 4, d_head 2, 4 tokens, 2 heads =================
+     residual dims are hand-labelled so you can read them: [noun, verb, pos, who?]  (real models: unlabelled) */
+  var TOK = ['The', 'cat', 'sat', 'on'], DIM = ['noun', 'verb', 'pos', 'who?'];
+  var W_E = { The: [0.3, 0, 0, 0], cat: [1.0, 0.1, 0, 0], sat: [0.1, 1.0, 0, 0], on: [0, 0.4, 0, 0] };
+  var W_pos = [[0, 0, 0.2, 0], [0, 0, 0.4, 0], [0, 0, 0.6, 0], [0, 0, 0.8, 0]];
+  var X = TOK.map(function (w, i) { return W_E[w].map(function (e, d) { return e + W_pos[i][d]; }); }); // resid_pre
+  var D_HEAD = 2, SQ = Math.sqrt(D_HEAD);
+  // head 0: "who did it?"  head 1: "what's recent?"   shapes: W_Q/W_K/W_V [d_model, d_head], W_O [d_head, d_model]
+  var HEADS = [
+    { name: 'head 0 · who did it?', col: P.pink,
+      W_Q: [[0, 0], [2, 0], [0, 1], [0, 0]], W_K: [[2, 0], [0, 0], [0, -1], [0, 0]],
+      W_V: [[1, 0], [0, 1], [0, 0], [0, 0]], W_O: [[0, 0, 0, 1], [0, 0, 0, -0.5]] },
+    { name: 'head 1 · what\'s recent?', col: P.teal,
+      W_Q: [[0, 0], [0, 0], [3, 0], [0, 0]], W_K: [[0, 0], [0, 0], [1, 0], [0, 0]],
+      W_V: [[0, 0], [0, 1], [1, 0], [0, 0]], W_O: [[0, 0, 0.5, 0], [0, 0.3, 0, 0]] }
+  ];
+  function mv(x, M) { var o = []; for (var j = 0; j < M[0].length; j++) { var s = 0; for (var i = 0; i < x.length; i++) s += x[i] * M[i][j]; o.push(s); } return o; }
+  function dot(a, b) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+  function softmax(r) { var m = -Infinity; r.forEach(function (v) { if (v > m) m = v; }); var e = r.map(function (v) { return v === -Infinity ? 0 : Math.exp(v - m); }), s = e.reduce(function (a, b) { return a + b; }, 0); return e.map(function (v) { return v / s; }); }
+  function add(a, b, k) { return a.map(function (v, i) { return v + b[i] * (k == null ? 1 : k); }); }
+  function run(h, qOverride, qpos, noScale) {
+    var q = X.map(function (x) { return mv(x, h.W_Q); }), k = X.map(function (x) { return mv(x, h.W_K); }), v = X.map(function (x) { return mv(x, h.W_V); });
+    if (qOverride) q[qpos] = qOverride;
+    var raw = q.map(function (qi) { return k.map(function (kj) { return dot(qi, kj); }); });
+    var sc = raw.map(function (r) { return r.map(function (s) { return noScale ? s : s / SQ; }); });
+    var masked = sc.map(function (r, i) { return r.map(function (s, j) { return j > i ? -Infinity : s; }); }); // IGNORE = -inf
+    var A = masked.map(softmax);
+    var z = A.map(function (row) { var o = [0, 0]; row.forEach(function (a, j) { o = add(o, v[j], a); }); return o; });
+    var out = z.map(function (zi) { return mv(zi, h.W_O); });
+    return { q: q, k: k, v: v, raw: raw, sc: sc, masked: masked, A: A, z: z, out: out };
+  }
+  var R0 = run(HEADS[0]), R1 = run(HEADS[1]);
+  var MID = X.map(function (x, i) { return add(add(x, R0.out[i]), R1.out[i]); }); // resid_mid = resid_pre + sum of heads
+  var f2 = function (v) { return (v === -Infinity) ? '-inf' : (Math.abs(v) < .005 ? '0.00' : v.toFixed(2)); };
+  var vs = function (a) { return '[' + a.map(f2).join(', ') + ']'; };
+
+  /* ================= layout & drawing helpers ================= */
+  function L(W, H) {
+    var ph = W < 560, nbW = Math.min(ph ? 86 : 132, (W - 20) / 4 - 8), nbH = ph ? 104 : 124, top = 24;
+    return { ph: ph, nbW: nbW, nbH: nbH, top: top, cx: function (i) { return W / 2 + (i - 1.5) * (nbW + 8); }, cy: top + nbH / 2, below: top + nbH + 26, fs: ph ? 12 : 15 };
+  }
+  function bg(ctx, W, H, t) { F.sky(ctx, W, H, P.night, '#2b2f5c'); F.stars(ctx, W, H, t, 'dw5', 40); }
+  function txt(ctx, s, x, y, sz, col, o) { o = o || {}; F.hand(ctx, s, x, y, sz, col || P.chalk, { align: o.align, font: o.mono ? F.MONO : undefined, bold: o.mono ? false : undefined, wobble: o.mono ? .2 : 1, seed: o.seed || s, reveal: o.reveal, outline: o.outline }); }
+  function mono(ctx, s, x, y, sz, col, align, reveal) { txt(ctx, s, x, y, sz, col, { mono: true, align: align || 'left', reveal: reveal }); }
+  // one seat's notebook: residual vector as 4 horizontal bars, with optional stacked additions [{v, col, a}]
+  function notebook(ctx, lay, i, base, adds, o) {
+    o = o || {}; var x = lay.cx(i), y = lay.cy, w = lay.nbW, h = lay.nbH;
+    ctx.save(); ctx.globalAlpha = o.alpha == null ? 1 : o.alpha;
+    F.paper(ctx, x, y, w, h, o.hi ? P.butter : P.cream, { seed: 'nb' + i, rot: (i - 1.5) * .012 });
+    txt(ctx, TOK[i], x, y - h / 2 + 13, lay.ph ? 14 : 17, P.ink, { seed: 'tk' + i });
+    var lw = lay.ph ? 25 : 32, bx = x - w / 2 + 6 + lw, bw = w - 14 - lw, zero = bx + bw * .22, sc = bw * .7, rowH = (h - 32) / 4;
+    for (var d = 0; d < 4; d++) {
+      var ry = y - h / 2 + 30 + rowH * (d + .5);
+      ctx.fillStyle = 'rgba(42,41,52,.55)'; ctx.font = (lay.ph ? 9 : 11) + 'px ' + F.MONO; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(DIM[d], bx - 3, ry); ctx.textAlign = 'left';
+      ctx.fillStyle = 'rgba(42,41,52,.08)'; ctx.fillRect(bx, ry - rowH * .32, bw, rowH * .64);
+      var at = zero, v0 = base[d]; ctx.fillStyle = '#6e6a86'; ctx.fillRect(Math.min(at, at + v0 * sc), ry - rowH * .28, Math.abs(v0 * sc), rowH * .56); at += v0 * sc;
+      (adds || []).forEach(function (A) { var vv = A.v[d] * (A.a == null ? 1 : A.a); if (Math.abs(vv) < 1e-4) return; ctx.fillStyle = A.col; ctx.fillRect(Math.min(at, at + vv * sc), ry - rowH * .28, Math.abs(vv * sc), rowH * .56); at += vv * sc; });
+      ctx.fillStyle = P.ink; ctx.fillRect(zero - .75, ry - rowH * .4, 1.5, rowH * .8);
+    }
+    ctx.restore();
+  }
+  function allNotebooks(ctx, lay, o) { o = o || {}; for (var i = 0; i < 4; i++) notebook(ctx, lay, i, X[i], o.adds ? o.adds(i) : null, { hi: o.hi === i, alpha: o.dim && o.dim(i) }); }
+  // a small matrix card with numbers
+  function matCard(ctx, x, y, M, o) {
+    o = o || {}; var sz = o.sz || 12, cw = sz * 3.3, chh = sz * 1.45, rows = M.length, cols = M[0].length, w = cols * cw + 12, h = rows * chh + (o.label ? sz * 1.6 : 0) + 10;
+    F.paper(ctx, x + w / 2, y + h / 2, w, h, o.bgc || P.cream, { seed: 'mc' + (o.label || '') + rows + cols, shadow: true });
+    if (o.label) txt(ctx, o.label, x + w / 2, y + sz * .95, sz, '#6b5a9a', { mono: true });
+    var y0 = y + (o.label ? sz * 1.6 : 0) + 5;
+    for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
+      var v = M[r][c], cx = x + 6 + c * cw, cy = y0 + r * chh;
+      if (o.shade) { ctx.fillStyle = o.shade(v, r, c); ctx.fillRect(cx + 1, cy + 1, cw - 2, chh - 2); }
+      if (o.hl && o.hl(r, c)) { ctx.strokeStyle = P.red; ctx.lineWidth = 2; ctx.strokeRect(cx + 1, cy + 1, cw - 2, chh - 2); }
+      ctx.fillStyle = o.ink ? o.ink(v, r, c) : P.ink; ctx.font = sz + 'px ' + F.MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(f2(v), cx + cw / 2, cy + chh / 2);
+    }
+    ctx.textAlign = 'left'; return { w: w, h: h };
+  }
+  function ticket(ctx, W, lay, a, l) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+    F.note(ctx, 'which word matters to me?', lay.cx(2) + (lay.ph ? -40 : 0), lay.top + lay.nbH + (lay.ph ? 26 : 30), lay.ph ? 15 : 19, { color: P.pink, rot: -.03, seed: 'ticket', reveal: ramp(l, 0, 1.5) });
+    ctx.restore();
+  }
+  function planeTo(ctx, x1, y1, x2, y2, p, s, col) { var x = lerp(x1, x2, p), y = lerp(y1, y2, p) - Math.sin(p * Math.PI) * 40; F.plane(ctx, x, y, s, Math.atan2(y2 - y1, x2 - x1) + (p - .5) * -.8, col); }
+  // d_head plane: 2D sheet where q and k live
+  function headPlane(ctx, x, y, s, R, qi, o) {
+    o = o || {};
+    F.paper(ctx, x, y, s * 2 + 20, s * 2 + 20, '#26294f', { seed: 'hp', rot: .01 });
+    ctx.save(); ctx.strokeStyle = 'rgba(253,250,240,.18)'; ctx.lineWidth = 1;
+    for (var g = -2; g <= 2; g++) { ctx.beginPath(); ctx.moveTo(x + g * s / 2, y - s); ctx.lineTo(x + g * s / 2, y + s); ctx.moveTo(x - s, y + g * s / 2); ctx.lineTo(x + s, y + g * s / 2); ctx.stroke(); }
+    ctx.restore();
+    var u = s / 2; // 1 unit = s/2 px, range [-2, 2]
+    R.k.forEach(function (k, j) {
+      var masked = o.mask && j > qi, col = masked ? 'rgba(253,250,240,.25)' : P.butter;
+      F.arrow(ctx, x, y, x + k[0] * u, y - k[1] * u, col, 2.5, 'k' + j);
+      var right = j < 2 ? k[0] >= 0 : j === 3; txt(ctx, 'k·' + TOK[j], x + k[0] * u + (right ? 7 : j === 2 ? -13 : -7), y - k[1] * u + (j < 2 ? -9 : 4), 12, col, { align: right ? 'left' : 'right', seed: 'kl' + j, outline: 3, outlineColor: 'rgba(20,20,50,.8)' });
+    });
+    var q = R.q[qi]; F.arrow(ctx, x, y, x + clamp(q[0], -2, 2) * u, y - clamp(q[1], -2, 2) * u, P.pink, 4, 'q');
+    txt(ctx, 'q·' + TOK[qi], x + clamp(q[0], -2, 2) * u, y - clamp(q[1], -2, 2) * u - 12, 14, P.pink, { seed: 'ql', outline: 3 });
+    ctx.fillStyle = P.pink; ctx.beginPath(); ctx.arc(x + clamp(q[0], -2, 2) * u, y - clamp(q[1], -2, 2) * u, o.handle ? 9 : 0, 0, 6.283); ctx.fill();
+    return u;
+  }
+  function patternBars(ctx, x, y, w, h, row, col, labels, o) {
+    o = o || {}; var n = row.length, bw = w / n;
+    row.forEach(function (a, j) {
+      var bx = x + j * bw, masked = o.masked && o.masked[j];
+      ctx.fillStyle = 'rgba(253,250,240,.1)'; ctx.fillRect(bx + 4, y, bw - 8, h);
+      if (!masked) { ctx.fillStyle = col; ctx.fillRect(bx + 4, y + h * (1 - a), bw - 8, h * a); F.lantern(ctx, bx + bw / 2, y - 16, 7, a > .3 ? 1 : .2, 0); }
+      else F.paper(ctx, bx + bw / 2, y + h / 2, bw - 6, h + 6, '#8c86a8', { seed: 'torn' + j, rot: .05 });
+      txt(ctx, masked ? 'IGNORE' : a.toFixed(2), bx + bw / 2, y + h + 12, 12, masked ? P.chalk : P.butter, { mono: true, align: 'center' });
+      txt(ctx, labels[j], bx + bw / 2, y + h + 28, 13, P.chalk, { seed: 'pl' + j });
+    });
+  }
+
+  /* ================= predict-then-watch (never gated) ================= */
+  var PRED = { asked: false, choice: null, lastT: 0, el: null };
+  function predictEl() {
+    if (PRED.el) return PRED.el;
+    var st = document.querySelector('#ifilm .stage'), d = document.createElement('div'); d.id = 'predict';
+    d.innerHTML = '<div class="card"><h3>Predict, then watch</h3><p>With the mask on, what does the <b>first</b> word, "The", attend to?</p><div class="opts">' +
+      '<button data-a="even">Spread evenly over all 4 words</button><button data-a="self">Only itself: weight 1.00</button>' +
+      '<button data-a="cat">Mostly "cat"</button><button data-a="none">Nothing: every weight is 0</button>' +
+      '<button class="skipq" data-a="skip">Just show me</button></div><div class="fb" aria-live="polite"></div></div>';
+    st.appendChild(d); PRED.el = d;
+    [].forEach.call(d.querySelectorAll('button'), function (b) {
+      b.onclick = function (e) {
+        e.stopPropagation(); PRED.choice = b.dataset.a; var fb = d.querySelector('.fb');
+        fb.textContent = b.dataset.a === 'skip' ? 'Watching...' : b.dataset.a === 'self' ? 'Yes. Watch why.' : 'Good guess to test. Watch the row.';
+        setTimeout(function () { d.classList.remove('on'); resume(); }, b.dataset.a === 'skip' ? 150 : 900);
+      };
+    });
+    return d;
+  }
+  function isPlaying() { var b = document.querySelector('#ifilm .pp'); return b && b.getAttribute('aria-label') === 'Pause'; }
+  function pause() { if (isPlaying()) document.querySelector('#ifilm .pp').click(); }
+  function resume() { if (!isPlaying()) document.querySelector('#ifilm .pp').click(); }
+  function maybeAsk(t, at) {
+    var natural = t - PRED.lastT > 0 && t - PRED.lastT < .25; PRED.lastT = t;
+    if (PRED.el && PRED.el.classList.contains('on') && Math.abs(t - at) > .6) PRED.el.classList.remove('on'); // scrubbed away
+    if (!PRED.asked && natural && t >= at && t < at + .5 && !window.__noPredict) { PRED.asked = true; pause(); predictEl().classList.add('on'); }
+  }
+
+  /* ================= chapters ================= */
+  var QI = 2; // "sat" is our query
+  var chapters = [
+    { name: 'the notebooks', start: 0, dur: 16, cap: {
+        1: 'A paper cinema row: <b>The cat sat on</b>. Every word has its own notebook. The notes start as "what word am I" plus "where am I sitting". The word <b>sat</b> has a question: who sat?',
+        2: 'Each notebook is the <b>residual stream</b> at that position: a vector of d_model numbers. It starts as a token embedding plus a position embedding. Here d_model = 4, and the last slot, <b>who?</b>, is empty.',
+        3: '<code>resid_pre = W_E[tokens] + W_pos</code>, shape <code>[batch, posn, d_model]</code>. We label the 4 dims (noun, verb, pos, who?) for reading; a real model\'s 768 dims come unlabelled.' },
+      draw: function (ctx, t, l, W, H) {
+        var lay = L(W, H); bg(ctx, W, H, t);
+        var a = ramp(l, .5, 3);
+        for (var i = 0; i < 4; i++) notebook(ctx, lay, i, X[i].map(function (v) { return v * a; }), null, { hi: l > 9 && i === QI });
+        var y = lay.below + (lay.ph ? 70 : 80), sz = lay.ph ? 12 : 15, x0 = lay.ph ? 14 : W / 2 - 230;
+        if (l > 4) {
+          ctx.save(); ctx.globalAlpha = ramp(l, 4, 5);
+          mono(ctx, 'W_E["sat"]  = ' + vs(W_E.sat), x0, y, sz, P.chalk);
+          mono(ctx, '+ W_pos[2]  = ' + vs(W_pos[2]), x0, y + sz * 1.7, sz, P.chalk);
+          mono(ctx, '= resid_pre = ' + vs(X[2]), x0, y + sz * 3.6, sz, P.butter);
+          ctx.restore();
+        }
+        if (l > 7) { ctx.save(); ctx.globalAlpha = ramp(l, 7, 8); txt(ctx, 'the "who?" slot is empty in every notebook', W / 2, y + sz * 6.2, lay.ph ? 14 : 18, P.mint); ctx.restore(); }
+        ticket(ctx, W, lay, ramp(l, 9.5, 10.5), l - 9.5);
+        F.egg(ctx, W - (lay.ph ? 34 : 60), H - (lay.ph ? 60 : 80), lay.ph ? 24 : 34, t, { clear: .1 });
+        if (l < 4) F.plane(ctx, lerp(-20, W + 20, l / 4), H * .62, 12, .05, P.cream);
+      } },
+    { name: 'queries & keys', start: 16, dur: 20, cap: {
+        1: '"sat" writes its question as a little arrow, the <b>query</b>. Every word also holds up a label arrow, its <b>key</b>: "here is what I am". The better a key lines up with the question, the higher its score.',
+        2: 'Both arrows come from the notebook times a matrix: <b>q = x W_Q</b>, <b>k = x W_K</b>. With d_head = 2 they are arrows on a sheet. The score is the dot product q·k: how much they point the same way.',
+        3: 'Per head, <code>W_Q, W_K: [d_model, d_head]</code>. In ARENA they are stacked as <code>[nheads, d_model, d_head]</code>. The QK circuit x W_Q W_Kᵀ xᵀ decides only <i>where</i> to look, not what to move.' },
+      draw: function (ctx, t, l, W, H) {
+        var lay = L(W, H); bg(ctx, W, H, t); allNotebooks(ctx, lay, { hi: QI });
+        var sz = lay.ph ? 11 : 13, y = lay.below + 6;
+        // matmul card: x_sat (1x4) @ W_Q (4x2) = q
+        ctx.save(); ctx.globalAlpha = ramp(l, .3, 1.3);
+        var c1 = matCard(ctx, 10, y, [X[QI]], { sz: sz, label: 'x[sat]' });
+        var c2 = matCard(ctx, 10 + c1.w + 18, y, HEADS[0].W_Q, { sz: sz, label: 'W_Q', hl: function (r, c) { return c === Math.floor((l * .8) % 2); } });
+        txt(ctx, '@', 10 + c1.w + 9, y + 26, 16, P.chalk); txt(ctx, '=', 10 + c1.w + c2.w + 29, y + 26, 16, P.chalk);
+        if (l > 2.5) matCard(ctx, 10 + c1.w + c2.w + 40, y, [R0.q[QI]], { sz: sz, label: 'q[sat]', bgc: P.pink });
+        ctx.restore();
+        // keys under every notebook
+        if (l > 5) for (var j = 0; j < 4; j++) { ctx.save(); ctx.globalAlpha = ramp(l, 5 + j * .5, 6 + j * .5); mono(ctx, 'k=' + vs(R0.k[j]), lay.cx(j), lay.top + lay.nbH + 12, lay.ph ? 8.5 : 11, P.butter, 'center'); ctx.restore(); }
+        // strings between seats with live dot products
+        if (l > 7.5) for (j = 0; j < 4; j++) {
+          if (j === QI) continue; var p = ramp(l, 7.5 + j * .6, 8.5 + j * .6); if (p <= 0) continue;
+          var x1 = lay.cx(QI), x2 = lay.cx(j), yy = lay.top - 2, mx = (x1 + x2) / 2;
+          ctx.save(); ctx.strokeStyle = 'rgba(247,227,160,.85)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x1, yy); ctx.quadraticCurveTo(lerp(x1, mx, p), yy - 18, lerp(x1, x2, p), yy); ctx.stroke(); ctx.restore();
+          if (p > .9) mono(ctx, f2(R0.sc[QI][j]), mx, yy - 11, 10, j === 1 ? P.pink : P.butter, 'center');
+        }
+        var planeS = Math.min(lay.ph ? 110 : 140, (H - y - 170) / 2);
+        if (l > 9 && planeS > 40) {
+          ctx.save(); ctx.globalAlpha = ramp(l, 9, 10);
+          var px = lay.ph ? W / 2 : W / 2 - 150, py = y + 110 + planeS; headPlane(ctx, px, py, planeS, R0, QI);
+          var rx = lay.ph ? 14 : W / 2 + 20, ry = lay.ph ? py + planeS + 26 : py - 50;
+          for (j = 0; j < 4; j++) { var s = R0.raw[QI][j]; ctx.globalAlpha = ramp(l, 10.5 + j * .7, 11.3 + j * .7); mono(ctx, 'q·k[' + TOK[j] + '] = ' + f2(s), lay.ph ? (j % 2 ? W / 2 + 4 : 14) : rx, lay.ph ? ry + Math.floor(j / 2) * 18 : ry + j * 24, lay.ph ? 12 : 15, j === 1 ? P.pink : P.chalk); }
+          ctx.restore();
+        }
+      } },
+    { name: 'scale & softmax', start: 36, dur: 18, cap: {
+        1: 'Scores become brightness. We squash them so the lanterns always share exactly one unit of light: the brightest word gets most, but everyone gets a bit. First we shrink the scores a little so one lantern doesn\'t hog it all.',
+        2: '<b>softmax</b> turns scores into weights that sum to 1. Before that we divide by <b>√d_head</b>. Watch the right-hand panel: without the division, bigger heads give bigger dot products and softmax slams to all-or-nothing.',
+        3: 'Dot products of random vectors have variance ∝ d_head, so ARENA scales by <code>self.cfg.d_head**0.5</code> <i>before</i> masking. A saturated softmax has near-zero gradient: the head stops learning.' },
+      draw: function (ctx, t, l, W, H) {
+        var lay = L(W, H); bg(ctx, W, H, t); allNotebooks(ctx, lay, { hi: QI });
+        var sz = lay.ph ? 12 : 15, y = lay.below + 8, x0 = lay.ph ? 14 : W / 2 - 250;
+        mono(ctx, 'scores  ' + vs(R0.raw[QI]), x0, y, sz, P.chalk);
+        if (l > 2) mono(ctx, '/ √2  →  ' + vs(R0.sc[QI]), x0, y + sz * 1.8, sz, P.butter, 'left', ramp(l, 2, 3.5));
+        var unmasked = softmax(R0.sc[QI]);
+        if (l > 4) { mono(ctx, 'softmax → ' + vs(unmasked), x0, y + sz * 3.6, sz, P.pink, 'left', ramp(l, 4, 5.5));
+          mono(ctx, 'sum = ' + unmasked.reduce(function (a, b) { return a + b; }, 0).toFixed(2), x0, y + sz * 5.2, sz, P.mint, 'left', ramp(l, 5.5, 6.5)); }
+        var bw = lay.ph ? W - 40 : 380, bx = lay.ph ? 20 : W / 2 - 250, by = y + sz * 7 + 30, bh = lay.ph ? 70 : 110;
+        if (l > 5) { ctx.save(); ctx.globalAlpha = ramp(l, 5, 6); patternBars(ctx, bx, by, bw, bh, unmasked, P.pink, TOK); ctx.restore(); }
+        // saturation demo: honest softmax(raw * s) as the multiplier grows
+        if (l > 9.5) {
+          var m = lerp(1 / SQ, 4, ramp(l, 10.5, 16)), sat = softmax(R0.raw[QI].map(function (s) { return s * m; }));
+          var sx = lay.ph ? 20 : W / 2 + 170, sy = lay.ph ? by + bh + 86 : by, sw = lay.ph ? W - 40 : 280, sh = lay.ph ? 56 : bh;
+          ctx.save(); ctx.globalAlpha = ramp(l, 9.5, 10.5);
+          txt(ctx, 'scores × ' + m.toFixed(2) + (m > 1.05 ? '  (like forgetting √d_head)' : '  (÷√2, as we do)'), sx, sy - (lay.ph ? 24 : 40), lay.ph ? 12 : 14, m > 1.05 ? P.orange : P.mint, { align: 'left', seed: 'satl' });
+          var n = 4, cw = sw / n; sat.forEach(function (a, j) { ctx.fillStyle = 'rgba(253,250,240,.1)'; ctx.fillRect(sx + j * cw + 4, sy, cw - 8, sh); ctx.fillStyle = P.orange; ctx.fillRect(sx + j * cw + 4, sy + sh * (1 - a), cw - 8, sh * a); mono(ctx, a.toFixed(2), sx + j * cw + cw / 2, sy + sh + 10, 11, P.chalk, 'center'); });
+          ctx.restore();
+        }
+      } },
+    { name: 'no peeking', start: 54, dur: 22, cap: {
+        1: 'Wait: "on" comes <b>after</b> "sat". In a real sentence "sat" can\'t have seen it yet. So we tape torn paper over every seat to the right. Covered seats get zero light.',
+        2: 'The <b>causal mask</b>. Grid rows are queries (the word asking), columns are keys (the words being looked at). Everything above the diagonal is set to <b>-inf</b> before softmax, and e^(-inf) = 0.',
+        3: '<code>attn_scores.masked_fill_(mask, self.IGNORE)</code> with <code>IGNORE = -inf</code> and <code>mask = t.triu(all_ones, diagonal=1).bool()</code>. Shape <code>[batch, n_heads, query_pos, key_pos]</code>, softmax over the last dim.' },
+      draw: function (ctx, t, l, W, H) {
+        var lay = L(W, H); bg(ctx, W, H, t); maybeAsk(t, 67);
+        allNotebooks(ctx, lay, { hi: QI, dim: function (i) { return i > QI ? lerp(1, .35, ramp(l, 1, 2)) : 1; } });
+        if (l > 1) { ctx.save(); ctx.globalAlpha = ramp(l, 1, 2); F.paper(ctx, lay.cx(3), lay.cy, lay.nbW + 6, lay.nbH * .8, '#8c86a8', { seed: 'coveron', rot: .08 }); txt(ctx, 'not yet!', lay.cx(3), lay.cy, 14, P.chalk); ctx.restore(); }
+        var sz = lay.ph ? 12 : 15, y = lay.below + 16, cw = sz * 3.3, chh = sz * 1.45;
+        var gx = lay.ph ? 34 : W / 2 - 300, gy = y + 12;
+        var maskP = ramp(l, 4, 6), softP = ramp(l, 7.5, 9.5);
+        // column labels (keys) and row labels (queries)
+        for (var j = 0; j < 4; j++) { txt(ctx, TOK[j], gx + 6 + j * cw + cw / 2, gy - 18, 12, P.butter, { seed: 'col' + j }); txt(ctx, TOK[j], gx - 4, gy + 5 + 12 * 1.6 + j * chh + chh / 2 - 4, 12, P.pink, { align: 'right', seed: 'row' + j }); }
+        var M = softP > 0 ? R0.A : R0.sc;
+        var card = matCard(ctx, gx, gy - 4, M, { sz: sz, label: softP > 0 ? 'attn_pattern' : 'attn_scores / √d_head',
+          shade: function (v, r, c) { return softP > 0 && c <= r ? 'rgba(243,179,195,' + (v * softP) + ')' : 'rgba(0,0,0,0)'; },
+          hl: function (r, c) { return l > 10 && r === 0 && c === 0; } });
+        // torn paper over the upper triangle
+        for (var r = 0; r < 4; r++) for (var c = r + 1; c < 4; c++) {
+          var a = maskP; if (a <= 0) continue; ctx.save(); ctx.globalAlpha = a;
+          F.paper(ctx, gx + 6 + c * cw + cw / 2, gy - 4 + sz * 1.6 + 5 + r * chh + chh / 2, cw - 1, chh - 1, '#8c86a8', { seed: 'm' + r + c, rot: ((r * 7 + c) % 5 - 2) * .04, shadow: false });
+          mono(ctx, softP > 0 ? '0' : '-inf', gx + 6 + c * cw + cw / 2, gy - 4 + sz * 1.6 + 5 + r * chh + chh / 2, sz * .85, P.chalk, 'center'); ctx.restore();
+        }
+        var sy = gy + card.h + 40, bw = lay.ph ? W - 60 : 340, bx = lay.ph ? 30 : W / 2 + 60, by = lay.ph ? sy : gy + 20, bh = lay.ph ? 60 : 110;
+        if (l > 9.5) { ctx.save(); ctx.globalAlpha = ramp(l, 9.5, 10.5);
+          txt(ctx, 'row "sat": masked softmax', bx + bw / 2, by - 36, lay.ph ? 13 : 16, P.pink, { seed: 'rs' });
+          patternBars(ctx, bx, by, bw, bh, R0.A[QI], P.pink, TOK, { masked: [false, false, false, true] }); ctx.restore(); }
+        if (l > 14) {
+          var ny = by + bh + (lay.ph ? 84 : 90);
+          ctx.save(); ctx.globalAlpha = ramp(l, 14, 15);
+          var ok = PRED.choice === 'self', msg = PRED.choice && PRED.choice !== 'skip' ? (ok ? 'you called it: ' : 'answer: ') : 'answer: ';
+          F.note(ctx, msg + '"The" sees only itself\nsoftmax([s, -inf, -inf, -inf]) = [1, 0, 0, 0]', W / 2, Math.min(ny, H - 40), lay.ph ? 12 : 16, { color: P.mint, seed: 'ans', font: F.MONO, rot: -.01 });
+          ctx.restore();
+        }
+      } },
+    { name: 'values & W_O', start: 76, dur: 22, cap: {
+        1: 'Now each earlier word folds a paper plane with a message: its <b>value</b>. The planes fly to "sat", bigger planes for brighter lanterns. "sat" blends them, translates the blend, and <b>adds</b> it to its own notebook. Now the who? slot says: a noun, mostly "cat".',
+        2: '<b>v = x W_V</b>. The head output at "sat" is z = Σ pattern · v, a weighted average. Then <b>W_O</b> maps z back to d_model and it is <b>added</b> to the residual stream. Nothing is overwritten: the old grey bars stay.',
+        3: '<code>z</code> is <code>[batch, posn_Q, nheads, d_head]</code>; <code>attn_out = einsum(z, W_O)</code> sums over nheads and d_head. The OV circuit W_V W_O decides <i>what</i> moves; the QK circuit decided <i>where from</i>.' },
+      draw: function (ctx, t, l, W, H) {
+        var lay = L(W, H); bg(ctx, W, H, t);
+        var writeP = ramp(l, 14, 17);
+        for (var i = 0; i < 4; i++) notebook(ctx, lay, i, X[i], i === QI ? [{ v: R0.out[QI], col: P.pink, a: writeP }] : null, { hi: i === QI, alpha: i > QI ? .4 : 1 });
+        var sz = lay.ph ? 11 : 14, y = lay.below + 8;
+        for (var j = 0; j <= QI; j++) {
+          var p = ramp(l, 1 + j * .6, 5 + j * .6), a = R0.A[QI][j];
+          if (p > 0 && p < 1) planeTo(ctx, lay.cx(j), lay.cy + lay.nbH / 2 + 10, lay.cx(QI), lay.cy + lay.nbH / 2 + 10, p, 6 + 16 * a, P.cream);
+          ctx.save(); ctx.globalAlpha = ramp(l, .5, 1.5); mono(ctx, 'v=' + vs(R0.v[j]), lay.cx(j), lay.top + lay.nbH + 12, lay.ph ? 8.5 : 11, P.cream, 'center'); ctx.restore();
+        }
+        var x0 = lay.ph ? 12 : W / 2 - 260, yy = y + 40;
+        if (l > 6) { ctx.save(); ctx.globalAlpha = ramp(l, 6, 7);
+          mono(ctx, 'z = ' + R0.A[QI].slice(0, 3).map(function (a, j) { return a.toFixed(2) + '·v[' + TOK[j] + ']'; }).join(' + '), x0, yy, lay.ph ? 10 : 14, P.chalk);
+          mono(ctx, '  = ' + vs(R0.z[QI]), x0, yy + sz * 1.8, sz, P.butter); ctx.restore(); }
+        if (l > 9) { ctx.save(); ctx.globalAlpha = ramp(l, 9, 10);
+          var c1 = matCard(ctx, x0, yy + sz * 3.4, [R0.z[QI]], { sz: sz, label: 'z[sat]' });
+          txt(ctx, '@', x0 + c1.w + 9, yy + sz * 3.4 + 26, 16, P.chalk);
+          var c2 = matCard(ctx, x0 + c1.w + 18, yy + sz * 3.4, HEADS[0].W_O, { sz: sz, label: 'W_O' });
+          ctx.restore(); }
+        if (l > 11.5) { ctx.save(); ctx.globalAlpha = ramp(l, 11.5, 12.5);
+          mono(ctx, 'attn_out[sat] = ' + vs(R0.out[QI]), x0, yy + sz * 3.4 + (sz * 1.45) * 2 + sz * 1.6 + 30, sz, P.pink); ctx.restore(); }
+        if (l > 13) { ctx.save(); ctx.globalAlpha = ramp(l, 13, 14);
+          var by = yy + sz * 3.4 + (sz * 1.45) * 2 + sz * 1.6 + 64;
+          mono(ctx, 'resid_mid = resid_pre + attn_out', x0, by, sz + 1, P.mint);
+          mono(ctx, vs(X[QI]) + ' + ' + vs(R0.out[QI]), x0, by + sz * 1.8, lay.ph ? 9.5 : 13, P.chalk);
+          mono(ctx, '= ' + vs(add(X[QI], R0.out[QI])), x0, by + sz * 3.4, sz, P.butter);
+          if (l > 16) F.note(ctx, 'an ADD, never an overwrite', W / 2, Math.min(H - 34, by + sz * 6.4), lay.ph ? 15 : 19, { color: P.butter, seed: 'addnote', rot: .02 });
+          ctx.restore(); }
+      } },
+    { name: 'many heads', start: 98, dur: 18, cap: {
+        1: 'There is more than one question being asked at once. A second head, asking "what\'s recent?", reads the same notebooks with its own arrows and writes its own note. The notes just stack up.',
+        2: 'Each head has its own W_Q, W_K, W_V, W_O and runs <b>in parallel</b>, at every position at once. Their outputs simply add: resid_mid = resid_pre + head 0 + head 1. Later the <b>MLP</b> adds its note the same way.',
+        3: '<code>attn_out</code> is Σ over heads of <code>z_h W_O[h]</code>: the einsum over <code>nheads d_head</code> is that sum. Then <code>resid_post = mlp(ln2(resid_mid)) + resid_mid</code>. Every layer reads the sum and writes a new term.' },
+      draw: function (ctx, t, l, W, H) {
+        var lay = L(W, H); bg(ctx, W, H, t);
+        var a0 = 1, a1 = ramp(l, 6, 9);
+        for (var i = 0; i < 4; i++) notebook(ctx, lay, i, X[i], [{ v: R0.out[i], col: P.pink, a: ramp(l, .5, 2.5) }, { v: R1.out[i], col: P.teal, a: a1 }], { hi: i === QI });
+        var sz = lay.ph ? 12 : 15, y = lay.below + 30, bw = lay.ph ? W - 60 : 300, bh = lay.ph ? 44 : 80;
+        var x1 = lay.ph ? 30 : W / 2 - bw - 30, x2 = lay.ph ? 30 : W / 2 + 30, y1 = y + 20, y2 = lay.ph ? y1 + bh + 80 : y1;
+        txt(ctx, HEADS[0].name, x1 + bw / 2, y1 - 34, lay.ph ? 13 : 16, P.pink, { seed: 'h0' });
+        patternBars(ctx, x1, y1, bw, bh, R0.A[QI], P.pink, TOK, { masked: [0, 0, 0, 1] });
+        if (l > 3) { ctx.save(); ctx.globalAlpha = ramp(l, 3, 4);
+          txt(ctx, HEADS[1].name, x2 + bw / 2, y2 - 34, lay.ph ? 13 : 16, P.teal, { seed: 'h1' });
+          patternBars(ctx, x2, y2, bw, bh, R1.A[QI], P.teal, TOK, { masked: [0, 0, 0, 1] }); ctx.restore(); }
+        var ey = (lay.ph ? y2 : y1) + bh + 58, x0 = lay.ph ? 12 : W / 2 - 250;
+        if (l > 9) { ctx.save(); ctx.globalAlpha = ramp(l, 9, 10);
+          mono(ctx, 'resid_pre[sat]  ' + vs(X[QI]), x0, ey, sz, P.chalk);
+          mono(ctx, '+ head 0        ' + vs(R0.out[QI]), x0, ey + sz * 1.6, sz, P.pink);
+          mono(ctx, '+ head 1        ' + vs(R1.out[QI]), x0, ey + sz * 3.2, sz, P.teal);
+          mono(ctx, '= resid_mid     ' + vs(MID[QI]), x0, ey + sz * 4.8, sz, P.butter); ctx.restore(); }
+      } },
+    { name: 'why we can read it', start: 116, dur: 18, cap: {
+        1: 'Because every note is <b>added</b>, you can tear any one note out and see exactly what it did. Tear out head 0\'s pink note and "sat" forgets who sat. That is how we look inside.',
+        2: 'Linearity is the gift: the residual stream is a <b>sum of contributions</b>. So we can attribute (which head wrote this?), ablate (remove one term), and later steer (add our own term). Honest limit: the patterns are learned geometry, not understanding.',
+        3: 'Direct attribution: resid·u = Σ (term·u), so each head\'s share of a direction is a dot product. Caveat: LayerNorm is nonlinear, and in real models features share dims (superposition), so the neat labels are something we have to discover, not read.' },
+      draw: function (ctx, t, l, W, H) {
+        var lay = L(W, H); bg(ctx, W, H, t);
+        var tear = ramp(l, 3, 5.5);
+        for (var i = 0; i < 4; i++) notebook(ctx, lay, i, X[i], [{ v: R0.out[i], col: P.pink, a: 1 - tear }, { v: R1.out[i], col: P.teal }], { hi: i === QI });
+        if (tear > 0 && tear < 1) { ctx.save(); ctx.globalAlpha = 1 - tear; F.paper(ctx, lay.cx(QI) + tear * 80, lay.cy + lay.nbH / 2 + 10 + tear * 120, 40, 14, P.pink, { seed: 'rip', rot: tear * 2 }); ctx.restore(); }
+        var sz = lay.ph ? 12 : 15, y = lay.below + 30, x0 = lay.ph ? 12 : W / 2 - 250;
+        var u = [0, 0, 0, 1]; // read the who? direction
+        mono(ctx, 'read the "who?" direction: resid · u', x0, y, sz, P.mint);
+        mono(ctx, 'head 0 wrote   ' + f2(dot(R0.out[QI], u)), x0, y + sz * 1.8, sz, P.pink);
+        mono(ctx, 'head 1 wrote   ' + f2(dot(R1.out[QI], u)), x0, y + sz * 3.4, sz, P.teal);
+        mono(ctx, 'now it reads   ' + f2(dot(add(add(X[QI], R0.out[QI], 1 - tear), R1.out[QI]), u)), x0, y + sz * 5, sz, P.butter);
+        if (l > 5.5) { ctx.save(); ctx.globalAlpha = ramp(l, 5.5, 6.5); txt(ctx, 'ablate one head: its note, and only its note, is gone', W / 2, y + sz * 7.2, lay.ph ? 13 : 17, P.chalk, { seed: 'abl' }); ctx.restore(); }
+        var p = ramp(l, 9, 10.5); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 10.2, 11); var s2 = lay.ph ? 13 : 18, cx = W - Math.min(W, H) * .33, cy = H - Math.min(W, H) * .24;
+          txt(ctx, 'really: 768 unlabelled dims', cx, cy - s2 * 2.8, s2, P.ink, { seed: 'r1' });
+          txt(ctx, 'features overlap', cx + s2 * .6, cy - s2 * 1.4, s2, P.ink, { seed: 'r2' });
+          txt(ctx, 'learned geometry,', cx + s2 * 1.1, cy, s2, P.ink, { seed: 'r3' });
+          txt(ctx, 'not understanding', cx + s2 * 1.6, cy + s2 * 1.4, s2, P.ink, { seed: 'r4' }); ctx.restore(); }
+        if (l > 14) { ctx.save(); ctx.globalAlpha = ramp(l, 14, 15); F.note(ctx, 'every edit we\'ll make to a model\nis an edit to this notebook', W / 2, y + sz * 11.6, lay.ph ? 15 : 20, { color: P.pink, seed: 'steer', rot: -.02 }); ctx.restore(); }
+      } },
+    { name: 'your code', start: 134, dur: 20, cap: {
+        1: 'Everything you just watched is a handful of lines. This is the exact recipe you write in ARENA [1.1] on Saturday 10 October.',
+        2: 'The learner\'s version of <code>Attention.forward</code> from [1.1] Transformer from Scratch: q, k, v by einsum, scores, scale, mask, softmax, weighted sum, W_O, then the residual add in the block.',
+        3: 'Names match ARENA: <code>attn_scores</code>, <code>apply_causal_mask</code>, <code>attn_pattern</code>, <code>z</code>, <code>attn_out</code>, <code>resid_mid = self.attn(self.ln1(resid_pre)) + resid_pre</code>. Biases b_Q, b_K, b_V, b_O omitted here for space; x = ln1(resid_pre).' },
+      draw: function (ctx, t, l, W, H) {
+        var lay = L(W, H); bg(ctx, W, H, t);
+        var phase = l < 10 ? 0 : 1, ll = phase ? l - 10 : l, sz = lay.ph ? 12 : 15;
+        var A = [['q = einops.einsum(x, self.W_Q,', P.pink], ['  "batch posn d_model,', P.chalk], ['   nheads d_model d_head', P.chalk], ['   -> batch posn nheads d_head")', P.chalk], ['# k, v: same, with W_K and W_V', '#9aa0c8'],
+          ['attn_scores = einops.einsum(q, k,', P.butter], ['  "batch posn_Q nheads d_head,', P.chalk], ['   batch posn_K nheads d_head', P.chalk], ['   -> batch nheads posn_Q posn_K")', P.chalk],
+          ['attn_scores = attn_scores / d_head**0.5', P.butter], ['attn_scores.masked_fill_(mask, self.IGNORE)', '#b8b2d8']];
+        var B = [['attn_pattern = attn_scores.softmax(-1)', P.pink], ['z = einops.einsum(v, attn_pattern,', P.cream], ['  "batch posn_K nheads d_head,', P.chalk], ['   batch nheads posn_Q posn_K', P.chalk], ['   -> batch posn_Q nheads d_head")', P.chalk],
+          ['attn_out = einops.einsum(z, self.W_O,', P.teal], ['  "batch posn_Q nheads d_head,', P.chalk], ['   nheads d_head d_model', P.chalk], ['   -> batch posn_Q d_model")  # sums heads', P.chalk],
+          ['resid_mid = attn_out + resid_pre', P.mint]];
+        var lines = phase ? B : A, w = Math.min(W - 16, 44 * sz * .62 + 30), h = lines.length * sz * 1.55 + 26, x = W / 2 - w / 2, y = Math.max(12, (H - h) / 2 - 20);
+        F.paper(ctx, W / 2, y + h / 2, w, h, '#20244a', { seed: 'code' + phase, rot: .004 });
+        lines.forEach(function (Ln, i) { mono(ctx, Ln[0], x + 12, y + 18 + i * sz * 1.55, sz, Ln[1], 'left', ramp(ll, .3 + i * .55, 1 + i * .55)); });
+        txt(ctx, phase ? '2/2  weigh, move, ADD' : '1/2  ask, match, mask', W / 2, y - 16 > 10 ? y - 16 : y + h + 16, lay.ph ? 13 : 16, P.butter, { seed: 'ph' + phase });
+        if (phase && ll > 7) { ctx.save(); ctx.globalAlpha = ramp(ll, 7, 8); F.note(ctx, 'now drag the question yourself', W / 2, Math.min(H - 30, y + h + 36), lay.ph ? 14 : 18, { color: P.butter, seed: 'drive' }); ctx.restore(); }
+      } }
+  ];
+
+  /* ================= coda: drag the query, watch the notebook ================= */
+  var C = { qi: 2, q: null, scale: true, drag: false, geo: null };
+  function codaRun() { var R = run(HEADS[0], C.q, C.qi, !C.scale); return R; }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:14px">' +
+        '<span>Query word:</span>' + TOK.map(function (w, i) { return '<button data-q="' + i + '" aria-pressed="' + (i === C.qi) + '">' + w + '</button>'; }).join('') +
+        '<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" checked> ÷√d_head</label><button data-r="1">reset q</button></div>' +
+        '<div style="font-size:13px;opacity:.85;margin-top:4px">Drag the pink query arrow. Scores, mask, softmax and the write into "who?" update live.</div>';
+      var bs = panel.querySelectorAll('button[data-q]');
+      [].forEach.call(bs, function (b) { b.onclick = function () { C.qi = +b.dataset.q; C.q = null; [].forEach.call(bs, function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); }); }; });
+      panel.querySelector('input').onchange = function (e) { C.scale = e.target.checked; };
+      panel.querySelector('button[data-r]').onclick = function () { C.q = null; };
+    },
+    down: function (x, y, api) { var g = C.geo; if (!g) return; var qx = g.x + g.u * C.cur[0], qy = g.y - g.u * C.cur[1]; if (Math.hypot(x - qx, y - qy) < 40 || Math.hypot(x - g.x, y - g.y) < g.s) { C.drag = true; this.move(x, y, api, true); api.audio.blip(520); } },
+    move: function (x, y, api, down) { if (!C.drag || !down) return; var g = C.geo; C.q = [clamp((x - g.x) / g.u, -2, 2), clamp(-(y - g.y) / g.u, -2, 2)]; },
+    up: function () { C.drag = false; },
+    draw: function (ctx, t, W, H, api) {
+      var lay = L(W, H); bg(ctx, W, H, t); var R = codaRun(), qi = C.qi; C.cur = R.q[qi];
+      for (var i = 0; i < 4; i++) notebook(ctx, lay, i, X[i], i === qi ? [{ v: R.out[qi], col: P.pink }] : null, { hi: i === qi, alpha: i > qi ? .4 : 1 });
+      var s = lay.ph ? Math.max(50, Math.min(88, (H - lay.below - 200) / 2)) : Math.min(150, (H - lay.below - 40) / 2), px = lay.ph ? W / 2 : W / 2 - 220, py = lay.below + 12 + s;
+      var u = headPlane(ctx, px, py, s, R, qi, { mask: true, handle: true }); C.geo = { x: px, y: py, u: u, s: s };
+      var bx = lay.ph ? 24 : W / 2 + 20, by = lay.ph ? py + s + 36 : lay.below + 60, bw = lay.ph ? W - 48 : 340, bh = lay.ph ? 42 : 100;
+      patternBars(ctx, bx, by, bw, bh, R.A[qi], P.pink, TOK, { masked: TOK.map(function (_, j) { return j > qi; }) });
+      var sz = lay.ph ? 11 : 14, ry = by + bh + (lay.ph ? 50 : 58);
+      mono(ctx, 'q = ' + vs(R.q[qi]) + (C.scale ? '   scores/√2' : '   raw scores'), bx, ry, sz, P.pink);
+      mono(ctx, vs(R.masked[qi]), bx, ry + sz * 1.6, sz, P.butter);
+      mono(ctx, 'who? += ' + f2(R.out[qi][3]) + '   (' + (R.out[qi][3] > .5 ? 'a noun wrote here' : R.out[qi][3] > .2 ? 'a blurry blend' : 'little noun reached it') + ')', bx, ry + sz * 3.2, sz, P.mint);
+    }
+  };
+
+  F.play({
+    title: 'Deep dive W5 · Attention writes to the notebook',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: transformer block', href: '../../index.html#demo/transformer-block' },
+      { label: 'Demo: residual stream bus', href: '../../index.html#demo/residual-stream-bus' },
+      { label: 'Week 5 pack', href: '../../index.html#week-05' },
+      { label: 'Map: causal mask', href: '../../index.html#map/node=softmax-attention-and-causal-mask' },
+      { label: 'Map: residual stream', href: '../../index.html#map/node=residual-stream' },
+      { label: 'Case: softmax attention', href: '../../index.html#cases/softmax-attention-and-causal-mask' },
+      { label: 'Case: residual stream', href: '../../index.html#cases/residual-stream' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
