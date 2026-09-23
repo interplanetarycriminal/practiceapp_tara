@@ -347,6 +347,8 @@ const html = [
   '<body>',
   body.trim(),
   SW_REG,
+  '<script src="intuition/hook.js" defer></script>',
+  '<script src="objects/hook.js" defer></script>',
   '</body>',
   '</html>',
   ''

@@ -94,9 +94,9 @@ self.addEventListener('fetch', (event) => {
 
   /* The shell document: always try the network so a redeploy lands, but never
      fail — a cached shell is what makes the app work offline. */
-  /* Intuition films (intuition/*): their own pages, edited often, so always
+  /* Intuition films (intuition/*) and the 3D objects (objects/*): their own pages, edited often, so always
      network-first and cached under their own URL, never as the shell. */
-  if (/\/intuition\//.test(url.pathname.slice(SCOPE.pathname.length - 1))) {
+  if (/\/(intuition|objects)\//.test(url.pathname.slice(SCOPE.pathname.length - 1))) {
     event.respondWith((async () => {
       const cache = await caches.open(SHELL_CACHE);
       try {
