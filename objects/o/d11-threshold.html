@@ -151,7 +151,7 @@ const H_AT = [1.62, 0, 0.74];           // the human auditor H (front right)
 const PALE = '#d9d2c4';
 const TINT = { aud: '#e6d3a4', def: '#c3e2df' };
 const CAM = {
-  cast: { pos: [-2.4, 2.6, 9.2], target: [-0.4, 1.0, 0.2] },
+  cast: { pos: [-1.3, 2.5, 9.4], target: [-0.4, 1.0, 0.2] },
   front: { pos: [2.5, 2.9, 9.3], target: [0, 1.25, 0] },
   full: { pos: [2.1, 3.7, 9.5], target: [0, 1.95, 0] },
   side: { pos: [6.3, 3.5, 6.9], target: [0, 1.3, 0] },
@@ -248,18 +248,18 @@ function buildBoard(S) {               // the safety-usefulness frontier, on a p
     const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = shadow; m.receiveShadow = true; g.add(m); return m;
   };
   const B = BOARD;
-  add(new THREE.BoxGeometry(B.x1 - B.x0, B.y1 - B.y0, 0.04), K.mat.plaster('#f6f1e8'), (B.x0 + B.x1) / 2, (B.y0 + B.y1) / 2, B.z);
+  add(new THREE.BoxGeometry(B.x1 - B.x0, B.y1 - B.y0, 0.04), K.mat.plaster('#fcf9f3'), (B.x0 + B.x1) / 2, (B.y0 + B.y1) / 2, B.z);
   for (const x of [B.x0 + 0.24, B.x1 - 0.24]) add(new THREE.CylinderGeometry(0.018, 0.018, B.y0, 12).translate(0, B.y0 / 2, 0), brass, x, 0, B.z - 0.035);
   const line = K.mat.plaster('#ddd3c3');
   for (const u of [0.5, 1]) add(new THREE.BoxGeometry(CH.x1 - CH.x0, 0.006, 0.004), line, (CH.x0 + CH.x1) / 2, by(u), ZF + 0.002, false);
   for (const s of [0.5, 1]) add(new THREE.BoxGeometry(0.006, CH.y1 - CH.y0, 0.004), line, bx(s), (CH.y0 + CH.y1) / 2, ZF + 0.002, false);
   add(new THREE.BoxGeometry(CH.x1 - CH.x0 + 0.03, 0.016, 0.016), brass, (CH.x0 + CH.x1) / 2 + 0.005, CH.y0, ZF + 0.008, false);   // safety axis
   add(new THREE.BoxGeometry(0.016, CH.y1 - CH.y0 + 0.03, 0.016), brass, CH.x0, (CH.y0 + CH.y1) / 2 + 0.005, ZF + 0.008, false);   // usefulness axis
-  st.ribbon = K.tube([], C.prob, 0.021, { shadow: false, sides: 10 });
+  st.ribbon = K.tube([], C.prob, 0.027, { shadow: false, sides: 10 });
   st.ribbon.mesh.userData.noFit = true;
   g.add(st.ribbon.mesh);
-  st.dot = add(new THREE.SphereGeometry(0.052, 20, 14), K.mat.ink(), 0, 0, ZF + 0.06);
-  const sg = new THREE.CylinderGeometry(0.034, 0.034, 0.02, 24).rotateX(Math.PI / 2);
+  st.dot = add(new THREE.SphereGeometry(0.064, 20, 14), K.mat.ink(), 0, 0, ZF + 0.06);
+  const sg = new THREE.CylinderGeometry(0.046, 0.046, 0.02, 24).rotateX(Math.PI / 2);
   st.studs = {};
   for (const k of ['up', 'tm', 'dtt', 't0']) st.studs[k] = add(sg, brass, 0, 0, ZF + 0.03, false);
   st.board = g;
@@ -374,7 +374,7 @@ function applyView(S) {
   st.tagD.show(walls && st.cur.defer);
   st.tagSafe.show(board); st.tagUse.show(board);
   for (const t of st.cast) t.show(v.cast);
-  st.readAt.position.set(0, board ? BOARD.y1 + 0.06 : WALL_H + 0.22, 0);
+  st.readAt.position.set(0, board ? BOARD.y1 + 0.06 : walls ? WALL_H + 0.22 : SHELF_Y + (v.attack ? 1.2 : 0.2), 0);
   paintBeads(S);
   legend(S);
   refresh(S);
@@ -475,21 +475,21 @@ run({
     layoutHill(st.sc.h, FLOOR_Y, ZH, st.tgt.h);
     st.readAt = new THREE.Object3D(); S.root.add(st.readAt);
     st.read = K.label(st.readAt, '', { cls: 'readout', anchor: 'bottom', dy: -6 });
-    st.tagA = K.label(st.wallA.userData.top, '', { cls: 'tag brass', anchor: 'left', dx: 6, dy: 0 });
-    st.tagD = K.label(st.wallD.userData.top, '', { cls: 'tag', anchor: 'right', dx: -6, dy: 0 });
-    st.tagAxis = K.label([0.75, FLOOR_Y - 0.03, ZH + LANE / 2 + 0.03], { 1: 'more suspicious →', 2: 'suspicion score →', 3: 'suspicion (toy units) →' }, { cls: 'tag', anchor: 'top', dy: 6 });
+    st.tagA = K.label(st.wallA.userData.top, '', { cls: 'tag brass', anchor: 'left', dx: 16, dy: -12 });
+    st.tagD = K.label(st.wallD.userData.top, '', { cls: 'tag', anchor: 'right', dx: -16, dy: 0 });
+    st.tagAxis = K.label([-0.95, FLOOR_Y - 0.03, ZH + LANE / 2 + 0.03], { 1: 'more suspicious →', 2: 'suspicion score →', 3: 'suspicion (toy units) →' }, { cls: 'tag', anchor: 'top', dy: 6 });
     st.tagSafe = K.label([CH.x1, CH.y0, ZF], { 1: 'safer →', 2: 'safety →', 3: 'safety →' }, { cls: 'tag', anchor: 'top', dy: 5 });
-    st.tagUse = K.label([CH.x0, CH.y1, ZF], { 1: 'more useful ↑', 2: 'usefulness ↑', 3: 'usefulness (T = 0, U = 1)' }, { cls: 'tag', anchor: 'bottom', dy: -5 });
+    st.tagUse = K.label([CH.x0 - 0.03, by(0.5), ZF], { 1: 'more useful ↑', 2: 'usefulness ↑', 3: 'usefulness ↑ (T 0, U 1)' }, { cls: 'tag', anchor: 'right', dx: -4, dy: 0 });
     st.studTag = {
-      up: K.label(st.studs.up, { 1: 'check the first 2%', 2: 'upfront auditing', 3: 'P1 upfront' }, { cls: 'tag brass', anchor: 'right', dx: -7, dy: 0 }),
+      up: K.label(st.studs.up, { 1: 'check the first 2%', 2: 'upfront auditing', 3: 'P1 upfront' }, { cls: 'tag brass', anchor: 'top', dy: 11 }),
       tm: K.label(st.studs.tm, { 1: 'watch + audit', 2: 'trusted monitoring', 3: 'P2 monitoring' }, { cls: 'tag brass', anchor: 'bottom', dy: -7 }),
-      dtt: K.label(st.studs.dtt, { 1: 'defer 10%', 2: 'defer to trusted 10%', 3: 'P3 defer 10%' }, { cls: 'tag brass', anchor: 'left', dx: 8, dy: 0 }),
+      dtt: K.label(st.studs.dtt, { 1: 'defer 10%', 2: 'defer to trusted 10%', 3: 'P3 defer 10%' }, { cls: 'tag brass', anchor: 'left', dx: 12, dy: 0 }),
       t0: K.label(st.studs.t0, { 1: 'T does everything', 2: 'T only', 3: 'P0 T only' }, { cls: 'tag brass', anchor: 'right', dx: -8, dy: -6 }),
     };
     st.cast = [
-      K.label([U_AT[0], 0.02, U_AT[2] + 0.15], { 1: 'U: strong, untrusted', 2: 'U · untrusted model', 3: 'U · claude-sonnet-4.5' }, { cls: 'tag', anchor: 'top', dy: 5 }),
-      K.label([T_AT[0], T_AT[1] + 0.18, T_AT[2]], { 1: 'T: weaker, trusted', 2: 'T · trusted monitor', 3: 'T · gemini-2.5-flash' }, { cls: 'tag', anchor: 'bottom', dy: -4 }),
-      K.label([H_AT[0], 1.0, H_AT[2]], { 1: 'H: a human checker', 2: 'H · human auditor', 3: 'H · 2% audit budget' }, { cls: 'tag', anchor: 'bottom', dy: -4 }),
+      K.label([U_AT[0], 0.02, U_AT[2] + 0.15], { 1: 'U: strong, untrusted', 2: 'U · untrusted model', 3: 'U · claude-sonnet-4.5' }, { cls: '', anchor: 'top', dy: 5 }),
+      K.label([T_AT[0], T_AT[1] + 0.18, T_AT[2]], { 1: 'T: weaker, trusted', 2: 'T · trusted monitor', 3: 'T · gemini-2.5-flash' }, { cls: '', anchor: 'bottom', dy: -4 }),
+      K.label([H_AT[0], 1.0, H_AT[2]], { 1: 'H: a human checker', 2: 'H · human auditor', 3: 'H · 2% audit budget' }, { cls: '', anchor: 'bottom', dy: -4 }),
     ];
   },
 
@@ -640,8 +640,8 @@ run({
     { tag: 'exercise',
       cap: {
         1: 'In ARENA you write each protocol as a router: audit the output, submit U\'s answer, or swap in T\'s. The brass studs mark the ones you build. Top-right is best.',
-        2: 'ARENA [3.5]: protocol_upfront_auditing, protocol_trusted_monitoring, protocol_defer_to_trusted (top 10%), protocol_trusted_editing (top 20%) each send a problem to audit, U, T or T\'s edit by suspicion rank. Toy safety: upfront 9.5% < monitoring 34.0% < defer 48.5%.',
-        3: 'AUDIT_BUDGET_FRACTION 0.02, DEFER_TO_TRUSTED_FRACTION 0.10, TRUSTED_EDITING_DEFER 0.20; with edit_removes_backdoor_rate 0.7, editing is 49.5% safe here. simulate_safety audits the top 2% after the run at a fixed attack rate, so its numbers run higher.',
+        2: '**Four routers you write in ARENA [3.5]:** upfront auditing, trusted monitoring, defer to trusted (top 10%), trusted editing (top 20%). Each sends a problem to H, U, T or T\'s edit. Toy safety: upfront 9.5%, monitoring 34.0%, defer 48.5%.',
+        3: 'protocol_trusted_monitoring and friends use AUDIT_BUDGET_FRACTION 0.02, DEFER_TO_TRUSTED_FRACTION 0.10, TRUSTED_EDITING_DEFER 0.20; with edit_removes_backdoor_rate 0.7, editing is 49.5% safe here. simulate_safety audits the top 2% after the run at a fixed attack rate, so its numbers run higher.',
       },
       cam: CAM.full,
       set: { dp: 1.64, b: 0.02, f: 0.10, fr: true },
