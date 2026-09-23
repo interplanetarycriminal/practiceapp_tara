@@ -38,6 +38,11 @@
   function entropy(p) { var h = 0; p.forEach(function (v) { if (v > 0) h -= v * Math.log2(v); }); return h; }
   var U_FILM = 0.52; // the film's one "random" draw, fixed so every viewing matches the captions
 
+  /* pass 2: acting. BT is set by the beat wrapper; at(x) = global time when scene time x happened. */
+  var BT = { g0: 0, from: 0 };
+  function at(x) { return BT.g0 + (x - BT.from); }
+  function act(l, keys, o) { var k = null, prev = 'idle'; keys.forEach(function (e) { if (l >= e[0]) { if (k) prev = k[1]; k = e; } }); o = o || {}; if (!k) return o; o.pose = k[1]; o.t0 = at(k[0]); o.from = prev; return o; }
+
   /* ---------------- layout ---------------- */
   var L = {};
   function lay(W, H) {
@@ -116,22 +121,14 @@
     ctx.restore(); return o.hx;
   }
 
-  var chapters = [
-    { name: 'the fortune-teller', start: 0, dur: 5, cap: {
-        1: 'The mind egg has read "The cat sat on the…" and must now <b>pick one word</b>. Each candidate word is a lantern on a pole: the taller the pole, the more the egg likes it.',
-        2: 'Pole height = the word\'s <b>logit</b>, the raw score the model outputs. Scores are not yet probabilities; the next steps turn them into a choice.',
-        3: 'logits: Float[Tensor, "d_vocab"], one per vocabulary item (50,257 in GPT-2; 8 here). Toy values, real maths from here on.' },
-      draw: function (ctx, t, l, W, H) {
+  var SC = [  // pass-2: scenes; captions live in the beats below
+    { name: 'the fortune-teller', start: 0, dur: 5, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         fortune(ctx, W / 2, L.top * .55, Math.min(W, H) * .14, (Math.sin(t * 5) + 1) / 2, 'which word, and why?', ramp(l, .4, 2));
         var g = ramp(l, 1.2, 3); lanterns(ctx, LOG.map(function (v) { return lerp(-1.5, v, g); }), null, t, { showLogit: g > .95 }); sitEgg(ctx, t);
         sentence(ctx, ['The', 'cat', 'sat', 'on', 'the', '___'], H - 22, false);
       } },
-    { name: 'temperature', start: 5, dur: 6, cap: {
-        1: 'A <b>temperature</b> dial. Turn it down and the favourite lantern blazes while the rest go dark. Turn it up and every lantern glows about the same.',
-        2: 'Divide every logit by T, then softmax. Low T: nearly always the top word (safe, repetitive). High T: flatter, more surprising, more nonsense.',
-        3: 'p = softmax(logits / T). As T→0 this becomes argmax (greedy); T→∞ gives uniform. Entropy shown live, in bits (max 3 for 8 words).' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'temperature', start: 5, dur: 6, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         var T = l < 2.5 ? lerp(1, .3, ramp(l, .3, 2.2)) : l < 4.8 ? lerp(.3, 2.5, ramp(l, 2.5, 4.5)) : lerp(2.5, 1, ramp(l, 4.8, 5.8));
         var d = dist(LOG, T, 0, 0); lanterns(ctx, LOG, d, t); sitEgg(ctx, t);
@@ -141,22 +138,14 @@
         F.hand(ctx, 'cool', cx - r * 1.35, cy + r * .6, 13, P.sky, { seed: 'cool' }); F.hand(ctx, 'hot', cx + r * 1.3, cy + r * .6, 13, P.orange, { seed: 'hot' });
         readout(ctx, -1, cy + r + 12, [['T = ' + T.toFixed(2) + '   p(mat) = ' + d.p[0].toFixed(2), P.butter], ['entropy = ' + entropy(d.p).toFixed(2) + ' bits', P.chalk]], W);
       } },
-    { name: 'top-k', start: 11, dur: 4, cap: {
-        1: 'Rule one for avoiding nonsense: only keep the <b>top few</b> lanterns. Here, the best 3. The rest are snipped off and their share goes to the survivors.',
-        2: '<b>Top-k</b>: keep the k highest-probability words, set the rest to zero, renormalise. Simple, but k doesn\'t care whether the model is sure or unsure.',
-        3: 'sample_top_k(logits, k): topk → sample among those k. With k=3 at T=1: p(mat) rises from ' + dist(LOG, 1, 0, 0).p[0].toFixed(2) + ' to ' + dist(LOG, 1, 3, 0).p[0].toFixed(2) + '.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'top-k', start: 11, dur: 4, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         var d = ramp(l, .8, 1.6) > .5 ? dist(LOG, 1, 3, 0) : dist(LOG, 1, 0, 0); lanterns(ctx, LOG, d, t); sitEgg(ctx, t);
         var sx = lerp(lx(2.5) - 10, lx(2.5), ramp(l, 0, .8)); ctx.save(); ctx.strokeStyle = P.red; ctx.setLineDash([6, 6]); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(sx, L.base - L.hmax - 20); ctx.lineTo(sx, L.base + 36); ctx.stroke(); ctx.restore();
         lbl(ctx, 'k = 3 ✂', sx, L.base - L.hmax - 34, P.red, 16);
         readout(ctx, -1, L.top * .3, [['top-k, k = 3', P.butter], ['kept: ' + VOC.filter(function (w, i) { return d.keep[i]; }).join(', '), P.chalk]], W);
       } },
-    { name: 'top-p', start: 15, dur: 4, cap: {
-        1: 'Rule two is smarter: keep lanterns until together they hold <b>90%</b> of the light. When the egg is sure, that\'s very few words; when it\'s unsure, many.',
-        2: '<b>Top-p</b> (nucleus): sort by probability, keep the smallest set whose total reaches p = 0.9, renormalise. The ribbon below adds up the shares.',
-        3: 'sample_top_p: sort, cumsum, keep up to and including the token that crosses p. Cumulative here: ' + (function () { var d = dist(LOG, 1, 0, 0), c = 0; return d.idx.slice(0, 5).map(function (i) { c += d.raw[i]; return c.toFixed(2); }).join(', '); })() + ' → 5 kept.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'top-p', start: 15, dur: 4, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         var d0 = dist(LOG, 1, 0, 0), d = ramp(l, 2, 2.6) > .5 ? dist(LOG, 1, 0, .9) : d0; lanterns(ctx, LOG, d, t); sitEgg(ctx, t);
         // the cumulative ribbon
@@ -168,11 +157,7 @@
         F.hand(ctx, 'p = 0.9', px90, ry + rh + 16, 12, P.red, { seed: 'p90' });
         readout(ctx, -1, ry + rh + 34, [['top-p = 0.9 → keep ' + d.keep.filter(Boolean).length + ' of 8', P.butter]], W);
       } },
-    { name: 'pick one', start: 19, dur: 4, cap: {
-        1: 'Now a paper plane is thrown at the lanterns, and wherever it lands is the word. This time it lands on <b>"sofa"</b>, not the favourite. That\'s what sampling means.',
-        2: 'Draw a random number u in [0,1) and walk along the ribbon until the running total passes u. Here u = ' + U_FILM + ', which lands on "sofa". Beep!',
-        3: 'Inverse-CDF sampling from the top-p distribution (torch.distributions.Categorical / multinomial). Greedy would always say "mat"; sampling keeps text varied.' },
-      draw: function (ctx, t, l, W, H, api) {
+    { name: 'pick one', start: 19, dur: 4, draw: function (ctx, t, l, W, H, api) {
         lay(W, H); bg(ctx, W, H, t);
         var d = dist(LOG, 1, 0, .9), pick = draw(d, U_FILM), landed = l > 2; lanterns(ctx, LOG, d, t, { pick: landed ? pick : -1 }); sitEgg(ctx, t, landed && l < 3);
         var tx = lx(pick), ty = L.base - (LOG[pick] + 1.5) / 6 * L.hmax - 10, fp = ramp(l, .3, 2);
@@ -183,11 +168,7 @@
         readout(ctx, -1, L.top * .3, [['u = ' + U_FILM.toFixed(2), P.butter], ['cumulative: ' + cum.toFixed(2) + ' < u < ' + (cum + d.p[pick]).toFixed(2), P.chalk], ['→ "' + VOC[pick] + '"', P.mint]], W);
         sentence(ctx, ['The', 'cat', 'sat', 'on', 'the', landed ? VOC[pick] : '___'], H - 22, landed);
       } },
-    { name: 'KV cache', start: 23, dur: 7, cap: {
-        1: 'To pick the <b>next</b> word the egg would have to re-read the whole sentence. Instead it keeps a recipe box of index cards, one per word it has already read, and only writes one new card each time.',
-        2: 'The <b>KV cache</b> stores every past token\'s keys and values. A new token computes only its own q, k, v and reads the old cards: one step per word, not a full re-read.',
-        3: 'Without a cache, generating n tokens recomputes K,V for 1+2+…+n positions (O(n²)); with it, n. Attention still reads all cached rows, so memory grows with context.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'KV cache', start: 23, dur: 7, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         var words = ['The', 'cat', 'sat', 'on', 'the', 'sofa', 'and', 'purred'], n = 5 + Math.min(3, Math.floor(ramp(l, .5, 5.5) * 3.999));
         sentence(ctx, words.slice(0, n), H * .08, true);
@@ -204,19 +185,17 @@
         readout(ctx, -1, by + cardH * 1.55, [['new words so far: ' + gen, P.butter], ['K,V rows computed', P.chalk], ['  re-read everything: ' + noCache, P.pink], ['  with the card box:  ' + cache, P.mint]], W);
         egg(ctx, W / 2, L.base - 10, Math.min(W, H) * .08, t, 0);
       } },
-    { name: 'open the hood', start: 30, dur: 7, cap: {
-        1: 'Now the fun part: a plumber opens the egg. Inside is a long pipe (the notebook from last week) with <b>brass taps</b> where each part pours in. One camera flash photographs everything flowing through.',
-        2: '<b>TransformerLens</b> gives every internal activation a name and a hook point. <b>run_with_cache</b> runs the model once and keeps a photo of every activation.',
-        3: 'logits, cache = model.run_with_cache(tokens); cache["blocks.0.attn.hook_pattern"] etc. utils.get_act_name("pattern", 0) builds the same name.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'open the hood', start: 30, dur: 7, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         var op = ramp(l, 0, 1.5); ctx.save(); ctx.globalAlpha = 1 - op; egg(ctx, W / 2, L.top, Math.min(W, H) * .12, t, op); ctx.restore();
         plumbing(ctx, t, null, op);
         // the plumber with a disposable camera
-        var ps = Math.min(44, W * .1), cxp = W * (L.por ? .22 : .3), cyp = L.base + 10; F.person(ctx, cxp, cyp, ps, t, { coat: P.sky, scarf: P.red, lantern: false, walk: l < 2 });
-        F.paper(ctx, cxp + ps * .7, cyp - ps * 1.05, ps * .8, ps * .5, '#e8e2d2', { seed: 'cam', rot: -.1 }); ctx.fillStyle = P.ink; ctx.beginPath(); ctx.arc(cxp + ps * .75, cyp - ps * 1.05, ps * .14, 0, 6.283); ctx.fill();
-        if (l > 2.3 && l < 3) F.glow(ctx, cxp + ps * .75, cyp - ps * 1.05, ps * 2.5, 'rgba(255,255,255,.95)', 1 - ramp(l, 2.5, 3));
-        F.hand(ctx, 'click!', cxp + ps * 1.6, cyp - ps * 1.8, 16, P.butter, { seed: 'click', outline: 3, outlineColor: 'rgba(20,20,50,.8)', reveal: ramp(l, 2.4, 2.8) });
+        // pass 2: the plumber walks in, raises the camera (anticipation), flinches at the flash, points at the photos
+        var ps = Math.min(44, W * .1), cxp = lerp(-ps, W * (L.por ? .22 : .3), ramp(l, 0, 1.8)), cyp = L.base + 10, cam = { x: cxp + ps * .75, y: cyp - ps * 1.05 };
+        F.person(ctx, cxp, cyp, ps, t, act(l, [[0, 'walk'], [1.8, 'reach'], [2.6, 'recoil'], [3.4, 'point']], { coat: P.sky, scarf: P.red, lantern: false, look: { x: W / 2, y: L.top * .95 },
+          hold: l < 3.4 ? function (c, hx, hy) { cam = { x: hx, y: hy }; F.paper(c, hx + ps * .12, hy - ps * .05, ps * .46, ps * .3, '#e8e2d2', { seed: 'cam', rot: -.1, shadow: false }); c.fillStyle = P.ink; c.beginPath(); c.arc(hx + ps * .16, hy - ps * .05, ps * .08, 0, 6.283); c.fill(); } : null }));
+        if (l > 2.3 && l < 3) F.glow(ctx, cam.x, cam.y, ps * 2.5, 'rgba(255,255,255,.95)', 1 - ramp(l, 2.5, 3));
+        F.hand(ctx, 'click!', cam.x + ps * .9, cam.y - ps * .8, 16, P.butter, { seed: 'click', outline: 3, outlineColor: 'rgba(20,20,50,.8)', reveal: ramp(l, 2.4, 2.8) });
         var flash = l > 2.5 && l < 2.8; if (flash) { ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.fillRect(0, 0, W, H); }
         var names = [['hook_embed', '(1, 6, 768)'], ['blocks.0.hook_resid_pre', '(1, 6, 768)'], ['blocks.0.attn.hook_pattern', '(1, 12, 6, 6)'], ['blocks.0.attn.hook_z', '(1, 6, 12, 64)'], ['blocks.1.hook_resid_post', '(1, 6, 768)']];
         var pw = Math.min(W * .8, 360), ph = W < 500 ? 36 : 42;
@@ -225,34 +204,22 @@
           F.hand(ctx, nm[0], W / 2 - pw / 2 + 12, y - 6, W < 500 ? 11 : 13, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .2, seed: nm[0] });
           F.hand(ctx, nm[1], W / 2 + pw / 2 - 12, y + 9, 11, '#6b5a9a', { align: 'right', font: F.MONO, bold: false, wobble: .2, seed: nm[1] }); ctx.restore(); });
       } },
-    { name: 'close a tap', start: 37, dur: 8, cap: {
-        1: 'The plumber closes one tap, the head that loves rhymes (cat → mat, hat). Run the egg again: "mat" and "hat" dim, and <b>"sofa"</b> becomes the favourite.',
-        2: 'A <b>hook</b> is a tiny function that edits an activation mid-run. Zeroing head L1H3\'s output removes its contribution to the logits; the probabilities shift live.',
-        3: 'Ablation: fn(z, hook): z[:, :, 3, :] = 0 on blocks.1.attn.hook_z. Here the head\'s direct effect is +0.9 on mat and hat: p(mat) ' + softmax(LOG)[0].toFixed(2) + ' → ' + softmax(logitsWith([0, 0, 0, 1]))[0].toFixed(2) + '.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'close a tap', start: 37, dur: 8, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         var k = ramp(l, 1.5, 3.5), off = [0, 0, 0, k > .5 ? 1 : 0];
         var lg = LOG.map(function (v, i) { return v - HEADS[3].c[i] * k; }), d = { p: softmax(lg), keep: lg.map(function () { return true; }) };
         var hx = plumbing(ctx, t, off, 1); lanterns(ctx, lg, d, t);
-        if (l > .5 && l < 3) { var p = hx[3]; F.person(ctx, p[0] + 34, p[1] + 34, Math.min(30, W * .08), t, { coat: P.sky, scarf: P.red, lantern: false, face: -1 }); }
+        if (l > .3 && l < 4.6) { var p = hx[3]; ctx.save(); ctx.globalAlpha = 1 - ramp(l, 4, 4.6); F.person(ctx, p[0] + 38, p[1] + 44, Math.min(38, W * .09), t, act(l, [[.3, 'reach'], [1.3, 'pull'], [2.8, 'point']], { coat: P.sky, scarf: P.red, lantern: false, face: -1, look: { x: p[0], y: p[1] } })); ctx.restore(); }
         readout(ctx, -1, L.top * 1.4, [['head L1H3 (' + HEADS[3].what + '): ' + (k > .5 ? 'ZEROED' : 'on'), k > .5 ? P.red : P.butter], ['p(mat) ' + d.p[0].toFixed(2) + '   p(sofa) ' + d.p[1].toFixed(2) + '   p(hat) ' + d.p[5].toFixed(2), P.chalk]], W);
       } },
-    { name: 'where it stops being true', start: 45, dur: 5, cap: {
-        1: 'Honest bit: closing a tap only lasts for <b>one run</b>. The egg itself isn\'t rewired; next time, the tap is open again unless you close it again.',
-        2: 'A hook edits activations during a single forward pass. The weights are untouched: remove the hook and the model is exactly as before. (Real heads also mix many jobs, not one tidy one.)',
-        3: 'model.reset_hooks() / the hooks context manager. Ablations measure causal effects of activations; changing behaviour permanently needs weight edits or fine-tuning.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'where it stops being true', start: 45, dur: 5, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         var reopen = ramp(l, .3, 1.2) > .5; plumbing(ctx, t, [0, 0, 0, reopen ? 0 : 1], 1); lanterns(ctx, LOG, { p: softmax(reopen ? LOG : logitsWith([0, 0, 0, 1])), keep: LOG.map(function () { return true; }) }, t);
         var p = ramp(l, 1, 2); F.cornerFlip(ctx, W, H, p, P.cream);
         if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 1.8, 2.6); var sz = W < 500 ? 14 : 18, x = W - Math.min(W, H) * .32, y = H - Math.min(W, H) * .22;
           F.hand(ctx, 'one run only:', x, y - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'weights untouched', x + sz * .8, y, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
       } },
-    { name: 'the code', start: 50, dur: 7, cap: {
-        1: 'Everything you just watched is a few lines of code: the dial, the snipping, and the plumber\'s tap.',
-        2: 'You\'ll write the sampler in [1.1] and use hooks all through [1.2] Intro to Mech Interp.',
-        3: 'ARENA [1.1] TransformerSampler: apply_temperature, sample_top_k, sample_top_p. [1.2]: run_with_cache, run_with_hooks(tokens, fwd_hooks=[(name, fn)]).' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the code', start: 50, dur: 7, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         ctx.save(); ctx.globalAlpha = .35; lanterns(ctx, LOG, dist(LOG, 1, 0, .9), t); ctx.restore();
         var sz = W < 500 ? 12 : 17, cards = [
@@ -270,11 +237,7 @@
           ctx.restore(); y += h + 12;
         });
       } },
-    { name: 'why it matters', start: 57, dur: 4, cap: {
-        1: 'Once you can open the taps, you can do more than watch. A hook is the first steering wheel.',
-        2: 'A hook is the first steering wheel: the same tool that zeroes a head can add a direction to the residual stream and nudge what the model says.',
-        3: 'Activation patching (week 7), SAEs (week 8) and steering vectors (week 9) are all hooks: read an activation, or write one, at a named point.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'why it matters', start: 57, dur: 4, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t); plumbing(ctx, t, null, .5);
         var s = Math.min(W, H) * .16, cx = W / 2, cy = H * .52, rot = Math.sin(t * 1.5) * .3;
         ctx.save(); ctx.translate(cx, cy); ctx.rotate(rot); ctx.strokeStyle = '#c99a3c'; ctx.lineWidth = s * .14; ctx.beginPath(); ctx.arc(0, 0, s, 0, 6.283); ctx.stroke();
@@ -283,6 +246,61 @@
         ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'a hook is the first\nsteering wheel', W / 2, H * .82, W < 500 ? 18 : 24, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore();
       } }
   ];
+
+  /* ---------------- pass 2: caption beats ----------------
+     beat(scene, from, to, dur, need, cap): plays scene seconds [from, to], then holds the last frame for the rest of dur.
+     need: core | exercise | library | contested */
+  function beat(c, from, to, dur, need, cap, name) {
+    return { name: name || c.name, dur: dur, need: need, cap: cap, draw: function (ctx, t, l, W, H, api) { BT.g0 = t - l; BT.from = from; return c.draw.call(c, ctx, t, from + Math.min(l, to - from), W, H, api); } };
+  }
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  var CUM5 = (function () { var d = dist(LOG, 1, 0, 0), c = 0; return d.idx.slice(0, 5).map(function (i) { c += d.raw[i]; return c.toFixed(2); }).join(', '); })();
+  var chapters = seq([
+    beat(SC[0], 0, 5, 7, 'core', {
+      1: 'The mind egg has read "The cat sat on the…" and must <b>pick one word</b>. Each candidate is a lantern on a pole: the taller the pole, the more the egg likes that word.',
+      2: 'Pole height = the word\'s <b>logit</b>: a raw score of any size, even negative. Scores are not chances yet. The next steps turn them into probabilities, then into one choice.',
+      3: '<code>logits: [batch, seq, d_vocab]</code>; to pick the next word use the last position, <code>logits[0, -1]</code>: 50,257 numbers in GPT-2, 8 here. Toy values, real maths.' }),
+    beat(SC[1], 0, 6, 8, 'core', {
+      1: 'A <b>temperature</b> dial. Turn it down and the favourite lantern blazes while the rest go dark. Turn it up and every lantern glows about the same. Same scores, different boldness.',
+      2: 'Divide every logit by T, then softmax. <b>Why divide?</b> After e^, score gaps become ratios: shrink the gaps (T > 1) and chances even out; stretch them (T < 1) and the top word dominates.',
+      3: '<code>apply_temperature</code> is just <code>logits / temperature</code>, then softmax. T → 0 is argmax (greedy), T → ∞ is uniform. Entropy is shown live, in bits (max log₂ 8 = 3).' }),
+    beat(SC[2], 0, 4, 7, 'exercise', {
+      1: 'Rule one against nonsense: keep only the <b>top few</b> lanterns, here the best 3. The rest are snipped off, and their share of the light goes to the survivors.',
+      2: '<b>Top-k</b>: keep the k most likely words, zero the rest, renormalise so they sum to 1. Simple, but k stays the same whether the model is sure or unsure.',
+      3: '<code>sample_top_k(logits, k)</code>: <code>t.topk</code>, then sample among those k. k = 3, T = 1: p(mat) ' + dist(LOG, 1, 0, 0).p[0].toFixed(2) + ' → ' + dist(LOG, 1, 3, 0).p[0].toFixed(2) + '. Written once; later it is an argument to <code>generate</code>.' }),
+    beat(SC[3], 0, 4, 8, 'exercise', {
+      1: 'Rule two adapts: keep lanterns, brightest first, until together they hold <b>90%</b> of the light. When the egg is sure that is a few words; when it is unsure, many.',
+      2: '<b>Top-p</b> (nucleus): sort by probability, keep the smallest set whose total reaches p = 0.9, renormalise. The ribbon adds up the shares; the red line marks 0.9.',
+      3: '<code>sample_top_p</code>: sort, <code>cumsum</code>, keep up to and including the token that crosses p. Cumulative here: ' + CUM5 + ' → 5 kept.' }),
+    beat(SC[4], 0, 4, 8, 'core', {
+      1: 'A paper plane is thrown at the lanterns and wherever it lands is the word. This time <b>"sofa"</b>, not the favourite. That is sampling: likely words win often, not always.',
+      2: 'Draw a random u between 0 and 1, walk along the ribbon until the running total passes u. Here u = ' + U_FILM + ' lands on "sofa". <b>Why random?</b> Always taking the top word gives dull, loopy text.',
+      3: 'Inverse-CDF sampling, i.e. <code>t.distributions.Categorical(probs).sample()</code>: a library call. Greedy (<code>argmax</code>) would always say "mat".' }),
+    beat(SC[5], 0, 7, 8, 'library', {
+      1: 'To write the <b>next</b> word the egg would re-read the whole sentence. Instead it keeps a card box, one card per word read, adding one card per step. Same trade as a browser cache.',
+      2: 'The <b>KV cache</b> stores past tokens\' keys and values. They never change (old words can\'t see new ones), so each step computes only the new token. A speed trick, same outputs.',
+      3: 'No cache: n tokens recompute K, V for 1+2+…+n positions (O(n²)); cached: n. Memory grows with context. ARENA marks it optional; in practice it is a library feature.' }),
+    beat(SC[6], 0, 7, 8, 'core', {
+      1: 'A plumber opens the egg. Inside is a long pipe (last week\'s notebook) with a labelled <b>tap</b> wherever a part pours in. One camera flash photographs every tap at once.',
+      2: '<b>TransformerLens</b> names every internal activation and gives it a hook point. <b>run_with_cache</b> runs the model once and keeps a photo of every activation, ready to read.',
+      3: '<code>logits, cache = model.run_with_cache(tokens)</code>; <code>cache["blocks.0.attn.hook_pattern"]</code> = <code>cache["pattern", 0]</code>. You will use these names and shapes all course.' }),
+    beat(SC[7], 0, 8, 9, 'core', {
+      1: 'The plumber closes one tap: the head that loves rhymes (cat → mat, hat). Run the egg again: "mat" and "hat" dim, and <b>"sofa"</b> becomes the favourite.',
+      2: 'A <b>hook</b> is a tiny function run mid-pass that can edit an activation. Zero head L1H3 and its push on the logits vanishes. <b>Why?</b> Change one thing, watch the effect: an experiment.',
+      3: 'Ablation: <code>z[:, :, 3, :] = 0</code> at <code>blocks.1.attn.hook_z</code> via <code>run_with_hooks</code>. This head adds +0.9 to mat and hat: p(mat) ' + softmax(LOG)[0].toFixed(2) + ' → ' + softmax(logitsWith([0, 0, 0, 1]))[0].toFixed(2) + '.' }),
+    beat(SC[8], 0, 5, 8, 'core', {
+      1: 'Honest bit: closing a tap lasts for <b>one run</b>. The egg is not rewired; next time the tap is open again. And real heads rarely have one tidy job like "rhymes".',
+      2: 'A hook edits activations during one forward pass; the weights are untouched. Remove it and the model is exactly as before. Real heads usually mix several jobs.',
+      3: '<code>model.reset_hooks()</code> or the hooks context manager. An ablation measures what an activation causes; lasting change needs weight edits or fine-tuning.' }, 'one run only'),
+    beat(SC[9], 0, 7, 8, 'exercise', {
+      1: 'Everything you just watched is a few lines of code: the dial, the snipping, and the plumber\'s tap.',
+      2: 'You write the sampler once in [1.1]; after that it is arguments to <code>generate</code>. Hooks are different: you will use them through [1.2] and every week after.',
+      3: 'ARENA [1.1] <code>TransformerSampler</code>: apply_temperature, sample_top_k, sample_top_p. [1.2]: <code>run_with_cache</code>, <code>run_with_hooks(tokens, fwd_hooks=[(name, fn)])</code>.' }),
+    beat(SC[10], 0, 4, 6, 'core', {
+      1: 'Once you can open the taps, you can do more than watch: a hook is the first steering wheel. <b>Ask yourself:</b> if closing a tap changes the answer, does that tap "know" rhymes?',
+      2: 'The same tool that zeroes a head can <b>add</b> a direction to the residual stream and nudge what the model says. Hooks are how you read and write a model\'s insides.',
+      3: 'Probes and steering (week 7), patching and SAEs (week 8), persona vectors (week 12): all hooks that read an activation, or write one, at a named point.' })
+  ]);
 
   /* ---------------- coda: now you drive ---------------- */
   var C = { T: 1, mode: 'p', k: 3, p: .9, off: [0, 0, 0, 0], words: ['The', 'cat', 'sat', 'on', 'the'], pick: -1, hx: [] };

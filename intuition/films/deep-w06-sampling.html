@@ -82,6 +82,11 @@
   var f2 = function (v) { return Math.abs(v) < .005 ? '0.00' : v.toFixed(2); };
   function human(n) { return n >= 1e9 ? (n / 1e9).toFixed(1) + ' GFLOP' : (n / 1e6).toFixed(0) + ' MFLOP'; }
 
+  /* pass 2: acting. BT is set by the beat wrapper; at(x) = global time when scene time x happened. */
+  var BT = { g0: 0, from: 0 };
+  function at(x) { return BT.g0 + (x - BT.from); }
+  function act(l, keys, o) { var k = null, prev = 'idle'; keys.forEach(function (e) { if (l >= e[0]) { if (k) prev = k[1]; k = e; } }); o = o || {}; if (!k) return o; o.pose = k[1]; o.t0 = at(k[0]); o.from = prev; return o; }
+
   /* ================= drawing helpers ================= */
   function lay(W, H) { var ph = W < 560; return { ph: ph, fs: ph ? 12 : 15, pad: ph ? 14 : 40 }; }
   function bg(ctx, W, H, t, warm) { F.sky(ctx, W, H, P.night, warm ? '#3b3466' : '#2b2f5c'); F.stars(ctx, W, H, t, 'dw6', 36); }
@@ -170,12 +175,8 @@
   }
 
   /* ================= chapters ================= */
-  var chapters = [
-    { name: 'the fortune-teller', start: 0, dur: 16, cap: {
-        1: 'The mind egg is writing: <b>"...wrote a ___"</b>. Ten words hang as lanterns, each as tall as the model\'s score for it. A paper fortune-teller asks: <b>which word, at what cost?</b>',
-        2: 'The model outputs <b>logits</b>, one per vocab word. <b>softmax</b> turns them into probabilities that sum to 1. <b>Temperature</b> divides the logits first: low T sharpens, high T flattens.',
-        3: 'ARENA\'s <code>TransformerSampler.sample_next_token</code> calls <code>apply_temperature(logits, temperature)</code> which is just <code>logits / temperature</code>, then the chosen sampler. Real d_vocab is 50257; we show 10.' },
-      draw: function (ctx, t, l, W, H) {
+  var SC = [  // pass-2: scenes; captions live in the beats below
+    { name: 'the fortune-teller', start: 0, dur: 16, draw: function (ctx, t, l, W, H) {
         var Ly = lay(W, H); bg(ctx, W, H, t);
         var T = l < 6 ? 1 : l < 10 ? lerp(1, .4, ramp(l, 6, 9)) : lerp(.4, 1.8, ramp(l, 10, 14));
         var pr = softmax(withT(LOGITS, T)), x = Ly.pad, w = W - 2 * Ly.pad, h = Ly.ph ? H * .34 : H * .42, y = Ly.ph ? 96 : 110;
@@ -189,11 +190,7 @@
           mono(ctx, 'p[story] = ' + pr[0].toFixed(3) + '   sum = ' + pr.reduce(function (a, b) { return a + b; }, 0).toFixed(3), Ly.pad, ty + Ly.fs * 3.6, Ly.fs, P.mint);
         });
       } },
-    { name: 'nucleus, live', start: 16, dur: 24, cap: {
-        1: 'Top-p trims the tail. Line the lanterns up tallest first, and pour their light into a jar one by one. Stop the moment the jar reaches <b>p = 0.90</b>. Everything after that line is cut, and the survivors share the light again.',
-        2: '<b>Nucleus (top-p) sampling</b>: sort probabilities, take the cumulative sum, keep the smallest set whose sum reaches top_p, renormalise, sample. Unlike <b>top-k</b>, the size of the set adapts: a confident model keeps 2 words, an unsure one keeps 8.',
-        3: '<code>sample_top_p(logits, top_p, min_tokens_to_keep=1)</code>: <code>logits.sort(descending=True)</code>, <code>probs.cumsum(-1)</code>, <code>t.searchsorted(cumsum, top_p, side="left")</code> gives n_keep. Compare <code>sample_top_k(logits, k)</code> with <code>t.topk</code>.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'nucleus, live', start: 16, dur: 24, draw: function (ctx, t, l, W, H) {
         var Ly = lay(W, H); bg(ctx, W, H, t);
         var T = l < 15 ? 1 : lerp(1, l < 19.5 ? .55 : 1.6, ramp(l, l < 19.5 ? 15 : 19.5, l < 19.5 ? 18 : 22.5));
         var pr = softmax(withT(LOGITS, T)), N = nucleus(pr, .9), cutP = ramp(l, 8, 10);
@@ -232,11 +229,7 @@
           mono(ctx, 'top-k (k=3) would keep 3 whatever T is: story ' + k3[0].toFixed(2), Ly.pad, ty + Ly.fs * 3.4, Ly.fs - 2, '#b8b2d4');
         });
       } },
-    { name: 'greedy vs beam', start: 40, dur: 26, cap: {
-        1: 'Two words to write. <b>Greedy</b> grabs the brightest lantern each step and never looks back. A <b>beam</b> of paper planes keeps the best two paths alive, adding up how likely each whole path is, and tears off the weak ones.',
-        2: '<b>Greedy</b> = argmax each step (T → 0 is the same thing). <b>Beam search</b> keeps num_beams partial sequences ranked by <b>summed log-probs</b>. log(p1·p2) = log p1 + log p2, so adding logs is multiplying probabilities without underflow.',
-        3: 'ARENA\'s <code>greedy_search(logits)</code> is <code>logits.argmax()</code>. <code>beam_search(input_text, num_beams, num_return_sequences, max_new_tokens, no_repeat_ngram_size)</code> keeps a <code>Beams</code> object of tokens and logprob_sums, and <code>generate</code> + <code>filter</code> each step.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'greedy vs beam', start: 40, dur: 26, draw: function (ctx, t, l, W, H) {
         var Ly = lay(W, H); bg(ctx, W, H, t, true); maybeAsk(t, 46);
         var greedyP = ramp(l, 1, 4), beamP = ramp(l, 8, 12), tear = ramp(l, 13, 15);
         var top2words = ['a', 'the'];
@@ -259,11 +252,7 @@
           F.note(ctx, lead + 'beam wins, p = ' + Math.exp(BEAMS[0].lp).toFixed(2) + ' vs ' + Math.exp(GREEDY.lp).toFixed(2) + '\nthe best first word was not on the best path', W / 2, Math.min(ty + sz * 5, H - 34), Ly.ph ? 11 : 15, { color: P.butter, seed: 'bw', font: F.MONO, rot: -.01 });
         });
       } },
-    { name: 'the card box (KV cache)', start: 66, dur: 26, cap: {
-        1: 'Every time the egg writes a new word, it used to reread the whole story from the start. Now it keeps a card box: each old word\'s <b>key</b> and <b>value</b> cards stay filed. A new word only makes its own two cards and reads the box.',
-        2: 'Keys and values of past tokens never change (causal mask), so we <b>cache</b> them. Per step we run only the new token through the dense layers: cost goes from ~n × 170M FLOPs to ~170M FLOPs. The price is memory: the cache grows by 2 × n_layers × d_model numbers per token.',
-        3: 'Counted for GPT-2 small (d_model 768, n_layers 12, d_mlp 3072), 2 FLOPs per multiply-add, ignoring LayerNorm and unembed. Logits are identical: attention for the new query only needs <code>k = t.cat([past_k, k_new], dim=1)</code> and the same for v.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the card box (KV cache)', start: 66, dur: 26, draw: function (ctx, t, l, W, H) {
         var Ly = lay(W, H); bg(ctx, W, H, t);
         var step = Math.max(1, Math.min(20, Math.floor(ramp(l, 1, 16) * 20) + 1));
         var x = Ly.pad, w = W - 2 * Ly.pad, y = Ly.ph ? 30 : 40, h = Ly.ph ? H * .3 : H * .36, mx = flopsNoCache(20), bw = w / 20;
@@ -289,11 +278,7 @@
           F.note(ctx, 'same answer either way: max |z_full - z_cached| = ' + (maxDiff === 0 ? '0 (bit-identical)' : maxDiff.toExponential(1)) + '\nk = t.cat([past_k, k_new], dim=1)', W / 2, Math.min(my + (Ly.ph ? 84 : 96), H - 30), Ly.ph ? 10 : 14, { color: P.butter, seed: 'kvn', font: F.MONO, rot: .01 });
         });
       } },
-    { name: 'the plumbing museum', start: 92, dur: 18, cap: {
-        1: 'A plumber arrives. The model is a museum of pipes, and every joint has a labelled <b>tap</b>. One flash of the camera photographs the water at every tap at once.',
-        2: '<b>TransformerLens</b> wraps GPT-2 as a <b>HookedTransformer</b>. Every activation passes through a named <b>HookPoint</b>. <code>run_with_cache</code> runs the model once and returns logits plus an <b>ActivationCache</b> of every hook\'s value.',
-        3: '<code>logits, cache = model.run_with_cache(tokens)</code>; <code>cache["blocks.0.attn.hook_pattern"]</code> is <code>(1, 12, 35, 35)</code> for 35 tokens, same as <code>cache["pattern", 0]</code> via <code>utils.get_act_name</code>. <code>hook_z</code> is <code>(1, 35, 12, 64)</code>.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the plumbing museum', start: 92, dur: 18, draw: function (ctx, t, l, W, H) {
         var Ly = lay(W, H); bg(ctx, W, H, t);
         var taps = ['hook_embed', 'blocks.0.hook_resid_pre', 'blocks.0.attn.hook_pattern', 'blocks.0.attn.hook_z', 'blocks.0.hook_resid_post', 'ln_final.hook_normalized'];
         var shapes = ['(1, 35, 768)', '(1, 35, 768)', '(1, 12, 35, 35)', '(1, 35, 12, 64)', '(1, 35, 768)', '(1, 35, 768)'];
@@ -317,13 +302,11 @@
           mono(ctx, 'logits, cache = model.run_with_cache(tokens)', Ly.pad, cy, Ly.fs - (Ly.ph ? 1.5 : 0), P.mint);
           mono(ctx, 'cache["blocks.0.attn.hook_pattern"].shape', Ly.pad, cy + Ly.fs * 1.7, Ly.fs - (Ly.ph ? 1.5 : 0), P.butter);
         });
-        if (!Ly.ph) F.person(ctx, W / 2 + 330, H * .45, 60, t, { color: P.sky });
+        // pass 2: the plumber walks in, points at the taps, flinches at the flash, then cheers at the photos
+        if (!Ly.ph) F.paper(ctx, W / 2 + 330, H * .45 + 6, 150, 12, '#454a86', { seed: 'ledge', shadow: false });
+        if (!Ly.ph) F.person(ctx, lerp(W + 40, W / 2 + 330, ramp(l, 0, 2.2)), H * .45, 60, t, act(l, [[0, 'walk'], [2.2, 'point'], [9.2, 'recoil'], [10.6, 'cheer'], [13, 'idle']], { color: P.sky, face: -1, lantern: false, look: { x: px, y: top + gap * 2 } }));
       } },
-    { name: 'close a tap', start: 110, dur: 20, cap: {
-        1: 'The plumber closes one tap: head 2 of layer 0, the one that keeps whispering "story". The water still flows everywhere else. Watch the lanterns redistribute, and the model get a little worse at predicting "story".',
-        2: 'A <b>hook function</b> receives the activation and the hook, and returns an edited one. We zero head 2 of <code>hook_z</code> and call <code>run_with_hooks</code>. Only this forward pass changes. The <b>loss</b> on the true next word, story, rises from ' + L0.toFixed(2) + ' to ' + LZ.toFixed(2) + '.',
-        3: 'Toy: each head adds a direct contribution to the logits, so zeroing its <code>z[:, :, 2, :]</code> removes exactly that. Real heads feed later layers too, so effects compound. ARENA: <code>fwd_hooks=[("blocks.1.attn.hook_pattern", hook_function)]</code>, <code>return_type="loss"</code>.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'close a tap', start: 110, dur: 20, draw: function (ctx, t, l, W, H) {
         var Ly = lay(W, H); bg(ctx, W, H, t, true);
         var z = ramp(l, 6, 9), lg = LOGITS.map(function (v, i) { return v - z * HEADS[2].c[i]; }), pr = softmax(lg), loss = lossOf(lg);
         var hx = Ly.pad, hw = W - 2 * Ly.pad, hy = Ly.ph ? 28 : 40, cw = hw / 4;
@@ -333,6 +316,9 @@
           txt(ctx, h.name + (off ? ' 0' : ''), hx + cw * (i + .5), hy + 16, Ly.ph ? 13 : 16, off ? P.chalk : P.ink, { seed: 'hn' + i + off });
         });
         if (l > 3 && l < 9) { F.arrow(ctx, W / 2 + (Ly.ph ? 40 : 60), hy + 90, hx + cw * 2.5, hy + 36, P.red, 3, 'wr'); txt(ctx, 'close this tap', W / 2 + (Ly.ph ? 40 : 60), hy + 104, Ly.ph ? 13 : 16, P.red, { seed: 'ct' }); }
+        // pass 2: the plumber reaches for the tap, turns it (pull) as the head is zeroed, then points at the lanterns
+        var pxp = Ly.ph ? hx + cw * 3.5 : hx + cw * 2.5 + cw * .3, pyp = hy + (Ly.ph ? 100 : 104);
+        F.person(ctx, pxp, pyp, Ly.ph ? 34 : 42, t, act(l, [[0, 'walk'], [2, 'reach'], [5.6, 'pull'], [9.5, 'point'], [13, 'shrug']], { color: P.sky, face: -1, look: { x: hx + cw * 2.5, y: hy + 16 }, lantern: false }));
         var y = hy + (Ly.ph ? 120 : 140), h = Ly.ph ? H * .26 : H * .32;
         lanterns(ctx, Ly.pad, y, hw, h, pr, { t: t, max: .6, hi: 0, col: function (i) { return pr[i] > P0[i] + .003 ? P.teal : pr[i] < P0[i] - .003 ? P.pink : P.butter; } });
         var ty = y + h + (Ly.ph ? 64 : 72);
@@ -340,11 +326,7 @@
         mono(ctx, 'loss = -log p[story] = ' + loss.toFixed(3) + (z > 0 ? '  (+' + (loss - L0).toFixed(3) + ')' : ''), Ly.pad, ty + Ly.fs * 1.7, Ly.fs, P.butter);
         alpha(ctx, ramp(l, 12, 13), function () { mono(ctx, 'weights untouched. next run: head 2 is back', Ly.pad, ty + Ly.fs * 3.4, Ly.fs - 1, P.mint); });
       } },
-    { name: 'your code', start: 130, dur: 20, cap: {
-        1: 'Where the story stops being true: the fortune-teller\'s scissors change <b>which</b> word comes out, not what the egg knows. Closing a tap changes <b>one run</b>, not the pipes. Hooks are the first steering wheel: see inside, then nudge.',
-        2: 'Sampling choices (T, top-k, top-p, beams, frequency penalty) change outputs, never knowledge. Hooks edit activations for a single forward pass; the weights are untouched. The same hook that reads can also add a steering vector: that is where activation steering begins.',
-        3: 'The code is your ARENA [1.1] sampling section and TransformerLens intro, trimmed. <code>apply_frequency_penalty</code> subtracts <code>freq_penalty × count</code> per already-used token; beam search adds <code>no_repeat_ngram_size</code>.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'your code', start: 130, dur: 20, draw: function (ctx, t, l, W, H) {
         var Ly = lay(W, H); bg(ctx, W, H, t);
         var sz = Ly.ph ? 9.6 : 13, w = Ly.ph ? W - 20 : Math.min(820, W - 80), x = (W - w) / 2;
         var A = ['def sample_top_p(logits, top_p, min_tokens_to_keep=1):',
@@ -370,6 +352,75 @@
         alpha(ctx, ramp(l, 13, 14), function () { F.note(ctx, 'changes the output, not the knowledge\nchanges one run, not the weights', W / 2, Math.min(ny + (Ly.ph ? 72 : 84), H - 34), Ly.ph ? 12 : 15, { color: P.butter, rot: .015, seed: 'stop' }); });
       } }
   ];
+
+  /* ================= pass 2: caption beats =================
+     Each scene is split into beats sharing its drawing; timings unchanged (predict pause stays at 46 s).
+     need: core | exercise | library | contested */
+  /* UPDATE 2: one small on-screen credit line when a beat borrows a framing (hub link in the coda) */
+  function credit(ctx, W, txt) { if (!txt) return; ctx.save(); ctx.globalAlpha = 1; ctx.font = '600 11px system-ui, -apple-system, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'top'; var w = ctx.measureText(txt).width; ctx.fillStyle = 'rgba(20,22,52,.7)'; ctx.fillRect(W - w - 17, 4, w + 12, 17); ctx.fillStyle = '#b9e3cc'; ctx.fillText(txt, W - 11, 7); ctx.restore(); }
+  function beat(c, from, to, need, cap, name, cr) {
+    return { name: name || c.name, dur: to - from, need: need, cap: cap, draw: function (ctx, t, l, W, H, api) { BT.g0 = t - l; BT.from = from; var r = c.draw.call(c, ctx, t, from + l, W, H, api); credit(ctx, W, cr); return r; } };
+  }
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  var NUC = function (T) { return nucleus(softmax(withT(LOGITS, T)), .9).n; };
+  var chapters = seq([
+    beat(SC[0], 0, 6, 'core', {
+      1: 'The mind egg is writing <b>"...wrote a ___"</b>. Ten words hang as lanterns, each as tall as its chance. A paper fortune-teller asks: <b>which word, at what cost?</b>',
+      2: 'The model outputs <b>logits</b>, one raw score per vocabulary word. <b>softmax</b> turns them into probabilities: e^score divided by the total, so all are positive and sum to 1.',
+      3: '<code>logits[0, -1]</code> is <code>[d_vocab]</code> for the next token (50,257 in GPT-2; 10 shown). <code>probs = logits.softmax(-1)</code>. Live p[story] = ' + P0[0].toFixed(3) + '.' }, 'scores to chances'),
+    beat(SC[0], 6, 16, 'core', {
+      1: 'Now the <b>temperature</b> knob. Cool: the favourite blazes, the rest fade. Hot: every lantern glows alike and odd words get a real chance. The scores never change.',
+      2: 'Divide the logits by <b>T</b> before softmax. <b>Why?</b> e^ turns score gaps into ratios: T < 1 stretches the gaps (bolder), T > 1 shrinks them (more random). T → 0 = always the top word.',
+      3: 'ARENA <code>apply_temperature(logits, temperature)</code> returns <code>logits / temperature</code>; <code>sample_next_token</code> then applies penalties and the chosen sampler.' }, 'temperature'),
+    beat(SC[1], 0, 10, 'exercise', {
+      1: 'Top-p trims the tail. Line the lanterns up tallest first and pour their light into a jar, one by one. Stop the moment the jar holds <b>p = 0.90</b>. The rest are cut.',
+      2: '<b>Nucleus (top-p)</b>: sort the probabilities, take the running total, keep the smallest set that reaches top_p, renormalise, sample. <b>Why?</b> It cuts the long tail of junk words.',
+      3: '<code>sample_top_p(logits, top_p, min_tokens_to_keep=1)</code>: <code>sort(descending=True)</code>, <code>softmax(-1).cumsum(-1)</code>, n_keep = <code>t.searchsorted(cumul, top_p) + 1</code>.' }, 'nucleus, live'),
+    beat(SC[1], 10, 24, 'exercise', {
+      1: 'The survivors share the light again. Now watch the temperature change: when the egg is sure the jar fills after ' + NUC(.55) + ' lanterns; when unsure it takes ' + NUC(1.6) + '. The cut adapts.',
+      2: 'After the cut, divide by the kept mass so the survivors sum to 1. Unlike <b>top-k</b> (always k words), top-p keeps few words when the model is confident and many when it is not.',
+      3: 'Renormalising is <code>p / p.sum()</code> (Categorical(logits=...) does it for you). <code>sample_top_k</code> uses <code>t.topk</code>. Later both are just arguments to <code>generate</code>.' }, 'top-p adapts'),
+    beat(SC[2], 0, 8, 'exercise', {
+      1: 'Two words to write. <b>Greedy</b> grabs the brightest lantern at each step and never looks back: "a", then "fish". Before the beam runs: which pair is more likely overall?',
+      2: '<b>Greedy</b> = argmax at every step: the T → 0 limit, and a beam of width 1. Fast and predictable, but short-sighted: the best first word can lead to a worse whole sentence.',
+      3: 'ARENA <code>greedy_search(logits)</code> is <code>logits.argmax().item()</code>. Path "a fish": log .5 + log .4 = ' + GREEDY.lp.toFixed(3) + '.' }, 'greedy', 'Framing: Andrew Ng, Deep Learning Specialization'),
+    beat(SC[2], 8, 26, 'exercise', {
+      1: 'A <b>beam</b> of paper planes keeps the best two paths alive, scoring each whole path, and tears off the weak ones. "the end" beats "a fish", though "the" started behind.',
+      2: 'Beam search keeps the B best partial sentences (B = num_beams), ranked by <b>summed log-probs</b>. <b>Why logs?</b> A product of many small probabilities underflows to 0; logs make it a sum.',
+      3: '<code>beam_search(prompt, num_return_sequences, num_beams, max_new_tokens, no_repeat_ngram_size)</code>: a <code>Beams</code> object; <code>generate</code> then <code>filter</code> each step. Best ' + BEAMS[0].lp.toFixed(3) + '.' }, 'beam search', 'Framing: Andrew Ng, Deep Learning Specialization'),
+    beat(SC[3], 0, 13, 'library', {
+      1: 'Each new word used to mean rereading the whole story. Now a card box files every old word\'s <b>key</b> and <b>value</b> cards; a new word makes only its own two cards.',
+      2: 'Past keys and values never change (the causal mask means old tokens never see new ones), so we <b>cache</b> them. Each step runs one token, not all n: ~n times less work.',
+      3: 'GPT-2 small (d_model 768, 12 layers, d_mlp 3072), 2 FLOPs per multiply-add, LayerNorm and unembed ignored. n = 20: ' + human(flopsNoCache(20)) + ' vs ' + human(flopsCache(20)) + '.' }, 'the card box (KV cache)'),
+    beat(SC[3], 13, 26, 'library', {
+      1: 'Same answer either way, just faster. The price is memory: the box grows with every word. Same trade as a browser cache: memory for speed. You will mostly just switch it on.',
+      2: 'Logits are identical with or without the cache. The cache grows by 2 × n_layers × d_model numbers per token. Libraries handle it for you; ARENA marks this exercise optional.',
+      3: 'Per step, append: <code>k = t.cat([past_k, k_new], dim=1)</code>, same for v, and attend with the new query only. Max |z_full − z_cached| = ' + (maxDiff === 0 ? '0' : maxDiff.toExponential(1)) + '.' }, 'same answer, less work'),
+    beat(SC[4], 0, 9, 'core', {
+      1: 'A plumber arrives. The model is a museum of pipes, and every joint has a labelled <b>tap</b>. The water flowing past a tap is the activation at that point.',
+      2: '<b>TransformerLens</b> wraps GPT-2 as a <b>HookedTransformer</b>. Every activation passes through a named <b>HookPoint</b>, where you can read it or change it.',
+      3: 'Names follow the architecture: <code>hook_embed</code>, <code>blocks.{L}.hook_resid_pre</code>, <code>blocks.{L}.attn.hook_pattern</code>, <code>hook_z</code>. <code>utils.get_act_name("pattern", 0)</code> builds them.' }, 'the plumbing museum'),
+    beat(SC[4], 9, 18, 'core', {
+      1: 'One camera flash photographs the water at every tap at once. Each photo has a <b>shape</b> that says which sentence, which word, which head and which number.',
+      2: '<code>run_with_cache</code> runs the model once and returns logits plus an <b>ActivationCache</b> of every hook. The <b>shape</b> tells you what each axis means: learn to read shapes.',
+      3: '35 tokens: <code>hook_pattern (1, 12, 35, 35)</code> = [batch, head, dest, src]; <code>hook_z (1, 35, 12, 64)</code> = [batch, pos, head, d_head]. <code>cache["pattern", 0]</code> is the same tensor.' }, 'one photo of everything'),
+    beat(SC[5], 0, 10, 'core', {
+      1: 'The plumber closes one tap: head 2 of layer 0, the one that keeps whispering "story". Water still flows everywhere else. Watch the lanterns shift.',
+      2: 'A <b>hook function</b> gets the activation (and the hook) and returns an edited one. Zero head 2 in <code>hook_z</code>, rerun with <code>run_with_hooks</code>: a controlled experiment.',
+      3: 'Toy: each head adds a direct term to the logits, so zeroing <code>z[:, :, 2, :]</code> removes exactly that. Real heads also feed later layers, so effects compound.' }, 'close a tap'),
+    beat(SC[5], 10, 20, 'core', {
+      1: 'The model gets a little worse at predicting "story", and only for this run. The pipes are unchanged: next run, the tap is open again.',
+      2: 'The <b>loss</b> on the true next word, story, rises from ' + L0.toFixed(2) + ' to ' + LZ.toFixed(2) + ': a number for how much that head helped. Weights untouched; the hook lives for one pass.',
+      3: '<code>model.run_with_hooks(tokens, return_type="loss", fwd_hooks=[("blocks.0.attn.hook_z", fn)])</code>. Loss −log p(story): ' + L0.toFixed(3) + ' → ' + LZ.toFixed(3) + '.' }, 'one run only'),
+    beat(SC[6], 0, 10, 'exercise', {
+      1: 'Everything you just watched is a few lines: the top-p cut, and a hook that zeroes one head. This is your ARENA [1.1] sampling section and TransformerLens intro, trimmed.',
+      2: 'You write <code>sample_top_p</code> once; afterwards it is a <code>generate</code> argument. The hook shape, fn(activation, hook) → activation, you will reuse every week.',
+      3: '<code>apply_frequency_penalty</code> subtracts <code>freq_penalty × count</code> for tokens already used; beam search adds <code>no_repeat_ngram_size</code>.' }, 'your code'),
+    beat(SC[6], 10, 20, 'core', {
+      1: 'The scissors change <b>which</b> word comes out, not what the egg knows; a closed tap changes <b>one run</b>, not the pipes. <b>Ask yourself:</b> if closing a tap barely hurts, is that head useless?',
+      2: 'Sampling choices (T, top-k, top-p, beams) change outputs, never knowledge. A hook that can read can also <b>add</b> a direction: that is where activation steering begins.',
+      3: 'The loss ignores T, k and p: it scores the model\'s distribution, not the sampler. Steering is a hook adding α·v at <code>hook_resid_post</code> (weeks 7 and 12).' }, 'where it stops')
+  ]);
 
   /* ================= coda: sliders + tap heads to ablate ================= */
   var C = { T: 1, p: .9, k: 10, off: [0, 0, 0, 0], geo: null };
@@ -414,7 +465,8 @@
       { label: 'Case: nucleus sampling', href: '../../index.html#cases/nucleus-sampling' },
       { label: 'Case: beam search', href: '../../index.html#cases/beam-search' },
       { label: 'Case: KV caching', href: '../../index.html#cases/kv-caching' },
-      { label: 'Case: hooks', href: '../../index.html#cases/hooks' }
+      { label: 'Case: hooks', href: '../../index.html#cases/hooks' },
+      { label: 'Andrew Ng: Deep Learning Specialization', href: 'https://www.coursera.org/specializations/deep-learning' }
     ]
   });
 })();

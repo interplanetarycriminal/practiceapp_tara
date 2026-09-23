@@ -109,6 +109,11 @@
     ctx.restore();
   }
   function mindEgg(ctx, x, y, s, t, clear, feats) { F.egg(ctx, x, y, s, t, { clear: clear, features: feats || [] }); }
+  /* pass 2: the clerks are stick figures. BT is set by the beat wrapper; at(x) = global time when scene time x happened. */
+  var BT = { g0: 0, from: 0 };
+  function at(x) { return BT.g0 + (x - BT.from); }
+  function act(l, keys, o) { var k = null, prev = 'idle'; keys.forEach(function (e) { if (l >= e[0]) { if (k) prev = k[1]; k = e; } }); o = o || {}; if (!k) return o; o.pose = k[1]; o.t0 = at(k[0]); o.from = prev; return o; }
+  function clerk(ctx, x, y, s, t, o, name) { var r = F.stick(ctx, x, y, s, t, o); if (name) lbl(ctx, name, x, y + 12, o.scarf || P.chalk, 12); return r; }
 
   /* ---------------- probe / steer / SAE toy data ---------------- */
   var PR = (function () { var r = F.rng('probe7'), pts = []; for (var i = 0; i < 40; i++) { var tr = i % 2 === 0, g1 = Math.sqrt(-2 * Math.log(r() + 1e-9)) * Math.cos(6.283 * r()), g2 = Math.sqrt(-2 * Math.log(r() + 1e-9)) * Math.cos(6.283 * r());
@@ -135,22 +140,14 @@
   }
   function tapeTop(W) { return ph(W) ? 118 : 140; }
 
-  var chapters = [
-    { name: 'the tape', start: 0, dur: 5, cap: {
-        1: 'A paper VHS tape of random words, played <b>twice</b>. The first time, nobody can guess what comes next. The second time... you have seen this before.',
-        2: 'Random tokens, then the same tokens again. A model with no memory tricks is stuck guessing on the first play. On the rerun it could <b>copy</b>, if it has the right circuit.',
-        3: 'ARENA\'s rep_tokens: (BOS, *rand_tokens, *rand_tokens). In-context loss on the second half is the classic induction-head signature. Here seq_len n = 6, vocab 12, d = 24.' },
-      draw: function (ctx, t, l, W, H) {
+  var SC = [  // pass-2: scenes; captions live in the beats below
+    { name: 'the tape', start: 0, dur: 5, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); cassette(ctx, W, t, ramp(l, 0, .6), t * 3); layout(W, H, N, tapeTop(W));
         drawTape(ctx, W, TOK, ramp(l, .6, 4.2));
         mindEgg(ctx, W / 2, H - (ph(W) ? 110 : 120), ph(W) ? 52 : 60, t, .15);
         if (l > 3.5) lbl(ctx, 'what comes next?', W / 2, H - (ph(W) ? 200 : 215), P.butter, ph(W) ? 16 : 19, { reveal: ramp(l, 3.5, 4.5) });
       } },
-    { name: 'previous-token head', start: 5, dur: 7, cap: {
-        1: 'Clerk one has a simple job: look at the word <b>just before</b> you, and stamp it on your card. "I came after Furby."',
-        2: 'A <b>previous-token head</b>. Its attention is a real softmax of position dot products; almost all the weight lands one step back. Its output is the stamp.',
-        3: 'q_i = β·pos(i−1), k_j = pos(j), A = softmax(q·k) over j ≤ i, β = 30. Stamp s_j = Σ_k A[j,k] E[t_k]: the OV output that the next layer will K-compose with.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'previous-token head', start: 5, dur: 7, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); cassette(ctx, W, t, 1, t * 3); layout(W, H, N, tapeTop(W));
         var L = TOK.length, cur = Math.min(L - 1, 1 + Math.floor(l / 6.2 * (L - 1)));
         var hi = {}; hi[cur] = P.butter; drawTape(ctx, W, TOK, 1, hi);
@@ -161,14 +158,11 @@
           ctx.strokeStyle = P.red; ctx.lineWidth = 1.5; ctx.strokeRect(-G.cw * .42, -8, G.cw * .84, 16); F.hand(ctx, 'after ' + VOC[prev], 0, 0, Math.min(ph(G.cw * 8) ? 10 : 13, G.cw * .15), P.red, { seed: 's' + i, wobble: .2 }); ctx.restore(); }
         var ys = G.y[1] + G.ch + 60, es = ph(W) ? Math.min(70, (H - ys - 120) * .35) : 80;
         mindEgg(ctx, W / 2, H - es * 1.4 - 20, es, t, .3, [{ x: -.3, y: -.1, on: A[cur - 1], c: 'rgba(243,179,195,.9)' }]);
+        var pp = cardXY(cur - 1); clerk(ctx, W / 2 + es * 1.7, H - 22 - es * .35, es * 1.15, t, act(l, [[0, 'walk'], [.3, 'point']], { face: -1, scarf: P.pink, look: { x: pp[0], y: pp[1] } }), 'clerk 1');
         lbl(ctx, 'stamp: "I came after ' + VOC[TOK[cur - 1]] + '"', W / 2, ys + 100, P.pink, ph(W) ? 16 : 19);
         readout(ctx, 12, ys, [['clerk 1 at pos ' + cur, P.butter], ['attn on pos ' + (cur - 1) + ' = ' + A[cur - 1].toFixed(3), P.pink], ['attn elsewhere = ' + (1 - A[cur - 1]).toFixed(3)]], W);
       } },
-    { name: 'induction head', start: 12, dur: 8, cap: {
-        1: 'Clerk two, on the rerun: "I am Nokia. Who has a stamp saying <b>after Nokia</b>?" It finds that card and <b>copies</b> the word on it. That is the guess, and it is right.',
-        2: 'The <b>induction head</b> compares its own word with every stamp (a real dot product), softmaxes, and copies the winner forward. Pattern: A B … A → B.',
-        3: 'score[i,j] = β₂·E[t_i]·s_j (β₂ = 8), A = softmax over j ≤ i; out_i = Σ_j A[i,j] E[t_j]; logits = γ E·out_i. Match lives at j = i − n + 1: the (−seq_len+1) diagonal.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'induction head', start: 12, dur: 8, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); cassette(ctx, W, t, 1, t * 3); layout(W, H, N, tapeTop(W));
         var step = 7.6 / N, k = Math.min(N - 1, Math.floor(l / step)), fr = (l % step) / step, i = N + k, j = i - N + 1;
         var hi = {}; hi[i] = P.butter; if (fr > .35) hi[j] = P.mint; drawTape(ctx, W, TOK, 1, hi);
@@ -183,12 +177,9 @@
         if (fr > .7) { F.note(ctx, 'next: ' + VOC[M.pred[i].tok], clamp(pi[0], 70, W - 70), py, ph(W) ? 14 : 17, { color: P.mint, seed: 'nx' + i, tape: false }); }
         readout(ctx, 12, G.y[1] + G.ch + (ph(W) ? 110 : 100), [['E[' + VOC[TOK[i]] + ']·stamp[' + j + '] = ' + (sc[j] / 8).toFixed(2), P.mint], ['attn[' + i + ',' + j + '] = ' + A[j].toFixed(3), P.butter], ['p(' + VOC[TOK[i + 1] != null ? TOK[i + 1] : TOK[i]] + ') = ' + (i < TOK.length - 1 ? M.pred[i].p[TOK[i + 1]].toFixed(3) : '(end)')]], W);
         var es2 = ph(W) ? Math.min(66, (H - G.y[1] - 260) * .33) : 80; mindEgg(ctx, W / 2, H - es2 * 1.4 - 20, es2, t, .45, [{ x: 0, y: -.2, on: ramp(fr, .7, .9) }]);
+        clerk(ctx, W / 2 + es2 * 1.7, H - 22 - es2 * .35, es2 * 1.15, t, act(l, [[k * step, 'lean-in'], [(k + .35) * step, 'point'], [(k + .72) * step, 'cheer']], { face: -1, scarf: P.mint, look: { x: pj[0], y: pj[1] } }), 'clerk 2');
       } },
-    { name: 'QK and OV', start: 20, dur: 7, cap: {
-        1: 'Each clerk carries <b>two stamps</b>. One decides <b>where to look</b>. The other decides <b>what to carry</b> back. The bright stripe is clerk two looking at "the card after my twin".',
-        2: '<b>QK</b> circuit: which positions get attention (the heatmap). <b>OV</b> circuit: what gets moved once you look (the copied word). They are separate matrices you can read separately.',
-        3: 'Heatmap = the real 12×12 induction pattern. W_QK = W_Q W_Kᵀ sets the stripe; W_OV = W_V W_O sets the copy (full OV = W_E W_OV W_U ≈ identity for a copying head).' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'QK and OV', start: 20, dur: 7, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t);
         var s = Math.min(W - 60, H * .5, 380), x = (W - s) / 2, y = ph(W) ? 44 : 50;
         heat(ctx, x, y, s, M.Ai, N, ramp(l, 0, .8), 'induction head: who looks at whom');
@@ -201,11 +192,7 @@
         if (l > 3.4) { ctx.save(); ctx.globalAlpha = ramp(l, 3.4, 4); F.note(ctx, 'OV: what to move', W * .72, sy + (ph(W) ? 44 : 0), sz, { color: P.mint, rot: .05, seed: 'ov' }); ctx.restore(); }
         readout(ctx, W - 12, H - 58, [['diagonal(-n+1).mean() = ' + M.score.toFixed(3), P.teal]], W, true);
       } },
-    { name: 'loss on the rerun', start: 27, dur: 4, cap: {
-        1: 'Scoreboard: how surprised the mind is at each word. First play: very. Rerun: <b>barely</b>.',
-        2: 'Per-token loss from the toy model. First half sits near ln 12 ≈ 2.5 (pure guessing). Second half collapses once the induction head can copy.',
-        3: 'Cross-entropy −log p(t_{i+1}) per position. The drop between halves is what ARENA plots as evidence of induction; in real models it appears as a sudden bump during training.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'loss on the rerun', start: 27, dur: 4, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t);
         var gw = Math.min(W - 40, 440), gh = gw * .74, gx = (W - gw) / 2, gy = Math.max(20, (H - gh) / 2 - 30);
         var r = F.gameboy(ctx, gx, gy, gw, gh, { label: 'SURPRISE BOY' }), L = TOK.length - 1, bw = (r.w - 20) / L, n = Math.ceil(ramp(l, .2, 2.4) * L);
@@ -215,11 +202,7 @@
         ctx.fillText('ln 12', r.x + r.w - 44, ly - 5);
         readout(ctx, 12, H - 64, [['mean loss PLAY  = ' + M.lossPlay.toFixed(2), P.pink], ['mean loss RERUN = ' + M.lossRerun.toFixed(2), P.mint]], W);
       } },
-    { name: 'probe', start: 31, dur: 5, cap: {
-        1: 'New tool: a <b>ruler</b>. Lay it across the mind\'s inner dots and true sentences land on one side, false on the other. The mind was keeping score all along.',
-        2: 'A <b>linear probe</b>: one direction in activation space that separates a concept. This one is the difference of the two cloud means, and the accuracy is counted live.',
-        3: 'w = μ_true − μ_false (normalised), threshold at the midpoint; accuracy = fraction on the right side. High probe accuracy shows the info is linearly present, not that the model uses it.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'probe', start: 31, dur: 5, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t);
         var cx = W / 2, cy = H * .42, sc = Math.min(W, H) * .24;
         F.paper(ctx, cx, cy, sc * 3.6, sc * 3, 'rgba(247,240,225,.12)', { seed: 'probebg', shadow: false });
@@ -230,25 +213,18 @@
         lbl(ctx, 'true', cx + sc * 1.25, cy - sc * 1.1, P.mint, 16); lbl(ctx, 'false', cx - sc * 1.25, cy + sc * 1.1, P.pink, 16);
         readout(ctx, 12, H - 64, [['probe accuracy = ' + (PR.acc * 100).toFixed(0) + '%', P.butter], ['w = (' + w[0].toFixed(2) + ', ' + w[1].toFixed(2) + ')']], W);
       } },
-    { name: 'steer', start: 36, dur: 5, cap: {
-        1: 'Now that we can <b>read</b> the mood, we can nudge it. A chalk arrow is added to the mind\'s inner state mid-thought, and the mood dial moves.',
-        2: 'A <b>steering vector</b>: add coef × v to the hidden state at one layer. The mood readout is the probe\'s view of the new state, recomputed each frame.',
-        3: 'h ← h + coef·v, mood = σ(4·w·h). ARENA\'s hook adds steering_coef · norm · v_normed to hidden_states. Too big a coef pushes activations off-distribution: gibberish.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'steer', start: 36, dur: 5, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t);
         var coef = 1.6 * ramp(l, .8, 3.8), md = mood(coef), ex = W / 2, ey = H * .44, es = Math.min(W, H) * .2;
         mindEgg(ctx, ex, ey, es, t, .55, [{ x: 0, y: 0, on: 1, c: md.m > .5 ? 'rgba(185,227,204,.9)' : 'rgba(243,179,195,.9)' }]);
         var s = es * .7, o = [ex + H0[0] * s, ey - H0[1] * s], hN = [ex + md.h[0] * s, ey - md.h[1] * s];
         F.arrow(ctx, o[0], o[1], hN[0], hN[1], P.butter, 3.5, 'steer');
+        clerk(ctx, ex - es * 1.75, ey + es * .95, es * 1.05, t, act(l, [[.2, 'think'], [.8, 'push'], [3.9, 'idle']], { scarf: P.lav, look: { x: ex, y: ey } }));
         F.paper(ctx, ex, ey + es * 1.55, 150, 46, P.cream, { seed: 'dial' }); moodFace(ctx, ex - 45, ey + es * 1.55, 30, md.m);
         ctx.fillStyle = 'rgba(0,0,0,.15)'; ctx.fillRect(ex - 20, ey + es * 1.55 - 5, 80, 10); ctx.fillStyle = md.m > .5 ? P.green : P.red; ctx.fillRect(ex - 20, ey + es * 1.55 - 5, 80 * md.m, 10);
         readout(ctx, 12, H - 64, [['h += ' + coef.toFixed(2) + ' * v', P.butter], ['mood = σ(4 w·h) = ' + md.m.toFixed(3)]], W);
       } },
-    { name: 'SAE', start: 41, dur: 5, cap: {
-        1: 'One inner light was flickering for <b>three different reasons</b>. A sparse autoencoder hangs a separate lantern for each idea, so each one lights for one thing only.',
-        2: 'A <b>busy neuron</b> reads a mix of three sparse features. The <b>SAE</b> encoder (ReLU of dot products with learned directions) splits the mix back into one lantern per feature.',
-        3: 'h = Σ f_k d_k; neuron = h[0] fires for all three. SAE: a = ReLU(W_enc h + b_enc), here W_enc rows = d_k, b = −0.25. Real SAEs learn d_k with an L1 sparsity penalty.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'SAE', start: 41, dur: 5, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t);
         var y0 = ph(W) ? 70 : 80, tw = W - 60, x0 = 30;
         F.paper(ctx, W / 2, y0, tw + 20, 80, 'rgba(22,26,53,.9)', { seed: 'trace', shadow: false });
@@ -263,25 +239,18 @@
         }
         readout(ctx, 12, H - 48, [['neuron = ' + hn[0].toFixed(2) + '   (mixes all three)', P.butter]], W);
       } },
-    { name: 'where it stops being true', start: 46, dur: 5, cap: {
-        1: 'Honest bit: real clerks are <b>messy</b>. They share jobs, do several at once, and their stripes are smudged, not neat.',
-        2: 'Real circuits are fuzzy and shared: many heads do partial induction, attention is spread out, and one head does several jobs. Clean diagrams are simplifications.',
-        3: 'Same model with β₂ = 2.5 and random score noise: the stripe blurs and diagonal score drops. Real heads are polysemantic and circuits overlap (backup heads, composition across layers).' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'where it stops being true', start: 46, dur: 5, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t);
         var nz = 4 * ramp(l, 0, 1.5), Mz = model(TOK, N, lerp(8, 2.5, ramp(l, 0, 1.5)), nz);
         var s = Math.min(W - 60, H * .5, 380), x = (W - s) / 2, y = ph(W) ? 44 : 50;
         heat(ctx, x, y, s, Mz.Ai, N, 1, 'a smudgier stripe');
+        var cs = Math.min(70, H * .1); clerk(ctx, Math.max(40, W * .16), H - 28, cs, t, act(l, [[.2, 'lean-in'], [1.6, 'shrug']], { scarf: P.mint, look: { x: x + s / 2, y: y + s / 2 } }), 'clerk 2');
         readout(ctx, 12, y + s + 24, [['diag score = ' + Mz.score.toFixed(3), P.teal]], W);
         var p = ramp(l, 1.2, 2.2); F.cornerFlip(ctx, W, H, p, P.cream);
         if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 2, 2.8); var sz = ph(W) ? 14 : 18, cx = W - Math.min(W, H) * .3, cy = H - Math.min(W, H) * .22;
           F.hand(ctx, 'real circuits are', cx, cy - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'fuzzy and shared', cx + sz * .8, cy, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
       } },
-    { name: 'the code', start: 51, dur: 7, cap: {
-        1: 'Everything you just watched is a few lines of code. The stripe is a diagonal. The nudge is one addition.',
-        2: 'The tape becomes ARENA\'s induction detector, the stamps become the OV circuit, the chalk arrow becomes the steering hook. You write all three in week 7.',
-        3: 'ARENA [1.2]: induction_attn_detector scores pattern.diagonal(-seq_len + 1).mean(); full_OV_circuit = FactoredMatrix(W_E @ W_V, W_O @ W_U); steering hook adds steering_coef * norm * v_normed.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the code', start: 51, dur: 7, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t);
         var sz = ph(W) ? 12 : 17, lines = [
           ['induction stripe', ['score = attention_pattern', '  .diagonal(-seq_len + 1).mean()'], P.butter, 0],
@@ -298,17 +267,70 @@
           ctx.restore(); y += h + 14;
         });
       } },
-    { name: 'read first', start: 58, dur: 4, cap: {
-        1: 'The order matters: first learn to <b>read</b> a mind. Only then <b>steer</b> it, and gently.',
-        2: 'Reading circuits tells us which knob does what. Steering without reading is turning dials in the dark.',
-        3: 'Interpretability before intervention: a steering vector found by a probe is only as trustworthy as the probe. Small coefficients, check for side effects, measure.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'read first', start: 58, dur: 4, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t);
         var es = Math.min(W, H) * .18; mindEgg(ctx, W / 2, H * .55, es, t, .8, [{ x: -.4, y: -.2, c: 'rgba(243,179,195,.9)' }, { x: .35, y: .1, c: 'rgba(185,227,204,.9)' }, { x: 0, y: .45, c: 'rgba(200,184,234,.9)' }]);
         ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'read first,\nthen steer gently.', W / 2, H * .2, ph(W) ? 20 : 26, { color: P.pink, seed: 'gentle', rot: -.02 }); ctx.restore();
         F.arrow(ctx, W / 2 - es * 1.8, H * .55 + es * .4, W / 2 - es * 1.2, H * .55 + es * .1, P.butter, 3, 'gentle');
+        clerk(ctx, W / 2 + es * 1.7, H * .55 + es * 1.05, es * 1.1, t, act(l, [[.2, 'lean-in'], [2.6, 'push']], { face: -1, scarf: P.pink, look: { x: W / 2, y: H * .55 } }));
       } }
   ];
+
+  /* ---------------- pass 2: caption beats ----------------
+     beat(scene, from, to, dur, need, cap): plays scene seconds [from, to], then holds the last frame for the rest of dur.
+     need: core | exercise | library | contested */
+  /* UPDATE 2: one small on-screen credit line when a beat borrows a framing (hub link in the coda) */
+  function credit(ctx, W, txt) { if (!txt) return; ctx.save(); ctx.globalAlpha = 1; ctx.font = '600 11px system-ui, -apple-system, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'top'; var w = ctx.measureText(txt).width; ctx.fillStyle = 'rgba(20,22,52,.7)'; ctx.fillRect(W - w - 17, 4, w + 12, 17); ctx.fillStyle = '#b9e3cc'; ctx.fillText(txt, W - 11, 7); ctx.restore(); }
+  function beat(c, from, to, dur, need, cap, name, cr) {
+    return { name: name || c.name, dur: dur, need: need, cap: cap, draw: function (ctx, t, l, W, H, api) { BT.g0 = t - l; BT.from = from; var r = c.draw.call(c, ctx, t, from + Math.min(l, to - from), W, H, api); credit(ctx, W, cr); return r; } };
+  }
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  var chapters = seq([
+    beat(SC[0], 0, 5, 7, 'core', {
+      1: 'A paper VHS tape of random words, played <b>twice</b>. The first time, nobody can guess what comes next. The second time... you have seen this before.',
+      2: 'Random tokens, then the same tokens again. On the first play a model can only guess. On the rerun it could <b>copy</b> from last time, if it has the right circuit.',
+      3: 'ARENA\'s rep_tokens: (BOS, *rand, *rand). Low loss on the second half is the classic induction-head signature. Here seq_len n = 6, vocab 12, d = 24, all computed live.' }),
+    beat(SC[1], 0, 7, 8, 'core', {
+      1: 'Clerk one has a simple job: look at the word <b>just before</b> you and stamp it on your card: "I came after Furby." It never cares what the words are, only where they sit.',
+      2: 'A <b>previous-token head</b>: its query and key read positions only, so nearly all attention lands one step back. What it carries over (the earlier word) is its output: the stamp.',
+      3: 'q_i = β·pos(i−1), k_j = pos(j), A = softmax over j ≤ i, β = 30. Stamp s_j = Σ_k A[j,k] E[t_k]: the head\'s OV output, which the next layer reads.' }, 'clerk one: look back'),
+    beat(SC[2], 0, 8, 9, 'core', {
+      1: 'Clerk two, on the rerun: "I am Nokia. Who has a stamp saying <b>after Nokia</b>?" It finds that card and <b>copies</b> its word. Your phone does this when it suggests a name you just typed.',
+      2: 'The <b>induction head</b> compares its own word with every stamp (a dot product), softmaxes, and copies the winner. A B … A → predict B. <b>Why useful?</b> Text repeats itself.',
+      3: 'score[i,j] = β₂·E[t_i]·s_j (β₂ = 8), softmax over j ≤ i; out_i = Σ_j A[i,j] E[t_j]; logits = γ E·out_i. The match sits at j = i − n + 1: the (1 − seq_len) diagonal.' }, 'clerk two: copy'),
+    beat(SC[3], 0, 7, 9, 'core', {
+      1: 'Each clerk really does <b>two separate jobs</b>: choosing <b>where to look</b>, and choosing <b>what to carry back</b>. The bright stripe is clerk two looking at "the card after my twin".',
+      2: '<b>QK circuit</b> (W_Q, W_K): which positions get attention; the heatmap. <b>OV circuit</b> (W_V, W_O): what gets moved once you look; the copied word. Each can be studied alone.',
+      3: 'W_QK = W_Q W_Kᵀ sets the stripe; W_OV = W_V W_O sets the copy. For a copying head the full OV circuit W_E W_OV W_U is close to the identity: attend to X, predict X.' }, 'QK and OV'),
+    beat(SC[4], 0, 4, 7, 'core', {
+      1: 'Scoreboard: how surprised the mind is at each word. First play: very. Rerun: <b>barely</b>. Surprise that collapses on the rerun is the clue that copying happened.',
+      2: 'Per-token loss from the toy. First half ≈ ln 12 ≈ 2.5 (guessing among 12 words). Second half collapses once the induction head can copy.',
+      3: 'Cross-entropy −log p(t_{i+1}) per position; ARENA plots exactly this. In real training induction heads form in a sudden phase change, seen as a bump in the loss curve.' }, 'loss on the rerun'),
+    beat(SC[5], 0, 5, 8, 'core', {
+      1: 'New tool: a <b>ruler</b>. Lay it across the mind\'s inner dots and true sentences land on one side, false on the other. The mind was keeping track all along.',
+      2: 'Directions carry meaning (like woman − man ≈ queen − king). A <b>linear probe</b> is one direction that splits a concept: here, the gap between cloud means. Decodable ≠ used.',
+      3: 'w = μ_true − μ_false (normalised), threshold at the midpoint. ARENA builds MMProbe (mean difference) and LRProbe (logistic regression). Decodable is not the same as used.' }, 'probe', 'Framing: 3Blue1Brown, neural-network series'),
+    beat(SC[6], 0, 5, 9, 'contested', {
+      1: 'Once we can <b>read</b> the mood we can nudge it: push a chalk arrow into the inner state mid-thought and the mood dial moves. How reliably this works is still argued about.',
+      2: 'Current method: a <b>steering vector</b>, adding coef × v at one layer. Emerging research: effects vary a lot across prompts and can hurt fluency. You need: small coef, measure side effects.',
+      3: 'h ← h + coef·v; mood = σ(4 w·h). ARENA\'s hook adds steering_coef · norm · v_normed to hidden_states. Too big a coef pushes activations off-distribution: gibberish.' }, 'steer'),
+    beat(SC[7], 0, 5, 9, 'contested', {
+      1: 'One inner light was flickering for <b>three different reasons</b>. A sparse autoencoder hangs one lantern per idea, so each lights for one thing only. How well that scales is debated.',
+      2: 'Current method: <b>SAEs</b> split busy neurons into sparse features. Emerging: transcoders, crosscoders; some teams find SAEs lose to plain probes on real tasks. You need: the idea.',
+      3: 'a = ReLU(W_enc h + b_enc), ĥ = W_dec a, loss = reconstruction + L1 sparsity. Here W_enc rows are the true d_k, b = −0.25. Real SAEs must learn d_k; dead and split latents are common.' }, 'SAE'),
+    beat(SC[8], 0, 5, 8, 'contested', {
+      1: 'Honest bit: real clerks are <b>messy</b>. They share jobs, do several at once, and their stripes are smudged, not neat.',
+      2: 'Induction heads show up in many models. Open: how far tidy circuit stories hold in big models, where heads share work and backups step in. You need: the A B … A → B test.',
+      3: 'Here β₂ = 2.5 plus score noise: the stripe blurs and the diagonal score drops. Real heads are polysemantic; backup heads and cross-layer composition blur single-head stories.' }, 'where it stops'),
+    beat(SC[9], 0, 7, 8, 'exercise', {
+      1: 'Everything you just watched is a few lines of code. The stripe is a diagonal. The copier is a matrix product. The nudge is one addition.',
+      2: 'The tape becomes ARENA\'s induction detector, the stamps become the OV circuit, the chalk arrow becomes a steering hook. You write all three this week.',
+      3: 'ARENA [1.2]: pattern.diagonal(-seq_len + 1).mean(); full_OV_circuit = FactoredMatrix(W_E @ W_V, W_O @ W_U); the hook adds steering_coef * norm * v_normed.' }, 'the code'),
+    beat(SC[10], 0, 4, 6, 'core', {
+      1: 'The order matters: first learn to <b>read</b> a mind; only then <b>steer</b> it, gently. <b>Ask yourself:</b> what evidence would show a probe found what the model <i>uses</i>?',
+      2: 'Reading circuits tells us which knob does what. Steering without reading is turning dials in the dark.',
+      3: 'Interpretability before intervention: a steering vector found by a probe is only as trustworthy as the probe. Small coefficients, check side effects, measure.' }, 'read first')
+  ]);
 
   /* ---------------- coda: now you drive ---------------- */
   var C = { n: 6, b2: 8, coef: 0, seed: 1, M: null, toks: null };
@@ -354,7 +376,8 @@
       { label: 'Map: previous-token head', href: '../../index.html#map/node=previous-token-head' },
       { label: 'Case: induction heads', href: '../../index.html#cases/induction-heads' },
       { label: 'Case: QK/OV circuits', href: '../../index.html#cases/qk-ov-circuits' },
-      { label: 'Case: steering vectors', href: '../../index.html#cases/steering-vectors' }
+      { label: 'Case: steering vectors', href: '../../index.html#cases/steering-vectors' },
+      { label: '3Blue1Brown: neural networks', href: 'https://www.3blue1brown.com/topics/neural-networks' }
     ]
   });
 })();

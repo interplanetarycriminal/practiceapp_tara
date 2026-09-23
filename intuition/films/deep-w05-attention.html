@@ -167,12 +167,8 @@
 
   /* ================= chapters ================= */
   var QI = 2; // "sat" is our query
-  var chapters = [
-    { name: 'the notebooks', start: 0, dur: 16, cap: {
-        1: 'A paper cinema row: <b>The cat sat on</b>. Every word has its own notebook. The notes start as "what word am I" plus "where am I sitting". The word <b>sat</b> has a question: who sat?',
-        2: 'Each notebook is the <b>residual stream</b> at that position: a vector of d_model numbers. It starts as a token embedding plus a position embedding. Here d_model = 4, and the last slot, <b>who?</b>, is empty.',
-        3: '<code>resid_pre = W_E[tokens] + W_pos</code>, shape <code>[batch, posn, d_model]</code>. We label the 4 dims (noun, verb, pos, who?) for reading; a real model\'s 768 dims come unlabelled.' },
-      draw: function (ctx, t, l, W, H) {
+  var SC = [  // pass-2: scenes; captions live in the beats below
+    { name: 'the notebooks', start: 0, dur: 16, draw: function (ctx, t, l, W, H) {
         var lay = L(W, H); bg(ctx, W, H, t);
         var a = ramp(l, .5, 3);
         for (var i = 0; i < 4; i++) notebook(ctx, lay, i, X[i].map(function (v) { return v * a; }), null, { hi: l > 9 && i === QI });
@@ -189,11 +185,7 @@
         F.egg(ctx, W - (lay.ph ? 34 : 60), H - (lay.ph ? 60 : 80), lay.ph ? 24 : 34, t, { clear: .1 });
         if (l < 4) F.plane(ctx, lerp(-20, W + 20, l / 4), H * .62, 12, .05, P.cream);
       } },
-    { name: 'queries & keys', start: 16, dur: 20, cap: {
-        1: '"sat" writes its question as a little arrow, the <b>query</b>. Every word also holds up a label arrow, its <b>key</b>: "here is what I am". The better a key lines up with the question, the higher its score.',
-        2: 'Both arrows come from the notebook times a matrix: <b>q = x W_Q</b>, <b>k = x W_K</b>. With d_head = 2 they are arrows on a sheet. The score is the dot product q·k: how much they point the same way.',
-        3: 'Per head, <code>W_Q, W_K: [d_model, d_head]</code>. In ARENA they are stacked as <code>[nheads, d_model, d_head]</code>. The QK circuit x W_Q W_Kᵀ xᵀ decides only <i>where</i> to look, not what to move.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'queries & keys', start: 16, dur: 20, draw: function (ctx, t, l, W, H) {
         var lay = L(W, H); bg(ctx, W, H, t); allNotebooks(ctx, lay, { hi: QI });
         var sz = lay.ph ? 11 : 13, y = lay.below + 6;
         // matmul card: x_sat (1x4) @ W_Q (4x2) = q
@@ -221,11 +213,7 @@
           ctx.restore();
         }
       } },
-    { name: 'scale & softmax', start: 36, dur: 18, cap: {
-        1: 'Scores become brightness. We squash them so the lanterns always share exactly one unit of light: the brightest word gets most, but everyone gets a bit. First we shrink the scores a little so one lantern doesn\'t hog it all.',
-        2: '<b>softmax</b> turns scores into weights that sum to 1. Before that we divide by <b>√d_head</b>. Watch the right-hand panel: without the division, bigger heads give bigger dot products and softmax slams to all-or-nothing.',
-        3: 'Dot products of random vectors have variance ∝ d_head, so ARENA scales by <code>self.cfg.d_head**0.5</code> <i>before</i> masking. A saturated softmax has near-zero gradient: the head stops learning.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'scale & softmax', start: 36, dur: 18, draw: function (ctx, t, l, W, H) {
         var lay = L(W, H); bg(ctx, W, H, t); allNotebooks(ctx, lay, { hi: QI });
         var sz = lay.ph ? 12 : 15, y = lay.below + 8, x0 = lay.ph ? 14 : W / 2 - 250;
         mono(ctx, 'scores  ' + vs(R0.raw[QI]), x0, y, sz, P.chalk);
@@ -245,11 +233,7 @@
           ctx.restore();
         }
       } },
-    { name: 'no peeking', start: 54, dur: 22, cap: {
-        1: 'Wait: "on" comes <b>after</b> "sat". In a real sentence "sat" can\'t have seen it yet. So we tape torn paper over every seat to the right. Covered seats get zero light.',
-        2: 'The <b>causal mask</b>. Grid rows are queries (the word asking), columns are keys (the words being looked at). Everything above the diagonal is set to <b>-inf</b> before softmax, and e^(-inf) = 0.',
-        3: '<code>attn_scores.masked_fill_(mask, self.IGNORE)</code> with <code>IGNORE = -inf</code> and <code>mask = t.triu(all_ones, diagonal=1).bool()</code>. Shape <code>[batch, n_heads, query_pos, key_pos]</code>, softmax over the last dim.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'no peeking', start: 54, dur: 22, draw: function (ctx, t, l, W, H) {
         var lay = L(W, H); bg(ctx, W, H, t); maybeAsk(t, 67);
         allNotebooks(ctx, lay, { hi: QI, dim: function (i) { return i > QI ? lerp(1, .35, ramp(l, 1, 2)) : 1; } });
         if (l > 1) { ctx.save(); ctx.globalAlpha = ramp(l, 1, 2); F.paper(ctx, lay.cx(3), lay.cy, lay.nbW + 6, lay.nbH * .8, '#8c86a8', { seed: 'coveron', rot: .08 }); txt(ctx, 'not yet!', lay.cx(3), lay.cy, 14, P.chalk); ctx.restore(); }
@@ -280,11 +264,7 @@
           ctx.restore();
         }
       } },
-    { name: 'values & W_O', start: 76, dur: 22, cap: {
-        1: 'Now each earlier word folds a paper plane with a message: its <b>value</b>. The planes fly to "sat", bigger planes for brighter lanterns. "sat" blends them, translates the blend, and <b>adds</b> it to its own notebook. Now the who? slot says: a noun, mostly "cat".',
-        2: '<b>v = x W_V</b>. The head output at "sat" is z = Σ pattern · v, a weighted average. Then <b>W_O</b> maps z back to d_model and it is <b>added</b> to the residual stream. Nothing is overwritten: the old grey bars stay.',
-        3: '<code>z</code> is <code>[batch, posn_Q, nheads, d_head]</code>; <code>attn_out = einsum(z, W_O)</code> sums over nheads and d_head. The OV circuit W_V W_O decides <i>what</i> moves; the QK circuit decided <i>where from</i>.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'values & W_O', start: 76, dur: 22, draw: function (ctx, t, l, W, H) {
         var lay = L(W, H); bg(ctx, W, H, t);
         var writeP = ramp(l, 14, 17);
         for (var i = 0; i < 4; i++) notebook(ctx, lay, i, X[i], i === QI ? [{ v: R0.out[QI], col: P.pink, a: writeP }] : null, { hi: i === QI, alpha: i > QI ? .4 : 1 });
@@ -313,11 +293,7 @@
           if (l > 16) F.note(ctx, 'an ADD, never an overwrite', W / 2, Math.min(H - 34, by + sz * 6.4), lay.ph ? 15 : 19, { color: P.butter, seed: 'addnote', rot: .02 });
           ctx.restore(); }
       } },
-    { name: 'many heads', start: 98, dur: 18, cap: {
-        1: 'There is more than one question being asked at once. A second head, asking "what\'s recent?", reads the same notebooks with its own arrows and writes its own note. The notes just stack up.',
-        2: 'Each head has its own W_Q, W_K, W_V, W_O and runs <b>in parallel</b>, at every position at once. Their outputs simply add: resid_mid = resid_pre + head 0 + head 1. Later the <b>MLP</b> adds its note the same way.',
-        3: '<code>attn_out</code> is Σ over heads of <code>z_h W_O[h]</code>: the einsum over <code>nheads d_head</code> is that sum. Then <code>resid_post = mlp(ln2(resid_mid)) + resid_mid</code>. Every layer reads the sum and writes a new term.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'many heads', start: 98, dur: 18, draw: function (ctx, t, l, W, H) {
         var lay = L(W, H); bg(ctx, W, H, t);
         var a0 = 1, a1 = ramp(l, 6, 9);
         for (var i = 0; i < 4; i++) notebook(ctx, lay, i, X[i], [{ v: R0.out[i], col: P.pink, a: ramp(l, .5, 2.5) }, { v: R1.out[i], col: P.teal, a: a1 }], { hi: i === QI });
@@ -335,11 +311,7 @@
           mono(ctx, '+ head 1        ' + vs(R1.out[QI]), x0, ey + sz * 3.2, sz, P.teal);
           mono(ctx, '= resid_mid     ' + vs(MID[QI]), x0, ey + sz * 4.8, sz, P.butter); ctx.restore(); }
       } },
-    { name: 'why we can read it', start: 116, dur: 18, cap: {
-        1: 'Because every note is <b>added</b>, you can tear any one note out and see exactly what it did. Tear out head 0\'s pink note and "sat" forgets who sat. That is how we look inside.',
-        2: 'Linearity is the gift: the residual stream is a <b>sum of contributions</b>. So we can attribute (which head wrote this?), ablate (remove one term), and later steer (add our own term). Honest limit: the patterns are learned geometry, not understanding.',
-        3: 'Direct attribution: resid·u = Σ (term·u), so each head\'s share of a direction is a dot product. Caveat: LayerNorm is nonlinear, and in real models features share dims (superposition), so the neat labels are something we have to discover, not read.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'why we can read it', start: 116, dur: 18, draw: function (ctx, t, l, W, H) {
         var lay = L(W, H); bg(ctx, W, H, t);
         var tear = ramp(l, 3, 5.5);
         for (var i = 0; i < 4; i++) notebook(ctx, lay, i, X[i], [{ v: R0.out[i], col: P.pink, a: 1 - tear }, { v: R1.out[i], col: P.teal }], { hi: i === QI });
@@ -359,11 +331,7 @@
           txt(ctx, 'not understanding', cx + s2 * 1.6, cy + s2 * 1.4, s2, P.ink, { seed: 'r4' }); ctx.restore(); }
         if (l > 14) { ctx.save(); ctx.globalAlpha = ramp(l, 14, 15); F.note(ctx, 'every edit we\'ll make to a model\nis an edit to this notebook', W / 2, y + sz * 11.6, lay.ph ? 15 : 20, { color: P.pink, seed: 'steer', rot: -.02 }); ctx.restore(); }
       } },
-    { name: 'your code', start: 134, dur: 20, cap: {
-        1: 'Everything you just watched is a handful of lines. This is the exact recipe you write in ARENA [1.1] on Saturday 10 October.',
-        2: 'The learner\'s version of <code>Attention.forward</code> from [1.1] Transformer from Scratch: q, k, v by einsum, scores, scale, mask, softmax, weighted sum, W_O, then the residual add in the block.',
-        3: 'Names match ARENA: <code>attn_scores</code>, <code>apply_causal_mask</code>, <code>attn_pattern</code>, <code>z</code>, <code>attn_out</code>, <code>resid_mid = self.attn(self.ln1(resid_pre)) + resid_pre</code>. Biases b_Q, b_K, b_V, b_O omitted here for space; x = ln1(resid_pre).' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'your code', start: 134, dur: 20, draw: function (ctx, t, l, W, H) {
         var lay = L(W, H); bg(ctx, W, H, t);
         var phase = l < 10 ? 0 : 1, ll = phase ? l - 10 : l, sz = lay.ph ? 12 : 15;
         var A = [['q = einops.einsum(x, self.W_Q,', P.pink], ['  "batch posn d_model,', P.chalk], ['   nheads d_model d_head', P.chalk], ['   -> batch posn nheads d_head")', P.chalk], ['# k, v: same, with W_K and W_V', '#9aa0c8'],
@@ -379,6 +347,101 @@
         if (phase && ll > 7) { ctx.save(); ctx.globalAlpha = ramp(ll, 7, 8); F.note(ctx, 'now drag the question yourself', W / 2, Math.min(H - 30, y + h + 36), lay.ph ? 14 : 18, { color: P.butter, seed: 'drive' }); ctx.restore(); }
       } }
   ];
+
+  /* ================= pass 2: caption beats =================
+     Each scene is split into beats that share its drawing; timings are unchanged (the predict pause stays at 67 s).
+     need: core | exercise | library | contested */
+  /* UPDATE 2: one small on-screen credit line when a beat borrows a framing (hub link in the coda) */
+  function credit(ctx, W, txt) { if (!txt) return; ctx.save(); ctx.globalAlpha = 1; ctx.font = '600 11px system-ui, -apple-system, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'top'; var w = ctx.measureText(txt).width; ctx.fillStyle = 'rgba(20,22,52,.7)'; ctx.fillRect(W - w - 17, 4, w + 12, 17); ctx.fillStyle = '#b9e3cc'; ctx.fillText(txt, W - 11, 7); ctx.restore(); }
+  function beat(c, from, to, need, cap, name, cr) {
+    return { name: name || c.name, dur: to - from, need: need, cap: cap, draw: function (ctx, t, l, W, H, api) { var r = c.draw.call(c, ctx, t, from + l, W, H, api); usher(ctx, W, H, t, t - l - from, from + l, c.acts); credit(ctx, W, cr); return r; } };
+  }
+  /* pass 2: an usher (stick figure) acts each scene from the empty floor: keys = [[scene time, pose]] */
+  var ACTS = [
+    [[0, 'walk'], [2.2, 'wave'], [4.5, 'idle'], [9.4, 'think']],
+    [[.4, 'point'], [7.4, 'lean-in'], [11.5, 'point']],
+    [[0, 'think'], [5, 'point'], [10.6, 'recoil'], [15.5, 'shrug']],
+    [[.8, 'push'], [4, 'point'], [9.5, 'lean-in'], [14.2, 'cheer']],
+    [[.8, 'reach'], [6, 'think'], [12.8, 'write'], [16.2, 'cheer']],
+    [[2.8, 'wave'], [8.8, 'point']],
+    [[2.6, 'pull'], [6, 'idle'], [9.2, 'shrug'], [14, 'point']],
+    [[.3, 'point'], [10, 'type'], [17, 'wave']]
+  ];
+  SC.forEach(function (c, i) { c.acts = ACTS[i]; });
+  function usher(ctx, W, H, t, g0, l, keys) {
+    if (!keys) return; var ph = W < 560, s = ph ? 62 : 104, x = ph ? 44 : Math.max(80, W * .12), y = H - (ph ? 18 : 26), k = null, prev = 'idle';
+    keys.forEach(function (e) { if (l >= e[0]) { if (k) prev = k[1]; k = e; } });
+    if (keys[0][1] === 'walk' && l < 2.2) x = lerp(-30, x, ramp(l, 0, 2.2));
+    F.paper(ctx, x, y + 4, s * 1.1, 8, '#454a86', { seed: 'ledge5', shadow: false });
+    F.stick(ctx, x, y, s, t, { pose: k ? k[1] : 'idle', t0: k ? g0 + k[0] : null, from: prev, scarf: P.pink, look: { x: W / 2, y: H * .3 } });
+  }
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  var chapters = seq([
+    beat(SC[0], 0, 8, 'core', {
+      1: 'A paper cinema row: <b>The cat sat on</b>. Each word has its own notebook. The first note says "which word am I" plus "which seat am I in". Later notes can only be <b>added</b>.',
+      2: 'Each notebook is the <b>residual stream</b> at that position: d_model numbers. It starts as token embedding + position embedding. Here d_model = 4: noun, verb, pos, who?',
+      3: '<code>resid_pre = W_E[tokens] + W_pos</code>, shape <code>[batch, posn, d_model]</code>. We label the 4 dims so you can read them; GPT-2 small has 768 unlabelled ones.' }),
+    beat(SC[0], 8, 16, 'core', {
+      1: '"sat" has a question: <b>who sat?</b> Its who? slot is empty; the answer is in another seat. <b>Attention</b> is how <b>words update each other\'s meaning</b>: "sat" will read "cat".',
+      2: 'Attention lets a position pull in information from earlier positions. One head will now fill the <b>who?</b> slot of "sat" by reading the noun before it. Every number is live maths.',
+      3: 'One head (d_head = 2), then a second. Biases and LayerNorm are left out so the numbers stay readable: x here stands for ln1(resid_pre).' }, 'the question', 'Framing: 3Blue1Brown, neural-network series'),
+    beat(SC[1], 0, 7.5, 'core', {
+      1: '"sat" turns its question into an arrow, the <b>query</b>. Every word also holds up a label arrow, its <b>key</b>: "this is what I am". Both come from the notebook through different lenses.',
+      2: '<b>q = x W_Q</b>, <b>k = x W_K</b>: one notebook, two learned matrices. <b>Why two?</b> What a word looks for differs from what it advertises: "sat" seeks a noun; "cat" is one.',
+      3: 'Per head <code>W_Q, W_K: [d_model, d_head]</code>; ARENA stacks heads as <code>[n_heads, d_model, d_head]</code>, one einsum each. Live q[sat] = ' + vs(R0.q[QI]) + '.' }),
+    beat(SC[1], 7.5, 20, 'core', {
+      1: 'Strings run from "sat" to every seat, each with a match score. On the sheet, keys that point the same way as the query score high. The key of "cat" points right along it.',
+      2: 'Score = <b>dot product</b> q·k: multiply matching entries, add. Big when the arrows agree, 0 at right angles, negative when opposed. This QK half of a head decides only <i>where</i> to look.',
+      3: '<code>attn_scores: [batch, n_heads, posn_Q, posn_K]</code>, one einsum over d_head. Row "sat" = ' + vs(R0.raw[QI]) + '. As a formula: x W_Q W_Kᵀ xᵀ.' }, 'the match'),
+    beat(SC[2], 0, 9.5, 'core', {
+      1: 'Scores become lantern light. There is exactly <b>one unit of light</b> to share: higher scores get more, everyone gets a little, and the shares always add up to 1.',
+      2: '<b>softmax</b>: e^score ÷ sum of e^score. <b>Why e^?</b> Every weight is positive, order is kept, and score gaps become ratios (+1 = ×2.7). The ÷√2 comes first; next beat says why.',
+      3: '<code>(attn_scores / d_head**0.5)</code>, mask, then <code>.softmax(-1)</code> over posn_K. Inside, libraries subtract the row max for numerical safety: same result.' }, 'softmax'),
+    beat(SC[2], 9.5, 18, 'exercise', {
+      1: 'Why shrink scores first? Like a class vote: more voters make bigger margins by pure chance. Right panel: multiply the scores up and one lantern hogs all the light.',
+      2: 'A dot product adds d_head terms, so its size grows like <b>√d_head</b>. Dividing keeps scores near 1. Too big and softmax goes all-or-nothing, and then it stops learning.',
+      3: 'Unit-variance q, k entries give Var(q·k) = d_head. A saturated softmax has gradient ≈ 0, so the head stops training (ARENA\'s reason). <code>attn_scores / self.cfg.d_head ** 0.5</code>.' }, 'why ÷√d_head'),
+    beat(SC[3], 0, 9.5, 'core', {
+      1: '"on" comes <b>after</b> "sat". When the model writes, later words do not exist yet, so "sat" must not see them. Torn paper covers every seat to the right: covered = no light.',
+      2: '<b>Causal mask</b>: rows ask, columns answer; above the diagonal is the future, set to −∞ before softmax (e^−∞ = 0). <b>Why?</b> Training predicts all positions at once; a peek would copy the answer.',
+      3: '<code>mask = t.triu(t.ones(n, n), diagonal=1).bool()</code>; <code>attn_scores.masked_fill_(mask, self.IGNORE)</code> with IGNORE = −inf. Shape <code>[batch, n_heads, posn_Q, posn_K]</code>.' }, 'no peeking'),
+    beat(SC[3], 9.5, 22, 'core', {
+      1: 'The first word, "The", has nothing before it. With the rest covered, all its light must land on <b>itself</b>. "sat" now splits its light over "The", "cat" and itself.',
+      2: 'Every row of the masked pattern still sums to 1, so row 0 is forced to [1, 0, 0, 0]. Real heads often park spare attention on the first token as a resting spot.',
+      3: 'softmax([s, −inf, −inf, −inf]) = [1, 0, 0, 0]. Row "sat" = ' + vs(R0.A[QI]) + '. ARENA calls the BOS token a "rest position" for heads with nothing to do.' }, 'the first word'),
+    beat(SC[4], 0, 9, 'core', {
+      1: 'Each earlier word folds a paper plane with its <b>value</b>: the message it hands over, not its label. Brighter lantern, bigger plane. "sat" blends whatever arrives.',
+      2: '<b>v = x W_V</b>: what a word passes on, separate from its key, like a book\'s spine title vs its pages. <b>z</b> = Σ weight × v: a weighted average of the messages.',
+      3: '<code>z = einsum(v, attn_pattern, "b pK h d, b h pQ pK -> b pQ h d")</code>. Live z[sat] = ' + vs(R0.z[QI]) + '.' }, 'values'),
+    beat(SC[4], 9, 22, 'core', {
+      1: '"sat" translates the blend back into notebook language and <b>adds</b> it. The grey bars stay; a pink bar appears in the who? slot: a noun sat here, mostly "cat".',
+      2: '<b>W_O</b> maps z back to d_model and it is <b>added</b>: resid_mid = resid_pre + attn_out. <b>Why add?</b> Old information stays readable by every later layer.',
+      3: '<code>attn_out = einsum(z, W_O)</code> sums over heads and d_head. OV circuit W_V W_O = <i>what</i> moves; QK = <i>where from</i>. Live who? += ' + f2(R0.out[QI][3]) + '.' }, 'add, never overwrite'),
+    beat(SC[5], 0, 9, 'core', {
+      1: 'Several questions are asked at once. A second head asks "what\'s recent?" with its own arrows and writes its own teal note. The notes just stack up.',
+      2: 'Each head has its own W_Q, W_K, W_V, W_O and runs <b>in parallel</b> at every position. <b>Why many heads?</b> Each can track a different relationship at the same time.',
+      3: 'GPT-2 small: 12 heads × 12 layers, d_head = 64, n_heads · d_head = d_model = 768. Head 1, row "sat" = ' + vs(R1.A[QI]) + '.' }, 'many heads'),
+    beat(SC[5], 9, 18, 'core', {
+      1: 'Original + pink + teal note: a notebook is just the <b>sum</b> of what was written. Attention is where words <b>communicate</b>; the MLP, added next the same way, is where each <b>thinks</b> alone.',
+      2: 'Head outputs simply add: resid_mid = resid_pre + head 0 + head 1. The MLP then adds its term. Every layer reads the running total and writes one more term.',
+      3: '<code>attn_out = Σ_h z_h W_O[h]</code> (the einsum over nheads, d_head). Then <code>resid_post = mlp(ln2(resid_mid)) + resid_mid</code>. resid_mid[sat] = ' + vs(MID[QI]) + '.' }, 'a sum of notes', 'Framing: Karpathy, Zero to Hero'),
+    beat(SC[6], 0, 9, 'core', {
+      1: 'Because every note is <b>added</b>, you can tear one out and see exactly what it did. Tear out head 0\'s pink note and "sat" forgets who sat. That is how we look inside.',
+      2: 'The stream is a <b>sum of contributions</b>, so you can ask who wrote this (attribution), remove one term (ablation), or add your own (steering). One trick, used all course.',
+      3: '(Σ terms)·u = Σ (term·u): each head\'s share of a read direction u is a dot product; head 0 wrote ' + f2(R0.out[QI][3]) + ' to who?. LayerNorm makes this only approximately linear.' }, 'why we can read it'),
+    beat(SC[6], 9, 18, 'contested', {
+      1: 'Honest bit: real notebooks have no labels, and ideas overlap on the same lines. How best to read them is open. <b>Ask yourself:</b> what evidence would convince you a line means "who?"?',
+      2: 'Current method: find <b>directions</b> with linear tools (probes, SAEs). Open: how much of a model reads out linearly. What you need: the stream is a sum, so you can attribute and ablate.',
+      3: 'Superposition packs more features than dims (Elhage et al. 2022); some features are circular (Engels et al. 2024); SAEs vs transcoders is live work. The sum structure itself is exact.' }, 'where it stops'),
+    beat(SC[7], 0, 10, 'exercise', {
+      1: 'Everything you just watched is a handful of lines: ask, match, scale, mask. This is the recipe you write in ARENA [1.1] on Saturday 10 October.',
+      2: 'Part 1 of <code>Attention.forward</code>: q, k, v by einsum, every pair of scores, ÷√d_head, mask. You write it once; after that, every library does it for you.',
+      3: 'Names match ARENA: <code>attn_scores</code>, <code>apply_causal_mask</code>, <code>self.IGNORE</code>. Biases b_Q, b_K, b_V, b_O omitted for space; x = ln1(resid_pre).' }, 'your code 1/2'),
+    beat(SC[7], 10, 20, 'exercise', {
+      1: 'Then weigh, move, <b>add</b>. Same pattern as a search engine: match your query against keys, hand back the values. Your turn: drag the question arrow and watch the light.',
+      2: 'Part 2: softmax to a pattern, weighted sum of values into z, W_O back to d_model (summed over heads), then the residual add in the block.',
+      3: '<code>attn_pattern</code>, <code>z</code>, <code>attn_out</code>, then <code>resid_mid = self.attn(self.ln1(resid_pre)) + resid_pre</code>. When stuck, print every shape.' }, 'your code 2/2')
+  ]);
 
   /* ================= coda: drag the query, watch the notebook ================= */
   var C = { qi: 2, q: null, scale: true, drag: false, geo: null };
@@ -424,7 +487,9 @@
       { label: 'Map: causal mask', href: '../../index.html#map/node=softmax-attention-and-causal-mask' },
       { label: 'Map: residual stream', href: '../../index.html#map/node=residual-stream' },
       { label: 'Case: softmax attention', href: '../../index.html#cases/softmax-attention-and-causal-mask' },
-      { label: 'Case: residual stream', href: '../../index.html#cases/residual-stream' }
+      { label: 'Case: residual stream', href: '../../index.html#cases/residual-stream' },
+      { label: '3Blue1Brown: neural networks', href: 'https://www.3blue1brown.com/topics/neural-networks' },
+      { label: 'Karpathy: Zero to Hero', href: 'https://karpathy.ai/zero-to-hero.html' }
     ]
   });
 })();

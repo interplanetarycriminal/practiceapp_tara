@@ -167,6 +167,11 @@
     F.hand(ctx, title, r.x + r.w / 2, r.y + r.h / 2, Math.min(18, r.w / 7), '#2f3a1e', { seed: title }); ctx.restore();
   }
 
+  /* pass 2: acting. BT is set by the beat wrapper; at(x) = global time when scene time x happened. */
+  var BT = { g0: 0, from: 0 };
+  function at(x) { return BT.g0 + (x - BT.from); }
+  function act(l, keys, o) { var k = null, prev = 'idle'; keys.forEach(function (e) { if (l >= e[0]) { if (k) prev = k[1]; k = e; } }); o = o || {}; if (!k) return o; o.pose = k[1]; o.t0 = at(k[0]); o.from = prev; return o; }
+
   /* ---------------- predict, then watch (never gated) ---------------- */
   var PRED = { el: null, asked: false, choice: null, lastT: 0 };
   var PRED_T = 97;
@@ -192,12 +197,8 @@
   }
 
   /* ---------------- chapters ---------------- */
-  var chapters = [
-    { name: 'the rerun', start: 0, dur: 18, cap: {
-        1: 'A tape of <b>random words</b>, played twice. The first time, the model can only guess. The second time it gets it almost right. Let us find the machine that does that.',
-        2: 'Repeated random tokens: <code>[BOS] A B C D E F A B C D E F</code>. Loss is high on the first pass and falls on the rerun. Every number is computed live by a real 2-layer toy model.',
-        3: 'Same set-up as ARENA <code>generate_repeated_tokens</code>: BOS then a random half repeated. Toy: attention-only, 2 layers, d_model = 64, d_vocab = 12. ln(12) = 2.48 nats is pure guessing; the red bars sit at or above it, the green ones drop.' },
-      draw: function (ctx, t, l, W, H) {
+  var SC = [  // pass-2: scenes; captions live in the beats below
+    { name: 'the rerun', start: 0, dur: 18, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var top = ph(W) ? 150 : 170; layout(W, H, SEQ, top);
         // the VHS label with the question
         var lw = Math.min(W - 40, 420), ly = ph(W) ? 58 : 70;
@@ -217,11 +218,7 @@
         if (l > 9) lbl(ctx, 'the mind egg: 2 layers,', W - es * 1.3 - es * 1.5, H - es * 3.4, P.butter, 13, { align: 'right' });
         if (l > 9) lbl(ctx, 'attention only', W - es * 1.3 - es * 1.5, H - es * 3.4 + 17, P.butter, 13, { align: 'right' });
       } },
-    { name: 'two heads', start: 18, dur: 20, cap: {
-        1: 'Inside, two readers do the work. The first always looks one word back. The second looks at a slanted line: the word <b>after</b> the last time it saw the current word.',
-        2: 'Layer 0 has a <b>previous-token head</b>: its pattern is the sub-diagonal. Layer 1 has an <b>induction head</b>: a stripe offset by <code>seq_len - 1</code>, looking at what followed the earlier copy.',
-        3: 'Rows = destination, columns = source, <code>cache["pattern", layer][head]</code>. Induction score = mean of <code>pattern.diagonal(offset=1-seq_len)</code>. The prev-token score is the mean of the -1 diagonal. Both computed from the forward pass shown.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'two heads', start: 18, dur: 20, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W), s = pw ? Math.min((W - 60) / 2, H * .3) : Math.min(W * .26, H * .5), gap = pw ? 30 : 90;
         var x1 = (W - 2 * s - gap) / 2, x2 = x1 + s + gap, y = pw ? 150 : 170;
         var cw = pw ? s : Math.min(220, s), chh = cw * .56;
@@ -237,11 +234,7 @@
         if (l > 8) readout(ctx, x2 - 4, ry, [['induction ' + RUN.ind.toFixed(2), P.teal]], W);
         if (l > 11) { var sz = pw ? 15 : 19; F.note(ctx, pw ? 'one looks back,\none looks where\nthe past went next' : 'one looks back, one looks where the past went next', W / 2, Math.min(H - 60, ry + (pw ? 110 : 90)), sz, { color: P.pink, seed: 'two', rot: -.02, reveal: ramp(l, 11, 13) }); }
       } },
-    { name: 'the stamp', start: 38, dur: 22, cap: {
-        1: 'Head 0.7 is a rubber stamp. At every position it copies the word <b>just before</b> into a spare corner of that position\'s memory: "the word before me was Snake".',
-        2: 'The prev-token head reads the <b>token</b> part of position i-1 and writes it into a spare part of position i\'s residual stream. That write is its OV circuit: <code>W_OV = W_V W_O</code>.',
-        3: 'Block norms of the real <code>W_OV^0 = W_V W_O</code> (64x64) over named subspaces: only TOK -> PREV is lit. The QK side (<code>W_QK = W_Q W_K^T</code>) reads positions only, so it attends i -> i-1 whatever the tokens are. Real models use a messier basis; ARENA checks this with <code>pos_by_pos_pattern</code>.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the stamp', start: 38, dur: 22, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W);
         // two residual columns: position j-1 and j
         var j = 3, colW = pw ? 92 : 120, bh = pw ? 40 : 48, cx1 = pw ? W * .24 : W * .2, cx2 = pw ? W * .62 : W * .42, top = pw ? 40 : 60;
@@ -273,11 +266,7 @@
         }
         if (l > 13) { var ry = pw ? gy + gs + 34 : gy + gs + 40; readout(ctx, pw ? 16 : gx - 10, ry, [['|TOK->PREV| = ' + OV0B[0][2].toFixed(2), P.pink], ['every other block = ' + OV0B[1][0].toFixed(2), P.chalk]], W); }
       } },
-    { name: 'QK: where to look', start: 60, dur: 22, cap: {
-        1: 'Now head 1.4 asks every earlier position: "was the word <b>before you</b> the same as me?" A stamp that matches lights up, and the head looks there.',
-        2: 'The <b>QK circuit</b> decides where to look: the query reads my token, the key reads head 0.7\'s stamp. Bright diagonal = "attend where the previous token was me".',
-        3: 'Full K-composition circuit: <code>W_E W_QK^1 (W_E W_OV^0)^T</code>, query side straight from the embedding, key side routed through the prev-token head. ARENA <code>find_K_comp_full_circuit</code>; <code>top_1_acc(K_comp_circuit.T)</code> is the fraction of tokens whose max key is itself.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'QK: where to look', start: 60, dur: 22, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W); layout(W, H, SEQ, pw ? 28 : 34);
         var q = SEQ + 1 + Math.floor(Math.max(0, l - 4) / 3) % SEQ, tgt = q - SEQ + 1, hi = {}; hi[q] = 1; hi[tgt] = .8;
         drawTape(ctx, W, TOK, 1, l > 4 ? hi : null);
@@ -292,11 +281,7 @@
           ['diag mean ' + KCS.d.toFixed(1) + ', off-diag ' + KCS.off.toFixed(2), P.chalk],
           ['top_1_acc = ' + M.top1(M.Kcomp).toFixed(2), P.mint]], W);
       } },
-    { name: 'OV: what to copy', start: 82, dur: 22, cap: {
-        1: 'Looking is half the job. Whatever the head looks at, it then <b>repeats</b> as its guess. That copying is a separate machine from the looking.',
-        2: 'The <b>OV circuit</b> decides what gets moved: <code>W_E W_OV W_U</code>. Bright diagonal = "attend to Snake, push up the logit for Snake": a copying head.',
-        3: 'Full OV circuit <code>W_E @ OV_circuit @ W_U</code> with <code>OV_circuit = FactoredMatrix(W_V, W_O)</code>, d_vocab x d_vocab. Here W_V is identity plus 12% noise, and it still wins every row: <code>top_1_acc</code> is the fraction where the best logit sits on the diagonal (ARENA ~0.39 for 1.4 alone, higher once 1.10 is added).' },
-      draw: function (ctx, t, l, W, H, api) {
+    { name: 'OV: what to copy', start: 82, dur: 22, draw: function (ctx, t, l, W, H, api) {
         bg(ctx, W, H, t); predTick(t, api); var pw = ph(W);
         var s = pw ? Math.min(W - 70, H * .46) : Math.min(H * .62, W * .34), x = pw ? (W - s) / 2 + 8 : W * .14, y = pw ? 50 : 60;
         var col = Math.floor(l / 2.5) % M.V;
@@ -310,11 +295,7 @@
           var sz = pw ? 15 : 19; F.note(ctx, msg, pw ? W / 2 : rx + 170, pw ? Math.min(H - 40, ry + 110) : ry + 150, sz, { color: P.butter, seed: 'ans', reveal: ramp(l, 15.2, 16.5), rot: -.02 });
         }
       } },
-    { name: 'K-composition', start: 104, dur: 18, cap: {
-        1: 'The trick is teamwork. Head 1.4 cannot see "the word before" on its own. It reads the stamp that head 0.7 left behind. One head\'s output becomes the next head\'s question to ask.',
-        2: '<b>K-composition</b>: layer 0\'s OV output feeds layer 1\'s <b>keys</b>. Measured from weights alone, the score is double a random head\'s; Q-composition is zero.',
-        3: '<code>get_comp_score(W_A, W_B) = ||W_A W_B||_F / (||W_A||_F ||W_B||_F)</code> with <code>W_A = W_OV^0</code>, <code>W_B = W_QK^1.T</code> for K-comp. Baseline: a random Gaussian W_A. The rank-16 identity blocks cap the score at 1/4 here; ARENA subtracts a similar random baseline.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'K-composition', start: 104, dur: 18, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W);
         // diagram: head 0.7 -> residual PREV -> head 1.4 key
         var bw = pw ? 130 : 170, bh = pw ? 50 : 60, y1 = pw ? 60 : 80, y2 = pw ? 210 : 250, xa = pw ? W * .28 : W * .25, xb = pw ? W * .72 : W * .55;
@@ -335,25 +316,20 @@
             lbl(ctx, b[0], bx + 6, yy + 11, 12, P.chalk, { align: 'left' }); ctx.save(); ctx.font = '600 13px ' + F.MONO; ctx.fillStyle = P.chalk; ctx.fillText((b[1] * k).toFixed(3), bx + maxw + 8, yy + 16); ctx.restore(); });
         }
       } },
-    { name: 'ablate the stamp', start: 122, dur: 18, cap: {
-        1: 'Proof by removal: switch off the stamp and the second head goes blind. The slanted line fades and the rerun is as hard as the first time.',
-        2: 'Zero-ablate head 0.7: the stripe vanishes and rerun loss climbs back to guessing. <b>Where this story stops being true:</b> real models are not this tidy.',
-        3: 'Ablation scale s multiplies head 0.7\'s output before layer 1; the whole forward pass reruns every frame. In ARENA\'s 2L model both 1.4 and 1.10 do induction, heads are polysemantic, and bigger models have many (and backup) induction heads, so single-head ablations understate the job.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'ablate the stamp', start: 122, dur: 18, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W), sc = 1 - ramp(l, 2, 8), R = M.run(TOK, sc);
         var s = pw ? Math.min(W - 90, H * .4) : Math.min(H * .55, W * .3), x = pw ? (W - s) / 2 : W * .2, y = pw ? 44 : 60;
         heat(ctx, x, y, s, tri(R.A1), { title: 'layer 1 pattern', seed: 'ab' });
         var rx = pw ? 14 : x + s + 50, ry = pw ? y + s + 26 : y + 10;
         readout(ctx, rx, ry, [['head 0.7 output x ' + sc.toFixed(2), P.pink], ['induction score ' + R.ind.toFixed(2), P.teal], ['rerun loss ' + R.lossRerun.toFixed(2) + ' nats', P.mint]], W);
+        // pass 2: an experimenter pulls the lever on head 0.7, slumps at the lost stripe, then shrugs at the honest limits
+        var fs = Math.min(90, H * .12); F.paper(ctx, Math.max(46, W * .16), H - 20, fs * 1.2, 8, '#454a86', { seed: 'ledge7', shadow: false });
+        F.stick(ctx, Math.max(46, W * .16), H - 24, fs, t, act(l, [[0, 'think'], [1.6, 'pull'], [6.5, 'slump'], [10.4, 'shrug']], { scarf: P.pink, look: { x: x + s / 2, y: y + s / 2 } }));
         var p = ramp(l, 10.5, 12); F.cornerFlip(ctx, W, H, p, P.cream);
         if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 11.5, 12.5); var sz = pw ? 13 : 17, cx = W - Math.min(W, H) * .3, cy = H - Math.min(W, H) * .24;
           F.hand(ctx, 'real models: many heads', cx - sz, cy - sz * 1.5, sz, P.ink, { seed: 'w1', rot: -.62 }); F.hand(ctx, 'share this job, messily', cx + sz * .3, cy, sz, P.ink, { seed: 'w2', rot: -.62 }); ctx.restore(); }
       } },
-    { name: 'your code', start: 140, dur: 18, cap: {
-        1: 'The tape turns into the code you write in week 7. One fully understood circuit is proof that <b>steering by understanding</b> is possible: first read the mind, then nudge it.',
-        2: 'Stripe = induction score from <code>cache["pattern", 1]</code>; copier = <code>FactoredMatrix</code> full OV circuit. <b>One fully understood circuit is proof that steering by understanding is possible.</b>',
-        3: 'Pattern shape <code>[batch, head, dest, src]</code>; diagonal offset <code>1 - seq_len</code>; <code>full_OV_circuit[indices, indices].AB</code> samples without building the whole matrix. Knowing the circuit tells you which weights to edit and what the side effects will be.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'your code', start: 140, dur: 18, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W);
         var code = [
           '# the stripe (induction score)',
@@ -372,6 +348,80 @@
         if (l > 9) { var szz = pw ? 15 : 20; F.note(ctx, pw ? 'one fully understood circuit\nis proof that steering by\nunderstanding is possible' : 'one fully understood circuit is proof\nthat steering by understanding is possible', W / 2, H - (pw ? 80 : 90), szz, { color: P.pink, seed: 'steer', rot: -.015, reveal: ramp(l, 9, 12) }); }
       } }
   ];
+
+  /* ---------------- pass 2: caption beats ----------------
+     Each scene is split into beats sharing its drawing; timings unchanged (predict pause stays at 97 s).
+     need: core | exercise | library | contested */
+  function beat(c, from, to, need, cap, name) {
+    return { name: name || c.name, dur: to - from, need: need, cap: cap, draw: function (ctx, t, l, W, H, api) { BT.g0 = t - l; BT.from = from; return c.draw.call(c, ctx, t, from + l, W, H, api); } };
+  }
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  var chapters = seq([
+    beat(SC[0], 0, 9, 'core', {
+      1: 'A tape of <b>random words</b>, played twice. The first time the model can only guess. The second time it gets almost every word, like singing along to a song\'s second chorus. Let us find the machine.',
+      2: 'Repeated random tokens: <code>[BOS] A B C D E F A B C D E F</code>. Loss is high on the first pass (red) and falls on the rerun (green). Every number comes from a real toy model.',
+      3: 'Same set-up as ARENA <code>generate_repeated_tokens</code>. ln(12) = 2.48 nats is pure guessing over 12 tokens. Live mean loss: ' + RUN.lossPlay.toFixed(2) + ' → ' + RUN.lossRerun.toFixed(2) + '.' }),
+    beat(SC[0], 9, 18, 'exercise', {
+      1: 'The model inside is tiny on purpose: two layers, attention only, weights we can read. Small enough to take apart completely, like ARENA\'s own 2-layer model.',
+      2: 'Attention-only, 2 layers, one head that matters per layer, d_model = 64 split into named zones (token, position, previous, output). Real models are messier; the logic is the same.',
+      3: 'Toy: d_model 64 = TOK 16 + POS 14 + PREV 16 + OUT 16 + 2 spare; d_vocab 12; BOS sink. Weights are hand-built block identities, not trained.' }, 'the toy model'),
+    beat(SC[1], 0, 8, 'core', {
+      1: 'Inside, two readers. The first, head 0.7, always looks <b>one word back</b>: its bright squares sit just below the diagonal of its grid.',
+      2: 'Layer 0 has a <b>previous-token head</b>. In its attention pattern (rows = the word reading, columns = the word being read) the weight sits on the sub-diagonal.',
+      3: 'Rows = destination, columns = source, as in <code>cache["pattern", 0][7]</code>. Prev-token score = mean of the −1 diagonal = ' + RUN.prev.toFixed(2) + '.' }, 'look back'),
+    beat(SC[1], 8, 20, 'core', {
+      1: 'The second reader, head 1.4, looks along a slanted line: at the word that came <b>after</b> the last time it saw its own word. That is where the answer is.',
+      2: 'Layer 1 has an <b>induction head</b>: a stripe offset by seq_len − 1, looking at whatever followed the earlier copy of the current token.',
+      3: 'Induction score = mean of <code>pattern.diagonal(offset=1-seq_len)</code> = ' + RUN.ind.toFixed(2) + '. Both scores come from the forward pass drawn.' }, 'where the past went next'),
+    beat(SC[2], 0, 8, 'core', {
+      1: 'Head 0.7 is a rubber stamp. At every seat it copies the word <b>just before</b> into a spare corner of that seat\'s notebook: "the word before me was Snake".',
+      2: 'The prev-token head reads the <b>token</b> part of position i−1 and writes it into a spare part of position i\'s residual stream. That write is its OV circuit, W_OV = W_V W_O.',
+      3: 'Here the spare part is the PREV zone. In a real model it is whatever subspace the head learned to write into: you have to find it, nobody labels it.' }, 'the stamp'),
+    beat(SC[2], 8, 22, 'exercise', {
+      1: 'We can check this from the weights alone. Of all the zones this head could read and write, only one link lights up: <b>token in, previous-slot out</b>.',
+      2: 'Block norms of W_OV (how strongly each input zone maps to each output zone): only TOK → PREV is lit. Its QK side reads positions only, so it looks i → i−1 whatever the words.',
+      3: 'Frobenius norm per block of the 64×64 <code>W_V W_O</code>; W_QK = W_Q W_Kᵀ reads POS only. ARENA checks real L0H7 through its positional QK circuit (<code>pos_by_pos_pattern</code>).' }, 'read the weights'),
+    beat(SC[3], 0, 7, 'core', {
+      1: 'Now head 1.4 asks every earlier seat: "was the word <b>before you</b> the same as me?" A stamp that matches lights up, and the head looks there.',
+      2: 'The <b>QK circuit</b> decides where to look. Here the query reads my token and the key reads head 0.7\'s stamp. Matching stamp = high score = attention.',
+      3: 'Query from the TOK zone, key from the PREV zone: score_ij = E[t_i] W_QK stamp_j. The arrow on the tape is the live attention weight.' }, 'QK: where to look'),
+    beat(SC[3], 7, 22, 'exercise', {
+      1: 'The grid tries every word against every stamp at once. The bright diagonal says "look where the previous word was me", for every word in the vocabulary.',
+      2: 'Multiply the weights out to get a word-by-word table: row = my token, column = the token on the stamp. A bright diagonal means the head matches like with like.',
+      3: '<code>W_E W_QK^1 (W_E W_OV^0)^T</code> (ARENA <code>find_K_comp_full_circuit</code>). <code>top_1_acc(K_comp_circuit.T)</code> = ' + M.top1(M.Kcomp).toFixed(2) + ': rows whose best key is themselves.' }, 'the whole table'),
+    beat(SC[4], 0, 15, 'core', {
+      1: 'Looking is half the job. Once the head finds the right card, what does it <b>say</b>? This grid answers for every word: row = the word it looks at, column = the word it pushes up.',
+      2: 'The <b>OV circuit</b> decides what gets moved: <code>W_E W_OV W_U</code>, a vocab-by-vocab table of "attend to this, boost that". What would a bright diagonal mean?',
+      3: 'Full OV circuit <code>W_E @ FactoredMatrix(W_V, W_O) @ W_U</code>, d_vocab × d_vocab. W_V = identity + 12% noise. Diagonal mean ' + OVS.d.toFixed(2) + ', off-diagonal ' + OVS.off.toFixed(2) + '.' }, 'OV: what to say'),
+    beat(SC[4], 15, 22, 'core', {
+      1: 'A bright diagonal means: look at "Snake", say "Snake". The head <b>copies</b> whatever it looks at. Where to look + what to say = the whole trick.',
+      2: 'Identity-like OV = copy what you attend to. <code>top_1_acc</code> = share of rows whose biggest logit is on the diagonal: ' + M.top1(M.fullOV).toFixed(2) + ' here, despite the noise.',
+      3: 'ARENA: ~31% for 1.4 alone, 95.6% once 1.4 and 1.10 are summed (the job is split over two heads). <code>full_OV_circuit[idx].AB</code> avoids building the whole matrix.' }, 'a copying head'),
+    beat(SC[5], 0, 8, 'core', {
+      1: 'The trick is teamwork. Head 1.4 cannot see "the word before" by itself. It reads the stamp head 0.7 left behind: one head\'s output becomes the next head\'s key.',
+      2: '<b>K-composition</b>: layer 0\'s OV output feeds layer 1\'s <b>keys</b>. That is why induction needs two layers: the "word before" must be moved into place before it can be matched.',
+      3: 'Q-, K- and V-composition: a later head reads an earlier head\'s output into its Q, K or V. Induction heads are the textbook K-composition case (Elhage et al. 2021).' }, 'K-composition'),
+    beat(SC[5], 8, 18, 'exercise', {
+      1: 'We can measure the teamwork from the weights: how much of head 0.7\'s writing lands where head 1.4\'s keys read. About double a random head; zero for queries.',
+      2: 'A <b>composition score</b> says how much two heads\' matrices line up (0 = unrelated). A handy heuristic, not a law: ARENA itself calls measuring overlap an open question.',
+      3: '<code>get_comp_score(W_A, W_B) = ||W_A W_B||_F / (||W_A||_F ||W_B||_F)</code>; W_A = W_OV^0, W_B = W_QK^1ᵀ: ' + M.compK.toFixed(3) + ' vs random ' + M.compRand.toFixed(3) + '. Rank-16 blocks cap it at 1/4.' }, 'measure the teamwork'),
+    beat(SC[6], 0, 10, 'core', {
+      1: 'Proof by removal: turn the stamp off and the second head goes blind. The slanted line fades and the rerun becomes as hard as the first time.',
+      2: '<b>Ablation</b>: zero head 0.7\'s output and rerun. The stripe vanishes and rerun loss climbs back towards guessing. <b>Why?</b> A heatmap shows correlation; removal shows cause.',
+      3: 'Scale s multiplies head 0.7\'s output before layer 1; the whole forward pass reruns every frame. At s = 0: induction ' + RUN0.ind.toFixed(2) + ', rerun loss ' + RUN0.lossRerun.toFixed(2) + '.' }, 'ablate the stamp'),
+    beat(SC[6], 10, 18, 'contested', {
+      1: 'Honest bit: real models are not this tidy. Many heads share this job, some step in as backups, and one head does several jobs. The clean story is a start, not the whole truth.',
+      2: 'Current method: find circuits head by head. Emerging research: jobs spread over many heads and backups, and small-model stories may not carry over. You need: the ablate-and-measure loop.',
+      3: 'ARENA\'s 2L model has two induction heads (1.4, 1.10); bigger models have many, plus backups, so single-head ablations understate the job.' }, 'where it stops'),
+    beat(SC[7], 0, 9, 'exercise', {
+      1: 'The tape turns into the code you write this week: one line for the stripe, one matrix product for the copier.',
+      2: 'Stripe = induction score from <code>cache["pattern", 1]</code>; copier = the <code>FactoredMatrix</code> full OV circuit. You write both in [1.2]; afterwards they are your reading tools.',
+      3: 'Pattern shape <code>[batch, head, dest, src]</code>, diagonal offset <code>1 - seq_len</code>. Toy: score ' + RUN.ind.toFixed(2) + ', top_1_acc ' + M.top1(M.fullOV).toFixed(2) + '.' }, 'your code'),
+    beat(SC[7], 9, 18, 'core', {
+      1: 'One fully understood circuit shows <b>steering by understanding</b> is possible: read first, then nudge, knowing what will change. <b>Ask yourself:</b> what result would prove a circuit story wrong?',
+      2: 'Knowing the circuit tells you which weights or activations to touch, and what the side effects will be. That is the promise of interpretability for safety.',
+      3: 'Next: patching (week 8) tests which parts matter on real tasks; persona vectors and capping (week 12) steer along read-out directions.' }, 'steer by understanding')
+  ]);
 
   /* ---------------- coda: now you drive ---------------- */
   var C = { n: 6, s0: 1, seed: 1, toks: null, R: null, q: 0 };

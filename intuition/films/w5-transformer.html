@@ -70,11 +70,16 @@
   function pupil(ctx, i, t, o) {
     o = o || {}; var x = px(i), s = L.s;
     ctx.save(); ctx.globalAlpha *= o.a == null ? 1 : o.a;
-    F.person(ctx, x, L.feet, s, t, { face: i === 4 ? -1 : 1, coat: TC[i], scarf: i === 4 ? P.red : P.lav, lantern: false, walk: !!o.walk });
+    F.person(ctx, x, L.feet, s, t, { face: o.face || (i === 4 ? -1 : 1), coat: TC[i], scarf: i === 4 ? P.red : P.lav, lantern: false, walk: !!o.walk, pose: o.pose, t0: o.t0, from: o.from, look: o.look });
     F.paper(ctx, x, L.feet + 12, Math.max(34, F.textW(ctx, TOK[i], 13) + 12), 18, P.cream, { seed: 'tag' + i, rot: (i - 2) * .02, shadow: false });
     F.hand(ctx, TOK[i], x, L.feet + 12, 13, P.ink, { seed: 'tk' + i });
     ctx.restore();
   }
+  // pass 2: acting. BT is set by the beat wrapper; at(x) = global time when scene time x happened, so poses
+  // start (anticipation, overshoot) exactly on their scene beat and settle during held frames.
+  var BT = { g0: 0, from: 0 };
+  function at(x) { return BT.g0 + (x - BT.from); }
+  function act(l, keys, o) { var k = null, prev = 'idle'; keys.forEach(function (e) { if (l >= e[0]) { if (k) prev = k[1]; k = e; } }); o = o || {}; if (!k) return o; o.pose = k[1]; o.t0 = at(k[0]); o.from = prev; return o; }
   // notebook = this pupil's residual-stream vector, as four signed bars
   function notebook(ctx, i, vec, o) {
     o = o || {}; var x = px(i), w = L.nbw, h = L.nbh, y = L.nby + h / 2;
@@ -164,12 +169,8 @@
   function qAt(p) { var a0 = Math.atan2(qStart[1], qStart[0]), a1 = Math.atan2(Q[4][1], Q[4][0]), m0 = Math.hypot(qStart[0], qStart[1]), m1 = Math.hypot(Q[4][0], Q[4][1]), a = lerp(a0, a1, p), m = lerp(m0, m1, p); return [m * Math.cos(a), m * Math.sin(a)]; }
   function dots(q, i) { return K.map(function (k, j) { return j > i ? -Infinity : (q[0] * k[0] + q[1] * k[1]) / Math.SQRT2; }); }
 
-  var chapters = [
-    { name: 'the wish', start: 0, dur: 7, cap: {
-        1: 'A paper school corridor. The sentence "The cat sat on the…" is cut into pieces, one pupil per piece. The last pupil has one job: <b>guess the next word</b>.',
-        2: 'Scissors = the <b>tokenizer</b>. Each token gets an <b>embedding</b>: a starting note in its own notebook. That notebook is the <b>residual stream</b>.',
-        3: 'Tokens → ids → rows of W_E (plus W_pos). Here d_model = 4 named directions [det, animal, place, sky] so you can read the bars; GPT-2 small has 768 unnamed ones.' },
-      draw: function (ctx, t, l, W, H) {
+  var SC = [  // pass-2: scenes; captions live in the beats below
+    { name: 'the wish', start: 0, dur: 7, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         var strip = ramp(l, 0, .6), cut = ramp(l, .8, 3.8), fall = ramp(l, 3.8, 5.2), sy = lerp(H * .3, L.feet - L.s * .6, fall);
         for (var i = 0; i < 5; i++) {
@@ -178,29 +179,25 @@
         }
         if (l < 4) { var sxp = lerp(W / 2 - 2.5 * Math.min(L.col, L.por ? 70 : 120), W / 2 + 2.5 * Math.min(L.col, L.por ? 70 : 120), cut); scissors(ctx, sxp, H * .3 + 6, L.por ? 24 : 36, Math.abs(Math.sin(t * 12))); }
         var pa = ramp(l, 4.6, 6);
-        if (pa > 0) { for (i = 0; i < 5; i++) pupil(ctx, i, t, { a: pa }); for (i = 0; i < 5; i++) notebook(ctx, i, X0[i].map(function (v) { return v * ramp(l, 5 + i * .2, 6.2 + i * .2); }), { a: pa, hl: i === 4 }); }
+        if (pa > 0) { for (i = 0; i < 5; i++) pupil(ctx, i, t, act(l, i === 4 ? [[4.6, 'land'], [6.1, 'think']] : [[4.6 + i * .08, 'land'], [5.6, 'idle']], { a: pa })); for (i = 0; i < 5; i++) notebook(ctx, i, X0[i].map(function (v) { return v * ramp(l, 5 + i * .2, 6.2 + i * .2); }), { a: pa, hl: i === 4 }); }
         question(ctx, W, H, ramp(l, .3, 1), ramp(l, .3, 2));
         F.plane(ctx, lerp(-30, W + 30, l / 7), H * .2 + Math.sin(l * 2) * 10, 13, .08 + Math.cos(l * 2) * .1, P.cream);
       } },
-    { name: 'query & keys', start: 7, dur: 9, cap: {
-        1: 'Every earlier pupil wears a <b>badge</b> saying what their note is about. The last pupil holds up a <b>question card</b>: "who here helps me guess?" The closer a badge points to the question, the higher the score.',
-        2: 'Badges are <b>keys</b>, the card is a <b>query</b>. Score = dot product q·k: big when the arrows point the same way. Watch the scores change as the query swings round to its real direction.',
-        3: 'q = W_Q x, k = W_K x (d_head = 2 here, so you can see the plane). Score = q·k / √d_head. The numbers are recomputed from the drawn arrow every frame.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'query & keys', start: 7, dur: 9, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         var q = qAt(ramp(l, 1.5, 6.5)), s = dots(q, 4);
-        for (var i = 0; i < 5; i++) pupil(ctx, i, t); allNotebooks(ctx, X0, { 4: { hl: true } });
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t, i === 4 ? act(l, [[.8, 'point'], [9.2, 'push']], { look: { x: L.dx, y: L.dy } }) : act(l, FW.S[4][i] > 1.5 ? [[4 + i * .3, 'wave'], [9.2, 'idle']] : [[4 + i * .3, 'shrug'], [7.5, 'idle']]));
+        allNotebooks(ctx, X0, { 4: { hl: true } });
         dial(ctx, q, { keysA: ramp(l, .2, 1.2) });
-        for (var j = 0; j < 5; j++) { var a = ramp(l, 1 + j * .2, 1.6 + j * .2); if (a > 0) { ctx.save(); ctx.globalAlpha = a; F.blob(ctx, px(j) + L.s * .25, L.feet - L.s * .8, 9, TC[j], { seed: 'bd' + j, jit: .3 }); lbl(ctx, 'q·k ' + s[j].toFixed(2), px(j), L.feet - L.s * 2.05, P.chalk, 13); ctx.restore(); } }
+        // pass 2: raw q·k first; past l = 9 (the "divide by √d_head" beat) the label shrinks to the scaled score
+        var scl = ramp(l, 9.4, 10.4);
+        for (var j = 0; j < 5; j++) { var a = ramp(l, 1 + j * .2, 1.6 + j * .2); if (a > 0) { ctx.save(); ctx.globalAlpha = a; F.blob(ctx, px(j) + L.s * .25, L.feet - L.s * .8, 9, TC[j], { seed: 'bd' + j, jit: .3 }); lbl(ctx, scl < .5 ? 'q·k ' + (s[j] * Math.SQRT2).toFixed(2) : '÷√2 ' + s[j].toFixed(2), px(j), L.feet - L.s * 2.05, scl < .5 ? P.chalk : P.butter, 13 - 2 * Math.sin(scl * Math.PI)); ctx.restore(); } }
+        if (l > 9) { ctx.save(); ctx.globalAlpha = ramp(l, 9, 9.6); readout(ctx, -1, L.bot, [['d_head = 2  →  divide every score by √2', P.butter], ['bigger heads, bigger sums: ÷√d_head evens it out', P.chalk]], W); ctx.restore(); }
       } },
-    { name: 'softmax', start: 16, dur: 7, cap: {
-        1: 'Scores become <b>shares of attention</b> that add up to 1. The last pupil copies a little from everyone, mostly from "cat", "sat" and "on". Paper planes carry the notes.',
-        2: '<b>Softmax</b> turns scores into weights: e^score, then divide by the total. The copied notes (values) are added into the last notebook: the faint bars are what it had before.',
-        3: 'A = softmax(QKᵀ/√d_head), row for the last token. z = Σ_j A_j · v_j with v = W_V x (here W_V = 0.8·I, W_O = I). The notebook becomes x + z: the attention output is added, not written over.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'softmax', start: 16, dur: 7, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
         var A = FW.A[4], g = ramp(l, .3, 1.5);
-        for (var i = 0; i < 5; i++) pupil(ctx, i, t);
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t, i === 4 ? act(l, [[0, 'think'], [2, 'reach'], [4.3, 'write']], { look: { x: px(2), y: L.feet - L.s * 1.2 } }) : act(l, A[i] > .2 ? [[2 + i * .25, 'push']] : []));
         var mix = ramp(l, 2.5, 5.5), v = X0[4].map(function (x, d) { return lerp(x, FW.x1[d], mix); });
         var nbs = X0.slice(); nbs[4] = v; allNotebooks(ctx, nbs, { 4: { hl: true, ghost: X0[4] } });
         dial(ctx, FW.q, { keysA: 1 - ramp(l, 0, 1) * .6 });
@@ -208,13 +205,9 @@
         for (var j = 0; j < 5; j++) { var pp = clamp((l - 2 - j * .25) / 2.2, 0, 1); if (pp > 0 && pp < 1 && A[j] > .04) planeFly(ctx, j, 4, pp, 6 + 16 * A[j]); }
         readout(ctx, -1, L.bot, [['weights = softmax(q·k/√2)', P.butter], [A.map(function (w) { return w.toFixed(2); }).join('  '), P.chalk], ['sum = ' + A.reduce(function (a, b) { return a + b; }).toFixed(2), P.mint]], W);
       } },
-    { name: 'no peeking', start: 23, dur: 6, cap: {
-        1: 'One rule: <b>no reading ahead</b>. Each pupil may only read notes from seats before it (and its own). Later seats are covered with paper.',
-        2: 'This is the <b>causal mask</b>. The grid shows every pupil\'s attention at once: row = who is asking, column = whose note. Everything above the diagonal is zero.',
-        3: 'Masked scores are set to −∞ (ARENA: self.IGNORE) before softmax, so e^−∞ = 0. Row for "cat": [' + FW.A[1].slice(0, 2).map(function (w) { return w.toFixed(2); }).join(', ') + ', 0, 0, 0].' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'no peeking', start: 23, dur: 6, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
-        for (var i = 0; i < 5; i++) pupil(ctx, i, t, { a: i > 1 ? .55 : 1 });
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t, i === 1 ? act(l, [[1.6, 'lean-in']], { face: -1 }) : i > 1 ? act(l, [[1.3 + i * .15, 'shrug']], { a: .55 }) : {});
         allNotebooks(ctx, X0, { 1: { hl: true } });
         var cov = ramp(l, .4, 1.4);
         for (i = 2; i < 5; i++) { ctx.save(); ctx.globalAlpha = cov; F.paper(ctx, px(i), lerp(-80, L.feet - L.s * .8, F.ease.back(cov)), L.col * .86, L.s * 2.1, '#e9e1cf', { seed: 'cv' + i, rot: (i - 3) * .05 }); lbl(ctx, '−∞', px(i), L.feet - L.s * .8, P.ink, 18); ctx.restore(); }
@@ -234,13 +227,9 @@
         ctx.strokeStyle = P.red; ctx.lineWidth = 2; ctx.strokeRect(gx, gy + cs, cs * n, cs);
         ctx.restore();
       } },
-    { name: 'MLP lookup', start: 29, dur: 7, cap: {
-        1: 'Next the last pupil visits the <b>card catalogue</b>. One drawer matches what the notebook now says ("…on the") and adds a card: <b>a place word comes next</b>. Nothing is rubbed out.',
-        2: 'The <b>MLP</b> works like a lookup: each neuron checks the notebook for a pattern and, if it fires, adds its own note. Only the "place" drawer fires here; the other two stay shut.',
-        3: 'h = ReLU(W_in·x + b), out = W_out·h. Live: h = [' + FW.h.map(function (v) { return v.toFixed(2); }).join(', ') + ']. The residual update is x ← x + mlp(x): add, never overwrite.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'MLP lookup', start: 29, dur: 7, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
-        for (var i = 0; i < 5; i++) pupil(ctx, i, t);
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t, i === 4 ? act(l, [[.6, 'reach'], [3, 'write'], [5, 'cheer']], { look: { x: W / 2, y: L.dy } }) : {});
         var mix = ramp(l, 3, 5.5), v = FW.x1.map(function (x, d) { return lerp(x, FW.x2[d], mix); }), nbs = X0.slice(); nbs[4] = v;
         allNotebooks(ctx, nbs, { 4: { hl: true, ghost: FW.x1 } });
         // card catalogue
@@ -256,25 +245,18 @@
         var fp = ramp(l, 2.2, 4); if (fp > 0 && fp < 1) { var x = lerp(cx, px(4), fp), y = lerp(cy - ch / 6, L.nby, fp) - Math.sin(fp * Math.PI) * 40; F.note(ctx, 'a place!', x, y, 13, { color: P.mint, seed: 'card', tape: false, rot: fp * 2 }); }
         if (l > 4.2) { ctx.save(); ctx.globalAlpha = ramp(l, 4.2, 5); lbl(ctx, 'added, never erased', W / 2, L.bot + 14, P.mint, 16); ctx.restore(); }
       } },
-    { name: 'volume knob', start: 36, dur: 5, cap: {
-        1: 'After all that adding, some notebooks get very loud. A <b>volume knob</b> (like the wheel on a Walkman) rescales each notebook before anyone reads it, so no one shouts.',
-        2: '<b>LayerNorm</b>: subtract the average, divide by the spread. The pattern stays; the volume is steadied. The Walkman\'s track number is the layer: GPT-2 small has 12 of these blocks.',
-        3: 'LN(x) = (x − μ)/σ · γ + β (γ=1, β=0 here). Live: μ = ' + FW.ln.mu.toFixed(2) + ', σ = ' + FW.ln.sd.toFixed(2) + '. Pre-LN blocks apply ln1 before attn and ln2 before the MLP; ln_final before the unembed.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'volume knob', start: 36, dur: 5, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
-        for (var i = 0; i < 5; i++) pupil(ctx, i, t);
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t, i === 4 ? act(l, [[.5, 'reach'], [3.2, 'idle']], { look: { x: W / 2, y: L.dy } }) : {});
         var k = ramp(l, 1, 3), v = FW.x2.map(function (x, d) { return lerp(x, FW.ln.y[d] * .55, k); }), nbs = X0.slice(); nbs[4] = v;
         allNotebooks(ctx, nbs, { 4: { hl: true } });
         walkman(ctx, W / 2, L.dy, Math.min(W * .5, 240), 1, -2.5 + k * 2);
         readout(ctx, -1, L.bot, [['μ = ' + FW.ln.mu.toFixed(2) + '   σ = ' + FW.ln.sd.toFixed(2), P.butter], ['LN(x) = [' + FW.ln.y.map(function (a) { return a.toFixed(2); }).join(', ') + ']', P.chalk]], W);
       } },
-    { name: 'next word', start: 41, dur: 8, cap: {
-        1: 'Finally the last notebook is read aloud against every word the class knows. Each word gets a lantern: the brighter and lower it hangs, the more likely. <b>"mat"</b> wins. A teacher then nudges things so "mat" glows a bit brighter next time.',
-        2: 'The <b>unembedding</b> scores every vocabulary word against the notebook; softmax turns scores into probabilities. <b>Training</b> lowers −log p(correct word): one real gradient step shown.',
-        3: 'logits = W_U · LN(x); p = softmax(logits). Loss = −log p(mat) = ' + (-Math.log(FW.p[0])).toFixed(3) + '; after one SGD step on W_U (lr 0.5) it is ' + (-Math.log(FW1.p[0])).toFixed(3) + '. ∂L/∂logits = p − onehot.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'next word', start: 41, dur: 8, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
-        ctx.save(); ctx.globalAlpha = .35; for (var i = 0; i < 5; i++) pupil(ctx, i, t); ctx.restore();
+        ctx.save(); ctx.globalAlpha = .35; for (var i = 0; i < 4; i++) pupil(ctx, i, t); ctx.restore();
+        pupil(ctx, 4, t, act(l, [[0, 'think'], [1.6, 'cheer'], [4.6, 'recoil'], [6.4, 'celebrate']], { a: .9 }));
         var tr = ramp(l, 4.5, 6.5), p = FW.p.map(function (v, i) { return lerp(v, FW1.p[i], tr); });
         var top = L.por ? H * .08 : H * .06;
         ctx.save(); ctx.fillStyle = 'rgba(20,22,50,.55)'; ctx.fillRect(0, 0, W, H); ctx.restore();
@@ -282,13 +264,9 @@
         var loss = -Math.log(p[0]);
         readout(ctx, -1, L.por ? H * .66 : H * .7, [['p(mat) = ' + p[0].toFixed(3), P.butter], ['loss = −log p(mat) = ' + loss.toFixed(3), tr > 0 ? P.mint : P.chalk], [tr > 0 ? 'one training step on W_U…' : 'W_U · LN(notebook) → softmax', P.chalk]], W);
       } },
-    { name: 'where it stops being true', start: 49, dur: 5, cap: {
-        1: 'Honest bit: real notebooks don\'t have neat labelled rows. Thousands of ideas are <b>squeezed into the same page</b>, overlapping, like notes written on top of each other.',
-        2: 'Real models have hundreds of dimensions and far more features than that, stored in <b>overlapping directions</b> of one shared space. Reading a note means finding its direction.',
-        3: 'Features aren\'t basis-aligned: superposition packs more features than d_model (768) at small interference cost. Why we need probes, SAEs and patching (weeks 7–9).' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'where it stops being true', start: 49, dur: 5, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t);
-        for (var i = 0; i < 5; i++) pupil(ctx, i, t);
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t, i === 0 ? act(l, [[.8, 'shrug']]) : i === 2 ? act(l, [[1.4, 'think']], { face: 1 }) : {});
         var nbs = X0.slice(); nbs[4] = FW.x2; allNotebooks(ctx, nbs, { 4: { hl: true } });
         // smudged overlapping notes
         var r = F.rng('smudge'), a = ramp(l, 0, 1.2);
@@ -303,11 +281,7 @@
         if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 2.2, 3); var sz = W < 500 ? 14 : 18, x2 = W - Math.min(W, H) * .32, y2 = H - Math.min(W, H) * .22;
           F.hand(ctx, 'really: 768 dims,', x2, y2 - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'notes overlap', x2 + sz * .8, y2, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
       } },
-    { name: 'the code', start: 54, dur: 7, cap: {
-        1: 'The whole corridor fits in two lines: read the notebook, add attention\'s notes; read it again, add the lookup\'s notes.',
-        2: 'This is one <b>transformer block</b>. You\'ll build it yourself in [1.1] Transformer from Scratch.',
-        3: 'ARENA [1.1] TransformerBlock.forward: resid_mid = self.attn(self.ln1(resid_pre)) + resid_pre, then resid_post = self.mlp(self.ln2(resid_mid)) + resid_mid. Stack 12, add ln_final and unembed.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the code', start: 54, dur: 7, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t); ctx.save(); ctx.globalAlpha = .25; for (var i = 0; i < 5; i++) pupil(ctx, i, t); ctx.restore();
         var sz = W < 500 ? 13 : 18, cards = [
           ['the corridor', ['x = x + attn(ln1(x))', 'x = x + mlp(ln2(x))'], P.butter, 0],
@@ -324,11 +298,7 @@
         });
         var nbs = X0.slice(); nbs[4] = FW.x2; ctx.save(); ctx.globalAlpha = ramp(l, 4.5, 5.5); allNotebooks(ctx, nbs, { 4: { hl: true } }); lbl(ctx, 'x  =  the notebook  =  resid', W / 2, L.nby - 14, P.butter, 15); ctx.restore();
       } },
-    { name: 'why it matters', start: 61, dur: 4, cap: {
-        1: 'This notebook is where the mind keeps its working thoughts. It\'s the page we\'ll learn to read, and write on, to steer it.',
-        2: 'This notebook is the page we\'ll read, and write on, to steer. Every probe, patch and steering vector later in the course acts on the residual stream.',
-        3: 'Linear read-outs (logit lens, probes) and writes (activation steering: resid += α·v at a hook point) all target this stream.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'why it matters', start: 61, dur: 4, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t); F.vignette(ctx, W, H, .6);
         var nbs = X0.slice(); nbs[4] = FW.x2; ctx.save(); ctx.globalAlpha = .5; allNotebooks(ctx, nbs, { 4: { hl: true } }); ctx.restore();
         F.egg(ctx, W / 2, L.feet - L.s * 1.2, Math.min(W, H) * .13, t, { clear: ramp(l, 0, 2) * .8, features: [{ x: -.4, y: -.2, c: 'rgba(247,227,160,.9)' }, { x: .1, y: .1, c: 'rgba(185,227,204,.9)' }, { x: .4, y: -.4, c: 'rgba(243,179,195,.9)' }] });
@@ -337,6 +307,79 @@
         F.note(ctx, 'this notebook is the page\nwe\'ll read, and write on, to steer', W / 2, W < 500 ? 44 : 60, W < 500 ? 15 : 22, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore();
       } }
   ];
+
+  /* ---------------- pass 2: caption beats ----------------
+     beat(scene, from, to, dur, need, cap): plays scene seconds [from, to] at normal speed, then holds the last
+     frame for the rest of dur, so each caption gets reading time. need: core | exercise | library | contested. */
+  /* UPDATE 2: one small on-screen credit line when a beat borrows a framing (hub link in the coda) */
+  function credit(ctx, W, txt) { if (!txt) return; ctx.save(); ctx.globalAlpha = 1; ctx.font = '600 11px system-ui, -apple-system, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'top'; var w = ctx.measureText(txt).width; ctx.fillStyle = 'rgba(20,22,52,.7)'; ctx.fillRect(W - w - 17, 4, w + 12, 17); ctx.fillStyle = '#b9e3cc'; ctx.fillText(txt, W - 11, 7); ctx.restore(); }
+  function beat(c, from, to, dur, need, cap, name, cr) {
+    return { name: name || c.name, dur: dur, need: need, cap: cap, draw: function (ctx, t, l, W, H, api) { BT.g0 = t - l; BT.from = from; var r = c.draw.call(c, ctx, t, from + Math.min(l, to - from), W, H, api); credit(ctx, W, cr); return r; } };
+  }
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  var f2 = function (v) { return v.toFixed(2); }, RAW4 = FW.S[4].map(function (s) { return s * Math.SQRT2; }), RAWA = softmax(RAW4);
+  var chapters = seq([
+    beat(SC[0], 0, 4.6, 8, 'core', {
+      1: 'A paper corridor. The sentence "The cat sat on the…" is cut into five pieces, one pupil per piece. The last pupil has one job: <b>guess the next word</b>.',
+      2: 'The scissors are the <b>tokenizer</b>: text in, pieces called <b>tokens</b> out. Each token then looks up a starting note, its <b>embedding</b>: a list of numbers.',
+      3: '<code>tokens [seq]</code> → <code>W_E[tokens] + W_pos[:seq]</code> → <code>resid [batch, seq, d_model]</code>. Tokenizers are a library call for your whole career: know they exist, skip the internals.' }),
+    beat(SC[0], 4.6, 7, 7, 'core', {
+      1: 'Each pupil gets a <b>notebook</b>. Every later step may only <b>add</b> a note to it, never rub one out, so the first note is still there at the very end.',
+      2: 'The notebook is the <b>residual stream</b>: one list of d_model numbers per token (here 4: det, animal, place, sky). Every layer reads it and adds: x ← x + layer(x).',
+      3: '<b>Why add, not replace?</b> Nothing learned early is lost, and gradients flow straight back through each "+ x", which is why 12 (or 100) stacked layers still train. GPT-2 small: d_model = 768.' }, 'the notebook'),
+    beat(SC[1], 0, 3.5, 8, 'core', {
+      1: 'The last pupil holds up a <b>question card</b>: "who can tell me what comes after me?" Everyone wears a <b>badge</b> saying what their notebook offers. On the dial: badges and the question, as arrows.',
+      2: 'Question = <b>query</b> q, badge = <b>key</b> k. Both are made from the pupil\'s own notebook by a learned lens: q = x W_Q, k = x W_K. <b>Why two lenses?</b> What I seek ≠ what I advertise.',
+      3: '<code>W_Q, W_K: [d_model, d_head]</code>, one pair per head; q, k: <code>[batch, seq, n_heads, d_head]</code>. d_head = 2 here so the plane is drawable; GPT-2 small uses 64.' }, 'question & badges'),
+    beat(SC[1], 3.5, 9, 8, 'core', {
+      1: 'How well does a badge answer the question? Pointing the same way = strong match, sideways = none, opposite = "definitely not you". The number above each pupil is that match.',
+      2: 'Match = <b>dot product</b> q·k = q₁k₁ + q₂k₂: multiply matching entries, add. <b>Why a dot product?</b> It is the cheapest "same direction?" test, and W_Q, W_K learn what "same" should mean.',
+      3: '<code>attn_scores = einsum(q, k, "b sQ h d, b sK h d -> b h sQ sK")</code>: every query against every key. Live for "the": q·k = [' + RAW4.map(f2).join(', ') + '].' }, 'the match'),
+    beat(SC[1], 9, 11, 8, 'exercise', {
+      1: 'Before sharing, every score is <b>shrunk</b>. Like a class vote: the more voters, the bigger the typical winning margin, even when nobody cares much. Dividing by √(voters) cancels that.',
+      2: 'Divide each score by <b>√d_head</b> (here √2). A dot product adds d_head terms, so its size grows like √d_head. <b>Why?</b> Scores stay near 1 at any head size: softmax stays soft and keeps learning.',
+      3: 'If entries of q, k have variance 1, q·k has variance d_head. Too-large scores saturate softmax and its gradient ≈ 0. Weights here: ÷√2 [' + FW.A[4].map(f2).join(' ') + '] vs raw [' + RAWA.map(f2).join(' ') + '].' }, 'divide by √d_head'),
+    beat(SC[2], 0, 2.4, 8, 'core', {
+      1: 'The last pupil has <b>one bag of 100 marbles</b> of attention to share. Each claim grows fast with its score, and marbles are shared in proportion. Bars: the shares.',
+      2: '<b>Softmax</b>: weight = e^score ÷ sum of all e^score. <b>Why e^?</b> Weights come out positive, higher score always wins more, +1 score = 2.7× the share. Dividing by the sum makes them add to 1.',
+      3: '<code>attn_pattern = attn_scores.softmax(-1)</code>, over the key axis. Libraries subtract the row max first (same result, no overflow). Live row "the": [' + FW.A[4].map(f2).join(', ') + '].' }, 'share the attention'),
+    beat(SC[2], 2.4, 7, 8, 'core', {
+      1: 'Chosen pupils send <b>notes</b> as paper planes, bigger for more marbles, <b>added</b> to the last notebook. So <b>words update each other\'s meaning</b>: "the" now carries a blend of "cat sat on".',
+      2: 'The note is the <b>value</b> v = x W_V: not the badge (a spine title vs the pages). Output = Σ weight × v, a weighted average, <b>added</b> to the stream (faint bars = before).',
+      3: '<code>z = einsum(v, attn_pattern)</code>, then <code>z W_O</code> is added to resid (here W_V = 0.8·I, W_O = I). ARENA splits a head into QK (where to look) and OV (what to move).' }, 'hand over notes', 'Framing: 3Blue1Brown, neural-network series'),
+    beat(SC[3], 0, 6, 8, 'core', {
+      1: 'Exam rule: <b>no reading ahead</b>. A pupil may read only the seats before it, and its own. Later seats are papered over and get zero marbles. The grid shows every pupil\'s shares at once.',
+      2: 'The <b>causal mask</b> sets later scores to −∞ before softmax; e^−∞ = 0. <b>Why?</b> Training predicts every position at once from one sentence. Peeking at the next word would just copy the answer.',
+      3: '<code>attn_scores.masked_fill_(mask, self.IGNORE)</code>, <code>mask = triu(ones, diagonal=1)</code>, after ÷√d_head, before softmax. Row "cat": [' + FW.A[1].slice(0, 2).map(f2).join(', ') + ', 0, 0, 0].' }),
+    beat(SC[4], 0, 7, 8, 'core', {
+      1: 'Next, the <b>card catalogue</b>. Each drawer checks the notebook for one pattern. Only "…on the → a place" opens, and it adds a card: <b>a place word comes next</b>.',
+      2: 'Attention = tokens <b>communicate</b>; the <b>MLP</b> = each token <b>thinks</b> alone on what it gathered. Each neuron reads one direction, fires above a threshold (ReLU), adds a note.',
+      3: '<code>h = ReLU(x W_in + b_in)</code>, <code>resid += h W_out</code>. Live h = [' + FW.h.map(f2).join(', ') + ']. Real neurons fire for many unrelated things (superposition), not one tidy drawer each.' }, null, 'Framing: Karpathy, Zero to Hero'),
+    beat(SC[5], 0, 5, 7, 'exercise', {
+      1: 'After all that adding, some notebooks get loud. A <b>volume knob</b> sets each one to a steady level before it is read. The pattern stays; only the loudness changes.',
+      2: '<b>LayerNorm</b>: subtract the notebook\'s average, divide by its spread. <b>Why?</b> Sums keep growing layer after layer; this keeps each layer\'s input in a familiar range. Write it once, then it\'s a library call.',
+      3: 'LN(x) = (x − μ)/√(σ² + ε) · w + b (w = 1, b = 0 here); live μ = ' + FW.ln.mu.toFixed(2) + ', σ = ' + FW.ln.sd.toFixed(2) + '. Pre-LN: ln1 before attn, ln2 before MLP, ln_final before unembed.' }),
+    beat(SC[6], 0, 4.5, 7, 'core', {
+      1: 'Finally the notebook is read against every word the class knows. Each word gets a lantern: longer and brighter = more likely. <b>"mat"</b> wins with ' + Math.round(FW.p[0] * 100) + '%.',
+      2: 'The <b>unembedding</b> W_U scores every vocabulary word against the final notebook, one dot product each: the <b>logits</b>. Softmax turns them into probabilities, just as in attention.',
+      3: '<code>logits = ln_final(resid) @ W_U</code>, <code>[batch, seq, d_vocab]</code>; one prediction per position. Here p(mat) = ' + FW.p[0].toFixed(3) + '; GPT-2 small has d_vocab = 50,257.' }),
+    beat(SC[6], 4.5, 8, 8, 'core', {
+      1: 'A teacher marks the guess: the less likely the right word looked, the bigger the penalty. Then every knob is nudged a little so "mat" glows brighter next time. That nudge is <b>learning</b>.',
+      2: '<b>Loss</b> = −log p(right word): 0 if sure and right, huge if it gave ~0%. <b>Why log?</b> A text\'s probability is a product; logs make it a sum, and confident mistakes cost the most.',
+      3: 'Cross-entropy; ∂L/∂logits = p − onehot(target). One SGD step on W_U (lr 0.5): loss ' + (-Math.log(FW.p[0])).toFixed(3) + ' → ' + (-Math.log(FW1.p[0])).toFixed(3) + '. Real training averages this over every position of every sequence.' }, 'learning'),
+    beat(SC[7], 0, 5, 9, 'contested', {
+      1: 'Honest bit: real notebooks have no neat labelled rows. Far more ideas than lines are <b>squeezed onto one page</b>, overlapping. Exactly how is still being worked out.',
+      2: 'Current view: ideas are <b>directions</b>, and more ideas than dimensions share the space (superposition). Open: are they all straight directions? Some found are circles. You need: look for directions.',
+      3: 'Linear-representation + superposition hypotheses (toy-model evidence, Elhage et al. 2022). Open: non-linear features (e.g. circular weekdays); best way to split them (SAEs, transcoders). Weeks 7-9.' }),
+    beat(SC[8], 0, 7, 8, 'exercise', {
+      1: 'The whole corridor fits in two lines: read the notebook, add attention\'s notes; read it again, add the catalogue\'s notes. Stack that block 12 times.',
+      2: 'That is one <b>transformer block</b>. You build it once in [1.1] Transformer from Scratch (LayerNorm, Embed, Attention, MLP, Unembed); after that, libraries build it for you.',
+      3: 'ARENA [1.1] <code>TransformerBlock.forward</code>: <code>resid_mid = self.attn(self.ln1(resid_pre)) + resid_pre</code>, then <code>resid_post = self.mlp(self.ln2(resid_mid)) + resid_mid</code>.' }),
+    beat(SC[9], 0, 4, 6, 'core', {
+      1: 'This notebook holds the model\'s working thoughts: the page we will learn to read, and write on, to steer it. <b>Ask yourself:</b> what would break if we deleted the "+ x"?',
+      2: 'Every probe, patch and steering vector later in the course reads from, or adds to, the residual stream. Same pattern as a computer\'s <b>bus</b>: many parts, one shared channel.',
+      3: 'Linear read-outs (logit lens, probes) and writes (steering: <code>resid += α·v</code> at a hook point) all target this stream.' })
+  ]);
 
   /* ---------------- coda: aim the query yourself ---------------- */
   var C = { q: Q[4].slice(), drag: false };
@@ -353,7 +396,7 @@
     draw: function (ctx, t, W, H, api) {
       lay(W, H); bg(ctx, W, H, t);
       var R = forward(C.q);
-      for (var i = 0; i < 5; i++) pupil(ctx, i, t);
+      for (var i = 0; i < 5; i++) pupil(ctx, i, t, i === 4 ? { pose: 'point', look: { x: L.dx + C.q[0] * L.dr / 3.3, y: L.dy - C.q[1] * L.dr / 3.3 } } : {});
       var nbs = X0.slice(); nbs[4] = R.x2; allNotebooks(ctx, nbs, { 4: { hl: true, ghost: X0[4] } });
       dial(ctx, C.q); weightBars(ctx, R.A[4], 1);
       var idx = VOC.map(function (w, i) { return i; }).sort(function (a, b) { return R.p[b] - R.p[a]; }).slice(0, 5);
@@ -376,7 +419,9 @@
       { label: 'Map: residual stream', href: '../../index.html#map/node=residual-stream' },
       { label: 'Map: causal mask', href: '../../index.html#map/node=softmax-attention-and-causal-mask' },
       { label: 'Case: transformer architecture', href: '../../index.html#cases/transformer-architecture' },
-      { label: 'Case: residual stream', href: '../../index.html#cases/residual-stream' }
+      { label: 'Case: residual stream', href: '../../index.html#cases/residual-stream' },
+      { label: '3Blue1Brown: neural networks', href: 'https://www.3blue1brown.com/topics/neural-networks' },
+      { label: 'Karpathy: Zero to Hero', href: 'https://karpathy.ai/zero-to-hero.html' }
     ]
   });
   // keep the canvas crisp when the coda panel changes the stage height
