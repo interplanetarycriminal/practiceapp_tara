@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Choose a word, open the hood</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /* ---------------- the real maths: logits -> temperature -> top-k / top-p -> sample ----------------
+     Toy logits for the word after "The cat sat on the"; the final logits are a base plus four
+     attention heads' direct contributions, so zeroing a head (a hook) really changes them. */
+  var VOC = ['mat', 'sofa', 'rug', 'bed', 'floor', 'hat', 'dog', 'moon'];
+  var LOG = [3.0, 2.5, 2.1, 1.6, 1.4, 0.8, 0.1, -0.6];
+  var HEADS = [
+    { name: 'L1H0', what: 'furniture', c: [1.2, .9, 1.0, .6, .5, 0, -.3, -.5] },
+    { name: 'L1H1', what: 'animal', c: [0, .2, 0, .3, 0, .2, .8, 0] },
+    { name: 'L1H2', what: 'prev "the"', c: [.2, .1, .1, .1, .2, .4, .2, .3] },
+    { name: 'L1H3', what: 'rhymes w/ cat', c: [.9, 0, 0, 0, 0, .9, 0, 0] }];
+  function logitsWith(off) { return LOG.map(function (v, i) { var s = v; HEADS.forEach(function (h, j) { if (off && off[j]) s -= h.c[i]; }); return s; }); }
+  function softmax(z) { var m = Math.max.apply(null, z), e = z.map(function (v) { return Math.exp(v - m); }), S = e.reduce(function (a, b) { return a + b; }, 0); return e.map(function (v) { return v / S; }); }
+  // mirrors ARENA's TransformerSampler: apply_temperature, then sample_top_k / sample_top_p
+  function dist(lg, T, k, p) {
+    var q = softmax(lg.map(function (v) { return v / T; })), idx = q.map(function (v, i) { return i; }).sort(function (a, b) { return q[b] - q[a]; }), keep = q.map(function () { return true; }), c = 0;
+    if (k > 0) idx.forEach(function (i, r) { if (r >= k) keep[i] = false; });
+    if (p > 0) idx.forEach(function (i) { if (c >= p) keep[i] = false; c += q[i]; });
+    var S = 0; q.forEach(function (v, i) { if (keep[i]) S += v; });
+    return { raw: q, p: q.map(function (v, i) { return keep[i] ? v / S : 0; }), keep: keep, idx: idx };
+  }
+  function draw(d, u) { var c = 0; for (var i = 0; i < d.p.length; i++) { c += d.p[i]; if (u < c) return i; } return d.idx[0]; }
+  function entropy(p) { var h = 0; p.forEach(function (v) { if (v > 0) h -= v * Math.log2(v); }); return h; }
+  var U_FILM = 0.52; // the film's one "random" draw, fixed so every viewing matches the captions
+
+  /* ---------------- layout ---------------- */
+  var L = {};
+  function lay(W, H) {
+    L.W = W; L.H = H; L.por = H > W * 1.1; L.n = VOC.length;
+    L.cw = Math.min((W - 16) / L.n, 110); L.x0 = W / 2 - L.cw * L.n / 2;
+    L.base = H * (L.por ? .72 : .78); L.hmax = H * (L.por ? .36 : .34);
+    L.top = H * (L.por ? .2 : .2);
+  }
+  function lx(i) { return L.x0 + L.cw * (i + .5); }
+  function bg(ctx, W, H, t) { F.sky(ctx, W, H, P.night, '#34396e'); F.stars(ctx, W, H, t, 'w6', 50); F.paper(ctx, W / 2, L.base + (H - L.base) / 2 + 30, W + 20, H - L.base + 30, '#2e3466', { seed: 'table', shadow: false }); }
+  // lanterns on poles: pole height = logit, glow & size = probability
+  function lanterns(ctx, lg, d, t, o) {
+    o = o || {}; var lo = -1.5, hi = 4.5;
+    for (var i = 0; i < L.n; i++) {
+      var x = lx(i), h = (lg[i] - lo) / (hi - lo) * L.hmax, y = L.base - h, pr = d ? d.p[i] : 0, cut = d && !d.keep[i];
+      ctx.save(); ctx.globalAlpha = cut ? .3 : 1;
+      ctx.strokeStyle = '#a58b6a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x, L.base); ctx.lineTo(x, y); ctx.stroke();
+      F.lantern(ctx, x, y - 8, Math.min(13, L.cw * .26) * (.6 + Math.sqrt(pr) * 1.1), pr > .08 ? 1 : .15 + pr * 6, t + i);
+      ctx.restore();
+      F.hand(ctx, VOC[i], x, L.base + 13, L.W < 500 ? 12 : 15, o.pick === i ? P.butter : cut ? 'rgba(253,250,240,.35)' : P.chalk, { seed: 'v' + i });
+      if (d) F.hand(ctx, (pr * 100).toFixed(pr < .1 ? 1 : 0) + '%', x, L.base + 29, L.W < 500 ? 11 : 13, cut ? 'rgba(253,250,240,.35)' : P.mint, { seed: 'p' + i, bold: false });
+      if (o.showLogit) F.hand(ctx, lg[i].toFixed(1), x, y - 28, 11, P.butter, { seed: 'l' + i, bold: false, outline: 3, outlineColor: 'rgba(20,20,50,.7)' });
+    }
+  }
+  function readout(ctx, x, y, lines, W) {
+    var sz = W < 500 ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    if (x < 0) x = (W - w - 22) / 2;
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.9)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+  }
+  function lbl(ctx, text, x, y, color, sz) { F.hand(ctx, text, x, y, sz || 15, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: text }); }
+  // paper fortune-teller (cootie catcher), opening and closing
+  function fortune(ctx, x, y, s, open, text, reveal) {
+    var cols = [P.pink, P.butter, P.mint, P.sky];
+    for (var k = 0; k < 4; k++) {
+      var a = k * Math.PI / 2 + Math.PI / 4, off = s * .12 * open;
+      ctx.save(); ctx.translate(x + Math.cos(a) * off, y + Math.sin(a) * off); ctx.rotate(a);
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(s * .55, -s * .42); ctx.lineTo(s * .75, 0); ctx.lineTo(s * .55, s * .42); ctx.closePath();
+      ctx.fillStyle = cols[k]; ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 8; ctx.fill(); ctx.shadowBlur = 0;
+      ctx.strokeStyle = 'rgba(42,41,52,.4)'; ctx.lineWidth = 1; ctx.stroke(); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(s * .75, 0); ctx.stroke();
+      ctx.restore();
+    }
+    if (text) F.note(ctx, text, x, y + s * .95, L.W < 500 ? 16 : 20, { rot: -.03, seed: 'q', reveal: reveal, color: P.cream });
+  }
+  function sentence(ctx, words, y, hiLast) {
+    var sz = L.W < 500 ? 14 : 18, txt = words.join(' '), w = F.textW(ctx, txt, sz) + 26;
+    F.paper(ctx, L.W / 2, y, Math.min(L.W - 12, w), sz * 2, P.cream, { seed: 'sent' + words.length, rot: -.01 });
+    var x = L.W / 2 - (w - 26) / 2;
+    words.forEach(function (wd, i) { var ww = F.textW(ctx, wd + ' ', sz); F.hand(ctx, wd, x, y, sz, hiLast && i === words.length - 1 ? '#d9622b' : P.ink, { align: 'left', seed: 'w' + i }); x += ww; });
+  }
+  function egg(ctx, x, y, s, t, clear, inner) { F.egg(ctx, x, y, s, t, { clear: clear, inner: inner }); }
+  // the mind egg sits on the table, watching its own lanterns
+  function sitEgg(ctx, t, beep) { var s = Math.min(26, L.W * .065), x = L.W < 500 ? s * 1.6 : L.W * .12, y = L.base + (L.H - L.base) * .5; egg(ctx, x, y, s, t + (beep ? Math.sin(t * 30) * .05 : 0), 0); if (beep) F.hand(ctx, 'beep!', x + s * 1.3, y - s * 1.2, 13, P.butter, { seed: 'beep', outline: 3, outlineColor: 'rgba(20,20,50,.8)' }); }
+  function tap(ctx, x, y, s, open, label, hl) {
+    ctx.save(); ctx.fillStyle = '#c99a3c'; ctx.strokeStyle = '#6d4f1c'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, s * .45, 0, 6.283); ctx.fill(); ctx.stroke();
+    ctx.translate(x, y); ctx.rotate(open ? 0 : Math.PI / 2); ctx.fillStyle = hl ? P.red : '#e2b85a'; ctx.fillRect(-s * .7, -s * .12, s * 1.4, s * .24); ctx.strokeRect(-s * .7, -s * .12, s * 1.4, s * .24);
+    ctx.restore();
+    if (label) F.hand(ctx, label, x, y + s * .95, 11, hl ? P.red : P.chalk, { seed: 'tp' + label, bold: true, outline: 3, outlineColor: 'rgba(20,20,50,.8)' });
+  }
+  // the plumbing: residual pipe with four head taps feeding in
+  function plumbing(ctx, t, off, a, o) {
+    o = o || {}; var W = L.W, y = L.top * .95, x0 = W * .06, x1 = W * .94, s = Math.min(26, W * .06);
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.strokeStyle = '#8f7a5a'; ctx.lineWidth = s * .7; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    ctx.strokeStyle = '#b89c70'; ctx.lineWidth = s * .35; ctx.beginPath(); ctx.moveTo(x0, y - s * .1); ctx.lineTo(x1, y - s * .1); ctx.stroke();
+    // flowing droplets = the residual stream
+    for (var k = 0; k < 10; k++) { var fx = x0 + ((t * 60 + k * (x1 - x0) / 10) % (x1 - x0)); ctx.fillStyle = 'rgba(169,201,239,.9)'; ctx.beginPath(); ctx.arc(fx, y, 3, 0, 6.283); ctx.fill(); }
+    o.hx = []; for (var j = 0; j < 4; j++) {
+      var hx = lerp(x0, x1, (j + 1) / 5), hy = y - s * 2.1; o.hx.push([hx, hy]);
+      ctx.strokeStyle = '#8f7a5a'; ctx.lineWidth = s * .35; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(hx, y); ctx.stroke();
+      tap(ctx, hx, hy, s, !(off && off[j]), HEADS[j].name, off && off[j]);
+    }
+    F.hand(ctx, 'residual stream →', x0 + 6, y + s * .9, 11, P.sky, { align: 'left', seed: 'rs', bold: false });
+    ctx.restore(); return o.hx;
+  }
+
+  var chapters = [
+    { name: 'the fortune-teller', start: 0, dur: 5, cap: {
+        1: 'The mind egg has read "The cat sat on the…" and must now <b>pick one word</b>. Each candidate word is a lantern on a pole: the taller the pole, the more the egg likes it.',
+        2: 'Pole height = the word\'s <b>logit</b>, the raw score the model outputs. Scores are not yet probabilities; the next steps turn them into a choice.',
+        3: 'logits: Float[Tensor, "d_vocab"], one per vocabulary item (50,257 in GPT-2; 8 here). Toy values, real maths from here on.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        fortune(ctx, W / 2, L.top * .55, Math.min(W, H) * .14, (Math.sin(t * 5) + 1) / 2, 'which word, and why?', ramp(l, .4, 2));
+        var g = ramp(l, 1.2, 3); lanterns(ctx, LOG.map(function (v) { return lerp(-1.5, v, g); }), null, t, { showLogit: g > .95 }); sitEgg(ctx, t);
+        sentence(ctx, ['The', 'cat', 'sat', 'on', 'the', '___'], H - 22, false);
+      } },
+    { name: 'temperature', start: 5, dur: 6, cap: {
+        1: 'A <b>temperature</b> dial. Turn it down and the favourite lantern blazes while the rest go dark. Turn it up and every lantern glows about the same.',
+        2: 'Divide every logit by T, then softmax. Low T: nearly always the top word (safe, repetitive). High T: flatter, more surprising, more nonsense.',
+        3: 'p = softmax(logits / T). As T→0 this becomes argmax (greedy); T→∞ gives uniform. Entropy shown live, in bits (max 3 for 8 words).' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        var T = l < 2.5 ? lerp(1, .3, ramp(l, .3, 2.2)) : l < 4.8 ? lerp(.3, 2.5, ramp(l, 2.5, 4.5)) : lerp(2.5, 1, ramp(l, 4.8, 5.8));
+        var d = dist(LOG, T, 0, 0); lanterns(ctx, LOG, d, t); sitEgg(ctx, t);
+        // the dial
+        var cx = W / 2, cy = L.top * .6, r = Math.min(W, H) * .1; F.blob(ctx, cx, cy, r, P.cream, { seed: 'dial' }); var ang = -2.4 + (Math.log(T) - Math.log(.2)) / (Math.log(3) - Math.log(.2)) * 4.8;
+        ctx.save(); ctx.strokeStyle = P.red; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.sin(ang) * r * .8, cy - Math.cos(ang) * r * .8); ctx.stroke(); ctx.restore();
+        F.hand(ctx, 'cool', cx - r * 1.35, cy + r * .6, 13, P.sky, { seed: 'cool' }); F.hand(ctx, 'hot', cx + r * 1.3, cy + r * .6, 13, P.orange, { seed: 'hot' });
+        readout(ctx, -1, cy + r + 12, [['T = ' + T.toFixed(2) + '   p(mat) = ' + d.p[0].toFixed(2), P.butter], ['entropy = ' + entropy(d.p).toFixed(2) + ' bits', P.chalk]], W);
+      } },
+    { name: 'top-k', start: 11, dur: 4, cap: {
+        1: 'Rule one for avoiding nonsense: only keep the <b>top few</b> lanterns. Here, the best 3. The rest are snipped off and their share goes to the survivors.',
+        2: '<b>Top-k</b>: keep the k highest-probability words, set the rest to zero, renormalise. Simple, but k doesn\'t care whether the model is sure or unsure.',
+        3: 'sample_top_k(logits, k): topk → sample among those k. With k=3 at T=1: p(mat) rises from ' + dist(LOG, 1, 0, 0).p[0].toFixed(2) + ' to ' + dist(LOG, 1, 3, 0).p[0].toFixed(2) + '.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        var d = ramp(l, .8, 1.6) > .5 ? dist(LOG, 1, 3, 0) : dist(LOG, 1, 0, 0); lanterns(ctx, LOG, d, t); sitEgg(ctx, t);
+        var sx = lerp(lx(2.5) - 10, lx(2.5), ramp(l, 0, .8)); ctx.save(); ctx.strokeStyle = P.red; ctx.setLineDash([6, 6]); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(sx, L.base - L.hmax - 20); ctx.lineTo(sx, L.base + 36); ctx.stroke(); ctx.restore();
+        lbl(ctx, 'k = 3 ✂', sx, L.base - L.hmax - 34, P.red, 16);
+        readout(ctx, -1, L.top * .3, [['top-k, k = 3', P.butter], ['kept: ' + VOC.filter(function (w, i) { return d.keep[i]; }).join(', '), P.chalk]], W);
+      } },
+    { name: 'top-p', start: 15, dur: 4, cap: {
+        1: 'Rule two is smarter: keep lanterns until together they hold <b>90%</b> of the light. When the egg is sure, that\'s very few words; when it\'s unsure, many.',
+        2: '<b>Top-p</b> (nucleus): sort by probability, keep the smallest set whose total reaches p = 0.9, renormalise. The ribbon below adds up the shares.',
+        3: 'sample_top_p: sort, cumsum, keep up to and including the token that crosses p. Cumulative here: ' + (function () { var d = dist(LOG, 1, 0, 0), c = 0; return d.idx.slice(0, 5).map(function (i) { c += d.raw[i]; return c.toFixed(2); }).join(', '); })() + ' → 5 kept.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        var d0 = dist(LOG, 1, 0, 0), d = ramp(l, 2, 2.6) > .5 ? dist(LOG, 1, 0, .9) : d0; lanterns(ctx, LOG, d, t); sitEgg(ctx, t);
+        // the cumulative ribbon
+        var rw = Math.min(W - 40, 600), rx = W / 2 - rw / 2, ry = L.top * .45, rh = 22, c = 0, grow = ramp(l, .2, 2);
+        F.paper(ctx, W / 2, ry + rh / 2, rw + 16, rh + 30, P.cream, { seed: 'rib' });
+        var cols = [P.orange, P.pink, P.mint, P.sky, P.lav, P.butter, P.peach, P.green];
+        d0.idx.forEach(function (i, r) { var w = d0.raw[i] * rw * grow; ctx.fillStyle = cols[r]; ctx.globalAlpha = d.keep[i] ? 1 : .3; ctx.fillRect(rx + c, ry, w, rh); ctx.globalAlpha = 1; if (w > 26) F.hand(ctx, VOC[i], rx + c + w / 2, ry + rh / 2, 11, P.ink, { seed: 'rb' + i }); c += w; });
+        var px90 = rx + rw * .9; ctx.strokeStyle = P.red; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(px90, ry - 8); ctx.lineTo(px90, ry + rh + 8); ctx.stroke();
+        F.hand(ctx, 'p = 0.9', px90, ry + rh + 16, 12, P.red, { seed: 'p90' });
+        readout(ctx, -1, ry + rh + 34, [['top-p = 0.9 → keep ' + d.keep.filter(Boolean).length + ' of 8', P.butter]], W);
+      } },
+    { name: 'pick one', start: 19, dur: 4, cap: {
+        1: 'Now a paper plane is thrown at the lanterns, and wherever it lands is the word. This time it lands on <b>"sofa"</b>, not the favourite. That\'s what sampling means.',
+        2: 'Draw a random number u in [0,1) and walk along the ribbon until the running total passes u. Here u = ' + U_FILM + ', which lands on "sofa". Beep!',
+        3: 'Inverse-CDF sampling from the top-p distribution (torch.distributions.Categorical / multinomial). Greedy would always say "mat"; sampling keeps text varied.' },
+      draw: function (ctx, t, l, W, H, api) {
+        lay(W, H); bg(ctx, W, H, t);
+        var d = dist(LOG, 1, 0, .9), pick = draw(d, U_FILM), landed = l > 2; lanterns(ctx, LOG, d, t, { pick: landed ? pick : -1 }); sitEgg(ctx, t, landed && l < 3);
+        var tx = lx(pick), ty = L.base - (LOG[pick] + 1.5) / 6 * L.hmax - 10, fp = ramp(l, .3, 2);
+        if (!landed) F.plane(ctx, lerp(-20, tx, fp), lerp(L.top * .4, ty, fp) - Math.sin(fp * Math.PI) * 60, 16, .5, P.cream);
+        else { F.glow(ctx, tx, ty, 50, 'rgba(255,214,120,.8)', .6 + .4 * Math.sin(t * 8)); if (!this.beeped) { this.beeped = 1; api.audio.blip(1320); } }
+        if (l < .2) this.beeped = 0;
+        var cum = 0, i0; for (i0 = 0; i0 < 8; i0++) { if (U_FILM < cum + d.p[i0]) break; cum += d.p[i0]; }
+        readout(ctx, -1, L.top * .3, [['u = ' + U_FILM.toFixed(2), P.butter], ['cumulative: ' + cum.toFixed(2) + ' < u < ' + (cum + d.p[pick]).toFixed(2), P.chalk], ['→ "' + VOC[pick] + '"', P.mint]], W);
+        sentence(ctx, ['The', 'cat', 'sat', 'on', 'the', landed ? VOC[pick] : '___'], H - 22, landed);
+      } },
+    { name: 'KV cache', start: 23, dur: 7, cap: {
+        1: 'To pick the <b>next</b> word the egg would have to re-read the whole sentence. Instead it keeps a recipe box of index cards, one per word it has already read, and only writes one new card each time.',
+        2: 'The <b>KV cache</b> stores every past token\'s keys and values. A new token computes only its own q, k, v and reads the old cards: one step per word, not a full re-read.',
+        3: 'Without a cache, generating n tokens recomputes K,V for 1+2+…+n positions (O(n²)); with it, n. Attention still reads all cached rows, so memory grows with context.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        var words = ['The', 'cat', 'sat', 'on', 'the', 'sofa', 'and', 'purred'], n = 5 + Math.min(3, Math.floor(ramp(l, .5, 5.5) * 3.999));
+        sentence(ctx, words.slice(0, n), H * .08, true);
+        // recipe box of K/V cards
+        var bw = Math.min(W * .86, 520), bx = W / 2 - bw / 2, by = H * .2, cardW = bw / 8 - 6, cardH = Math.min(H * .2, 110);
+        F.paper(ctx, W / 2, by + cardH * .75, bw + 20, cardH * 1.3, '#8a5a3c', { seed: 'box' });
+        for (var i = 0; i < n; i++) {
+          var fresh = i === n - 1, dy = fresh ? (1 - ramp(l - (n - 5) * 1.6, .5, 1.3)) * -40 : 0, cx = bx + i * (cardW + 6) + cardW / 2 + 3;
+          F.paper(ctx, cx, by + cardH * .55 + dy, cardW, cardH, fresh ? '#fff4c9' : P.cream, { seed: 'card' + i, rot: (i % 3 - 1) * .03 });
+          F.hand(ctx, words[i], cx, by + cardH * .2 + dy, W < 500 ? 10 : 13, P.ink, { seed: 'cw' + i });
+          F.hand(ctx, 'k', cx, by + cardH * .5 + dy, 12, '#3f78c0', { seed: 'k' + i }); F.hand(ctx, 'v', cx, by + cardH * .75 + dy, 12, '#3f9a6c', { seed: 'vv' + i });
+        }
+        var gen = n - 5, noCache = 0, cache = 0; for (var g = 1; g <= gen; g++) { noCache += 5 + g; cache += 1; }
+        readout(ctx, -1, by + cardH * 1.55, [['new words so far: ' + gen, P.butter], ['K,V rows computed', P.chalk], ['  re-read everything: ' + noCache, P.pink], ['  with the card box:  ' + cache, P.mint]], W);
+        egg(ctx, W / 2, L.base - 10, Math.min(W, H) * .08, t, 0);
+      } },
+    { name: 'open the hood', start: 30, dur: 7, cap: {
+        1: 'Now the fun part: a plumber opens the egg. Inside is a long pipe (the notebook from last week) with <b>brass taps</b> where each part pours in. One camera flash photographs everything flowing through.',
+        2: '<b>TransformerLens</b> gives every internal activation a name and a hook point. <b>run_with_cache</b> runs the model once and keeps a photo of every activation.',
+        3: 'logits, cache = model.run_with_cache(tokens); cache["blocks.0.attn.hook_pattern"] etc. utils.get_act_name("pattern", 0) builds the same name.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        var op = ramp(l, 0, 1.5); ctx.save(); ctx.globalAlpha = 1 - op; egg(ctx, W / 2, L.top, Math.min(W, H) * .12, t, op); ctx.restore();
+        plumbing(ctx, t, null, op);
+        // the plumber with a disposable camera
+        var ps = Math.min(44, W * .1), cxp = W * (L.por ? .22 : .3), cyp = L.base + 10; F.person(ctx, cxp, cyp, ps, t, { coat: P.sky, scarf: P.red, lantern: false, walk: l < 2 });
+        F.paper(ctx, cxp + ps * .7, cyp - ps * 1.05, ps * .8, ps * .5, '#e8e2d2', { seed: 'cam', rot: -.1 }); ctx.fillStyle = P.ink; ctx.beginPath(); ctx.arc(cxp + ps * .75, cyp - ps * 1.05, ps * .14, 0, 6.283); ctx.fill();
+        if (l > 2.3 && l < 3) F.glow(ctx, cxp + ps * .75, cyp - ps * 1.05, ps * 2.5, 'rgba(255,255,255,.95)', 1 - ramp(l, 2.5, 3));
+        F.hand(ctx, 'click!', cxp + ps * 1.6, cyp - ps * 1.8, 16, P.butter, { seed: 'click', outline: 3, outlineColor: 'rgba(20,20,50,.8)', reveal: ramp(l, 2.4, 2.8) });
+        var flash = l > 2.5 && l < 2.8; if (flash) { ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.fillRect(0, 0, W, H); }
+        var names = [['hook_embed', '(1, 6, 768)'], ['blocks.0.hook_resid_pre', '(1, 6, 768)'], ['blocks.0.attn.hook_pattern', '(1, 12, 6, 6)'], ['blocks.0.attn.hook_z', '(1, 6, 12, 64)'], ['blocks.1.hook_resid_post', '(1, 6, 768)']];
+        var pw = Math.min(W * .8, 360), ph = W < 500 ? 36 : 42;
+        names.forEach(function (nm, i) { var a = ramp(l, 2.8 + i * .35, 3.3 + i * .35); if (a <= 0) return; var y = L.top * 1.35 + i * (ph + 6);
+          ctx.save(); ctx.globalAlpha = a; F.paper(ctx, W / 2 + (i % 2 ? 8 : -8), y, pw, ph, '#fbf6ea', { seed: 'pol' + i, rot: (i % 2 ? .02 : -.02) });
+          F.hand(ctx, nm[0], W / 2 - pw / 2 + 12, y - 6, W < 500 ? 11 : 13, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .2, seed: nm[0] });
+          F.hand(ctx, nm[1], W / 2 + pw / 2 - 12, y + 9, 11, '#6b5a9a', { align: 'right', font: F.MONO, bold: false, wobble: .2, seed: nm[1] }); ctx.restore(); });
+      } },
+    { name: 'close a tap', start: 37, dur: 8, cap: {
+        1: 'The plumber closes one tap, the head that loves rhymes (cat → mat, hat). Run the egg again: "mat" and "hat" dim, and <b>"sofa"</b> becomes the favourite.',
+        2: 'A <b>hook</b> is a tiny function that edits an activation mid-run. Zeroing head L1H3\'s output removes its contribution to the logits; the probabilities shift live.',
+        3: 'Ablation: fn(z, hook): z[:, :, 3, :] = 0 on blocks.1.attn.hook_z. Here the head\'s direct effect is +0.9 on mat and hat: p(mat) ' + softmax(LOG)[0].toFixed(2) + ' → ' + softmax(logitsWith([0, 0, 0, 1]))[0].toFixed(2) + '.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        var k = ramp(l, 1.5, 3.5), off = [0, 0, 0, k > .5 ? 1 : 0];
+        var lg = LOG.map(function (v, i) { return v - HEADS[3].c[i] * k; }), d = { p: softmax(lg), keep: lg.map(function () { return true; }) };
+        var hx = plumbing(ctx, t, off, 1); lanterns(ctx, lg, d, t);
+        if (l > .5 && l < 3) { var p = hx[3]; F.person(ctx, p[0] + 34, p[1] + 34, Math.min(30, W * .08), t, { coat: P.sky, scarf: P.red, lantern: false, face: -1 }); }
+        readout(ctx, -1, L.top * 1.4, [['head L1H3 (' + HEADS[3].what + '): ' + (k > .5 ? 'ZEROED' : 'on'), k > .5 ? P.red : P.butter], ['p(mat) ' + d.p[0].toFixed(2) + '   p(sofa) ' + d.p[1].toFixed(2) + '   p(hat) ' + d.p[5].toFixed(2), P.chalk]], W);
+      } },
+    { name: 'where it stops being true', start: 45, dur: 5, cap: {
+        1: 'Honest bit: closing a tap only lasts for <b>one run</b>. The egg itself isn\'t rewired; next time, the tap is open again unless you close it again.',
+        2: 'A hook edits activations during a single forward pass. The weights are untouched: remove the hook and the model is exactly as before. (Real heads also mix many jobs, not one tidy one.)',
+        3: 'model.reset_hooks() / the hooks context manager. Ablations measure causal effects of activations; changing behaviour permanently needs weight edits or fine-tuning.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        var reopen = ramp(l, .3, 1.2) > .5; plumbing(ctx, t, [0, 0, 0, reopen ? 0 : 1], 1); lanterns(ctx, LOG, { p: softmax(reopen ? LOG : logitsWith([0, 0, 0, 1])), keep: LOG.map(function () { return true; }) }, t);
+        var p = ramp(l, 1, 2); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 1.8, 2.6); var sz = W < 500 ? 14 : 18, x = W - Math.min(W, H) * .32, y = H - Math.min(W, H) * .22;
+          F.hand(ctx, 'one run only:', x, y - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'weights untouched', x + sz * .8, y, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
+      } },
+    { name: 'the code', start: 50, dur: 7, cap: {
+        1: 'Everything you just watched is a few lines of code: the dial, the snipping, and the plumber\'s tap.',
+        2: 'You\'ll write the sampler in [1.1] and use hooks all through [1.2] Intro to Mech Interp.',
+        3: 'ARENA [1.1] TransformerSampler: apply_temperature, sample_top_k, sample_top_p. [1.2]: run_with_cache, run_with_hooks(tokens, fwd_hooks=[(name, fn)]).' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        ctx.save(); ctx.globalAlpha = .35; lanterns(ctx, LOG, dist(LOG, 1, 0, .9), t); ctx.restore();
+        var sz = W < 500 ? 12 : 17, cards = [
+          ['choose a word', ['logits = logits / temperature', 'sample_top_p(logits, top_p=0.9)'], 0],
+          ['photograph everything', ['logits, cache = model.run_with_cache(tokens)'], 1.8],
+          ['close a tap', ['model.run_with_hooks(tokens,', '    fwd_hooks=[(name, fn)])'], 3.6]];
+        var y = H * .06;
+        cards.forEach(function (Cd, j) {
+          var a = ramp(l, Cd[2], Cd[2] + .8); if (a <= 0) return;
+          ctx.save(); ctx.globalAlpha = a; var h = Cd[1].length * sz * 1.5 + sz * 2;
+          var w = Math.min(W - 12, Math.max.apply(null, Cd[1].map(function (s) { return F.textW(ctx, s, sz, F.MONO); })) + 30);
+          F.paper(ctx, W / 2, y + h / 2, w, h, P.cream, { seed: 'code' + j, rot: (j - 1) * .015 });
+          F.hand(ctx, Cd[0], W / 2 - w / 2 + 12, y + sz, sz * .95, '#6b5a9a', { align: 'left', seed: Cd[0] });
+          Cd[1].forEach(function (s, i) { F.hand(ctx, s, W / 2 - w / 2 + 12, y + sz * 2.2 + i * sz * 1.5, sz, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: s, reveal: ramp(l, Cd[2] + .2 + i * .3, Cd[2] + 1 + i * .3) }); });
+          ctx.restore(); y += h + 12;
+        });
+      } },
+    { name: 'why it matters', start: 57, dur: 4, cap: {
+        1: 'Once you can open the taps, you can do more than watch. A hook is the first steering wheel.',
+        2: 'A hook is the first steering wheel: the same tool that zeroes a head can add a direction to the residual stream and nudge what the model says.',
+        3: 'Activation patching (week 7), SAEs (week 8) and steering vectors (week 9) are all hooks: read an activation, or write one, at a named point.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t); plumbing(ctx, t, null, .5);
+        var s = Math.min(W, H) * .16, cx = W / 2, cy = H * .52, rot = Math.sin(t * 1.5) * .3;
+        ctx.save(); ctx.translate(cx, cy); ctx.rotate(rot); ctx.strokeStyle = '#c99a3c'; ctx.lineWidth = s * .14; ctx.beginPath(); ctx.arc(0, 0, s, 0, 6.283); ctx.stroke();
+        for (var k = 0; k < 3; k++) { ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(k * 2.094 - 1.57) * s, Math.sin(k * 2.094 - 1.57) * s); ctx.lineWidth = s * .1; ctx.stroke(); } ctx.restore();
+        F.egg(ctx, cx, cy, s * .45, t, { clear: .7, features: [{ x: -.3, y: -.2 }, { x: .3, y: .2, c: 'rgba(185,227,204,.9)' }] });
+        ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'a hook is the first\nsteering wheel', W / 2, H * .82, W < 500 ? 18 : 24, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore();
+      } }
+  ];
+
+  /* ---------------- coda: now you drive ---------------- */
+  var C = { T: 1, mode: 'p', k: 3, p: .9, off: [0, 0, 0, 0], words: ['The', 'cat', 'sat', 'on', 'the'], pick: -1, hx: [] };
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;font-size:14px">' +
+        '<span>T</span><input type="range" class="sT" min="-1" max="0.5" step="0.01" value="0"><b class="vT"></b>' +
+        '<select class="sM" aria-label="Filter" style="font:inherit;border-radius:8px;padding:2px"><option value="none">no cut</option><option value="k">top-k</option><option value="p">top-p</option></select><input type="range" class="sK" min="0" max="1" step="0.01"><b class="vK"></b>' +
+        '</div><div style="display:flex;gap:8px;align-items:center;margin-top:4px;font-size:13px"><button class="smp">Sample a word</button><button class="rs">Reset</button><span>Tap a brass tap to close that head.</span></div>';
+      var q = function (s) { return panel.querySelector(s); }, sT = q('.sT'), sM = q('.sM'), sK = q('.sK');
+      function sync() {
+        C.T = Math.pow(10, +sT.value); q('.vT').textContent = C.T.toFixed(2); C.mode = sM.value;
+        if (C.mode === 'k') { sK.disabled = false; C.k = Math.max(1, Math.round(1 + +sK.value * 7)); q('.vK').textContent = 'k=' + C.k; }
+        else if (C.mode === 'p') { sK.disabled = false; C.p = Math.max(.05, +sK.value); q('.vK').textContent = 'p=' + C.p.toFixed(2); }
+        else { sK.disabled = true; q('.vK').textContent = ''; }
+      }
+      sM.value = C.mode; sK.value = C.mode === 'k' ? (C.k - 1) / 7 : C.p;
+      sM.onchange = function () { sK.value = sM.value === 'k' ? (C.k - 1) / 7 : C.p; sync(); };
+      sT.oninput = sK.oninput = sync; sync();
+      q('.smp').onclick = function () { var d = cur(); C.pick = draw(d, Math.random()); C.words.push(VOC[C.pick]); if (C.words.length > 8) C.words.splice(5, 1); api.audio.blip(1320); };
+      q('.rs').onclick = function () { C.words = ['The', 'cat', 'sat', 'on', 'the']; C.off = [0, 0, 0, 0]; C.pick = -1; };
+    },
+    down: function (x, y, api) { C.hx.forEach(function (h, j) { if (Math.hypot(x - h[0], y - h[1]) < 30) { C.off[j] = C.off[j] ? 0 : 1; api.audio.blip(C.off[j] ? 330 : 660); } }); },
+    draw: function (ctx, t, W, H) {
+      lay(W, H); L.top = H * .2; bg(ctx, W, H, t);
+      C.hx = plumbing(ctx, t, C.off, 1);
+      var d = cur(), lg = logitsWith(C.off); lanterns(ctx, lg, d, t, { pick: C.pick });
+      readout(ctx, -1, L.top * 1.25, [['T=' + C.T.toFixed(2) + (C.mode === 'k' ? '  top-k ' + C.k : C.mode === 'p' ? '  top-p ' + C.p.toFixed(2) : '') + '  H=' + entropy(d.p).toFixed(2) + ' bits', P.butter], ['closed: ' + (HEADS.filter(function (h, j) { return C.off[j]; }).map(function (h) { return h.name; }).join(', ') || 'none'), C.off.some(Boolean) ? P.red : P.chalk]], W);
+      sentence(ctx, C.words, H - 18, C.pick >= 0);
+    }
+  };
+  function cur() { var lg = logitsWith(C.off); return dist(lg, C.T, C.mode === 'k' ? C.k : 0, C.mode === 'p' ? C.p : 0); }
+
+  var api = F.play({
+    title: 'W6 · Choose a word, open the hood',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: sampling & decoding', href: '../../index.html#demo/sampling-decoding' },
+      { label: 'Week 6 pack', href: '../../index.html#week-06' },
+      { label: 'Map: top-p', href: '../../index.html#map/node=top-p-sampling' },
+      { label: 'Map: hooks', href: '../../index.html#map/node=hooks' },
+      { label: 'Case: nucleus sampling', href: '../../index.html#cases/nucleus-sampling' },
+      { label: 'Case: KV caching', href: '../../index.html#cases/kv-caching' },
+      { label: 'Case: hooks', href: '../../index.html#cases/hooks' }
+    ]
+  });
+  try { var stg = api.root.querySelector('.stage'); if (window.ResizeObserver) new ResizeObserver(function () { window.dispatchEvent(new Event('resize')); }).observe(stg); } catch (e) {}
+})();
+</script>
+</body>
+</html>

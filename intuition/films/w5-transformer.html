@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>The shared notebook</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /* ---------------- a real (tiny) one-layer transformer, computed live ----------------
+     d_model = 4 named directions so you can read the notebook: [det, animal, place, sky].
+     Toy weights are hand-set so the story reads; every number on screen is the real maths. */
+  var TOK = ['The', 'cat', 'sat', 'on', 'the'];
+  var X0 = [[1, 0, 0, .1], [0, 1.2, 0, 0], [0, .2, 1, 0], [.2, 0, .9, .3], [1, 0, 0, .1]];
+  var WQ = [[2, .3, 0, 0], [2.4, -.5, 0, 0]], WK = [[0, 1, 0, 0], [0, 0, 1, .5]], WV = .8; // W_V = 0.8·I
+  var WIN = [[.8, 0, 1, 0], [0, 0, 0, 1], [0, 1, 0, 0]], BIN = [-1, -.5, -.4], WOUT = [[0, 0, 1.5, 0], [0, 0, 0, 1.2], [0, .5, 0, 0]];
+  var NEUR = ['“…on the” → a place', 'up-ish → sky', 'animal → pets'];
+  var VOC = ['mat', 'sofa', 'cat', 'dog', 'hat', 'moon', 'sat', 'the'];
+  var U0 = [[1, 0, 2, 0], [1, 0, 1.6, 0], [1, 1.5, 0, 0], [1, 1.4, 0, 0], [1, .6, .6, 0], [1, 0, 0, 2.2], [-1, .5, .8, 0], [-2, 0, 0, 0]];
+  var DIMC = [P.butter, P.pink, P.mint, P.sky], DIMN = ['det', 'animal', 'place', 'sky'];
+  var TC = [P.butter, P.pink, P.mint, P.sky, P.orange];
+
+  function mv(M, x) { return M.map(function (r) { var s = 0; for (var i = 0; i < r.length; i++) s += r[i] * x[i]; return s; }); }
+  function softmax(z) { var m = -Infinity; z.forEach(function (v) { if (v > m) m = v; }); var e = z.map(function (v) { return v === -Infinity ? 0 : Math.exp(v - m); }), S = e.reduce(function (a, b) { return a + b; }, 0); return e.map(function (v) { return v / S; }); }
+  function layerNorm(x) { var mu = x.reduce(function (a, b) { return a + b; }) / x.length, v = x.reduce(function (a, b) { return a + (b - mu) * (b - mu); }, 0) / x.length, sd = Math.sqrt(v + 1e-5); return { y: x.map(function (a) { return (a - mu) / sd; }), mu: mu, sd: sd }; }
+  var K = X0.map(function (x) { return mv(WK, x); }), Q = X0.map(function (x) { return mv(WQ, x); });
+  // full forward pass; q4 optionally overrides the last pupil's query (the coda)
+  function forward(q4, U) {
+    U = U || U0; var Qs = Q.slice(); if (q4) Qs[4] = q4;
+    var S = Qs.map(function (q, i) { return K.map(function (k, j) { return j > i ? -Infinity : (q[0] * k[0] + q[1] * k[1]) / Math.SQRT2; }); });
+    var A = S.map(softmax);
+    var x1 = X0.map(function (x, i) { return x.map(function (v, d) { var s = 0; for (var j = 0; j < 5; j++) s += A[i][j] * WV * X0[j][d]; return v + s; }); });
+    var h = mv(WIN, x1[4]).map(function (v, n) { return Math.max(0, v + BIN[n]); });
+    var x2 = x1[4].map(function (v, d) { var s = 0; for (var n = 0; n < 3; n++) s += h[n] * WOUT[n][d]; return v + s; });
+    var ln = layerNorm(x2), logits = mv(U, ln.y), p = softmax(logits);
+    return { S: S, A: A, x1: x1[4], h: h, x2: x2, ln: ln, logits: logits, p: p, q: Qs[4] };
+  }
+  var FW = forward();
+  // one real gradient step of cross-entropy on the unembedding, target 'mat'
+  var U1 = U0.map(function (row, w) { return row.map(function (u, d) { return u - 0.5 * (FW.p[w] - (w === 0 ? 1 : 0)) * FW.ln.y[d]; }); });
+  var FW1 = forward(null, U1);
+
+  /* ---------------- layout ---------------- */
+  var L = {};
+  function lay(W, H) {
+    var por = H > W * 1.1; L.W = W; L.H = H; L.por = por;
+    L.col = Math.min(W / 5, 210); L.x0 = W / 2 - 2 * L.col;
+    L.feet = H * (por ? .58 : .66); L.s = Math.min(L.col * .45, H * (por ? .085 : .11));
+    L.nbw = L.col - 10; L.nbh = Math.min(por ? 100 : 120, H * .15); L.nby = L.feet + 28;
+    L.dr = Math.min(H * .15, W * .3); L.dx = W / 2; L.dy = H * .2;
+    L.bot = L.nby + L.nbh + 12;
+  }
+  function px(i) { return L.W / 2 + (i - 2) * L.col; }
+  function bg(ctx, W, H, t) {
+    F.sky(ctx, W, H, '#262b55', '#3c4180');
+    // corridor wall: lockers
+    var r = F.rng('lock'), lw = Math.max(34, L.col * .42);
+    for (var x = -10, i = 0; x < W + lw; x += lw + 4, i++) F.paper(ctx, x + lw / 2, L.feet - L.s * 1.9, lw, L.s * 2.6, i % 3 ? '#3f4686' : '#4a4f92', { seed: 'lk' + i, shadow: false, grainA: .5 });
+    for (x = -10, i = 0; x < W + lw; x += lw + 4, i++) { ctx.fillStyle = 'rgba(20,20,50,.35)'; ctx.fillRect(x + lw * .7, L.feet - L.s * 2.1, 3, 10); }
+    F.paper(ctx, W / 2, (L.feet + H) / 2 + 4, W + 20, H - L.feet + 6, '#c9a97e', { seed: 'floor', shadow: false });
+    ctx.fillStyle = 'rgba(80,50,30,.12)'; for (x = 0; x < W; x += 46) ctx.fillRect(x, L.feet, 2, H - L.feet);
+  }
+  function pupil(ctx, i, t, o) {
+    o = o || {}; var x = px(i), s = L.s;
+    ctx.save(); ctx.globalAlpha *= o.a == null ? 1 : o.a;
+    F.person(ctx, x, L.feet, s, t, { face: i === 4 ? -1 : 1, coat: TC[i], scarf: i === 4 ? P.red : P.lav, lantern: false, walk: !!o.walk });
+    F.paper(ctx, x, L.feet + 12, Math.max(34, F.textW(ctx, TOK[i], 13) + 12), 18, P.cream, { seed: 'tag' + i, rot: (i - 2) * .02, shadow: false });
+    F.hand(ctx, TOK[i], x, L.feet + 12, 13, P.ink, { seed: 'tk' + i });
+    ctx.restore();
+  }
+  // notebook = this pupil's residual-stream vector, as four signed bars
+  function notebook(ctx, i, vec, o) {
+    o = o || {}; var x = px(i), w = L.nbw, h = L.nbh, y = L.nby + h / 2;
+    ctx.save(); ctx.globalAlpha *= o.a == null ? 1 : o.a;
+    F.paper(ctx, x, y, w, h, o.hl ? '#fff4c9' : P.cream, { seed: 'nb' + i, rot: (i % 2 ? .015 : -.012) });
+    ctx.strokeStyle = 'rgba(120,150,200,.35)'; ctx.lineWidth = 1; for (var k = 1; k < 4; k++) { ctx.beginPath(); ctx.moveTo(x - w / 2 + 4, y - h / 2 + k * h / 4); ctx.lineTo(x + w / 2 - 4, y - h / 2 + k * h / 4); ctx.stroke(); }
+    var bw = (w - 16) / 4, base = y + h * .18, sc = h * .3 / (o.scale || 1);
+    ctx.fillStyle = 'rgba(42,41,52,.5)'; ctx.fillRect(x - w / 2 + 6, base, w - 12, 1.2);
+    for (var d = 0; d < 4; d++) {
+      var v = vec[d] || 0, bh = clamp(v * sc, -h * .3, h * .6), bx = x - w / 2 + 8 + d * bw;
+      if (o.ghost) { ctx.fillStyle = 'rgba(42,41,52,.14)'; var gh = clamp(o.ghost[d] * sc, -h * .3, h * .6); ctx.fillRect(bx + 2, base - Math.max(0, gh), bw - 4, Math.abs(gh)); }
+      ctx.fillStyle = DIMC[d]; ctx.fillRect(bx + 2, base - Math.max(0, bh), bw - 4, Math.abs(bh));
+      ctx.strokeStyle = 'rgba(42,41,52,.55)'; ctx.strokeRect(bx + 2, base - Math.max(0, bh), bw - 4, Math.abs(bh));
+    }
+    ctx.restore();
+  }
+  function allNotebooks(ctx, vecs, o) { for (var i = 0; i < 5; i++) notebook(ctx, i, vecs[i], o && o[i]); }
+  function readout(ctx, x, y, lines, W) {
+    var sz = W < 500 ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    if (x < 0) x = (W - w - 22) / 2;
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.9)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+  }
+  function lbl(ctx, text, x, y, color, sz) { F.hand(ctx, text, x, y, sz || 15, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: text }); }
+  function question(ctx, W, H, a, reveal) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+    F.note(ctx, 'what comes next?', W < 500 ? W / 2 : W * .5, W < 500 ? 30 : 40, W < 500 ? 18 : 22, { rot: -.03, seed: 'q', reveal: reveal == null ? 1 : reveal });
+    ctx.restore();
+  }
+  // the query/key dial: every key and the query live in the same little 2-D plane
+  function dial(ctx, q, o) {
+    o = o || {}; var cx = L.dx, cy = L.dy, r = L.dr, u = r / 3.3;
+    F.blob(ctx, cx, cy, r, P.cream, { seed: 'dial', jit: .25 });
+    ctx.save(); ctx.strokeStyle = 'rgba(42,41,52,.2)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx - r * .9, cy); ctx.lineTo(cx + r * .9, cy); ctx.moveTo(cx, cy - r * .9); ctx.lineTo(cx, cy + r * .9); ctx.stroke(); ctx.restore();
+    for (var j = 0; j < 4; j++) {
+      if (o.keysA != null && o.keysA <= 0) break; var k = K[j], L2 = Math.hypot(k[0], k[1]); if (L2 < .1) { ctx.fillStyle = TC[j]; ctx.beginPath(); ctx.arc(cx, cy, 4, 0, 6.283); ctx.fill(); continue; }
+      ctx.save(); ctx.globalAlpha = o.keysA == null ? 1 : o.keysA; F.arrow(ctx, cx, cy, cx + k[0] * u, cy - k[1] * u, TC[j] === P.butter ? '#c9a640' : shade(TC[j]), 3, 'k' + j);
+      F.hand(ctx, TOK[j], cx + k[0] * u * 1.18 + (j === 2 ? 14 : j === 3 ? -14 : 0), cy - k[1] * u * 1.18 - 6, 12, P.ink, { seed: 'dk' + j }); ctx.restore();
+    }
+    if (q) { F.arrow(ctx, cx, cy, cx + q[0] * u, cy - q[1] * u, '#d9622b', 4.5, 'q'); F.hand(ctx, 'query', cx + q[0] * u + (q[0] >= 0 ? 8 : -8), cy - q[1] * u - 12, 13, '#b8471b', { align: q[0] >= 0 ? 'left' : 'right', seed: 'qq' }); }
+    F.tape(ctx, cx - r * .7, cy - r * .8, 34, -.5);
+  }
+  function shade(c) { return { '#f3b3c3': '#d0607e', '#b9e3cc': '#3f9a6c', '#a9c9ef': '#3f78c0', '#c8b8ea': '#7a5fc0', '#f2995a': '#d9622b' }[c] || c; }
+  function weightBars(ctx, w, a, lab) {
+    ctx.save(); ctx.globalAlpha = a;
+    for (var j = 0; j < 5; j++) {
+      var x = px(j), top = L.feet - L.s * 1.75, hh = L.s * 1.4 * w[j];
+      if (w[j] === 0 && lab === 'mask') continue;
+      ctx.fillStyle = 'rgba(255,214,120,.9)'; ctx.fillRect(x - 9, top - hh, 18, hh); ctx.strokeStyle = P.ink; ctx.lineWidth = 1; ctx.strokeRect(x - 9, top - hh, 18, hh);
+      lbl(ctx, w[j].toFixed(2), x, top - hh - 11, P.butter, 13);
+    }
+    ctx.restore();
+  }
+  function scissors(ctx, x, y, s, open) {
+    ctx.save(); ctx.translate(x, y); ctx.strokeStyle = '#8a8fa8'; ctx.lineWidth = s * .12; ctx.lineCap = 'round';
+    [-1, 1].forEach(function (sg) { ctx.save(); ctx.rotate(sg * open * .35); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -s * 1.1); ctx.stroke(); ctx.restore();
+      ctx.save(); ctx.rotate(-sg * open * .35); ctx.strokeStyle = sg < 0 ? P.red : P.orange; ctx.lineWidth = s * .1; ctx.beginPath(); ctx.ellipse(sg * s * .18, s * .5, s * .16, s * .24, 0, 0, 6.283); ctx.stroke(); ctx.restore(); });
+    ctx.restore();
+  }
+  function planeFly(ctx, j, i, p, size) { var a = [px(j), L.feet - L.s * 1.2], b = [px(i), L.nby + 6], x = lerp(a[0], b[0], p), y = lerp(a[1], b[1], p) - Math.sin(p * Math.PI) * L.s * 1.4; F.plane(ctx, x, y, size, Math.atan2(b[1] - a[1], b[0] - a[0]) + Math.cos(p * Math.PI) * -.8, TC[j]); }
+  function lanterns(ctx, p, t, y0, a) {
+    var n = VOC.length, W = L.W, cw = Math.min((W - 20) / n, 100), x0 = W / 2 - cw * n / 2, top = y0, hmax = L.H - y0 - 30;
+    ctx.save(); ctx.globalAlpha = a == null ? 1 : a;
+    ctx.strokeStyle = 'rgba(253,250,240,.5)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x0, top); ctx.lineTo(x0 + cw * n, top); ctx.stroke();
+    var best = 0; p.forEach(function (v, i) { if (v > p[best]) best = i; });
+    for (var i = 0; i < n; i++) {
+      var x = x0 + cw * (i + .5), len = 10 + hmax * .55 * Math.sqrt(p[i]);
+      ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + len); ctx.stroke();
+      F.lantern(ctx, x, top + len + 10, Math.min(12, cw * .22) * (.7 + p[i] * .9), p[i] > .15 ? 1 : .2 + p[i] * 3, t + i);
+      F.hand(ctx, VOC[i], x, top + len + 32, 12, i === best ? P.butter : P.chalk, { seed: 'v' + i, outline: 3, outlineColor: 'rgba(20,20,50,.7)' });
+      F.hand(ctx, (p[i] * 100).toFixed(p[i] < .1 ? 1 : 0) + '%', x, top + len + 46, 11, P.chalk, { seed: 'vp' + i, bold: false });
+    }
+    ctx.restore();
+  }
+  function walkman(ctx, x, y, w, track, vol) {
+    F.paper(ctx, x, y, w, w * .68, '#6f86c9', { seed: 'wm', rot: -.03 });
+    ctx.fillStyle = '#233064'; ctx.fillRect(x - w * .4, y - w * .26, w * .8, w * .2);
+    ctx.fillStyle = '#b7c48a'; ctx.font = '700 ' + Math.round(w * .09) + 'px ' + F.MONO; ctx.textBaseline = 'middle'; ctx.textAlign = 'center'; ctx.fillText('LAYER ' + track + '/12', x, y - w * .16); ctx.textAlign = 'left';
+    for (var k = -1; k <= 1; k += 2) { ctx.fillStyle = '#233064'; ctx.beginPath(); ctx.arc(x + k * w * .2, y + w * .1, w * .09, 0, 6.283); ctx.fill(); ctx.fillStyle = P.cream; ctx.beginPath(); ctx.arc(x + k * w * .2, y + w * .1, w * .03, 0, 6.283); ctx.fill(); }
+    // volume wheel
+    var vx = x + w * .42, vy = y + w * .05; ctx.fillStyle = P.butter; ctx.beginPath(); ctx.arc(vx, vy, w * .08, 0, 6.283); ctx.fill(); ctx.strokeStyle = P.ink; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(vx, vy); ctx.lineTo(vx + Math.cos(vol) * w * .07, vy + Math.sin(vol) * w * .07); ctx.stroke();
+  }
+
+  var qStart = [-2.2, 1.6];
+  function qAt(p) { var a0 = Math.atan2(qStart[1], qStart[0]), a1 = Math.atan2(Q[4][1], Q[4][0]), m0 = Math.hypot(qStart[0], qStart[1]), m1 = Math.hypot(Q[4][0], Q[4][1]), a = lerp(a0, a1, p), m = lerp(m0, m1, p); return [m * Math.cos(a), m * Math.sin(a)]; }
+  function dots(q, i) { return K.map(function (k, j) { return j > i ? -Infinity : (q[0] * k[0] + q[1] * k[1]) / Math.SQRT2; }); }
+
+  var chapters = [
+    { name: 'the wish', start: 0, dur: 7, cap: {
+        1: 'A paper school corridor. The sentence "The cat sat on the…" is cut into pieces, one pupil per piece. The last pupil has one job: <b>guess the next word</b>.',
+        2: 'Scissors = the <b>tokenizer</b>. Each token gets an <b>embedding</b>: a starting note in its own notebook. That notebook is the <b>residual stream</b>.',
+        3: 'Tokens → ids → rows of W_E (plus W_pos). Here d_model = 4 named directions [det, animal, place, sky] so you can read the bars; GPT-2 small has 768 unnamed ones.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        var strip = ramp(l, 0, .6), cut = ramp(l, .8, 3.8), fall = ramp(l, 3.8, 5.2), sy = lerp(H * .3, L.feet - L.s * .6, fall);
+        for (var i = 0; i < 5; i++) {
+          var gap = cut > (i + 1) / 5 ? 1 : 0, x = lerp(W / 2 + (i - 2) * Math.min(L.col, L.por ? 70 : 120), px(i), fall);
+          if (fall < .98) { ctx.save(); ctx.globalAlpha = strip; F.paper(ctx, x, sy + (gap ? Math.sin(i * 3) * 4 : 0), Math.min(L.col, L.por ? 70 : 120) - (gap ? 4 : -2), L.por ? 30 : 42, P.cream, { seed: 'st' + i, rot: gap ? (i - 2) * .06 : 0 }); F.hand(ctx, TOK[i], x, sy, L.por ? 16 : 24, P.ink, { seed: 'sw' + i }); ctx.restore(); }
+        }
+        if (l < 4) { var sxp = lerp(W / 2 - 2.5 * Math.min(L.col, L.por ? 70 : 120), W / 2 + 2.5 * Math.min(L.col, L.por ? 70 : 120), cut); scissors(ctx, sxp, H * .3 + 6, L.por ? 24 : 36, Math.abs(Math.sin(t * 12))); }
+        var pa = ramp(l, 4.6, 6);
+        if (pa > 0) { for (i = 0; i < 5; i++) pupil(ctx, i, t, { a: pa }); for (i = 0; i < 5; i++) notebook(ctx, i, X0[i].map(function (v) { return v * ramp(l, 5 + i * .2, 6.2 + i * .2); }), { a: pa, hl: i === 4 }); }
+        question(ctx, W, H, ramp(l, .3, 1), ramp(l, .3, 2));
+        F.plane(ctx, lerp(-30, W + 30, l / 7), H * .2 + Math.sin(l * 2) * 10, 13, .08 + Math.cos(l * 2) * .1, P.cream);
+      } },
+    { name: 'query & keys', start: 7, dur: 9, cap: {
+        1: 'Every earlier pupil wears a <b>badge</b> saying what their note is about. The last pupil holds up a <b>question card</b>: "who here helps me guess?" The closer a badge points to the question, the higher the score.',
+        2: 'Badges are <b>keys</b>, the card is a <b>query</b>. Score = dot product q·k: big when the arrows point the same way. Watch the scores change as the query swings round to its real direction.',
+        3: 'q = W_Q x, k = W_K x (d_head = 2 here, so you can see the plane). Score = q·k / √d_head. The numbers are recomputed from the drawn arrow every frame.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        var q = qAt(ramp(l, 1.5, 6.5)), s = dots(q, 4);
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t); allNotebooks(ctx, X0, { 4: { hl: true } });
+        dial(ctx, q, { keysA: ramp(l, .2, 1.2) });
+        for (var j = 0; j < 5; j++) { var a = ramp(l, 1 + j * .2, 1.6 + j * .2); if (a > 0) { ctx.save(); ctx.globalAlpha = a; F.blob(ctx, px(j) + L.s * .25, L.feet - L.s * .8, 9, TC[j], { seed: 'bd' + j, jit: .3 }); lbl(ctx, 'q·k ' + s[j].toFixed(2), px(j), L.feet - L.s * 2.05, P.chalk, 13); ctx.restore(); } }
+      } },
+    { name: 'softmax', start: 16, dur: 7, cap: {
+        1: 'Scores become <b>shares of attention</b> that add up to 1. The last pupil copies a little from everyone, mostly from "cat", "sat" and "on". Paper planes carry the notes.',
+        2: '<b>Softmax</b> turns scores into weights: e^score, then divide by the total. The copied notes (values) are added into the last notebook: the faint bars are what it had before.',
+        3: 'A = softmax(QKᵀ/√d_head), row for the last token. z = Σ_j A_j · v_j with v = W_V x (here W_V = 0.8·I, W_O = I). The notebook becomes x + z: the attention output is added, not written over.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        var A = FW.A[4], g = ramp(l, .3, 1.5);
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t);
+        var mix = ramp(l, 2.5, 5.5), v = X0[4].map(function (x, d) { return lerp(x, FW.x1[d], mix); });
+        var nbs = X0.slice(); nbs[4] = v; allNotebooks(ctx, nbs, { 4: { hl: true, ghost: X0[4] } });
+        dial(ctx, FW.q, { keysA: 1 - ramp(l, 0, 1) * .6 });
+        weightBars(ctx, A.map(function (w) { return w * g; }), g);
+        for (var j = 0; j < 5; j++) { var pp = clamp((l - 2 - j * .25) / 2.2, 0, 1); if (pp > 0 && pp < 1 && A[j] > .04) planeFly(ctx, j, 4, pp, 6 + 16 * A[j]); }
+        readout(ctx, -1, L.bot, [['weights = softmax(q·k/√2)', P.butter], [A.map(function (w) { return w.toFixed(2); }).join('  '), P.chalk], ['sum = ' + A.reduce(function (a, b) { return a + b; }).toFixed(2), P.mint]], W);
+      } },
+    { name: 'no peeking', start: 23, dur: 6, cap: {
+        1: 'One rule: <b>no reading ahead</b>. Each pupil may only read notes from seats before it (and its own). Later seats are covered with paper.',
+        2: 'This is the <b>causal mask</b>. The grid shows every pupil\'s attention at once: row = who is asking, column = whose note. Everything above the diagonal is zero.',
+        3: 'Masked scores are set to −∞ (ARENA: self.IGNORE) before softmax, so e^−∞ = 0. Row for "cat": [' + FW.A[1].slice(0, 2).map(function (w) { return w.toFixed(2); }).join(', ') + ', 0, 0, 0].' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t, { a: i > 1 ? .55 : 1 });
+        allNotebooks(ctx, X0, { 1: { hl: true } });
+        var cov = ramp(l, .4, 1.4);
+        for (i = 2; i < 5; i++) { ctx.save(); ctx.globalAlpha = cov; F.paper(ctx, px(i), lerp(-80, L.feet - L.s * .8, F.ease.back(cov)), L.col * .86, L.s * 2.1, '#e9e1cf', { seed: 'cv' + i, rot: (i - 3) * .05 }); lbl(ctx, '−∞', px(i), L.feet - L.s * .8, P.ink, 18); ctx.restore(); }
+        weightBars(ctx, FW.A[1].map(function (w) { return w * ramp(l, 1.4, 2.4); }), ramp(l, 1.4, 2), 'mask');
+        // the full attention pattern grid
+        var n = 5, cs = Math.min(L.dr * 2 / 5.6, 30), gx = W / 2 - n * cs / 2 + 18, gy = L.dy - n * cs / 2 + 6, ga = ramp(l, .1, .9);
+        ctx.save(); ctx.globalAlpha = ga; F.paper(ctx, W / 2 + 8, gy + n * cs / 2, n * cs + 70, n * cs + 34, P.cream, { seed: 'grid' });
+        for (var r = 0; r < n; r++) {
+          F.hand(ctx, TOK[r], gx - 6, gy + (r + .5) * cs, 11, P.ink, { align: 'right', seed: 'gr' + r });
+          for (var c = 0; c < n; c++) {
+            var x = gx + c * cs, y = gy + r * cs;
+            if (c > r) { ctx.fillStyle = '#d8cfbd'; ctx.fillRect(x + 1, y + 1, cs - 2, cs - 2); continue; }
+            var w = FW.A[r][c]; ctx.fillStyle = 'rgba(217,98,43,' + (0.1 + w * .9) + ')'; ctx.fillRect(x + 1, y + 1, cs - 2, cs - 2);
+            if (cs > 24) { ctx.fillStyle = w > .5 ? '#fff' : P.ink; ctx.font = '600 9px ' + F.MONO; ctx.textAlign = 'center'; ctx.fillText(w.toFixed(2).slice(1), x + cs / 2, y + cs / 2 + 3); ctx.textAlign = 'left'; }
+          }
+        }
+        ctx.strokeStyle = P.red; ctx.lineWidth = 2; ctx.strokeRect(gx, gy + cs, cs * n, cs);
+        ctx.restore();
+      } },
+    { name: 'MLP lookup', start: 29, dur: 7, cap: {
+        1: 'Next the last pupil visits the <b>card catalogue</b>. One drawer matches what the notebook now says ("…on the") and adds a card: <b>a place word comes next</b>. Nothing is rubbed out.',
+        2: 'The <b>MLP</b> works like a lookup: each neuron checks the notebook for a pattern and, if it fires, adds its own note. Only the "place" drawer fires here; the other two stay shut.',
+        3: 'h = ReLU(W_in·x + b), out = W_out·h. Live: h = [' + FW.h.map(function (v) { return v.toFixed(2); }).join(', ') + ']. The residual update is x ← x + mlp(x): add, never overwrite.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t);
+        var mix = ramp(l, 3, 5.5), v = FW.x1.map(function (x, d) { return lerp(x, FW.x2[d], mix); }), nbs = X0.slice(); nbs[4] = v;
+        allNotebooks(ctx, nbs, { 4: { hl: true, ghost: FW.x1 } });
+        // card catalogue
+        var cw = Math.min(W * .86, 420), ch = L.dr * 1.9, cx = W / 2, cy = L.dy;
+        F.paper(ctx, cx, cy, cw, ch, '#a8835c', { seed: 'cat', rot: .01 });
+        var pre = mv(WIN, FW.x1);
+        for (var n = 0; n < 3; n++) {
+          var dy = cy - ch / 2 + ch * (n + .5) / 3, on = FW.h[n] > 0, slide = on ? ramp(l, 1, 2.2) * 16 : 0;
+          F.paper(ctx, cx, dy + slide * .2, cw * .9, ch / 3 - 8, on ? '#f0d7a6' : '#caa57a', { seed: 'dr' + n, shadow: on });
+          F.hand(ctx, NEUR[n], cx - cw * .42, dy, W < 500 ? 12 : 14, P.ink, { align: 'left', seed: 'nn' + n });
+          F.hand(ctx, 'h=' + Math.max(0, pre[n] + BIN[n]).toFixed(2), cx + cw * .42, dy, W < 500 ? 12 : 14, on ? '#b8471b' : '#6d5a44', { align: 'right', font: F.MONO, bold: true, seed: 'hv' + n });
+        }
+        var fp = ramp(l, 2.2, 4); if (fp > 0 && fp < 1) { var x = lerp(cx, px(4), fp), y = lerp(cy - ch / 6, L.nby, fp) - Math.sin(fp * Math.PI) * 40; F.note(ctx, 'a place!', x, y, 13, { color: P.mint, seed: 'card', tape: false, rot: fp * 2 }); }
+        if (l > 4.2) { ctx.save(); ctx.globalAlpha = ramp(l, 4.2, 5); lbl(ctx, 'added, never erased', W / 2, L.bot + 14, P.mint, 16); ctx.restore(); }
+      } },
+    { name: 'volume knob', start: 36, dur: 5, cap: {
+        1: 'After all that adding, some notebooks get very loud. A <b>volume knob</b> (like the wheel on a Walkman) rescales each notebook before anyone reads it, so no one shouts.',
+        2: '<b>LayerNorm</b>: subtract the average, divide by the spread. The pattern stays; the volume is steadied. The Walkman\'s track number is the layer: GPT-2 small has 12 of these blocks.',
+        3: 'LN(x) = (x − μ)/σ · γ + β (γ=1, β=0 here). Live: μ = ' + FW.ln.mu.toFixed(2) + ', σ = ' + FW.ln.sd.toFixed(2) + '. Pre-LN blocks apply ln1 before attn and ln2 before the MLP; ln_final before the unembed.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t);
+        var k = ramp(l, 1, 3), v = FW.x2.map(function (x, d) { return lerp(x, FW.ln.y[d] * .55, k); }), nbs = X0.slice(); nbs[4] = v;
+        allNotebooks(ctx, nbs, { 4: { hl: true } });
+        walkman(ctx, W / 2, L.dy, Math.min(W * .5, 240), 1, -2.5 + k * 2);
+        readout(ctx, -1, L.bot, [['μ = ' + FW.ln.mu.toFixed(2) + '   σ = ' + FW.ln.sd.toFixed(2), P.butter], ['LN(x) = [' + FW.ln.y.map(function (a) { return a.toFixed(2); }).join(', ') + ']', P.chalk]], W);
+      } },
+    { name: 'next word', start: 41, dur: 8, cap: {
+        1: 'Finally the last notebook is read aloud against every word the class knows. Each word gets a lantern: the brighter and lower it hangs, the more likely. <b>"mat"</b> wins. A teacher then nudges things so "mat" glows a bit brighter next time.',
+        2: 'The <b>unembedding</b> scores every vocabulary word against the notebook; softmax turns scores into probabilities. <b>Training</b> lowers −log p(correct word): one real gradient step shown.',
+        3: 'logits = W_U · LN(x); p = softmax(logits). Loss = −log p(mat) = ' + (-Math.log(FW.p[0])).toFixed(3) + '; after one SGD step on W_U (lr 0.5) it is ' + (-Math.log(FW1.p[0])).toFixed(3) + '. ∂L/∂logits = p − onehot.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        ctx.save(); ctx.globalAlpha = .35; for (var i = 0; i < 5; i++) pupil(ctx, i, t); ctx.restore();
+        var tr = ramp(l, 4.5, 6.5), p = FW.p.map(function (v, i) { return lerp(v, FW1.p[i], tr); });
+        var top = L.por ? H * .08 : H * .06;
+        ctx.save(); ctx.fillStyle = 'rgba(20,22,50,.55)'; ctx.fillRect(0, 0, W, H); ctx.restore();
+        lanterns(ctx, p.map(function (v) { return v * ramp(l, 0, 1.5); }), t, top, 1);
+        var loss = -Math.log(p[0]);
+        readout(ctx, -1, L.por ? H * .66 : H * .7, [['p(mat) = ' + p[0].toFixed(3), P.butter], ['loss = −log p(mat) = ' + loss.toFixed(3), tr > 0 ? P.mint : P.chalk], [tr > 0 ? 'one training step on W_U…' : 'W_U · LN(notebook) → softmax', P.chalk]], W);
+      } },
+    { name: 'where it stops being true', start: 49, dur: 5, cap: {
+        1: 'Honest bit: real notebooks don\'t have neat labelled rows. Thousands of ideas are <b>squeezed into the same page</b>, overlapping, like notes written on top of each other.',
+        2: 'Real models have hundreds of dimensions and far more features than that, stored in <b>overlapping directions</b> of one shared space. Reading a note means finding its direction.',
+        3: 'Features aren\'t basis-aligned: superposition packs more features than d_model (768) at small interference cost. Why we need probes, SAEs and patching (weeks 7–9).' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t);
+        for (var i = 0; i < 5; i++) pupil(ctx, i, t);
+        var nbs = X0.slice(); nbs[4] = FW.x2; allNotebooks(ctx, nbs, { 4: { hl: true } });
+        // smudged overlapping notes
+        var r = F.rng('smudge'), a = ramp(l, 0, 1.2);
+        ctx.save(); ctx.globalAlpha = a * .6; for (var k = 0; k < 14; k++) { ctx.strokeStyle = [P.pink, P.mint, P.sky, P.lav, P.butter][k % 5]; ctx.lineWidth = 2; ctx.beginPath(); var x = px(4) + (r() - .5) * L.nbw * .8, y = L.nby + L.nbh * (.2 + r() * .6); ctx.moveTo(x - 14, y); ctx.bezierCurveTo(x - 4, y - 8, x + 4, y + 8, x + 16, y - 2); ctx.stroke(); } ctx.restore();
+        // more ideas than directions: six feature arrows crammed into a 2-D page
+        var fa = ramp(l, .1, 1), FEAT = ['cat', 'place', 'French', 'sad', 'code', 'legal'];
+        ctx.save(); ctx.globalAlpha = fa; F.blob(ctx, L.dx, L.dy, L.dr, P.cream, { seed: 'dial', jit: .25 });
+        FEAT.forEach(function (nm, k) { var a = k * Math.PI / 3 + .3, rr = L.dr * .72; F.arrow(ctx, L.dx, L.dy, L.dx + Math.cos(a) * rr, L.dy - Math.sin(a) * rr, shade(TC[k % 5]), 2.5, 'f' + k);
+          F.hand(ctx, nm, L.dx + Math.cos(a) * rr * 1.22, L.dy - Math.sin(a) * rr * 1.18, 12, P.ink, { seed: 'fn' + k }); });
+        F.hand(ctx, '6 ideas, 2 directions', L.dx, L.dy + L.dr + 12, 13, P.butter, { seed: 'six', outline: 3, outlineColor: 'rgba(20,20,50,.8)' }); ctx.restore();
+        var p = ramp(l, 1.4, 2.4); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 2.2, 3); var sz = W < 500 ? 14 : 18, x2 = W - Math.min(W, H) * .32, y2 = H - Math.min(W, H) * .22;
+          F.hand(ctx, 'really: 768 dims,', x2, y2 - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'notes overlap', x2 + sz * .8, y2, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
+      } },
+    { name: 'the code', start: 54, dur: 7, cap: {
+        1: 'The whole corridor fits in two lines: read the notebook, add attention\'s notes; read it again, add the lookup\'s notes.',
+        2: 'This is one <b>transformer block</b>. You\'ll build it yourself in [1.1] Transformer from Scratch.',
+        3: 'ARENA [1.1] TransformerBlock.forward: resid_mid = self.attn(self.ln1(resid_pre)) + resid_pre, then resid_post = self.mlp(self.ln2(resid_mid)) + resid_mid. Stack 12, add ln_final and unembed.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t); ctx.save(); ctx.globalAlpha = .25; for (var i = 0; i < 5; i++) pupil(ctx, i, t); ctx.restore();
+        var sz = W < 500 ? 13 : 18, cards = [
+          ['the corridor', ['x = x + attn(ln1(x))', 'x = x + mlp(ln2(x))'], P.butter, 0],
+          ['ARENA [1.1]', ['resid_mid = self.attn(', '    self.ln1(resid_pre)) + resid_pre', 'resid_post = self.mlp(', '    self.ln2(resid_mid)) + resid_mid'], P.mint, 2.2]];
+        var y = H * .08;
+        cards.forEach(function (Cd, j) {
+          var a = ramp(l, Cd[3], Cd[3] + .8); if (a <= 0) return;
+          ctx.save(); ctx.globalAlpha = a; var h = Cd[1].length * sz * 1.5 + sz * 2;
+          var w = Math.min(W - 16, Math.max.apply(null, Cd[1].map(function (s) { return F.textW(ctx, s, sz, F.MONO); })) + 34);
+          F.paper(ctx, W / 2, y + h / 2, w, h, P.cream, { seed: 'code' + j, rot: (j - .5) * .02 });
+          F.hand(ctx, Cd[0], W / 2 - w / 2 + 12, y + sz, sz * .95, '#6b5a9a', { align: 'left', seed: Cd[0] });
+          Cd[1].forEach(function (s, i) { F.hand(ctx, s, W / 2 - w / 2 + 12, y + sz * 2.2 + i * sz * 1.5, sz, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: s, reveal: ramp(l, Cd[3] + .2 + i * .35, Cd[3] + 1 + i * .35) }); });
+          ctx.restore(); y += h + 14;
+        });
+        var nbs = X0.slice(); nbs[4] = FW.x2; ctx.save(); ctx.globalAlpha = ramp(l, 4.5, 5.5); allNotebooks(ctx, nbs, { 4: { hl: true } }); lbl(ctx, 'x  =  the notebook  =  resid', W / 2, L.nby - 14, P.butter, 15); ctx.restore();
+      } },
+    { name: 'why it matters', start: 61, dur: 4, cap: {
+        1: 'This notebook is where the mind keeps its working thoughts. It\'s the page we\'ll learn to read, and write on, to steer it.',
+        2: 'This notebook is the page we\'ll read, and write on, to steer. Every probe, patch and steering vector later in the course acts on the residual stream.',
+        3: 'Linear read-outs (logit lens, probes) and writes (activation steering: resid += α·v at a hook point) all target this stream.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t); F.vignette(ctx, W, H, .6);
+        var nbs = X0.slice(); nbs[4] = FW.x2; ctx.save(); ctx.globalAlpha = .5; allNotebooks(ctx, nbs, { 4: { hl: true } }); ctx.restore();
+        F.egg(ctx, W / 2, L.feet - L.s * 1.2, Math.min(W, H) * .13, t, { clear: ramp(l, 0, 2) * .8, features: [{ x: -.4, y: -.2, c: 'rgba(247,227,160,.9)' }, { x: .1, y: .1, c: 'rgba(185,227,204,.9)' }, { x: .4, y: -.4, c: 'rgba(243,179,195,.9)' }] });
+        F.lantern(ctx, W / 2 + Math.min(W, H) * .2, L.feet - L.s * 2, 10, 1, t);
+        ctx.save(); ctx.globalAlpha = ramp(l, .2, 1);
+        F.note(ctx, 'this notebook is the page\nwe\'ll read, and write on, to steer', W / 2, W < 500 ? 44 : 60, W < 500 ? 15 : 22, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore();
+      } }
+  ];
+
+  /* ---------------- coda: aim the query yourself ---------------- */
+  var C = { q: Q[4].slice(), drag: false };
+  function setQ(x, y) { var u = L.dr / 3.3, q = [(x - L.dx) / u, -(y - L.dy) / u], m = Math.hypot(q[0], q[1]); if (m > 3.6) { q[0] *= 3.6 / m; q[1] *= 3.6 / m; } C.q = q; }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px"><span style="flex:1;min-width:200px">Drag anywhere to aim the last pupil\'s <b style="color:#f2995a">query</b>. Point it at a badge and watch who gets read, and what word comes next.</span><button class="rq">Reset</button></div>';
+      panel.querySelector('.rq').onclick = function () { C.q = Q[4].slice(); };
+    },
+    down: function (x, y, api) { C.drag = true; setQ(x, y); api.audio.blip(520 + Math.random() * 200); },
+    move: function (x, y, api, pressed) { if (C.drag && pressed) setQ(x, y); },
+    up: function () { C.drag = false; },
+    draw: function (ctx, t, W, H, api) {
+      lay(W, H); bg(ctx, W, H, t);
+      var R = forward(C.q);
+      for (var i = 0; i < 5; i++) pupil(ctx, i, t);
+      var nbs = X0.slice(); nbs[4] = R.x2; allNotebooks(ctx, nbs, { 4: { hl: true, ghost: X0[4] } });
+      dial(ctx, C.q); weightBars(ctx, R.A[4], 1);
+      var idx = VOC.map(function (w, i) { return i; }).sort(function (a, b) { return R.p[b] - R.p[a]; }).slice(0, 5);
+      var f = function (i) { return VOC[i] + ' ' + (R.p[i] * 100).toFixed(1) + '%'; };
+      var lines = [['top 5 next words', P.butter], [f(idx[0]) + '   ' + f(idx[1]), P.mint], [f(idx[2]) + '   ' + f(idx[3]) + '   ' + f(idx[4]), P.chalk]];
+      readout(ctx, -1, L.bot, lines, W);
+      F.hand(ctx, 'q = (' + C.q[0].toFixed(1) + ', ' + C.q[1].toFixed(1) + ')', L.dx, Math.max(12, L.dy - L.dr - 10), 13, P.chalk, { font: F.MONO, bold: false, seed: 'qr', outline: 3, outlineColor: 'rgba(20,20,50,.7)' });
+    }
+  };
+
+  var api = F.play({
+    title: 'W5 · The shared notebook',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: transformer block', href: '../../index.html#demo/transformer-block' },
+      { label: 'Demo: residual stream bus', href: '../../index.html#demo/residual-stream-bus' },
+      { label: 'Week 5 pack', href: '../../index.html#week-05' },
+      { label: 'Map: residual stream', href: '../../index.html#map/node=residual-stream' },
+      { label: 'Map: causal mask', href: '../../index.html#map/node=softmax-attention-and-causal-mask' },
+      { label: 'Case: transformer architecture', href: '../../index.html#cases/transformer-architecture' },
+      { label: 'Case: residual stream', href: '../../index.html#cases/residual-stream' }
+    ]
+  });
+  // keep the canvas crisp when the coda panel changes the stage height
+  try { var stg = api.root.querySelector('.stage'); if (window.ResizeObserver) new ResizeObserver(function () { window.dispatchEvent(new Event('resize')); }).observe(stg); } catch (e) {}
+})();
+</script>
+</body>
+</html>
