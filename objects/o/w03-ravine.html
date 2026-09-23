@@ -174,7 +174,7 @@ const SURFACES = {
     pre: { sgd: { lr: 0.001, mu: 0 }, mom: { lr: 0.001, mu: 0.99 }, rms: { lr: 0.01, mu: 0 }, adam: { lr: 0.1, mu: 0.9 } } },
   trimodal: { f: neg_trimodal_func, g: neg_trimodal_grad, x: [-2, 2], y: [-2, 2], start: [1.0, 1.0], n: 100,
     pre: { sgd: { lr: 0.1, mu: 0 }, mom: { lr: 0.1, mu: 0.5 }, rms: { lr: 0.1, mu: 0.5 }, adam: { lr: 0.1, mu: 0.9 } } },
-  bowl: { f: stretched_bowl, g: stretched_bowl_grad, x: [-1.5, 1.5], y: [-3, 3], start: [0.5, 2.6], n: 60,
+  bowl: { f: stretched_bowl, g: stretched_bowl_grad, x: [-1, 1], y: [-3, 3], start: [0.5, -2.6], n: 60,
     pre: { sgd: { lr: 0.18, mu: 0 }, mom: { lr: 0.02, mu: 0.9 }, rms: { lr: 0.02, mu: 0 }, adam: { lr: 0.1, mu: 0.9 } } },
 };
 
@@ -193,8 +193,8 @@ const MATH = { pathological_curve_loss, pathological_curve_grad, neg_trimodal_fu
 
 /* ============================================================ display setup */
 
-const R = 0.056;                       // ball radius (world)
-const TR = 0.011;                      // string radius
+const R = 0.066;                       // ball radius (world)
+const TR = 0.012;                      // string radius
 const BALLS = [
   { id: 'sgd', name: 'SGD', color: C.data },
   { id: 'mom', name: 'Momentum', color: C.aux },
@@ -207,25 +207,27 @@ const LOOK = {   // display-only settings per surface (heights are compressed to
     flag: { 1: 'lowest point shown', 2: 'lowest visible point', 3: 'y_min (edge of view)' } },
   banana: { size: 4.0, height: 1.35, show: (v) => Math.log10(v), rate: 100, g0: 60, fig: [2.0, 0.9], flags: [[1, 1]],
     flag: { 1: 'the bottom (1, 1)', 2: 'minimum (1, 1)', 3: 'argmin (a, a²) = (1, 1)' } },
-  trimodal: { size: 3.6, height: 1.0, show: (v) => v, rate: 30, g0: 3, fig: [2.08, 1.2], flags: means,
+  trimodal: { size: 3.6, height: 0.7, show: (v) => v, rate: 30, g0: 3, fig: [2.08, 1.2], flags: means,
+    tint: ['#8fc3b6', '#dfe7de', '#f1ebe0'],   // the plain is the top here: keep it pale, wells cool
     flag: { 1: 'three wells', 2: 'three minima', 3: 'means (σ = 0.2)' } },
-  bowl: { size: 3.6, height: 1.3, show: (v) => v, rate: 18, g0: 5, fig: [2.08, 1.2], flags: [[0, 0]],
+  bowl: { size: 4.4, height: 1.3, show: (v) => v, rate: 18, g0: 5, fig: [2.08, 1.2], flags: [[0, 0]],
     flag: { 1: 'the bottom', 2: 'minimum (0, 0)', 3: 'argmin = 0' } },
 };
 const CAM = {   // authored views; fit: k = close-up (the kit otherwise zooms to fit the whole plinth)
-  ravine: { pos: [4.6, 6.6, 8.3], target: [0, 0.5, 0.15] },
+  ravine: { pos: [4.1, 7.6, 7.5], target: [0, 0.5, 0.15] },
   zig: { pos: [2.9, 4.4, 5.6], target: [0.05, 0.4, 0.2], fit: 1 },
-  bowl: { pos: [3.2, 6.4, 7.4], target: [0, 0.45, 0] },
-  mom: { pos: [-4.2, 6.2, 7.9], target: [-0.3, 0.45, 0.2] },
-  adam: { pos: [-4.4, 6.2, 8.4], target: [0, 0.45, 0.2] },
+  bowl: { pos: [3.4, 7.2, 7.2], target: [0, 0.45, 0.1] },
+  mom: { pos: [1.85, 8.9, 7.3], target: [0, 0.45, 0.45] },
+  adam: { pos: [-4.4, 8.2, 8.4], target: [0, 0.45, 0.2] },
   top: { pos: [0, 11.6, 0.35], target: [0, 0.4, 0] },
-  tri: { pos: [3.4, 8.6, 6.8], target: [0, 0.45, 0.05] },
-  wide: { pos: [5.6, 5.8, 8.6], target: [0, 0.5, 0.1] },
+  tri: { pos: [3.0, 9.6, 6.2], target: [0, 0.35, 0.05] },
+  wide: { pos: [5.6, 8.3, 8.6], target: [0, 0.5, 0.1] },
   start: { pos: [3.4, 3.5, 1.5], target: [0.95, 1.15, -1.7], fit: 1 },
   arrow: { pos: [2.8, 2.9, 1.3], target: [0.37, 0.95, -1.45], fit: 1 },
 };
 const fmt = (v, d = 3) => K.fmt(v, d);
-const pt = (p, d = 2) => `(${fmt(p[0], d)}, ${fmt(p[1], d)})`;
+const fx = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+const pt = (p, d = 2) => `(${fx(p[0], d)}, ${fx(p[1], d)})`;          // a position, fixed decimals
 const lit = (p) => `(${p.map((v) => String(v).replace('-', '−')).join(', ')})`;   // exact literals, e.g. (2.5, 2.5)
 
 /* ======================================================== object behaviour */
@@ -235,7 +237,7 @@ function buildSurface(S, id) {
   if (st.hf) { S.root.remove(st.hf.mesh); st.hf.dispose(); }
   st.surf = id;
   st.hf = K.heightfield((x, y) => L.show(s.f(x, y)), {
-    x: s.x, y: s.y, n: 112, size: L.size, height: L.height, base: 0.12, contours: 14,
+    x: s.x, y: s.y, n: 112, size: L.size, height: L.height, base: 0.12, contours: 14, tint: L.tint,
   });
   S.root.add(st.hf.mesh);
   st.span = [s.x[1] - s.x[0], s.y[1] - s.y[0]];
@@ -419,7 +421,7 @@ function readouts(S) {
 }
 
 /* the live-maths note (one per beat / prediction) */
-const FREE_NOTES = { bowl: 1, comb: 1, first: 1 };   // pinned above a point; the rest hang under a ball
+const FREE_NOTES = { bowl: 1, comb: 1, first: 1, flat: 1 };   // free-standing; the rest hang under a ball
 function note(S, k) {
   const st = S.state, mode = st.noteMode;
   const free = !!FREE_NOTES[mode];
@@ -436,27 +438,33 @@ function note(S, k) {
       : `∂L/∂x (up the wall) ${fmt(g[0], 2)}\n∂L/∂y (along the floor) ${fmt(g[1], 2)}`);
   } else if (mode === 'bowl') {
     const plain = (S.knobs.focus === 'sgd' || S.knobs.focus === 'mom') && h.mu === 0;
-    const fx = 1 - 10 * h.lr, fy = 1 - h.lr;
+    const ax = 1 - 10 * h.lr, ay = 1 - h.lr;
     N.move(st.noteAt).set(plain
-      ? `one SGD step: x × (1 − 10·lr) = x × ${fmt(fx, 3)}\ny × (1 − lr) = y × ${fmt(fy, 3)}\n${Math.abs(fx) < 1 ? (fx < 0 ? 'swings shrink: it settles' : 'no swing: it slides in') : 'swings grow: it flies off'}`
-      : `(1 − 10·lr) only describes plain SGD:\nfocus SGD with momentum 0`);
+      ? `each SGD step:\nx → x × (1 − 10·lr) = x × ${fmt(ax, 3)}\ny → y × (1 − lr) = y × ${fmt(ay, 3)}\n${Math.abs(ax) < 1 ? (ax < 0 ? 'swings shrink: it settles' : 'no swing: it slides in') : 'swings grow: it flies off'}`
+      : `(1 − 10·lr) describes plain SGD:\nfocus SGD, momentum 0`);
   } else if (mode === 'comb') {
-    const mu = st.hp.mom.mu;
-    N.move(st.combTop).set(`μ = ${fmt(mu, 2)}: weights μᵏ = 1, ${fmt(mu, 2)}, ${fmt(mu * mu, 2)}, …\nmemory ≈ 1/(1 − μ) = ${mu < 1 ? fmt(1 / (1 - mu), 3) : '∞'} steps`);
+    const mu = st.hp.mom.mu, mem = mu < 1 ? fmt(1 / (1 - mu), 2) : '∞';
+    const w = `μ = ${mu.toFixed(2)} → 1, ${fmt(mu, 2)}, ${fmt(mu * mu, 2)}, …`;
+    N.move(st.combTop).set(S.tier === 1
+      ? `each bar: how much a slope from\nk steps ago still counts\n${w}\nteal = memory ≈ ${mem} steps`
+      : `bar k = μᵏ, the weight of the\ngradient from k steps ago\n${w}\nmemory ≈ 1/(1 − μ) = ${mem} steps (teal)`);
   } else if (mode === 'adam') {
     // Adam's latest step with the loss as set, beside the same step computed with the loss x1
     const A = st.P.adam, ka = stepIndex(S, A), j = Math.max(0, Math.min(ka, A.xy.length - 1) - 1);
-    const d = (xy) => `Δx ${fmt(xy[j + 1][0] - xy[j][0], 3)}, Δy ${fmt(xy[j + 1][1] - xy[j][1], 3)}`;
+    const d = (xy) => `(${fmt(xy[j + 1][0] - xy[j][0], 3)}, ${fmt(xy[j + 1][1] - xy[j][1], 3)})`;
     const G = st.G && st.G.adam;
     N.move(st.balls.adam.mesh).set(st.scale !== 1 && G
-      ? `Adam, step ${j + 1}, loss ×100: ${d(A.xy)}\nsame step, loss ×1: ${d(G.xy)}`
-      : `Adam, step ${j + 1}: ${d(A.xy)}\n(loss ×1: switch on ×100 in Knobs)`);
+      ? `Adam's step ${j + 1}, (Δx, Δy):\nloss ×100: ${d(A.xy)}\nloss ×1: ${d(G.xy)}`
+      : `Adam's step ${j + 1}, (Δx, Δy):\n${d(A.xy)} (loss ×1)`);
   } else if (mode === 'first') {
     const d = (id) => { const Q = st.P[id]; return pt([Q.xy[1][0] - Q.xy[0][0], Q.xy[1][1] - Q.xy[0][1]], 3); };
     N.move(st.noteAt).set(`first step (Δx, Δy)\nAdam ${d('adam')} · lr ${fmt(st.hp.adam.lr, 2)}\nRMSprop ${d('rms')} · lr ${fmt(st.hp.rms.lr, 2)}\nSGD ${d('sgd')}`);
   } else if (mode === 'flat') {
-    const g = P.grad[k], gl = Math.hypot(g[0], g[1]);
-    N.move(st.balls[S.knobs.focus].mesh).set(`slope here: ${fmt(gl, 2)}\nSGD's step = lr × slope = ${fmt(h.lr * gl, 2)}`);
+    // plain SGD where it stands (it never leaves the start on this plain)
+    const Q = st.P.sgd, ks = stepIndex(S, Q), g = Q.grad[ks], gl = Math.hypot(g[0], g[1]), lr = st.hp.sgd.lr;
+    N.move(st.balls.sgd.mesh).set(S.tier === 1
+      ? `SGD feels a slope of ${fmt(gl, 2)}\nits step, lr × slope = ${fmt(lr * gl, 2)}: stuck`
+      : `SGD: |∇L| = ${fmt(gl, 2)}\nstep lr·|∇L| = ${fmt(lr * gl, 2)}: stuck`);
   } else if (mode === 'arena') {
     const Q = st.P.sgd, ks = stepIndex(S, Q), e = Q.xy[ks];
     N.move(st.balls.sgd.mesh).set(`after ${ks} steps: (${e[0].toFixed(4)}, ${e[1].toFixed(4)})\nARENA prints tensor([0.2300, 1.4820]) after 100`);
@@ -466,34 +474,35 @@ function note(S, k) {
   }
 }
 
-/* the memory comb: weight μᵏ of the gradient from k steps ago */
+/* the memory comb: bar k = μᵏ, the weight of the gradient from k steps ago. It stands along the
+   front of the ravine (k = 0 on the left), so a front camera reads it like a bar chart. */
+const COMB = { n: 20, x0: -1.1875, dx: 0.125, z: 2.24, h: 0.8 };
 function buildComb(S) {
-  const st = S.state, g = new THREE.Group();
-  const n = 24, x = -1.72, z0 = 1.45, dz = -0.118;
-  const rail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, Math.abs(dz) * n + 0.06), K.mat.brass());
-  rail.position.set(x, 0.01, z0 + dz * (n - 1) / 2);
+  const st = S.state, g = new THREE.Group(), { n, x0, dx, z } = COMB;
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(dx * (n - 1) + 0.12, 0.022, 0.07), K.mat.brass());
+  rail.position.set(x0 + dx * (n - 1) / 2, 0.011, z);
   rail.castShadow = true; rail.receiveShadow = true;
   g.add(rail);
   st.combBars = [];
-  const geo = new THREE.BoxGeometry(0.052, 1, 0.07).translate(0, 0.5, 0);
+  const geo = new THREE.BoxGeometry(0.095, 1, 0.08).translate(0, 0.5, 0);
+  st.combMat = { hot: K.mat.paint(C.aux), cold: K.mat.plaster('#ece5d8') };
   for (let k = 0; k < n; k++) {
-    const m = new THREE.Mesh(geo, K.mat.plaster('#e8e1d4'));
-    m.position.set(x, 0.02, z0 + dz * k);
+    const m = new THREE.Mesh(geo, st.combMat.cold);
+    m.position.set(x0 + dx * k, 0.022, z);
     m.castShadow = true; m.receiveShadow = true;
     g.add(m); st.combBars.push(m);
   }
-  st.combTop = new THREE.Vector3(x, 0.78, z0 + 0.1);
+  st.combTop = new THREE.Vector3(x0 + dx * (n - 1) / 2, 0, z + 0.2);   // the note hangs below the comb
   st.comb = g;
+  g.visible = false;
   S.root.add(g);
-  st.combMat = { hot: K.mat.paint(C.aux), cold: K.mat.plaster('#e8e1d4') };
 }
 function paintComb(S) {
   const st = S.state, mu = st.hp.mom.mu, mem = mu < 1 ? 1 / (1 - mu) : Infinity;
   st.combBars.forEach((m, k) => {
-    m.scale.y = Math.max(0.004, 0.62 * Math.pow(mu, k));
+    m.scale.y = Math.max(0.004, COMB.h * Math.pow(mu, k));   // honest heights: μᵏ
     m.material = k < mem - 1e-9 ? st.combMat.hot : st.combMat.cold;
   });
-  st.combTag.set(S.tier === 3 ? 'μᵏ, k steps ago' : 'how much a slope from k steps ago still counts');
 }
 
 /* start / restart the race; resolves when the balls stop */
@@ -523,11 +532,11 @@ function scene(S, o) {
   st.noteAt = o.noteAt ? new THREE.Vector3(...o.noteAt) : new THREE.Vector3(0, 1.9, 0);
   const onRavine = st.surf === 'ravine';
   st.comb.visible = !!o.comb && onRavine;
-  st.combTag.show(!!o.comb && onRavine);
   if (st.comb.visible) paintComb(S);
-  const axes = !!o.axes;
-  for (const a of [st.axX, st.axY, st.axZ]) a.show(axes);
-  for (const t of [st.tagX, st.tagY, st.tagZ]) t.show(axes);
+  st.noteFree.anchor(o.noteAnchor || 'bottom');
+  const axes = !!o.axes, up = axes && o.axes !== 'xy';   // 'xy': no loss axis (top view)
+  st.axX.show(axes); st.axY.show(axes); st.axZ.show(up);
+  st.tagX.show(axes); st.tagY.show(axes); st.tagZ.show(up);
   st.startTag.show(!!o.tags);
   st.flagTag.show(!!o.tags);
   if (o.figure) {
@@ -558,7 +567,7 @@ run({
         ['trimodal', { 1: 'Three wells', 2: 'Three wells (trimodal)', 3: 'neg_trimodal_func' }],
         ['bowl', { 1: 'Stretched bowl', 2: 'Stretched bowl (theory)', 3: '½(10x² + y²)' }]] },
     { id: 'focus', type: 'select', label: { 1: 'Follow', 2: 'Focus ball', 3: 'Focus optimiser' }, value: 'sgd',
-      options: [['sgd', 'SGD'], ['mom', { 1: 'Momentum', 2: 'SGD + momentum', 3: 'SGD (μ > 0)' }], ['rms', 'RMSprop'], ['adam', 'Adam']] },
+      options: [['sgd', 'SGD'], ['mom', { 1: 'Momentum', 2: 'Momentum', 3: 'SGD, μ > 0' }], ['rms', 'RMSprop'], ['adam', 'Adam']] },
     { id: 'x100', type: 'toggle', label: { 1: 'Make the loss 100× bigger', 2: 'Loss × 100', 3: 'scale L by 100' }, value: false },
     { id: 'lr', type: 'range', label: { 1: 'Step size (focus ball)', 2: 'Learning rate lr (focus ball)', 3: 'lr (focused optimiser)' },
       min: 0.0001, max: 2, log: true, value: 0.1, fmt: (v) => fmt(v, 3) },
@@ -597,7 +606,7 @@ run({
     st.tagX = K.label([0, 0, 0], { 1: 'x = weight 1', 2: 'x (weight 1)', 3: 'θ₀ = x' }, { cls: 'tag', anchor: 'left', dx: 6, dy: 0 });
     st.tagY = K.label([0, 0, 0], { 1: 'y = weight 2', 2: 'y (weight 2)', 3: 'θ₁ = y' }, { cls: 'tag', anchor: 'bottom', dy: -4 });
     st.tagZ = K.label([0, 0, 0], { 1: 'height = how wrong', 2: 'loss', 3: 'L(x, y)' }, { cls: 'tag', anchor: 'bottom', dy: -4 });
-    st.startTag = K.label([0, 0, 0], 'start', { cls: 'tag', anchor: 'top', dy: 8 });
+    st.startTag = K.label([0, 0, 0], 'start', { cls: 'tag', anchor: 'left', dx: 10, dy: 0 });
     st.flagTag = K.label([0, 0, 0], '', { cls: 'tag', anchor: 'bottom', dy: -6 });
     st.readout = K.label([0, 0, 0], '', { cls: 'readout', dy: -14 });
     st.readout.move(st.balls.sgd.mesh);
@@ -607,8 +616,6 @@ run({
     st.fig = K.figure();
     S.root.add(st.fig.group);
     buildComb(S);
-    st.combTag = K.label([0, 0, 0], '', { cls: 'tag', anchor: 'top', dy: 10 });
-    st.combTag.move(new THREE.Vector3(-1.72, 0.0, 1.62));
     st.legend = K.legend(BALLS.map((b) => ({ id: b.id, label: b.name, color: b.color })), (id) => S.setKnob('focus', id));
     st.u = 0;
   },
@@ -713,7 +720,7 @@ run({
       },
       cam: CAM.bowl,
       set: { surface: 'bowl', focus: 'sgd', lr: 0.19, mu: 0, x100: false },
-      enter(S) { scene(S, { note: 'bowl', noteAt: [0, 1.5, -1.85] }); race(S); } },
+      enter(S) { scene(S, { note: 'bowl', noteAt: [0, 1.45, -2.2] }); race(S); } },
 
     { tag: 'core',
       cap: {
@@ -723,7 +730,7 @@ run({
       },
       cam: CAM.mom,
       set: { surface: 'ravine', focus: 'mom', lr: 0.1, mu: 0.9, x100: false },
-      enter(S) { scene(S, { comb: true, note: 'comb' }); race(S); } },
+      enter(S) { scene(S, { comb: true, note: 'comb', noteAnchor: 'top' }); race(S); } },
 
     { tag: 'core',
       cap: {
@@ -743,16 +750,16 @@ run({
       },
       cam: CAM.top,
       set: { surface: 'ravine', focus: 'sgd', x100: false },
-      enter(S) { scene(S, { axes: true, tags: true }); race(S); } },
+      enter(S) { scene(S, { axes: 'xy', tags: true }); race(S); } },
 
     { tag: 'contested',
       cap: {
-        1: '**Where the picture stops.** Real models have millions of weights; nobody sees that landscape. Adam is today\'s default and newer optimisers are on trial. On this flat plain, SGD feels no slope at all.',
-        2: 'ARENA\'s `neg_trimodal_func`: wells in a flat plain. At (1, 1) the slope is 9×10⁻¹¹: SGD never moves, while Adam divides by the slope\'s size (floored at ε), creeps, then dives. Current method: AdamW; emerging: Lion, Sophia, Muon. For you, a library call.',
-        3: 'Current method: AdamW (decoupled weight decay), or SGD + momentum in vision. Emerging: Lion (sign of momentum), Sophia (clipped diagonal Hessian), Muon (orthogonalised updates). For you, a library call; from 2D keep conditioning, step size, EMAs.',
+        1: '**Where the picture stops.** Real models have millions of weights; nobody sees that landscape. Adam is today\'s default and newer optimisers are on trial. On this flat plain, SGD feels almost no slope.',
+        2: 'ARENA\'s `neg_trimodal_func`: wells in a flat plain. At (1, 1) the slope is 9×10⁻¹¹: SGD is stuck, while Adam divides by the slope\'s size (floored at ε), creeps, then dives. Current method: AdamW; emerging: Lion, Sophia, Muon. For you, a library call.',
+        3: 'Current method: AdamW (decoupled weight decay), or SGD + momentum in vision. Emerging: Lion (sign of momentum), Sophia (clipped diagonal Hessian), Muon (orthogonalised updates). From 2D keep conditioning, step size, EMAs.',
       },
       cam: CAM.tri,
-      set: { surface: 'trimodal', focus: 'sgd', x100: false },
+      set: { surface: 'trimodal', focus: 'adam', x100: false },
       enter(S) { scene(S, { note: 'flat', tags: true, figure: 'shrug', face: [0, 0.6, 3] }); race(S); } },
 
     { tag: 'core',
@@ -769,15 +776,15 @@ run({
   predict: [
     { q: { 1: 'On the stretched bowl, plain SGD with step size 0.25. What happens?',
         2: 'Stretched bowl L = ½(10x² + y²), plain SGD, lr = 0.25. What does the ball do?',
-        3: 'L = ½(10x² + y²), SGD (μ = 0), lr = 0.25, from (0.5, 2.6). Behaviour?' },
+        3: 'L = ½(10x² + y²), SGD (μ = 0), lr = 0.25, from (0.5, −2.6). Behaviour?' },
       options: [{ t: 'Zig-zags across with growing swings and flies off', ok: true }, { t: 'Zig-zags, but settles in the middle' },
         { t: 'Slides smoothly to the bottom' }, { t: 'Barely moves' }],
       why: { 1: 'The steep direction gets multiplied by (1 − 10 × 0.25) = −1.5 each step: it flips sides and grows by half. It can never settle.',
         2: 'x ← x(1 − 10·lr) = x·(−1.5): every step flips sides and grows 1.5×. The safe limit is lr < 2/10 = 0.2. The gentle y-direction (factor 0.75) would be fine; the steep one breaks first.',
-        3: '|1 − lr·λ_max| = |1 − 2.5| = 1.5 > 1, so x_t = (−1.5)^t · 0.5 diverges while y_t = 0.75^t · 2.6 converges. Stability is set by the largest curvature: lr < 2/λ_max.' },
+        3: '|1 − lr·λ_max| = |1 − 2.5| = 1.5 > 1, so x_t = (−1.5)^t · 0.5 diverges while y_t = 0.75^t · (−2.6) converges. Stability is set by the largest curvature: lr < 2/λ_max.' },
       show(S) {
         S.setKnobs({ surface: 'bowl', focus: 'sgd', lr: 0.25, mu: 0, x100: false });
-        scene(S, { note: 'bowl', noteAt: [0, 1.5, -1.85] }); S.fly(CAM.bowl);
+        scene(S, { note: 'bowl', noteAt: [0, 1.45, -2.2] }); S.fly(CAM.bowl);
         return race(S);
       } },
     { q: { 1: 'Momentum at μ = 0.9. Roughly how many recent slopes does it remember?',
@@ -789,7 +796,7 @@ run({
         3: 'b_t = Σ μᵏ g_(t−k): total weight 1/(1 − μ) = 10, e-folding time −1/ln μ ≈ 9.5 steps. Andrew Ng\'s rule of thumb for exponentially weighted averages: window ≈ 1/(1 − β).' },
       show(S) {
         S.setKnobs({ surface: 'ravine', focus: 'mom', lr: 0.1, mu: 0.9, x100: false });
-        scene(S, { comb: true, note: 'comb' }); S.fly(CAM.mom);
+        scene(S, { comb: true, note: 'comb', noteAnchor: 'top' }); S.fly(CAM.mom);
         return race(S);
       } },
     { q: { 1: 'Make the loss 100× bigger (same valley, just taller). Whose path barely changes?',

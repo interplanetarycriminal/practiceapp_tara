@@ -1,0 +1,1060 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Model Room · Object Lessons</title>
+<meta name="description" content="Every hard idea in TARA as an object you can hold: 28 models in a round room, one bay per Saturday.">
+<link rel="stylesheet" href="kit.css">
+<!-- The Model Room (objects/index.html): the 3D hub of Object Lessons.
+     A rotunda: The Machine (00) on a tall plinth in the centre, 14 bays in a ring around it in
+     week order (clockwise from the brass start line in the north), chapter zones as soft coloured
+     floor arcs. Each bay holds its objects' miniatures (minis.js) on small numbered plinths.
+     Fixed places on purpose: it is a memory palace. Stops: 0 = the whole room (The Machine),
+     1-14 = the bays; swipe, arrow keys or the card's buttons walk them. objects.json is read at
+     runtime: ready objects are painted and open on tap, the rest stay plaster, "in the workshop".
+     URL: #week-03 or #w03 (a bay), #<object-id> (that object, highlighted), no hash = this week.
+     ?shot=1 (screenshots: no intro flight, instant moves), ?nowebgl=1 (the plain list).
+     Test hooks: window.__hub = { ready, stop(), go(stop, {hl}), list(open), week, stats() }. -->
+<style>
+  :root{--card-h:242px; --bar-h:52px}
+  .k-bar h1{margin:0}
+  .h-listbtn{
+    flex:0 0 auto; font:600 12.5px/1 var(--font); padding:7px 12px; border-radius:999px;
+    border:1px solid var(--rule); background:var(--surface); color:var(--ink); cursor:pointer;
+  }
+  .h-listbtn[aria-expanded="true"]{background:var(--ink); border-color:var(--ink); color:var(--surface)}
+  .h-listbtn[hidden]{display:none}
+
+  /* first-visit one-liner */
+  .h-hint{
+    position:absolute; z-index:6; left:50%; transform:translateX(-50%);
+    top:calc(var(--bar-h) + env(safe-area-inset-top,0px) + 10px);
+    width:max-content; max-width:calc(100% - 24px);
+    display:flex; align-items:center; gap:6px; padding:7px 6px 7px 14px;
+    background:var(--ink); color:var(--surface); border-radius:16px; box-shadow:var(--shadow);
+    font:600 13px/1.35 var(--font); transition:opacity .35s;
+  }
+  .h-hint[hidden]{display:none}
+  .h-hint.off{opacity:0; pointer-events:none}
+  .h-hint button{
+    flex:0 0 auto; width:26px; height:26px; border:0; border-radius:999px; padding:0; cursor:pointer;
+    background:transparent; color:inherit; opacity:.7; font:600 12px/1 var(--font);
+  }
+
+  /* the bay card: fixed height, fixed slots, never jumps */
+  .h-card{
+    position:absolute; z-index:6; left:0; right:0; bottom:0;
+    height:calc(var(--card-h) + env(safe-area-inset-bottom,0px));
+    padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));
+    display:grid; grid-template-rows:32px 37px minmax(0,1fr); row-gap:6px;
+    background:var(--surface); border-top:1px solid var(--rule);
+    border-radius:16px 16px 0 0; box-shadow:0 -6px 24px rgba(52,40,20,.10);
+  }
+  .h-card[hidden]{display:none}
+  .h-head{display:flex; align-items:center; gap:8px; min-width:0}
+  .h-id{flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:8px; white-space:nowrap; overflow:hidden}
+  .h-wk{font:700 18px/1 var(--font); font-variant-numeric:tabular-nums; letter-spacing:-.01em}
+  .h-date{font:600 13px/1 var(--font); color:var(--muted)}
+  .h-chap{
+    flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
+    font:700 10.5px/1 var(--font); letter-spacing:.06em; text-transform:uppercase;
+    padding:5px 8px; border-radius:999px;
+    color:color-mix(in srgb, var(--cc) 78%, var(--ink)); background:color-mix(in srgb, var(--cc) 15%, transparent);
+  }
+  .h-now{
+    flex:0 0 auto; font:700 10.5px/1 var(--font); letter-spacing:.05em; text-transform:uppercase;
+    color:#9a5b12; padding:5px 8px; border-radius:999px; background:color-mix(in srgb, #e8a33d 22%, transparent);
+  }
+  .h-nav{flex:0 0 auto; display:inline-flex; gap:4px}
+  .h-nav button{
+    width:32px; height:32px; border-radius:999px; border:1px solid var(--rule); background:var(--surface);
+    color:var(--ink); font:600 11px/1 var(--font); cursor:pointer; padding:0;
+  }
+  .h-nav #room{font-size:15px}
+  .h-nav button[aria-pressed="true"]{background:var(--ink); border-color:var(--ink); color:var(--surface)}
+  .h-lc{font-weight:700; color:color-mix(in srgb, var(--cc) 75%, var(--ink))}
+  .h-line{
+    margin:0; font:13.5px/1.36 var(--font); color:var(--muted); overflow:hidden;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; text-wrap:pretty;
+  }
+  .h-rows{list-style:none; margin:0; padding:0; display:grid; grid-auto-rows:44px; gap:5px; align-content:start; overflow:hidden}
+  .h-row{
+    display:grid; grid-template-columns:30px minmax(0,1fr) auto; align-items:center; gap:8px;
+    padding:0 5px 0 10px; border-radius:11px; border:1px solid var(--rule); background:var(--soft); cursor:pointer;
+  }
+  .h-row.on{border-color:var(--k-brass); box-shadow:inset 0 0 0 1px var(--k-brass)}
+  .h-row.h-tip{grid-template-columns:1fr; cursor:default; background:transparent; border-style:dashed; color:var(--muted); font:13px/1.3 var(--font); padding:0 12px}
+  .h-num{font:600 12.5px/1 var(--mono); color:var(--muted); font-variant-numeric:tabular-nums}
+  .h-tt{min-width:0; display:flex; flex-direction:column; gap:3px}
+  .h-name{font:600 14px/1.15 var(--font); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .h-sub{font:500 11.5px/1.1 var(--font); color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .h-sub i{font-style:italic}
+  .h-star{color:var(--k-brass); font-style:normal}
+  .h-open{
+    display:inline-flex; align-items:center; justify-content:center; min-width:62px; height:32px; padding:0 14px;
+    border-radius:999px; border:1px solid var(--accent); background:var(--accent); color:var(--surface);
+    font:600 13px/1 var(--font); text-decoration:none; cursor:pointer;
+  }
+  .h-open:disabled{background:transparent; border-color:var(--rule); color:var(--muted); cursor:default; opacity:.75}
+
+  /* labels pinned in 3D (kit label layer) */
+  .k-label.k-wshop{font:italic 500 11px/1.2 var(--font); color:var(--muted); padding:2px 8px; border-radius:999px; box-shadow:none}
+  .k-label.k-hover{font:600 12.5px/1.3 var(--font)}
+  .k-label.k-focus{border-left:3px solid var(--k-brass); font:600 12.5px/1.3 var(--font)}
+  .k-label.k-wk{font:700 10.5px/1 var(--font); padding:3px 6px; border-radius:999px; font-variant-numeric:tabular-nums; box-shadow:none}
+  .k-label.k-wk.k-now{background:#e8a33d; border-color:#e8a33d; color:#2b2a33}
+  .k-label.k-ch{
+    background:transparent; border:0; box-shadow:none; -webkit-backdrop-filter:none; backdrop-filter:none; padding:0;
+    font:700 10px/1 var(--font); letter-spacing:.09em; text-transform:uppercase;
+    color:color-mix(in srgb, var(--cc) 75%, var(--ink));
+  }
+
+  /* the plain list (also the no-WebGL view) */
+  .h-list{
+    position:absolute; z-index:7; left:0; right:0; bottom:0;
+    top:calc(var(--bar-h) + env(safe-area-inset-top,0px));
+    overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; background:var(--paper);
+    padding:16px 12px calc(32px + env(safe-area-inset-bottom,0px));
+  }
+  .h-list[hidden]{display:none}
+  .h-list:focus{outline:none}
+  .h-lwrap{max-width:760px; margin:0 auto}
+  .h-ltitle{margin:0 0 4px; font:700 20px/1.25 var(--font)}
+  .h-lnote{margin:0 0 18px; font:14px/1.45 var(--font); color:var(--muted)}
+  .h-grp{margin:0 0 20px}
+  .h-grp h3{display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin:0 0 3px; font:700 15px/1.3 var(--font)}
+  .h-grp h3 .h-date{font-weight:600}
+  .h-gl{margin:0 0 8px; font:13.5px/1.4 var(--font); color:var(--muted)}
+  .h-items{list-style:none; margin:0; padding:0; display:grid; gap:8px}
+  .h-item{
+    display:grid; grid-template-columns:34px minmax(0,1fr); gap:4px 10px; align-items:start;
+    padding:11px 12px; background:var(--surface); border:1px solid var(--rule); border-radius:12px;
+  }
+  .h-item .h-num{padding-top:3px}
+  .h-it{margin:0; font:600 15px/1.3 var(--font); overflow-wrap:anywhere}
+  .h-it a{color:var(--ink); text-decoration:none}
+  .h-it a:hover{color:var(--accent)}
+  .h-is{margin:2px 0 0; font:13.5px/1.42 var(--font); color:var(--muted); overflow-wrap:anywhere}
+  .h-ia{grid-column:2; display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin-top:6px}
+  .h-ia .h-open{height:30px}
+  .h-state{font:italic 500 12.5px/1 var(--font); color:var(--muted)}
+  .h-find{border:0; background:none; padding:4px 0; color:var(--accent); font:600 12.5px/1 var(--font); cursor:pointer}
+  .h-find:hover{text-decoration:underline}
+
+  .h-err{position:absolute; z-index:8; left:16px; right:16px; top:calc(var(--bar-h) + 24px); max-width:520px; margin:0 auto;
+    padding:16px 18px; background:var(--surface); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow)}
+  .h-err p{margin:0 0 10px; font:14.5px/1.5 var(--font)}
+
+  /* desktop: card bottom-left, hover labels */
+  @media (min-width:760px) and (min-height:520px){
+    .h-card{
+      left:16px; bottom:16px; right:auto; width:460px; height:var(--card-h);
+      padding:10px 14px 12px; border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow);
+    }
+    .h-list{padding-top:24px}
+  }
+  /* short landscape phones: the card moves to the left edge */
+  @media (min-width:600px) and (max-height:519px){
+    .h-card{top:calc(var(--bar-h) + 8px); bottom:8px; left:8px; right:auto; width:340px; height:auto;
+      border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow)}
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]) .h-now{color:#f3c178}
+  }
+  :root[data-theme="dark"] .h-now{color:#f3c178}
+  @media (prefers-reduced-motion: reduce){ .h-hint{transition:none} }
+</style>
+</head>
+<body>
+<div class="k-app h-app" id="app">
+  <header class="k-bar">
+    <a class="k-back" id="back" href="../index.html#today"><span aria-hidden="true">◀</span> TARA</a>
+    <h1 class="k-title">Model Room</h1>
+    <button type="button" class="h-listbtn" id="listBtn" aria-expanded="false" aria-controls="list">List</button>
+  </header>
+  <div class="h-hint" id="hint" role="note" hidden>
+    <span>Every hard idea in TARA as an object you can hold. Tap one.</span>
+    <button type="button" id="hintX" aria-label="Dismiss">✕</button>
+  </div>
+  <section class="h-card" id="card" aria-label="The bay in view">
+    <div class="h-head">
+      <div class="h-id" id="cardId" aria-live="polite"></div>
+      <div class="h-nav" role="group" aria-label="Walk the room">
+        <button type="button" id="prev" aria-label="Previous bay (left arrow)" title="Previous bay">◀</button>
+        <button type="button" id="room" aria-label="The whole room" aria-pressed="false" title="The whole room">◎</button>
+        <button type="button" id="next" aria-label="Next bay (right arrow)" title="Next bay">▶</button>
+      </div>
+    </div>
+    <p class="h-line" id="cardLine"></p>
+    <ul class="h-rows" id="cardRows"></ul>
+  </section>
+  <section class="h-list" id="list" hidden tabindex="-1" aria-labelledby="listTitle">
+    <div class="h-lwrap">
+      <h2 class="h-ltitle" id="listTitle">All 28 objects</h2>
+      <p class="h-lnote" id="listNote">In course order, one group per Saturday. Painted objects are ready to open; the rest are still in the workshop.</p>
+      <div id="listBody"></div>
+    </div>
+  </section>
+</div>
+<script type="module">
+import { stage, dimToggle, K, C, THREE, J } from './kit.js';
+import { minis } from './minis.js';
+
+/* ============================================================ basics */
+const Q = new URLSearchParams(location.search);
+const SHOT = Q.get('shot') === '1';
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const TAU = Math.PI * 2, DEG = Math.PI / 180;
+const $ = (id) => document.getElementById(id);
+const mod = (n, m) => ((n % m) + m) % m;
+const wrapPi = (x) => mod(x + Math.PI, TAU) - Math.PI;
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const store = (area) => ({
+  get(k) { try { return window[area].getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { window[area].setItem(k, v); } catch (e) { /* private mode */ } },
+});
+const LS = store('localStorage'), SS = store('sessionStorage');
+const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+
+/* ============================================================ the course */
+const WEEKS = 14;
+const T0 = Date.parse('2026-09-12T00:00:00+10:00');          // W1 Saturday, Brisbane
+function weekNow(now = Date.now()) {                          // same rule as intuition/hook.js
+  const d = (now - T0) / 864e5;
+  return clamp(Math.floor(d / 7) + 1 + (d % 7 > 0.5 ? 1 : 0), 1, WEEKS);
+}
+const WEEK = weekNow();
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function sat(w) { const d = new Date(Date.UTC(2026, 8, 12 + 7 * (w - 1))); return `${d.getUTCDate()} ${MON[d.getUTCMonth()]}`; }
+const CHAPTERS = [
+  { name: 'Fundamentals', from: 1, to: 4, color: C.data },
+  { name: 'Transformers', from: 5, to: 6, color: C.prob },
+  { name: 'Interpretability', from: 7, to: 8, color: C.dir },
+  { name: 'RL', from: 9, to: 10, color: C.good },
+  { name: 'Evals', from: 11, to: 11, color: C.aux },
+  { name: 'Capstone', from: 12, to: 14, color: C.brass },
+];
+const chapterOf = (w) => CHAPTERS.find((c) => w >= c.from && w <= c.to);
+const range = (c) => (c.from === c.to ? `W${c.from}` : `W${c.from}–${c.to}`);
+const LINE = {
+  1: 'Tensors, einops and einsum, then a ray tracer built from batched maths.',
+  2: 'Convolutions, and ResNets: the shortcut that lets nets go deep.',
+  3: 'Optimisation: how SGD, momentum and Adam walk down a loss surface.',
+  4: 'Backprop by hand: blame flows back through every op. Then VAEs and GANs.',
+  5: 'A transformer from scratch: attention, MLPs and the residual stream.',
+  6: 'Sampling, the KV cache, and opening the model with TransformerLens.',
+  7: 'Mech interp begins: induction heads and the circuits they build.',
+  8: 'Patching on IOI, then superposition and sparse autoencoders.',
+  9: 'Values, Q-learning and DQN, then vanilla policy gradients.',
+  10: 'PPO’s clipped update, then RLHF: climbing a learned reward on a KL leash.',
+  11: 'One Saturday: threat models, datasets, Inspect, agents and AI control.',
+  12: 'Model organisms, persona vectors and steering, LoRA fine-tunes.',
+  13: 'Thought anchors (the sentence an answer hangs on) and the assistant axis.',
+  14: 'Final presentations: a research claim that stands like an arch.',
+};
+const KIND = { weekly: 'weekly object', deep: 'deep dive', north: 'north star' };
+
+async function main() {
+  /* ============================================================ page chrome */
+  const app = $('app'), bar = document.querySelector('.k-bar'), card = $('card');
+  const backTo = SS.get('tara.dim.back') || '#today';
+  $('back').href = '../index.html' + backTo;
+  bar.appendChild(dimToggle('3d', { back2d: '#today' }));
+
+  const seenMap = () => { try { return JSON.parse(localStorage.getItem('tara.objects.seen') || '{}') || {}; } catch (e) { return {}; } };
+  let SEEN = seenMap();
+
+  let reg = null;
+  try {
+    const r = await fetch('./objects.json', { cache: 'no-cache' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    reg = await r.json();
+    if (!Array.isArray(reg)) throw new Error('bad registry');
+  } catch (e) {
+    const box = document.createElement('div');
+    box.className = 'h-err';
+    box.innerHTML = `<p><b>The Model Room could not load its list of objects.</b> Check your connection and try again.</p>
+      <p><a class="k-btn" href="">Try again</a> <a class="k-btn" href="../index.html${esc(backTo)}">Back to TARA</a></p>`;
+    app.appendChild(box);
+    card.hidden = true; $('listBtn').hidden = true;
+    return;
+  }
+  reg = reg.filter((o) => o && o.id).map((o) => Object.assign({}, o, { ready: o.ready === true, week: Number(o.week) || 0 }))
+    .sort((a, b) => Number(a.num) - Number(b.num));
+  const byId = Object.fromEntries(reg.map((o) => [o.id, o]));
+  const stopOf = (o) => (o.kind === 'north' || !o.week ? 0 : clamp(o.week, 1, WEEKS));
+  const objsAt = (stop) => reg.filter((o) => stopOf(o) === stop);
+  const machine = reg.find((o) => stopOf(o) === 0);
+
+  /* ============================================================ the plain list */
+  const list = $('list'), listBtn = $('listBtn');
+  function renderList() {
+    const groups = [[0, machine ? [machine] : []]];
+    for (let w = 1; w <= WEEKS; w++) groups.push([w, objsAt(w)]);
+    $('listBody').innerHTML = groups.map(([w, objs]) => {
+      if (!objs.length) return '';
+      const ch = w ? chapterOf(w) : null;
+      const head = w
+        ? `<span class="h-wk">W${w}</span><span class="h-date">Sat ${sat(w)}</span><span class="h-chap" style="--cc:${ch.color}">${ch.name}</span>${w === WEEK ? '<span class="h-now">this week</span>' : ''}`
+        : `<span class="h-wk">00</span><span class="h-date">The Machine</span><span class="h-chap" style="--cc:${C.brass}">north star</span>`;
+      const line = w ? LINE[w] : 'Stands in the centre of the room; every other object is one of its parts.';
+      const items = objs.map((o) => {
+        const seen = SEEN[o.id] ? ' <span class="h-star" title="You have visited this one">★</span>' : '';
+        const title = o.ready ? `<a href="${esc(o.path)}">${esc(o.title)}</a>` : esc(o.title);
+        const act = o.ready ? `<a class="h-open" href="${esc(o.path)}">Open</a>` : '<span class="h-state">in the workshop</span>';
+        const find = st ? `<button type="button" class="h-find" data-find="${esc(o.id)}">Show in the room</button>` : '';
+        return `<li class="h-item"><span class="h-num">${esc(o.num)}</span><div><p class="h-it">${title}${seen}</p><p class="h-is">${esc(o.subtitle || '')}</p></div><div class="h-ia">${act}${find}</div></li>`;
+      }).join('');
+      return `<section class="h-grp" id="grp-${w}" aria-label="${w ? `Week ${w}` : 'The Machine'}"><h3>${head}</h3><p class="h-gl">${esc(line)}</p><ul class="h-items">${items}</ul></section>`;
+    }).join('');
+  }
+  let listOpen = false;
+  function setList(on, { focus = true } = {}) {
+    listOpen = !!on;
+    list.hidden = !listOpen;
+    listBtn.setAttribute('aria-expanded', String(listOpen));
+    listBtn.textContent = listOpen && st ? 'Room' : 'List';
+    if (st) card.hidden = listOpen;
+    if (listOpen) {
+      renderList();
+      const grp = st && cur > 0 ? $('grp-' + cur) : null;     // open at the bay in view
+      list.scrollTop = grp ? Math.max(0, grp.offsetTop - 12) : 0;
+      if (focus) list.focus({ preventScroll: true });
+    }
+    else if (focus) listBtn.focus({ preventScroll: true });
+    if (st && !listOpen) layout();
+    if (st) st.invalidate();
+  }
+  listBtn.addEventListener('click', () => setList(!listOpen));
+  list.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-find]');
+    if (!b) return;
+    const o = byId[b.dataset.find];
+    setList(false, { focus: false });
+    if (o) go(stopOf(o), { hl: o.id });
+  });
+
+  /* ============================================================ the stage */
+  const st = stage({ host: app, plinth: false, fov: 30, fit: 1, idle: false, insets: { top: 60, bottom: 250 },
+    view: { pos: [0, 30, 30], target: [0, 0.4, 0], fit: 1 } });
+  window.__hub = { ready: false, week: WEEK };
+
+  if (!st) {
+    // no WebGL: the plain list is the whole page
+    $('listNote').textContent = 'This device cannot draw the 3D room, so here is every object as a plain list, in course order. Painted objects are ready to open; the rest are still in the workshop.';
+    card.hidden = true; listBtn.hidden = true;
+    setList(true, { focus: false });
+    window.__hub = { ready: true, week: WEEK, webgl: false, stop: () => null, go() {}, list() {} };
+    return;
+  }
+
+  const { scene, camera, controls, renderer, canvas } = st;
+  controls.enabled = false;                 // the hub walks the ring itself (swipe, keys, buttons)
+  controls.enableDamping = false;
+  controls.minDistance = 0.1; controls.maxDistance = 600;
+  controls.minPolarAngle = 0; controls.maxPolarAngle = Math.PI * 0.49;
+  camera.near = 0.3; camera.far = 220;
+  const maxAniso = renderer.capabilities.getMaxAnisotropy();
+
+  /* lights: the kit's warm key and cool fill, re-aimed for a whole room; they turn with the view */
+  let key = null, fill = null, shadowFloor = null;
+  scene.traverse((o) => {
+    if (o.isDirectionalLight) { if (o.castShadow) key = o; else fill = o; }
+    if (o.isMesh && o.material && o.material.isShadowMaterial) shadowFloor = o;
+  });
+  const L0 = new THREE.Vector3(-13.8, 14.1, 9.6), F0 = new THREE.Vector3(10, 5, -8), UP = new THREE.Vector3(0, 1, 0);
+  if (key) {
+    key.shadow.mapSize.set(2048, 2048);
+    if (key.shadow.map) { key.shadow.map.dispose(); key.shadow.map = null; }
+    Object.assign(key.shadow.camera, { left: -12.8, right: 12.8, top: 12.8, bottom: -12.8, near: 1, far: 60 });
+    key.shadow.camera.updateProjectionMatrix();
+    key.shadow.normalBias = 0.03;
+    key.target.position.set(0, 0, 0);
+  }
+  if (shadowFloor) { shadowFloor.position.y = 0.02; shadowFloor.renderOrder = 6; }
+
+  /* ---------------------------------------------------------------- layout of the room */
+  const R = 10;                              // radius of the ring of bays (mini centres)
+  const STEP = TAU / WEEKS;                  // one bay
+  const SP = 1.42;                           // spacing of minis inside a bay (along the arc)
+  const PL = { rt: 0.58, rb: 0.6, h: 0.21 }; // a mini's plinth
+  const bayAngle = (w) => (w - 0.5) * STEP;  // clockwise from north (-z): W1 just after the start line
+  const polar = (a, r, y = 0) => new THREE.Vector3(r * Math.sin(a), y, -r * Math.cos(a));
+  const basisAt = (a, pos) => new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(Math.cos(a), 0, Math.sin(a)), UP, new THREE.Vector3(-Math.sin(a), 0, Math.cos(a))).setPosition(pos);
+  // every object gets a fixed place: its bay, then left to right (clockwise) in course order
+  const PLACES = {};
+  for (let w = 1; w <= WEEKS; w++) {
+    const objs = objsAt(w), n = objs.length;
+    objs.forEach((o, j) => { const a = bayAngle(w) + ((j - (n - 1) / 2) * SP) / R; PLACES[o.id] = { a, pos: polar(a, R), stop: w }; });
+  }
+  if (machine) PLACES[machine.id] = { a: 0, pos: new THREE.Vector3(0, 0, 0), stop: 0 };
+
+  /* ---------------------------------------------------------------- theme colours */
+  const hexMix = (a, b, t) => {
+    const p = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const x = p(a), y = p(b);
+    return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join('');
+  };
+  let DARK = st.isDark();
+  const TH = () => (DARK
+    ? { paper: '#15161a', ink: '#d8d0c2', ink2: '#9d9384', band: (c) => hexMix(c, '#15161a', 0.8), chap: (c) => hexMix(c, '#ffffff', 0.25), now: '#f3c178', glow: [255, 196, 110, 0.34] }
+    : { paper: '#efe9df', ink: '#5a5044', ink2: '#8a7d6b', band: (c) => hexMix(c, '#efe9df', 0.83), chap: (c) => hexMix(c, '#2b2a33', 0.28), now: '#b86b12', glow: [255, 183, 84, 0.46] });
+
+  /* ---------------------------------------------------------------- canvas text helpers */
+  function spaced(g, text, x, y, sp) {                // letter-spaced text centred on x
+    const cs = [...text], ws = cs.map((c) => g.measureText(c).width);
+    const total = ws.reduce((s, v) => s + v, 0) + sp * (cs.length - 1);
+    let cx = x - total / 2;
+    g.textAlign = 'left';
+    cs.forEach((c, i) => { g.fillText(c, cx, y); cx += ws[i] + sp; });
+    return total;
+  }
+  function spacedWidth(g, text, sp) {
+    const cs = [...text];
+    return cs.reduce((s, c) => s + g.measureText(c).width, 0) + sp * (cs.length - 1);
+  }
+  function fitFont(g, weight, px, text, maxW, sp = 0) {   // largest size <= px that fits maxW
+    for (let f = px; f > 10; f -= 1) {
+      g.font = `${weight} ${f}px ${FONT}`;
+      if ((sp ? spacedWidth(g, text, sp) : g.measureText(text).width) <= maxW) return f;
+    }
+    return 10;
+  }
+  function atlas(w, h) {
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = maxAniso;
+    return { cv, g: cv.getContext('2d'), tex };
+  }
+  function remapUV(geo, col, row, cols, rows, cw = 1 / cols, ch = 1 / rows) {   // put a geometry's 0..1 UVs in one atlas cell
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, col * cw + uv.getX(i) * cw, 1 - (row + 1) * ch + uv.getY(i) * ch);
+    return geo;
+  }
+
+  /* ---------------------------------------------------------------- floor: chapter arcs */
+  const floorGroup = new THREE.Group();
+  scene.add(floorGroup);
+  const BAND = { r0: R - 1.72, r1: R + 1.5 };
+  const WALL = { r: BAND.r1 + 0.1, t: 0.24, h: 2.0 };   // the rotunda's wall, just behind the bays
+  function sector(r0, r1, a0, a1, segs) {
+    const pos = [], uv = [], idx = [];
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs, a = a0 + (a1 - a0) * t, s = Math.sin(a), c = Math.cos(a);
+      pos.push(r0 * s, 0, -r0 * c, r1 * s, 0, -r1 * c); uv.push(t, 0, t, 1);
+    }
+    for (let i = 0; i < segs; i++) { const k = i * 2; idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx);
+    return g;
+  }
+  const bandGeos = CHAPTERS.map((c) => {
+    const gap = 0.55 * DEG;
+    return sector(BAND.r0, BAND.r1, (c.from - 1) * STEP + gap, c.to * STEP - gap, 10 * (c.to - c.from + 1));
+  });
+  const bandMesh = new THREE.Mesh(THREE.mergeGeometries(bandGeos), new THREE.MeshBasicMaterial({ vertexColors: true }));
+  bandMesh.renderOrder = 0;
+  floorGroup.add(bandMesh);
+  function paintBands() {
+    const cols = [], col = new THREE.Color();
+    CHAPTERS.forEach((c, i) => {
+      col.set(TH().band(c.color));
+      for (let k = 0; k < bandGeos[i].attributes.position.count; k++) cols.push(col.r, col.g, col.b);
+    });
+    bandMesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+  }
+
+  // the brass start line: where W14 ends and W1 begins, pointing north from The Machine
+  const startLine = new THREE.Mesh(new THREE.PlaneGeometry(0.05, BAND.r1 - 2.05).rotateX(-Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: C.brass, roughness: 0.45, metalness: 0.5, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+  startLine.position.set(0, 0.006, -(2.05 + BAND.r1) / 2);
+  startLine.receiveShadow = true;
+  floorGroup.add(startLine);
+
+  // the rotunda: a plaster wall round the ring, a pilaster between every two bays, a brass rail
+  {
+    const wallMat = new THREE.MeshStandardMaterial({ color: '#f1e8d9', roughness: 0.97, metalness: 0, emissive: '#6b5236', emissiveIntensity: 0.22 });
+    const wallIn = new THREE.Mesh(new THREE.CylinderGeometry(WALL.r, WALL.r, WALL.h, 280, 1, true).translate(0, WALL.h / 2, 0),
+      new THREE.MeshStandardMaterial({ color: '#f1e8d9', roughness: 0.97, metalness: 0, side: THREE.BackSide, emissive: '#6b5236', emissiveIntensity: 0.22 }));
+    const wallOut = new THREE.Mesh(new THREE.CylinderGeometry(WALL.r + WALL.t, WALL.r + WALL.t, WALL.h, 280, 1, true).translate(0, WALL.h / 2, 0), wallMat);
+    const wallTop = new THREE.Mesh(new THREE.RingGeometry(WALL.r, WALL.r + WALL.t, 280, 1).rotateX(-Math.PI / 2).translate(0, WALL.h, 0),
+      new THREE.MeshStandardMaterial({ color: '#efe7da', roughness: 0.95, metalness: 0 }));
+    const pil = [];
+    for (let k = 0; k < WEEKS; k++) {
+      const a = k * STEP;
+      pil.push(new THREE.BoxGeometry(0.36, WALL.h + 0.05, 0.12).translate(0, (WALL.h + 0.05) / 2, 0).applyMatrix4(basisAt(a, polar(a, WALL.r - 0.058))));
+    }
+    const pilasters = new THREE.Mesh(THREE.mergeGeometries(pil), new THREE.MeshStandardMaterial({ color: '#f6efe3', roughness: 0.95, metalness: 0, emissive: '#6b5236', emissiveIntensity: 0.18 }));
+    const rail = new THREE.Mesh(new THREE.TorusGeometry(WALL.r - 0.014, 0.018, 6, 280).rotateX(Math.PI / 2).translate(0, WALL.h * 0.78, 0), K.mat.brass());
+    for (const m of [wallIn, wallOut, wallTop, pilasters, rail]) { m.receiveShadow = true; m.castShadow = false; floorGroup.add(m); }
+  }
+
+  /* ---------------------------------------------------------------- floor: bay labels ("W3 · 26 Sep" + chapter) */
+  const FLB = { cols: 2, rows: 8, cw: 512, ch: 128, w: 2.5, h: 0.625, r: R - 1.2 };
+  const floorAtlas = atlas(FLB.cols * FLB.cw, FLB.rows * FLB.ch);
+  function paintFloorLabels() {
+    const { g, cv } = floorAtlas, T = TH();
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.textBaseline = 'alphabetic';
+    for (let w = 1; w <= WEEKS; w++) {
+      const x0 = ((w - 1) % FLB.cols) * FLB.cw, y0 = Math.floor((w - 1) / FLB.cols) * FLB.ch, cx = x0 + FLB.cw / 2;
+      const main = `W${w} · ${sat(w)}`, maxW = FLB.cw - 28;
+      if (w === WEEK) {
+        const tail = '  ·  this week';
+        let k = 1;
+        for (; k > 0.5; k -= 0.02) {
+          g.font = `700 ${Math.round(54 * k)}px ${FONT}`; const mw = g.measureText(main).width;
+          g.font = `700 ${Math.round(30 * k)}px ${FONT}`; if (mw + g.measureText(tail).width <= maxW) break;
+        }
+        g.font = `700 ${Math.round(54 * k)}px ${FONT}`; const mw = g.measureText(main).width;
+        g.font = `700 ${Math.round(30 * k)}px ${FONT}`; const tw = g.measureText(tail).width;
+        const left = cx - (mw + tw) / 2;
+        g.textAlign = 'left';
+        g.font = `700 ${Math.round(54 * k)}px ${FONT}`; g.fillStyle = T.ink; g.fillText(main, left, y0 + 60);
+        g.font = `700 ${Math.round(30 * k)}px ${FONT}`; g.fillStyle = T.now; g.fillText(tail, left + mw, y0 + 60);
+      } else {
+        fitFont(g, 700, 54, main, maxW);
+        g.textAlign = 'center'; g.fillStyle = T.ink; g.fillText(main, cx, y0 + 60);
+      }
+      const c = chapterOf(w), sub = `${c.name.toUpperCase()}  ·  ${range(c)}`;
+      fitFont(g, 700, 27, sub, maxW, 3);
+      g.fillStyle = T.chap(c.color);
+      spaced(g, sub, cx, y0 + 108, 3);
+    }
+    floorAtlas.tex.needsUpdate = true;
+  }
+  {
+    const geos = [];
+    for (let w = 1; w <= WEEKS; w++) {
+      const a = bayAngle(w);
+      const pg = new THREE.PlaneGeometry(FLB.w, FLB.h);
+      remapUV(pg, (w - 1) % FLB.cols, Math.floor((w - 1) / FLB.cols), FLB.cols, FLB.rows);
+      // lie flat, reading upright for someone standing in the room facing the bay
+      pg.applyMatrix4(new THREE.Matrix4().makeBasis(new THREE.Vector3(Math.cos(a), 0, Math.sin(a)),
+        new THREE.Vector3(Math.sin(a), 0, -Math.cos(a)), UP).setPosition(polar(a, FLB.r, 0.012)));
+      geos.push(pg);
+    }
+    const m = new THREE.Mesh(THREE.mergeGeometries(geos), new THREE.MeshBasicMaterial({
+      map: floorAtlas.tex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }));
+    m.renderOrder = 2;
+    floorGroup.add(m);
+  }
+
+  /* ---------------------------------------------------------------- this week's glow */
+  const glowTex = atlas(256, 256);
+  function paintGlow() {
+    const { g } = glowTex, [r, gg, b, a] = TH().glow;
+    g.clearRect(0, 0, 256, 256);
+    const grd = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+    grd.addColorStop(0, `rgba(${r},${gg},${b},${a})`);
+    grd.addColorStop(0.55, `rgba(${r},${gg},${b},${a * 0.55})`);
+    grd.addColorStop(1, `rgba(${r},${gg},${b},0)`);
+    g.fillStyle = grd; g.fillRect(0, 0, 256, 256);
+    glowTex.tex.needsUpdate = true;
+  }
+  const glow = new THREE.Mesh(new THREE.PlaneGeometry(5.6, 5.6).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({
+    map: glowTex.tex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+  glow.position.copy(polar(bayAngle(WEEK), R - 0.25, 0.008));
+  glow.renderOrder = 1;
+  floorGroup.add(glow);
+  const glowLight = new THREE.PointLight(0xffd29a, 9, 6, 2);
+  glowLight.position.copy(polar(bayAngle(WEEK), R - 0.6, 2.6));
+  scene.add(glowLight);
+
+  /* ---------------------------------------------------------------- plinths (merged: one body, one rim, one number band) */
+  const NUM = { cols: 4, rows: 8, cw: 256, ch: 88, band: 0.16, y: 0.104 };
+  const numAtlas = atlas(NUM.cols * NUM.cw, 1024);
+  const bodies = [], rims = [], bands = [];
+  const bodyGeo = new THREE.CylinderGeometry(PL.rt, PL.rb, PL.h, 48, 1).translate(0, PL.h / 2, 0);
+  const rimGeo = new THREE.TorusGeometry(PL.rt + 0.004, 0.014, 6, 48).rotateX(Math.PI / 2).translate(0, PL.h - 0.004, 0);
+  const rAt = (y, rt, rb, h) => rb + (rt - rb) * (y / h);        // radius of a tapered drum at height y
+  const arc = (NUM.band * NUM.cw) / NUM.ch / (PL.rt + 0.012);   // band angle that keeps the texture's aspect
+  const bandGeo = new THREE.CylinderGeometry(rAt(NUM.y + NUM.band / 2, PL.rt, PL.rb, PL.h) + 0.004, rAt(NUM.y - NUM.band / 2, PL.rt, PL.rb, PL.h) + 0.004,
+    NUM.band, 16, 1, true, -arc / 2, arc).translate(0, NUM.y, 0);
+  function paintNumbers() {
+    const { g, cv } = numAtlas;
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.fillStyle = '#86765e'; g.font = `700 70px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    reg.forEach((o, i) => {
+      if (stopOf(o) === 0) return;
+      const col = i % NUM.cols, row = Math.floor(i / NUM.cols);
+      g.fillText(String(o.num), col * NUM.cw + NUM.cw / 2, row * NUM.ch + NUM.ch / 2 + 3);
+    });
+    numAtlas.tex.needsUpdate = true;
+  }
+  const plinthMat = new THREE.MeshStandardMaterial({ color: '#e6ddcd', roughness: 0.93, metalness: 0 });
+  const brassMat = K.mat.brass();
+  reg.forEach((o, i) => {
+    const P = PLACES[o.id];
+    if (!P || P.stop === 0) return;
+    const M = basisAt(P.a, P.pos);
+    bodies.push(bodyGeo.clone().applyMatrix4(M));
+    rims.push(rimGeo.clone().applyMatrix4(M));
+    const b = bandGeo.clone();
+    remapUV(b, i % NUM.cols, Math.floor(i / NUM.cols), NUM.cols, NUM.rows, 1 / NUM.cols, NUM.ch / 1024);
+    bands.push(b.applyMatrix4(M));
+  });
+  const ringGroup = new THREE.Group();
+  scene.add(ringGroup);
+  {
+    const body = new THREE.Mesh(THREE.mergeGeometries(bodies), plinthMat);
+    body.castShadow = true; body.receiveShadow = true;
+    const rim = new THREE.Mesh(THREE.mergeGeometries(rims), brassMat);
+    rim.castShadow = true;
+    const band = new THREE.Mesh(THREE.mergeGeometries(bands), new THREE.MeshStandardMaterial({
+      map: numAtlas.tex, transparent: true, depthWrite: false, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+    band.renderOrder = 3;
+    ringGroup.add(body, rim, band);
+  }
+
+  /* The Machine's plinth: a stepped drum in the centre, "00 · THE MACHINE" on its front */
+  const MP = { r0: 1.78, h0: 0.12, r1: 1.32, h1: 0.62, scale: 1.55 };
+  const MTOP = MP.h0 + MP.h1;
+  const centre = new THREE.Group();
+  scene.add(centre);
+  if (machine) {
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(MP.r0, MP.r0 + 0.02, MP.h0, 96).translate(0, MP.h0 / 2, 0), plinthMat);
+    const drum = new THREE.Mesh(new THREE.CylinderGeometry(MP.r1, MP.r1 + 0.03, MP.h1, 96).translate(0, MP.h0 + MP.h1 / 2, 0), plinthMat);
+    for (const m of [base, drum]) { m.castShadow = true; m.receiveShadow = true; }
+    const rim0 = new THREE.Mesh(new THREE.TorusGeometry(MP.r0 + 0.004, 0.018, 8, 160).rotateX(Math.PI / 2).translate(0, MP.h0 - 0.004, 0), brassMat);
+    const rim1 = new THREE.Mesh(new THREE.TorusGeometry(MP.r1 + 0.004, 0.018, 8, 160).rotateX(Math.PI / 2).translate(0, MTOP - 0.004, 0), brassMat);
+    const lab = atlas(1024, 128);
+    lab.g.fillStyle = '#86765e'; lab.g.font = `700 60px ${FONT}`; lab.g.textBaseline = 'middle';
+    spaced(lab.g, `${machine.num}  ·  ${machine.title.toUpperCase()}`, 512, 68, 6);
+    lab.tex.needsUpdate = true;
+    const ma = (0.3 * 1024) / 128 / (MP.r1 + 0.02);
+    const mr = (f) => MP.r1 + 0.03 - 0.03 * f + 0.005;        // drum radius at height fraction f, plus a hair
+    const mband = new THREE.Mesh(new THREE.CylinderGeometry(mr(0.5 + 0.15 / MP.h1), mr(0.5 - 0.15 / MP.h1), 0.3, 48, 1, true, -ma / 2, ma).translate(0, MP.h0 + MP.h1 / 2, 0),
+      new THREE.MeshStandardMaterial({ map: lab.tex, transparent: true, depthWrite: false, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+    mband.renderOrder = 3;
+    centre.add(base, drum, rim0, rim1, mband);
+  }
+
+  /* ---------------------------------------------------------------- minis (minis.js; y up, front +z) */
+  const matCache = new Map();
+  function matFor(kind, hex) {
+    const k = kind + hex;
+    if (!matCache.has(k)) matCache.set(k, kind === 'brass' ? K.mat.brass() : kind === 'paint' ? K.mat.paint(hex) : K.mat.plaster(hex));
+    return matCache.get(k);
+  }
+  const rawMat = K.mat.plaster(C.plaster);    // unpainted plaster: objects still in the workshop
+  function bufferOf(geoms) {                   // JSCAD polygons (convex) -> triangles, flat normals
+    const pos = [];
+    for (const g of geoms) for (const p of J.geometries.geom3.toPolygons(g)) {
+      const v = p.vertices;
+      for (let i = 1; i + 1 < v.length; i++) pos.push(...v[0], ...v[i], ...v[i + 1]);
+    }
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    bg.computeVertexNormals();
+    return bg;
+  }
+  const MINI = {};          // id -> { group, top (Vector3), proxy, o }
+  const proxies = [];
+  const hitMat = new THREE.MeshBasicMaterial();
+  reg.forEach((o) => {
+    const P = PLACES[o.id];
+    if (!P) return;
+    const isM = P.stop === 0;
+    const g = new THREE.Group();
+    g.position.copy(P.pos);
+    g.rotation.y = -P.a;                      // face the centre of the room
+    const holder = new THREE.Group();
+    holder.position.y = isM ? MTOP : PL.h;
+    if (isM) holder.scale.setScalar(MP.scale);
+    g.add(holder);
+    let size = [0.9, 0.9, 0.9];
+    try {
+      const built = minis[o.id] ? minis[o.id](J) : null;
+      if (!built) throw new Error('no mini for ' + o.id);
+      size = built.size || size;
+      if (o.ready) {
+        for (const { geom, color, mat } of built.geoms) {
+          const m = new THREE.Mesh(bufferOf([geom]), matFor(mat || 'plaster', color));
+          m.castShadow = true; m.receiveShadow = true; holder.add(m);
+        }
+      } else {
+        const m = new THREE.Mesh(bufferOf(built.geoms.map((x) => x.geom)), rawMat);
+        m.castShadow = true; m.receiveShadow = true; holder.add(m);
+      }
+    } catch (e) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7).translate(0, 0.35, 0), rawMat);
+      m.castShadow = true; holder.add(m);
+    }
+    const s = isM ? MP.scale : 1, base = isM ? MTOP : PL.h;
+    const hgt = base + size[1] * s;
+    const pw = isM ? MP.r1 * 2 : 1.2;
+    const proxy = new THREE.Mesh(new THREE.BoxGeometry(pw, hgt + 0.1, pw).translate(0, (hgt + 0.1) / 2, 0), hitMat);
+    proxy.visible = false;
+    proxy.userData.obj = o;
+    g.add(proxy);
+    proxies.push(proxy);
+    (isM ? centre : ringGroup).add(g);
+    MINI[o.id] = { group: g, o, top: P.pos.clone().setY(hgt + 0.08), foot: isM ? polar(Math.PI, MP.r0 + 0.1, 0.02) : polar(P.a, R - PL.rb - 0.04, 0.02) };
+    st.pick(proxy, () => tapObject(o));
+  });
+  // the floor of each bay is tappable too (in the whole-room view, tap a bay to walk to it)
+  for (let w = 1; w <= WEEKS; w++) {
+    const a = bayAngle(w), n = objsAt(w).length;
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(Math.max(3.2, n * SP + 0.6), 0.04, BAND.r1 - BAND.r0), hitMat);
+    pad.applyMatrix4(basisAt(a, polar(a, (BAND.r0 + BAND.r1) / 2, 0.02)));
+    pad.visible = false;
+    scene.add(pad);
+    st.pick(pad, () => { if (cur !== w) go(w); });
+  }
+
+  /* brass stars on the plinths of visited objects (one merged mesh, rebuilt when visits change) */
+  const starShape = new THREE.Shape();
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 ? 0.034 : 0.078, a = (i / 10) * TAU;
+    if (i) starShape.lineTo(r * Math.sin(a), r * Math.cos(a)); else starShape.moveTo(r * Math.sin(a), r * Math.cos(a));
+  }
+  const starGeo = new THREE.ExtrudeGeometry(starShape, { depth: 0.016, bevelEnabled: true, bevelThickness: 0.005, bevelSize: 0.005, bevelSegments: 1 }).translate(0, 0, -0.008);
+  let starMesh = null;
+  function buildStars() {
+    if (starMesh) { scene.remove(starMesh); starMesh.geometry.dispose(); starMesh = null; }
+    const geos = [];
+    for (const o of reg) {
+      if (!SEEN[o.id] || !MINI[o.id]) continue;
+      const P = PLACES[o.id], isM = P.stop === 0;
+      const r = (isM ? MP.r1 + 0.02 : PL.rb - 0.01) + 0.014, t = isM ? 0.62 : 0.74, y = isM ? MP.h0 + MP.h1 / 2 : NUM.y;
+      const local = new THREE.Matrix4().makeRotationY(t).setPosition(r * Math.sin(t), y, r * Math.cos(t));
+      const M = isM ? local : basisAt(P.a, P.pos).multiply(local);
+      geos.push(starGeo.clone().applyMatrix4(M));
+    }
+    if (!geos.length) return;
+    starMesh = new THREE.Mesh(THREE.mergeGeometries(geos), brassMat);
+    starMesh.castShadow = true;
+    scene.add(starMesh);
+  }
+
+  /* highlight: a brass ring on the floor round one object's plinth */
+  const hlRing = new THREE.Mesh(new THREE.RingGeometry(0.7, 0.79, 72).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({
+    color: C.brass, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }));
+  hlRing.renderOrder = 4; hlRing.visible = false;
+  scene.add(hlRing);
+
+  /* ---------------------------------------------------------------- labels (HTML, pinned in 3D) */
+  const notes = {};           // "in the workshop" under each unready mini of the bay in view
+  for (const o of reg) if (!o.ready && MINI[o.id]) {
+    notes[o.id] = st.label(MINI[o.id].top, 'in the workshop', { cls: 'wshop', dy: -2 });
+    notes[o.id].show(false);
+  }
+  const hoverLabel = st.label(new THREE.Vector3(), '', { cls: 'hover', dy: -6, prio: 6 }); hoverLabel.show(false);
+  const focusLabel = st.label(new THREE.Vector3(), '', { cls: 'focus', dy: -6, prio: 5 }); focusLabel.show(false);
+  const roomLabels = [];      // week tags and chapter names, for the whole-room view
+  for (let w = 1; w <= WEEKS; w++) {
+    const L = st.label(polar(bayAngle(w), R + 1.0, 0.02), `W${w}`, { cls: w === WEEK ? 'wk now' : 'wk', anchor: 'center', dy: 0, prio: 2 });
+    L.show(false); roomLabels.push(L);
+  }
+  for (const c of CHAPTERS) {
+    const L = st.label(polar(((c.from - 1 + c.to) / 2) * STEP, BAND.r0 - 1.25, 0.02), c.name, { cls: 'ch', anchor: 'center', dy: 0, prio: 1 });
+    L.el.style.setProperty('--cc', c.color);
+    L.show(false); roomLabels.push(L);
+  }
+
+  /* ============================================================ the view: a walk round the ring */
+  let INS = { top: 60, bottom: 250, left: 0, right: 0 };
+  const EL_BAY = 27 * DEG, EL_ROOM = 54 * DEG;
+  const V = { a: bayAngle(WEEK), s: 0, yaw: 0 };   // ring angle, blend towards the whole room (0..1), room drag
+  const DB = {};                                    // camera distance per bay (fits the bay into the free area)
+  let DROOM = 40;
+  const isDesk = () => matchMedia('(min-width:760px) and (min-height:520px)').matches;
+  function perDist() {                              // visible width / height of the free area per unit of distance
+    const sw = Math.max(60, innerWidth - INS.left - INS.right), sh = Math.max(60, innerHeight - INS.top - INS.bottom);
+    const m = Math.min(sw, sh), t2 = 2 * Math.tan(15 * DEG);
+    return { w: (sw * t2) / m, h: (sh * t2) / m };
+  }
+  function distances() {
+    const p = perDist(), desk = isDesk();
+    for (let w = 1; w <= WEEKS; w++) {
+      const n = Math.max(1, objsAt(w).length);
+      const need = Math.max(((n - 1) * SP + 1.3) / (p.w * 0.95), 1.7 / (p.h * 0.9));
+      DB[w] = clamp(need, desk ? 10.5 : 4.8, 13);
+    }
+    const ext = WALL.r + WALL.t + 0.25;
+    DROOM = Math.max((2 * ext) / (p.w * 0.93), (2 * ext * Math.sin(EL_ROOM) + 3.4 * Math.cos(EL_ROOM)) / (p.h * 0.93)) * 1.06;
+  }
+  function distAt(a) {
+    const u = a / STEP - 0.5, i0 = Math.floor(u), t = u - i0;
+    return lerp(DB[mod(i0, WEEKS) + 1], DB[mod(i0 + 1, WEEKS) + 1], t);
+  }
+  const bayPose = (a) => ({ target: polar(a, R - 0.45, 0.5), az: a + Math.PI, el: EL_BAY, dist: distAt(a) });
+  const roomPose = () => ({ target: new THREE.Vector3(0, 0.3, 0.9), az: Math.PI + V.yaw, el: EL_ROOM, dist: DROOM });
+  function pose() {
+    if (V.s <= 0) return bayPose(V.a);
+    if (V.s >= 1) return roomPose();
+    const p = bayPose(V.a), q = roomPose(), s = V.s;
+    return { target: p.target.clone().lerp(q.target, s), az: p.az + wrapPi(q.az - p.az) * s, el: lerp(p.el, q.el, s),
+      dist: Math.exp(lerp(Math.log(p.dist), Math.log(q.dist), s)) };
+  }
+  function applyView() {
+    const P = pose(), ce = Math.cos(P.el);
+    camera.position.set(P.target.x + P.dist * ce * Math.sin(P.az), P.target.y + P.dist * Math.sin(P.el), P.target.z - P.dist * ce * Math.cos(P.az));
+    controls.target.copy(P.target);
+    camera.lookAt(P.target);
+    const head = P.az - Math.PI;              // the key light rakes in from the viewer's left, wherever they face
+    if (key) { key.position.copy(L0).applyAxisAngle(UP, -head); key.target.updateMatrixWorld(); }
+    if (fill) fill.position.copy(F0).applyAxisAngle(UP, -head);
+    st.refit();
+  }
+  function layout() {
+    if (card.hidden) return;                        // list open: keep the last insets, re-run on close
+    const barB = bar.getBoundingClientRect().bottom;
+    const cr = card.getBoundingClientRect();
+    if (isDesk()) INS = { top: barB + 8, bottom: 18, left: Math.round(cr.right * 0.5), right: 0 };
+    else if (innerWidth >= 600 && innerHeight < 520) INS = { top: barB + 6, bottom: 8, left: Math.round(cr.right + 8), right: 0 };
+    else INS = { top: barB + 4, bottom: Math.max(0, innerHeight - cr.top) + 4, left: 0, right: 0 };
+    st.setViewInsets(INS, { animate: false });
+    distances();
+    applyView();
+  }
+
+  /* ---------------------------------------------------------------- stops: 0 = the whole room, 1..14 = bays */
+  let cur = -1, HL = null, LAST = WEEK, navTok = 0;
+  const nextStop = (s, d) => mod(s + d, WEEKS + 1);
+  function go(stop, { hl = null, ms = null } = {}) {
+    stop = mod(stop, WEEKS + 1);
+    const tok = ++navTok;
+    const from = { a: V.a, s: V.s, yaw: V.yaw };
+    const to = stop === 0 ? { a: V.a, s: 1, yaw: 0 } : { a: V.a + wrapPi(bayAngle(stop) - V.a), s: 0, yaw: 0 };
+    if (stop !== 0 && from.s >= 0.999) from.a = to.a;       // from the whole room: drop straight into the bay
+    const steps = Math.abs(to.a - from.a) / STEP;
+    const hop = stop !== 0 && from.s < 0.01 && steps > 2.5 ? Math.min(0.55, 0.08 * steps) : 0;   // long walks lift a little
+    const dur = ms ?? clamp(480 + 150 * Math.max(steps, Math.abs(to.s - from.s) * 5), 480, 1500);
+    setStop(stop, hl);
+    return st.tween(dur, (k) => {
+      if (tok !== navTok) return;
+      V.a = lerp(from.a, to.a, k); V.s = clamp(lerp(from.s, to.s, k) + hop * Math.sin(Math.PI * k), 0, 1); V.yaw = lerp(from.yaw, to.yaw, k);
+      applyView();
+    }, K.ease.inOut);
+  }
+  function setStop(stop, hl) {
+    const changed = stop !== cur;
+    cur = stop;
+    if (stop) LAST = stop;
+    HL = hl || null;
+    const h = stop === 0 ? '#' + (machine ? machine.id : 'room') : HL ? '#' + HL : `#week-${String(stop).padStart(2, '0')}`;
+    if (location.hash !== h) try { history.replaceState(null, '', h); } catch (e) { /* file:// */ }
+    // labels for the stop in view
+    updateNotes();
+    for (const L of roomLabels) L.show(stop === 0);
+    showHighlight();
+    renderCard(changed);
+    $('room').setAttribute('aria-pressed', String(stop === 0));
+  }
+  function updateNotes() {
+    for (const id in notes) notes[id].show(cur !== 0 && PLACES[id].stop === cur && id !== HL && !(HOV && HOV.id === id));
+  }
+  function showHighlight() {
+    const m = HL && MINI[HL];
+    if (!m) { hlRing.visible = false; focusLabel.show(false); updateNotes(); st.invalidate(); return; }
+    const isM = PLACES[HL].stop === 0;
+    hlRing.position.copy(PLACES[HL].pos).setY(0.016);
+    hlRing.scale.setScalar(isM ? 2.62 : 1);
+    hlRing.visible = true;
+    focusLabel.move(m.top).set(`${m.o.num} · ${m.o.title}${m.o.ready ? '' : ' · in the workshop'}`).show(HOV !== m.o);
+    updateNotes();
+    st.invalidate();
+  }
+  function highlight(id) {
+    HL = id;
+    const h = '#' + id;
+    if (location.hash !== h) try { history.replaceState(null, '', h); } catch (e) { /* file:// */ }
+    showHighlight();
+    renderRows();
+  }
+
+  /* ---------------------------------------------------------------- the card */
+  function renderCard() {
+    const id = $('cardId'), line = $('cardLine');
+    if (cur === 0) {
+      id.innerHTML = `<span class="h-wk">${esc(machine ? machine.num : '00')}</span><span class="h-date">${esc(machine ? machine.title : 'The Machine')}</span><span class="h-chap" style="--cc:${C.brass}">north star</span>`;
+      line.textContent = machine ? machine.subtitle : '';
+    } else {
+      const c = chapterOf(cur);
+      id.innerHTML = `<span class="h-wk">W${cur}</span><span class="h-date">Sat ${sat(cur)}</span>${cur === WEEK ? '<span class="h-now">this week</span>' : ''}`;
+      line.innerHTML = `<b class="h-lc" style="--cc:${c.color}">${c.name}</b> · ${esc(LINE[cur])}`;
+    }
+    renderRows();
+  }
+  function renderRows() {
+    const objs = objsAt(cur);
+    let html = objs.map((o) => {
+      const seen = SEEN[o.id];
+      const sub = o.ready
+        ? `${KIND[o.kind] || o.kind}${seen ? ' · <span class="h-star">★ visited</span>' : ''}`
+        : `<i>in the workshop</i>${seen ? ' · <span class="h-star">★</span>' : ''}`;
+      const btn = o.ready
+        ? `<a class="h-open" href="${esc(o.path)}" aria-label="Open ${esc(o.title)}">Open</a>`
+        : `<button type="button" class="h-open" disabled aria-label="${esc(o.title)}: in the workshop">Open</button>`;
+      return `<li class="h-row${HL === o.id ? ' on' : ''}" data-id="${esc(o.id)}"><span class="h-num">${esc(o.num)}</span><span class="h-tt"><span class="h-name">${esc(o.title)}</span><span class="h-sub">${sub}</span></span>${btn}</li>`;
+    }).join('');
+    if (cur === 0) html += '<li class="h-row h-tip">Around it, one bay per Saturday: swipe, or use ◀ ▶, to walk the 14 weeks.</li>';
+    $('cardRows').innerHTML = html;
+  }
+  $('cardRows').addEventListener('click', (e) => {
+    if (e.target.closest('a.h-open')) return;          // the link opens the object
+    const row = e.target.closest('.h-row[data-id]');
+    if (row) highlight(row.dataset.id);
+  });
+  $('prev').addEventListener('click', () => { hideHint(); go(nextStop(cur, -1)); });
+  $('next').addEventListener('click', () => { hideHint(); go(nextStop(cur, +1)); });
+  $('room').addEventListener('click', () => { hideHint(); go(cur === 0 ? LAST : 0); });
+
+  /* ---------------------------------------------------------------- taps, hover, swipes, keys */
+  function tapObject(o) {
+    hideHint();
+    const stop = stopOf(o);
+    if (stop !== cur) { go(stop, { hl: o.id }); return; }
+    if (o.ready) { location.href = o.path; return; }
+    highlight(o.id);
+    K.toast(`${o.num} · ${o.title} is still in the workshop.`);
+  }
+  let HOV = null, hovRaf = 0, hovEv = null;
+  const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+  function hoverAt(e) {
+    hovEv = e;
+    if (!hovRaf) hovRaf = requestAnimationFrame(() => {
+      hovRaf = 0;
+      const r = canvas.getBoundingClientRect();
+      ndc.set(((hovEv.clientX - r.left) / r.width) * 2 - 1, -((hovEv.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      const hit = ray.intersectObjects(proxies, false)[0];
+      setHover(hit ? hit.object.userData.obj : null);
+    });
+  }
+  function setHover(o) {
+    if (o === HOV) return;
+    HOV = o;
+    canvas.style.cursor = o ? 'pointer' : '';
+    if (o) hoverLabel.move(MINI[o.id].top).set(`${o.num} · ${o.title}${o.ready ? '' : ' · in the workshop'}`).show(true);
+    else hoverLabel.show(false);
+    if (HL && MINI[HL]) focusLabel.show(!o || o.id !== HL);
+    updateNotes();
+    st.invalidate();
+  }
+  canvas.addEventListener('pointerleave', () => setHover(null));
+
+  let drag = null;
+  const dragSpan = () => Math.min(innerWidth, 1000) * 0.5;       // px of finger travel per bay
+  canvas.addEventListener('pointerdown', (e) => {
+    if ((e.button && e.button !== 0) || drag) return;
+    drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, on: false, from: cur, a0: V.a, f: 0, pts: [] };
+  }, { passive: true });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) { if (!drag && e.pointerType === 'mouse') hoverAt(e); return; }
+    const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+    if (!drag.on) {
+      if (Math.abs(dx) < 10 || Math.abs(dx) < Math.abs(dy) * 1.1) return;
+      drag.on = true; drag.x0 = e.clientX; navTok++;
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      hideHint(); setHover(null);
+    }
+    const f = clamp(-(e.clientX - drag.x0) / dragSpan(), -1.15, 1.15);
+    drag.f = f;
+    drag.pts.push([performance.now(), e.clientX]); if (drag.pts.length > 6) drag.pts.shift();
+    if (drag.from === 0) { V.s = 1; V.yaw = f * 0.5; }
+    else if ((drag.from === WEEKS && f > 0) || (drag.from === 1 && f < 0)) { V.a = drag.a0; V.s = Math.min(0.6, Math.abs(f) * 0.6); }
+    else { V.a = drag.a0 + f * STEP; V.s = 0; }
+    applyView();
+  }, { passive: true });
+  function endDrag(e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = drag; drag = null;
+    if (!d.on) return;
+    let v = 0;
+    if (d.pts.length >= 2) { const [t0, x0] = d.pts[0], [t1, x1] = d.pts[d.pts.length - 1]; if (t1 > t0) v = (x1 - x0) / (t1 - t0); }
+    const dir = d.f > 0.22 || v < -0.45 ? 1 : d.f < -0.22 || v > 0.45 ? -1 : 0;
+    const to = nextStop(d.from, dir);
+    go(to, { hl: dir === 0 ? HL : null, ms: dir === 0 ? 300 : null });
+  }
+  canvas.addEventListener('pointerup', endDrag, { passive: true });
+  canvas.addEventListener('pointercancel', endDrag, { passive: true });
+
+  let wheelAcc = 0, wheelT = 0;
+  canvas.addEventListener('wheel', (e) => {                   // trackpad: a sideways swipe walks the ring
+    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+    e.preventDefault();
+    const now = performance.now();
+    if (now - wheelT < 550) return;
+    wheelAcc += e.deltaX;
+    if (Math.abs(wheelAcc) > 70) { wheelT = now; go(nextStop(cur, wheelAcc > 0 ? 1 : -1)); wheelAcc = 0; }
+  }, { passive: false });
+
+  addEventListener('keydown', (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === 'Escape') { if (listOpen) setList(false); else hideHint(); return; }
+    if (listOpen || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '')) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); hideHint(); go(nextStop(cur, 1)); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); hideHint(); go(nextStop(cur, -1)); }
+  });
+  st.onDoubleTap(() => go(cur === 0 ? LAST : 0));
+
+  /* ---------------------------------------------------------------- hash, visits, theme, hint */
+  function fromHash() {
+    const h = decodeURIComponent(location.hash.replace(/^#/, ''));
+    let m;
+    if ((m = h.match(/^(?:week-?|w)(\d{1,2})$/i))) { const w = Number(m[1]); if (w >= 1 && w <= WEEKS) return { stop: w }; }
+    if (byId[h]) return { stop: stopOf(byId[h]), hl: h };
+    if (h === 'room') return { stop: 0 };
+    return null;
+  }
+  addEventListener('hashchange', () => { const t = fromHash(); if (t) go(t.stop, { hl: t.hl }); });
+  function refreshSeen() {
+    const s = seenMap();
+    if (JSON.stringify(s) === JSON.stringify(SEEN)) return;
+    SEEN = s; buildStars(); renderRows(); if (listOpen) renderList(); st.invalidate();
+  }
+  addEventListener('storage', (e) => { if (e.key === 'tara.objects.seen') refreshSeen(); });
+  addEventListener('pageshow', refreshSeen);
+  function paintAll() { paintBands(); paintFloorLabels(); paintGlow(); st.invalidate(); }
+  st.onTheme((d) => { DARK = d; paintAll(); });
+
+  const hint = $('hint');
+  let hintT = 0;
+  function hideHint() {
+    if (hint.hidden || hint.classList.contains('off')) return;
+    hint.classList.add('off'); clearTimeout(hintT);
+    LS.set('tara.objects.hubHint', '1');
+    setTimeout(() => { hint.hidden = true; }, 400);
+  }
+  $('hintX').addEventListener('click', hideHint);
+
+  /* ---------------------------------------------------------------- go */
+  paintAll(); paintNumbers(); buildStars();
+  addEventListener('resize', layout);
+  const start = fromHash();
+  const intro = !start && !SHOT && !REDUCED && !SS.get('tara.objects.hubIntro');
+  if (intro) { SS.set('tara.objects.hubIntro', '1'); V.s = 1; }
+  layout();
+  if (intro) { setStop(0, null); layout(); }
+  else go(start ? start.stop : WEEK, { hl: start && start.hl, ms: 0 });
+  if (!LS.get('tara.objects.hubHint')) {
+    hint.hidden = false;
+    if (!SHOT) hintT = setTimeout(hideHint, 9000);
+  }
+  await st.whenRendered();
+  if (intro) setTimeout(() => go(WEEK, { ms: 1700 }), 350);
+  window.__hub = {
+    ready: true, week: WEEK, webgl: true,
+    stop: () => cur, highlighted: () => HL, go: (s, o) => go(s, o || {}), list: (on) => setList(on, { focus: false }),
+    view: () => ({ a: V.a, s: V.s }), stats: () => st.stats(),
+    screenOf: (id) => {                          // where a mini's body sits on screen (for tests)
+      const m = MINI[id]; if (!m) return null;
+      const v = m.top.clone().setY(m.top.y * 0.6).project(camera);
+      return { x: ((v.x + 1) / 2) * innerWidth, y: ((1 - v.y) / 2) * innerHeight };
+    },
+    renderInfo: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles }),
+  };
+}
+main().catch((e) => console.error(e));
+</script>
+</body>
+</html>

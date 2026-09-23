@@ -62,23 +62,32 @@
          beats, predict, where, links, remix, credit
        + plinth {r, h} | false   + fit (number, >1 = object drawn bigger; default 1)
        + fov (deg, default 30)   + onTier(S, tier)   + film ('w3-optimisers', for the no-WebGL card)
+   knobs[]   + wide: true   the control spans both columns of the drawer (long select labels)
+   beats[].cam  {pos, target} chooses the viewing DIRECTION: the kit auto-fits the whole plinth
+       (a turntable-safe cylinder, grown to enclose S.root) into the free area, centred.
+       + fit: k  a close-up instead: the 30 deg fov spans k x the free square, target centred.
    S = { scene, root, camera, controls, renderer, knobs, state, tier, beat, invalidate(),
        + shot (true under ?shot=1: no idle spin, every tween/fly/race finishes instantly)
-       + changed (array of knob ids behind the current rebuild call)
+       + first (true only during the first rebuild)   + changed (knob ids behind this rebuild)
        + setKnob(id, value, {silent})  change a knob from code (silent: no rebuild)
        + setKnobs({id: value, ...})     several at once, ONE rebuild(S, '*')
        + tr(text|{1,2,3}|fn)            resolve tiered text for the current tier
        + fly(view, ms) · tween(ms, fn, ease) · stage · spec }
    Beats: set{} is applied with ONE rebuild(S, '*') (S.changed lists the ids), then enter(S),
-   then the camera flies to cam (authored for a square view; the kit zooms to fit the free area).
+   then the camera flies to cam.
    rebuild(S, id): id is the single knob that changed, or '*' when several changed at once.
    On first load rebuild(S, '*') runs once with S.first === true (build everything) and
    S.changed = the ids the opening beat sets; setup(S) has already run.
-   Captions accept `code` and **bold**. Tier 1 <= 200 chars, tiers 2-3 <= 320 chars.
+   Captions accept `code` and **bold**. Tier 1 <= 200 chars, tiers 2-3 <= 320 chars; the phone
+   card (fixed 236 px) holds ~7 lines of 14 px, i.e. ~290 chars of prose (fewer with `code`).
    Predict: show(S) may return a Promise; `why` appears when it resolves (or after 2.6 s).
+   "Another" sits in the sheet header. Progress: localStorage tara.objects.predict.
    URL: ?shot=1 (screenshots), ?beat=3 (open at beat 3, 1-based), ?nowebgl=1 (test fallback).
    Test hooks: window.__obj = { ready, beat(i 0-based), knob(id, v), predict(i), pick(j),
-       sheet('knobs'|'predict'|'more'|null), tier(n), stats(), S }.
+       sheet('knobs'|'predict'|'more'|null), tier(n), stats(), beats (count), S }.
+   Rendering: on demand only; DPR <= 2; paused while hidden. three r186 removed PCFSoftShadowMap,
+   so the key light uses PCFShadowMap + shadow.radius (its soft successor), 1024 map. The kit
+   injects an inline favicon (no /favicon.ico 404 in the console).
 
    --------------------------------------------------------------- K helpers
    K.mesh(geom3|geom3[], material?, {smooth})   JSCAD solid -> THREE.Mesh. JSCAD is z-up
@@ -86,17 +95,25 @@
         (faceted plaster); smooth: merged vertices + vertex normals.
    K.mat.plaster(hex?) · brass() · paint(hex) · glass(hex, opacity) · string(hex) · ink()
    K.arrow(from, to, hex, {r}) -> {group, set(from, to), show(bool)}
-   K.tube(points, hex, r) -> {mesh, set(points)}          polyline tube, grows without realloc
+   K.tube(points, hex, r, {material, shadow, sides}) -> {mesh, set(points)}   polyline tube,
+        grows without realloc
    K.bead(pos, hex, r) -> THREE.Mesh                      painted sphere, casts shadow
-   K.label(pos|Object3D, text|{1,2,3}|fn, {cls, dx, dy, anchor}) -> {el, set(text), show(bool),
-        move(pos)}   crisp HTML label pinned to a 3D point. cls: 'note' | 'readout' | 'tag' | ''
+   K.label(pos|Object3D, text|{1,2,3}|fn, {cls, dx, dy, anchor, prio}) -> {el, set(text),
+        show(bool), move(pos), anchor(name), remove()}   crisp HTML label pinned to a 3D point.
+        cls: 'readout' | 'note' | 'tag' | '' (+ accents 'brass', 'grad'). anchor = the side of
+        the label that touches the point: 'bottom' (default: label sits above) | 'top' | 'left' |
+        'right' | 'center'. Labels are clamped between the bar and the card, and treat the card
+        and any open sheet as obstacles (stage.setKeepOut); overlaps resolve by prio (readout 3 >
+        note 2 > plain 1 > tag 0): the lower one moves up to 56 px, else hides that frame. Tags
+        (prio <= 0) also hide while an open sheet leaves less than 250 px of view.
    K.heightfield(fn(x,y), {x:[a,b], y:[a,b], n, zScale | height, base, size, clamp, contours,
         tint:[lo,mid,hi], trim}) -> {mesh, geom (lazy, watertight JSCAD solid), z(x,y),
         toWorld(x, y, lift), toJ(x, y, lift), fmin, fmax, s, dispose()}
         size = world length of the longer side (default 3.6); height = world height of the
         relief (default 1.2) unless zScale is given; base = solid thickness under the lowest point.
+        The open top casts shadows from both faces; skirts face outward (same as the STL solid).
    K.pick(obj, onTap(hit)) · K.unpick(obj)                tap/click picking (raycast)
-   K.fly({pos, target}, ms) -> Promise                     camera flight
+   K.fly({pos, target, fit}, ms) -> Promise                camera flight
    K.figure({color}) -> {group, pose(name, {at, ms}), place(pos, facing)}  faceless stick figure
         ~0.9 tall. Poses: stand, point (at: [x,y,z] world), think, cheer, shrug, lean.
    K.fmt(n, digits=3)   K.rng(seed) -> () => [0,1)   K.toast(msg)   K.onTier(fn) -> off()
@@ -107,14 +124,21 @@
  + K.tubeSolid(points3J, r, sides) -> geom3   watertight tube for STL (points in JSCAD coords)
 
    ----------------------------------------------------------------- stage(opts)
-   stage({ host, insets:{top,right,bottom,left}, plinth, fov, fit, view:{pos,target}, shot })
-   -> { scene, root, camera, controls, renderer, canvas, invalidate(), onFrame(fn(t, dt) ->
-        animating?) -> off(), onRender(fn), setViewInsets(insets, {animate}), fly(view, ms),
-        setBaseView(view), resetView(ms), tween(ms, fn, ease), pick(obj, fn), label(...),
-        onDoubleTap(fn), stats(), isDark() }   or null when WebGL is unavailable.
+   stage({ host, insets:{top,right,bottom,left}, plinth, fov, fit, view:{pos,target,fit}, shot })
+   -> { scene, root, camera, controls, renderer, canvas, labelsEl, plinth, plinthR, plinthH,
+        invalidate(), onFrame(fn(t, dt) -> animating?) -> off(), onRender(fn), onTheme(fn(dark)),
+        setViewInsets(insets, {animate}), getInsets(), refit(), fly(view, ms), setBaseView(view),
+        setKeepOut([DOMRect...]) (chrome over the canvas that labels must avoid),
+        resetView(ms), tween(ms, fn, ease), pick(obj, fn), unpick(obj), label(...),
+        onDoubleTap(fn), whenRendered() -> Promise, stopIdle(), stats(), isDark() }
+        or null when WebGL is unavailable.
    The camera keeps the target centred in the rectangle left free by the insets
-   (camera.setViewOffset) and zooms so the object fits it. Renders only on demand.
-   Axis convention: y up, plinth top y = 0, objects fit roughly in a 4 x 3 x 4 box.
+   (camera.setViewOffset) and zooms so the object fits it (refit() after changing S.root a lot).
+   run() layout: phone = the free area above the card (and above an open sheet). Desktop = beside
+   the card (it may overhang the card's top-right corner) or, when the Knobs panel narrows the
+   screen so that this would draw the object smaller, above the card, full width.
+   Renders only on demand. Axis convention: y up, plinth top y = 0, objects fit roughly in a
+   4 x 3 x 4 box.
 ============================================================================= */
 
 import * as THREE from './vendor/three.js';
@@ -323,7 +347,7 @@ export function stage(opts = {}) {
   const ph = (o.plinth === false ? 0 : (o.plinth.h ?? 0.14));
   const hemi = new THREE.HemisphereLight(0xfff1dc, 0xa89274, 0.6);
   const key = new THREE.DirectionalLight(0xffe2bf, 1.9);
-  key.position.set(-5.5, 5.8, 4.2);        // fairly low: rakes across relief, so shape reads
+  key.position.set(-5.2, 6.6, 4.4);        // fairly low: rakes across relief, so shape reads
   key.castShadow = true;
   key.shadow.mapSize.set(1024, 1024);
   key.shadow.radius = 4;
@@ -363,7 +387,7 @@ export function stage(opts = {}) {
   let envRT = null;
 
   /* floor (shadow only) and plinth */
-  const floorMat = new THREE.ShadowMaterial({ color: 0x5b4630, opacity: 0.24 });
+  const floorMat = new THREE.ShadowMaterial({ color: 0x5b4630, opacity: 0.2 });
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), floorMat);
   floor.rotation.x = -Math.PI / 2;
   floor.position.y = -ph - 0.001;
@@ -397,7 +421,7 @@ export function stage(opts = {}) {
     const d = isDark();
     scene.background = new THREE.Color(d ? '#15161a' : '#efe9df');
     floorMat.color.set(d ? '#000000' : '#5b4630');
-    floorMat.opacity = d ? 0.5 : 0.24;
+    floorMat.opacity = d ? 0.5 : 0.2;
     hemi.color.set(d ? 0xbfc0d0 : 0xfff1dc);
     hemi.groundColor.set(d ? 0x2a2622 : 0xa89274);
     hemi.intensity = d ? 0.5 : 0.6;
@@ -638,6 +662,7 @@ export function stage(opts = {}) {
 
   /* HTML labels pinned to 3D points */
   const labels = new Set();
+  let keepOut = [];                               // see setKeepOut() below
   const tv = new THREE.Vector3(), tc = new THREE.Vector3();
   const ANCH = { bottom: [-0.5, -1], top: [-0.5, 0], left: [0, -0.5], right: [-1, -0.5], center: [-0.5, -0.5] };
   /* Labels are clamped inside the free rectangle (never under the bar, card or a sheet),
@@ -646,9 +671,10 @@ export function stage(opts = {}) {
   function projectLabels() {
     const W = size.w, H = size.h;
     const top0 = ins.top + 2, bot0 = H - ins.bottom - 2;
+    const tight = bot0 - top0 < 250;            // a sheet is open on a phone: tags (prio <= 0) step aside
     const live = [];
     for (const L of labels) {
-      if (!L.on) { if (L.shown) { L.el.style.display = 'none'; L.shown = false; } continue; }
+      if (!L.on || (tight && L.prio <= 0)) { if (L.shown) { L.el.style.display = 'none'; L.shown = false; } continue; }
       if (L.target.isObject3D) L.target.getWorldPosition(tv); else tv.copy(L.target);
       tc.copy(tv).applyMatrix4(camera.matrixWorldInverse);
       let ok = tc.z < -camera.near;
@@ -667,7 +693,7 @@ export function stage(opts = {}) {
       live.push({ L, l, t });
     }
     live.sort((a, b) => b.L.prio - a.L.prio);
-    const placed = [];
+    const placed = keepOut.slice();               // page chrome over the canvas counts as placed
     const hit = (a, b) => a.l < b.l + b.L.w + 3 && a.l + a.L.w + 3 > b.l && a.t < b.t + b.L.h + 3 && a.t + a.L.h + 3 > b.t;
     for (const a of live) {
       let bad = placed.find((b) => hit(a, b));
@@ -686,6 +712,14 @@ export function stage(opts = {}) {
       a.L.el.style.transform = `translate3d(${a.l.toFixed(1)}px,${a.t.toFixed(1)}px,0)`;
     }
   }
+  /* Keep-out rects: page chrome that floats over the canvas inside the free area's rows (the
+     desktop card beside the object, the Knobs panel). Labels treat them like placed labels:
+     nudge off by <= 56 px or hide. Rects are viewport DOMRects; stored in canvas px. */
+  function setKeepOut(rects = []) {
+    const c = canvas.getBoundingClientRect();
+    keepOut = rects.filter((r) => r && r.width > 0 && r.height > 0).map((r) => ({ l: r.left - c.left, t: r.top - c.top, L: { w: r.width, h: r.height } }));
+    invalidate();
+  }
   const PRIO = { readout: 3, note: 2, tag: 0 };
   function label(target, text, opt = {}) {
     const cls = opt.cls || '';
@@ -703,6 +737,7 @@ export function stage(opts = {}) {
       set(t) { L.text = t; paint(); invalidate(); return api; },
       show(b = true) { L.on = !!b; invalidate(); return api; },
       move(p) { L.target = p.isObject3D ? p : v3(p); invalidate(); return api; },
+      anchor(a) { L.anchor = ANCH[a] || ANCH.bottom; invalidate(); return api; },
       remove() { labels.delete(L); e.remove(); off(); },
     };
     invalidate();
@@ -723,7 +758,7 @@ export function stage(opts = {}) {
   const api = {
     scene, root, camera, controls, renderer, canvas, labelsEl, plinth, shot: o.shot,
     plinthR: pr, plinthH: ph,
-    invalidate, tween, fly, setBaseView, resetView, setViewInsets, pick, unpick, label, refit,
+    invalidate, tween, fly, setBaseView, resetView, setViewInsets, setKeepOut, pick, unpick, label, refit,
     getInsets: () => Object.assign({}, ins),
     onFrame(fn) { frameFns.add(fn); schedule(); return () => frameFns.delete(fn); },
     onRender(fn) { renderFns.add(fn); return () => renderFns.delete(fn); },
@@ -953,7 +988,7 @@ K.tube = function tube(points, hex = C.ink, r = 0.015, o = {}) {
   function set(pts) {
     const P = pts.map((p) => (p.isVector3 ? p : new THREE.Vector3(p[0], p[1], p[2])));
     if (P.length > cap) alloc(Math.max(16, Math.ceil(P.length * 1.5)));
-    if (P.length < 2) { geo.setDrawRange(0, 0); return; }
+    if (P.length < 2) { geo.setDrawRange(0, 0); if (geo.boundingBox) geo.boundingBox.makeEmpty(); return; }
     const F = frames(P);
     for (let i = 0; i < P.length; i++) {
       const { n, b } = F[i];
@@ -968,6 +1003,11 @@ K.tube = function tube(points, hex = C.ink, r = 0.015, o = {}) {
     geo.attributes.position.needsUpdate = true;
     geo.attributes.normal.needsUpdate = true;
     geo.setDrawRange(0, (P.length - 1) * sides * 6);
+    // bounds of the DRAWN part only (the buffer holds spare, stale rings), for the kit's auto-fit
+    const bb = geo.boundingBox || (geo.boundingBox = new THREE.Box3());
+    bb.makeEmpty();
+    for (const p of P) bb.expandByPoint(p);
+    bb.expandByScalar(r);
   }
   alloc(Math.max(16, points.length));
   set(points);
@@ -1112,6 +1152,9 @@ K.heightfield = function heightfield(fn, o = {}) {
   topGeo.computeVertexNormals();
 
   const topMat = new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 0.9, metalness: 0 });
+  // an open surface: by default three only draws BACK faces into the shadow map, so the lit
+  // slopes would cast no shadow (and strings lying on them would shadow the floor alone)
+  topMat.shadowSide = THREE.DoubleSide;
   const levels = o.contours ?? 12;
   if (levels > 0) {
     const step = (range * zScale) / levels;
@@ -1149,8 +1192,8 @@ K.heightfield = function heightfield(fn, o = {}) {
     const ka = ja * W1 + ia, kb = jb * W1 + ib;
     const ax = pos[3 * ka], ay = pos[3 * ka + 1], az = pos[3 * ka + 2];
     const bx = pos[3 * kb], by = pos[3 * kb + 1], bz = pos[3 * kb + 2];
-    // outward quad: top a, bottom a, bottom b, top b (three coords; see note in the JSCAD block)
-    sk.push(ax, ay, az, bx, 0, bz, ax, 0, az, ax, ay, az, bx, by, bz, bx, 0, bz);
+    // outward quad (CCW from outside): top a, bottom a, bottom b, top b; same order as the JSCAD solid
+    sk.push(ax, ay, az, ax, 0, az, bx, 0, bz, ax, ay, az, bx, 0, bz, bx, by, bz);
   }
   const skGeo = new THREE.BufferGeometry();
   skGeo.setAttribute('position', new THREE.Float32BufferAttribute(sk, 3));
@@ -1162,7 +1205,7 @@ K.heightfield = function heightfield(fn, o = {}) {
   mesh.add(top, skirt);
   if (o.trim !== false) {
     const bm = MAT.brass();
-    const tw = 0.018, th = Math.min(0.07, base * 0.6);
+    const tw = 0.024, th = Math.min(0.07, base * 0.6);
     const hx = spanX * s / 2, hz = spanY * s / 2;
     const mk = (w, d, x, z) => {
       const b = new THREE.Mesh(new THREE.BoxGeometry(w, th, d), bm);
@@ -1470,12 +1513,26 @@ export function run(spec) {
     const shR = sh ? sh.getBoundingClientRect() : null;
     if (isPhone()) {
       bottom = H - (shR ? Math.min(shR.top, cardR.top) : cardR.top) + 12;
+    } else if (shR && openName !== 'knobs') {
+      left = shR.right + 12; bottom = 28;               // Predict / More sit in the left column
     } else {
-      bottom = 28;
-      left = shR && openName !== 'knobs' ? shR.right + 12 : Math.round(cardR.right * 0.62);
-      if (openName === 'knobs' && shR) right = innerWidth - shR.left + 12;
+      // Desktop, card bottom-left (+ Knobs panel on the right). Two candidate free rects:
+      //   A: beside the card, full height. The object may overhang the card's top-right corner
+      //      (0.62 x card width) when height is what limits it; when width limits it, A clears
+      //      the card completely.
+      //   B: above the card, full width.
+      // The plinth projects about 1.3x wider than tall; pick the rect that draws it bigger.
+      right = shR ? innerWidth - shR.left + 12 : 0;
+      const aspect = 1.3, hA = H - top - 28;
+      let leftA = Math.round(cardR.right * 0.62);
+      if (innerWidth - leftA - right < hA * aspect) leftA = Math.round(cardR.right + 12);
+      const sizeA = Math.min(innerWidth - leftA - right, hA * aspect);
+      const bottomB = H - cardR.top + 12;
+      const sizeB = Math.min(innerWidth - right, (H - top - bottomB) * aspect);
+      if (sizeB > sizeA) { left = 0; bottom = bottomB; } else { left = leftA; bottom = 28; }
     }
     st.setViewInsets({ top, bottom, left, right }, { animate });
+    st.setKeepOut([cardR, shR]);                        // labels never slide under the card or a sheet
   }
   S._relayout = relayout;
   addEventListener('resize', () => relayout(false));
@@ -1646,7 +1703,7 @@ export function run(spec) {
     const q = qs[curQ];
     if (!q) return;
     predBody.innerHTML = '';
-    pMeta.textContent = `${curQ + 1} of ${qs.length} · a hunch, no scores`;
+    pMeta.textContent = `${curQ + 1} of ${qs.length} · no scores`;
     pAnother.hidden = qs.length < 2;
     const qq = el('p', 'k-q', md(tr(q.q, S)));
     const ol = el('div', 'k-opts');
