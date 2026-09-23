@@ -1,0 +1,1163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The dictionary · Object Lessons</title>
+<meta name="description" content="A sparse autoencoder trained live on the polytope's activations: more words than dimensions, one word per feature.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+  /* kit note: .k-tag (the beat pill) sets min-width 52px and centring, which leaks into K.label tags */
+  .k-label.k-tag{min-width:0; text-align:left; padding:1px 3px; border-radius:4px}
+  .k-label.k-tag.k-feat{font-size:11px; letter-spacing:0; text-transform:none; color:var(--ink); background:var(--wash)}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   17 · d08-dictionary: "The dictionary" (W8 deep, ARENA [1.5.4] Toy Models of
+   Superposition & SAEs, sections 4-5: sparse autoencoders in toy models).
+   ARENA's ToySAE (after Bricken et al. 2023), trained live in the page on the activations
+   of the polytope's toy model (Elhage et al. 2022), which is trained first:
+   acts_post = ReLU((h - b_dec) @ W_enc + b_enc), h_reconstructed = acts_post @ W_dec_normalized
+   + b_dec, loss = mean_d (h_reconstructed - h)^2 + sparsity_coeff * sum |acts_post|.
+   Gradients are written by hand (including through the decoder-row normalisation) and checked
+   against finite differences in node (see LEDGER.md); the node checks load MATH and RUN below.
+   ========================================================================= */
+
+// MATH-BEGIN
+/* Seeded randomness: mulberry32 (the same generator as K.rng) + Box-Muller normals. */
+function rng(seed = 1) {
+  let a = (seed >>> 0) || 1;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function randn(rand) {                       // standard normal (Box-Muller)
+  let u = 0;
+  while (u <= 1e-12) u = rand();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
+}
+
+/* torch.optim.Adam (betas (0.9, 0.999), eps 1e-8, bias correction), elementwise over
+   a list of Float64Array parameters. step(grads) takes one gradient array per parameter. */
+class Adam {
+  constructor(params, { lr = 1e-3, betas = [0.9, 0.999], eps = 1e-8 } = {}) {
+    this.params = params;
+    this.lr = lr;
+    [this.beta1, this.beta2] = betas;
+    this.eps = eps;
+    this.t = 0;
+    this.m = params.map((p) => new Float64Array(p.length));
+    this.v = params.map((p) => new Float64Array(p.length));
+  }
+  step(grads) {
+    this.t += 1;
+    const b1 = this.beta1, b2 = this.beta2, c1 = 1 - b1 ** this.t, c2 = 1 - b2 ** this.t;
+    this.params.forEach((p, pi) => {
+      const g = grads[pi], m = this.m[pi], v = this.v[pi];
+      for (let i = 0; i < p.length; i++) {
+        m[i] = b1 * m[i] + (1 - b1) * g[i];
+        v[i] = b2 * v[i] + (1 - b2) * g[i] * g[i];
+        p[i] -= this.lr * (m[i] / c1) / (Math.sqrt(v[i] / c2) + this.eps);
+      }
+    });
+  }
+}
+
+/* ARENA's learning-rate schedules (optimize multiplies lr by lr_scale(step, steps)). */
+const constant_lr = () => 1.0;
+const linear_lr = (step, steps) => 1 - step / steps;
+const cosine_decay_lr = (step, steps) => Math.cos(0.5 * Math.PI * step / (steps - 1));
+
+/* ARENA [1.5.4] ToyModel, one instance (n_inst = 1).
+   W: (d_hidden, n_features), stored W[k * n + i]; b_final: (n_features,).
+   forward: h = W x,  out = ReLU(W.T @ h + b_final).
+   calculate_loss: mean over batch and features of importance * (batch - out)**2. */
+class ToyModel {
+  constructor(cfg, { feature_probability = 0.01, importance = 1.0, seed = 1 } = {}) {
+    const n = cfg.n_features, m = cfg.d_hidden;
+    this.cfg = { n_features: n, d_hidden: m };
+    this.rand = rng(seed);
+    const bc = (v) => Float64Array.from({ length: n }, (_, i) => (typeof v === 'number' ? v : v[i]));
+    this.feature_probability = bc(feature_probability);
+    this.importance = bc(importance);
+    // nn.init.xavier_normal_ on a (n_inst=1, d_hidden, n_features) tensor:
+    // fan_in = d_hidden * n_features, fan_out = n_inst * n_features, std = sqrt(2 / (fan_in + fan_out))
+    const std = Math.sqrt(2 / (m * n + 1 * n));
+    this.W = Float64Array.from({ length: m * n }, () => std * randn(this.rand));
+    this.b_final = new Float64Array(n);
+    this.gW = new Float64Array(m * n);
+    this.gb = new Float64Array(n);
+    this.h = new Float64Array(m);
+    this.step_count = 0;
+  }
+  forward(x, out = new Float64Array(this.cfg.n_features)) {       // one example
+    const { n_features: n, d_hidden: m } = this.cfg, W = this.W, h = this.h;
+    for (let k = 0; k < m; k++) { let s = 0; for (let i = 0; i < n; i++) s += W[k * n + i] * x[i]; h[k] = s; }
+    for (let i = 0; i < n; i++) {
+      let s = this.b_final[i];
+      for (let k = 0; k < m; k++) s += W[k * n + i] * h[k];
+      out[i] = s > 0 ? s : 0;
+    }
+    return out;
+  }
+  generate_batch(batch_size) {
+    // Each feature is present with probability feature_probability, magnitude ~ U[0, 1]: the same
+    // distribution as ARENA's where(feat_seeds <= p, feat_mag, 0). With one p for all features, the
+    // gaps between present entries are drawn directly (geometric), so a sparse batch costs a few
+    // dozen random numbers instead of thousands.
+    const n = this.cfg.n_features, N = batch_size * n, r = this.rand, P = this.feature_probability;
+    const x = new Float64Array(N), p = P[0];
+    if (P.some((q) => q !== p)) { for (let j = 0; j < N; j++) if (r() <= P[j % n]) x[j] = r(); return x; }
+    if (p >= 1) { for (let j = 0; j < N; j++) x[j] = r(); return x; }
+    if (p <= 0) return x;
+    const lq = Math.log(1 - p);
+    for (let j = Math.floor(Math.log(1 - r()) / lq); j < N; j += 1 + Math.floor(Math.log(1 - r()) / lq)) x[j] = r();
+    return x;
+  }
+  calculate_loss(out, batch) {
+    const n = this.cfg.n_features, N = batch.length;
+    let s = 0;
+    for (let j = 0; j < N; j++) { const e = batch[j] - out[j]; s += this.importance[j % n] * e * e; }
+    return s / N;                                                   // einops.reduce(..., 'mean')
+  }
+  /* loss and hand-derived gradients (what loss.backward() leaves in W.grad, b_final.grad).
+     Sparse batches are mostly all-zero rows, which are identical: their share is computed once
+     and counted z times (exact; it only saves time on a phone). */
+  loss_and_grad(batch) {
+    const { n_features: n, d_hidden: m } = this.cfg, W = this.W, gW = this.gW, gb = this.gb;
+    const B = batch.length / n, scale = 2 / (B * n);
+    const h = new Float64Array(m), dh = new Float64Array(m);
+    gW.fill(0); gb.fill(0);
+    let L = 0, z = 0;
+    for (let b = 0; b < B; b++) {
+      const o = b * n;
+      let nz = false;
+      for (let i = 0; i < n; i++) if (batch[o + i] !== 0) { nz = true; break; }
+      if (!nz) { z++; continue; }
+      for (let k = 0; k < m; k++) { let s = 0; for (let i = 0; i < n; i++) s += W[k * n + i] * batch[o + i]; h[k] = s; }
+      dh.fill(0);
+      for (let i = 0; i < n; i++) {
+        let pre = this.b_final[i];
+        for (let k = 0; k < m; k++) pre += W[k * n + i] * h[k];
+        const out = pre > 0 ? pre : 0, err = out - batch[o + i];
+        L += this.importance[i] * err * err;
+        if (pre > 0) {                                             // ReLU passes the gradient
+          const g = scale * this.importance[i] * err;              // dL/dpre_i
+          gb[i] += g;
+          for (let k = 0; k < m; k++) { gW[k * n + i] += g * h[k]; dh[k] += W[k * n + i] * g; }
+        }
+      }
+      for (let i = 0; i < n; i++) {                                  // h = W x: dL/dW[k, i] += dh_k x_i
+        const xi = batch[o + i];
+        if (xi !== 0) for (let k = 0; k < m; k++) gW[k * n + i] += dh[k] * xi;
+      }
+    }
+    if (z) for (let i = 0; i < n; i++) {                             // x = 0: h = 0, out = ReLU(b_final)
+      const bi = this.b_final[i];
+      if (bi > 0) { L += z * this.importance[i] * bi * bi; gb[i] += z * scale * this.importance[i] * bi; }
+    }
+    return L / (B * n);
+  }
+  /* ToyModel.optimize, resumable: one call = one Adam step. */
+  train_step(o) {
+    if (!this.opt) this.opt = new Adam([this.W, this.b_final], { lr: o.lr });
+    const lr_scale = o.lr_scale || constant_lr;
+    this.opt.lr = o.lr * lr_scale(this.step_count, o.steps);
+    const batch = this.generate_batch(o.batch_size);
+    const loss = this.loss_and_grad(batch);
+    this.opt.step([this.gW, this.gb]);
+    this.step_count += 1;
+    return loss;
+  }
+  optimize(o) {
+    const log = [];
+    for (let s = 0; s < o.steps; s++) {
+      const loss = this.train_step(o);
+      if (o.log_freq && (s % o.log_freq === 0 || s + 1 === o.steps)) log.push({ step: s, loss });
+    }
+    return log;
+  }
+  /* column i of W: feature i's direction in hidden space */
+  col(i) { const { n_features: n, d_hidden: m } = this.cfg; return Array.from({ length: m }, (_, k) => this.W[k * n + i]); }
+}
+
+/* W^T W (n x n): diagonal = squared length ||W_i||^2, off-diagonal = interference W_i . W_j */
+function gram(W, n, m) {
+  const G = new Float64Array(n * n);
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    let s = 0; for (let k = 0; k < m; k++) s += W[k * n + i] * W[k * n + j];
+    G[i * n + j] = s;
+  }
+  return G;
+}
+/* ARENA compute_dimensionality: D_i = ||W_i||^2 / sum_j (W_i_hat . W_j)^2 */
+function compute_dimensionality(W, n, m) {
+  const G = gram(W, n, m), D = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const norm = Math.sqrt(G[i * n + i]), num = norm * norm;
+    let den = 0;
+    for (let j = 0; j < n; j++) { const d = G[i * n + j] / (norm + 1e-8); den += d * d; }
+    D[i] = num / den;
+  }
+  return D;
+}
+
+/* ARENA [1.5.4] ToySAE, one instance, untied weights.
+   W_enc: (d_in, d_sae) stored [k * d_sae + l]; _W_dec: (d_sae, d_in) stored [l * d_in + k].
+   acts_post = ReLU((h - b_dec) @ W_enc + b_enc);  h_reconstructed = acts_post @ W_dec_normalized + b_dec
+   L_reconstruction = mean over d_in of (h_reconstructed - h)**2;  L_sparsity = sum over d_sae of |acts_post|
+   loss = L_reconstruction + sparsity_coeff * L_sparsity  (then mean over the batch). */
+class ToySAE {
+  constructor(cfg, model, { seed = 7, normalize = true } = {}) {
+    const d_in = cfg.d_in, d_sae = cfg.d_sae;
+    this.cfg = { d_in, d_sae, sparsity_coeff: cfg.sparsity_coeff ?? 0.2, weight_normalize_eps: cfg.weight_normalize_eps ?? 1e-8 };
+    this.model = model;
+    this.normalize = normalize;                   // ARENA always normalises; false only for the "what if" reveal
+    this.rand = rng(seed);
+    // nn.init.kaiming_uniform_ on (n_inst, d_in, d_sae) and (n_inst, d_sae, d_in): fan_in = d_in * d_sae,
+    // gain sqrt(2), bound = gain * sqrt(3 / fan_in)
+    const bound = Math.sqrt(2) * Math.sqrt(3 / (d_in * d_sae));
+    this.W_enc = Float64Array.from({ length: d_in * d_sae }, () => (2 * this.rand() - 1) * bound);
+    this._W_dec = Float64Array.from({ length: d_sae * d_in }, () => (2 * this.rand() - 1) * bound);
+    this.b_enc = new Float64Array(d_sae);
+    this.b_dec = new Float64Array(d_in);
+    this.g = [new Float64Array(d_in * d_sae), new Float64Array(d_sae * d_in), new Float64Array(d_sae), new Float64Array(d_in)];
+    this.step_count = 0;
+  }
+  get W_dec() { return this._W_dec; }
+  get W_dec_normalized() {                      // W_dec / (W_dec.norm(dim=-1, keepdim=True) + eps)
+    const { d_in, d_sae, weight_normalize_eps: eps } = this.cfg, W = this._W_dec, out = new Float64Array(W.length);
+    for (let l = 0; l < d_sae; l++) {
+      let s = 0; for (let k = 0; k < d_in; k++) s += W[l * d_in + k] ** 2;
+      const r = Math.sqrt(s) + eps;
+      for (let k = 0; k < d_in; k++) out[l * d_in + k] = W[l * d_in + k] / r;
+    }
+    return out;
+  }
+  generate_batch(batch_size) {                  // h = W x for a fresh batch of toy-model inputs
+    const M = this.model, n = M.cfg.n_features, m = M.cfg.d_hidden, x = M.generate_batch(batch_size);
+    const h = new Float64Array(batch_size * m);
+    for (let b = 0; b < batch_size; b++) for (let i = 0; i < n; i++) {
+      const xi = x[b * n + i];
+      if (xi !== 0) for (let k = 0; k < m; k++) h[b * m + k] += M.W[k * n + i] * xi;
+    }
+    return h;
+  }
+  forward(h) {
+    const { d_in: D, d_sae: F, sparsity_coeff } = this.cfg, B = h.length / D;
+    const Wd = this.normalize ? this.W_dec_normalized : this._W_dec;
+    const acts_post = new Float64Array(B * F), h_reconstructed = new Float64Array(B * D);
+    const L_reconstruction = new Float64Array(B), L_sparsity = new Float64Array(B), loss = new Float64Array(B);
+    for (let b = 0; b < B; b++) {
+      for (let l = 0; l < F; l++) {
+        let s = this.b_enc[l];
+        for (let k = 0; k < D; k++) s += (h[b * D + k] - this.b_dec[k]) * this.W_enc[k * F + l];
+        acts_post[b * F + l] = s > 0 ? s : 0;
+      }
+      let rec = 0, sp = 0;
+      for (let k = 0; k < D; k++) {
+        let s = this.b_dec[k];
+        for (let l = 0; l < F; l++) s += acts_post[b * F + l] * Wd[l * D + k];
+        h_reconstructed[b * D + k] = s;
+        rec += (s - h[b * D + k]) ** 2;
+      }
+      for (let l = 0; l < F; l++) sp += Math.abs(acts_post[b * F + l]);
+      L_reconstruction[b] = rec / D;
+      L_sparsity[b] = sp;
+      loss[b] = L_reconstruction[b] + sparsity_coeff * L_sparsity[b];
+    }
+    return { loss_dict: { L_reconstruction, L_sparsity }, loss, acts_post, h_reconstructed };
+  }
+  /* mean-over-batch loss and hand-derived gradients for [W_enc, _W_dec, b_enc, b_dec].
+     All-zero rows of h (no feature active) are identical: computed once, weighted by their count. */
+  loss_and_grad(h) {
+    const { d_in: D, d_sae: F, sparsity_coeff: lam, weight_normalize_eps: eps } = this.cfg, B = h.length / D;
+    const [gE, gD, gbe, gbd] = this.g;
+    gE.fill(0); gD.fill(0); gbe.fill(0); gbd.fill(0);
+    const W = this._W_dec, Wd = this.normalize ? this.W_dec_normalized : W;
+    const gWn = new Float64Array(F * D);                  // dL/dW_dec_normalized
+    const fa = this.fa = new Float64Array(F);             // frac_active = (acts.abs() > 1e-8).mean(0)
+    const hc = new Float64Array(D), pre = new Float64Array(F), a = new Float64Array(F), dr = new Float64Array(D);
+    let Ltot = 0, z = 0;
+    const row = (o, w) => {                               // one input row h[o .. o+D), counted w times
+      for (let k = 0; k < D; k++) hc[k] = (o < 0 ? 0 : h[o + k]) - this.b_dec[k];
+      let sp = 0;
+      for (let l = 0; l < F; l++) {
+        let s = this.b_enc[l];
+        for (let k = 0; k < D; k++) s += hc[k] * this.W_enc[k * F + l];
+        pre[l] = s; a[l] = s > 0 ? s : 0; sp += a[l];
+        if (a[l] > 1e-8) fa[l] += w / B;
+      }
+      let rec = 0;
+      for (let k = 0; k < D; k++) {
+        let s = this.b_dec[k];
+        for (let l = 0; l < F; l++) s += a[l] * Wd[l * D + k];
+        const e = s - (o < 0 ? 0 : h[o + k]);
+        rec += e * e;
+        dr[k] = w * (2 / (D * B)) * e;                       // dL/dh_reconstructed
+        gbd[k] += dr[k];
+      }
+      Ltot += w * (rec / D + lam * sp);
+      for (let l = 0; l < F; l++) {
+        if (a[l] > 0) for (let k = 0; k < D; k++) gWn[l * D + k] += a[l] * dr[k];
+        if (pre[l] > 0) {                                        // ReLU (and |.|: sign(+) = 1)
+          let g = w * lam / B;
+          for (let k = 0; k < D; k++) g += dr[k] * Wd[l * D + k];
+          gbe[l] += g;
+          for (let k = 0; k < D; k++) { gE[k * F + l] += hc[k] * g; gbd[k] -= this.W_enc[k * F + l] * g; }
+        }
+      }
+    };
+    for (let b = 0; b < B; b++) {
+      let nz = false;
+      for (let k = 0; k < D; k++) if (h[b * D + k] !== 0) { nz = true; break; }
+      if (nz) row(b * D, 1); else z++;
+    }
+    if (z) row(-1, z);
+    // back through W_dec_normalized = W / (||W|| + eps), row by row
+    for (let l = 0; l < F; l++) {
+      if (!this.normalize) { for (let k = 0; k < D; k++) gD[l * D + k] = gWn[l * D + k]; continue; }
+      let s = 0, wg = 0;
+      for (let k = 0; k < D; k++) { s += W[l * D + k] ** 2; wg += W[l * D + k] * gWn[l * D + k]; }
+      const r = Math.sqrt(s), q = r + eps;
+      for (let k = 0; k < D; k++) gD[l * D + k] = gWn[l * D + k] / q - (r > 0 ? W[l * D + k] * wg / (r * q * q) : 0);
+    }
+    return Ltot / B;
+  }
+  /* ToySAE.optimize, resumable: one call = one step (resample check, Adam step, renormalise W_dec,
+     record frac_active). */
+  train_step(o) {
+    if (!this.opt) { this.opt = new Adam([this.W_enc, this._W_dec, this.b_enc, this.b_dec], { lr: o.lr }); this.frac_active_list = []; this.resampled = new Uint8Array(this.cfg.d_sae); }
+    const step = this.step_count;
+    if (o.resample_method && (step + 1) % o.resample_freq === 0) {
+      const win = this.frac_active_list.slice(-o.resample_window);
+      if (o.resample_method === 'simple') this.resample_simple(win, o.resample_scale);
+      else this.resample_advanced(win, o.resample_scale, o.batch_size);
+    }
+    this.opt.lr = o.lr * (o.lr_scale || constant_lr)(step, o.steps);
+    const h = this.generate_batch(o.batch_size);
+    const loss = this.loss_and_grad(h);
+    this.opt.step(this.g);
+    if (this.normalize) this._W_dec.set(this.W_dec_normalized);   // self.W_dec.data = self.W_dec_normalized.data
+    this.frac_active_list.push(this.fa);             // from this step's forward pass (acts before the update)
+    if (this.frac_active_list.length > (o.resample_window || 1) + 2) this.frac_active_list.shift();
+    this.step_count += 1;
+    return loss;
+  }
+  dead_mask(win) {                                // (frac_active_in_window < 1e-8).all(dim=0)
+    const F = this.cfg.d_sae, dead = new Uint8Array(F).fill(win.length ? 1 : 0);
+    for (const fa of win) for (let l = 0; l < F; l++) if (!(fa[l] < 1e-8)) dead[l] = 0;
+    return dead;
+  }
+  resample_simple(win, resample_scale) {
+    const { d_in: D, d_sae: F, weight_normalize_eps: eps } = this.cfg, dead = this.dead_mask(win);
+    for (let l = 0; l < F; l++) {
+      if (!dead[l]) continue;
+      const v = Array.from({ length: D }, () => randn(this.rand));
+      const r = Math.hypot(...v) + eps;
+      for (let k = 0; k < D; k++) {
+        this.W_enc[k * F + l] = resample_scale * v[k] / r;
+        this._W_dec[l * D + k] = v[k] / r;
+      }
+      this.b_enc[l] = 0;
+      this.resampled[l] = 1;
+    }
+  }
+  resample_advanced(win, resample_scale, batch_size) {
+    const { d_in: D, d_sae: F, weight_normalize_eps: eps } = this.cfg, dead = this.dead_mask(win);
+    const deadIdx = []; for (let l = 0; l < F; l++) if (dead[l]) deadIdx.push(l);
+    if (!deadIdx.length) return;
+    const h = this.generate_batch(batch_size);
+    const l2 = this.forward(h).loss_dict.L_reconstruction;
+    let mx = 0; for (const v of l2) mx = Math.max(mx, v);
+    if (mx < 1e-6) return;
+    const w = Array.from(l2, (v) => v * v), tot = w.reduce((s, v) => s + v, 0);
+    // mean encoder norm of the alive latents (1.0 if none)
+    let an = 0, na = 0;
+    for (let l = 0; l < F; l++) if (!dead[l]) { let s = 0; for (let k = 0; k < D; k++) s += this.W_enc[k * F + l] ** 2; an += Math.sqrt(s); na++; }
+    const W_enc_norm_alive_mean = na ? an / na : 1.0;
+    for (const l of deadIdx) {
+      let u = this.rand() * tot, x = 0;
+      while (x < w.length - 1 && (u -= w[x]) > 0) x++;
+      const v = Array.from({ length: D }, (_, k) => h[x * D + k] - this.b_dec[k]);
+      const r = Math.hypot(...v) + eps;
+      for (let k = 0; k < D; k++) {
+        this._W_dec[l * D + k] = v[k] / r;
+        this.W_enc[k * F + l] = v[k] / r * W_enc_norm_alive_mean * resample_scale;
+      }
+      this.b_enc[l] = 0;
+      this.resampled[l] = 1;
+    }
+  }
+  dec(l) { const D = this.cfg.d_in; return Array.from(this.normalize ? this.W_dec_normalized.subarray(l * D, l * D + D) : this._W_dec.subarray(l * D, l * D + D)); }
+  enc(l) { const { d_in: D, d_sae: F } = this.cfg; return Array.from({ length: D }, (_, k) => this.W_enc[k * F + l]); }
+}
+// MATH-END
+
+// RUN-BEGIN
+/* The toy model the SAE reads: the polytope's, trained the same way (Adam, lr 0.01 with cosine
+   decay, 1,500 steps of batch 256, seed 1) at feature_probability 0.025 and equal importance, as in
+   ARENA's SAE section. Three choices: 8 features in 3 dims (square antiprism), 6 in 3 (octahedron),
+   and ARENA's own 5 in 2 (pentagon). */
+const TOY_BUDGET = { batch_size: 256, steps: 1500, lr: 1e-2, lr_scale: cosine_decay_lr };
+const TOY_P = 0.025;
+const TOYS = { anti: { n: 8, m: 3 }, oct: { n: 6, m: 3 }, pent: { n: 5, m: 2 } };
+const TOY_CACHE = {};
+function getToy(key) {
+  if (TOY_CACHE[key]) return TOY_CACHE[key];
+  const { n, m } = TOYS[key];
+  const model = new ToyModel({ n_features: n, d_hidden: m }, { feature_probability: TOY_P, importance: 1, seed: 1 });
+  model.optimize(TOY_BUDGET);
+  // the fixed evaluation set: 3,000 inputs x and their activations h = W x (the star)
+  const probe = Object.create(model); probe.rand = rng(777);
+  const X = probe.generate_batch(3000), H = new Float64Array(3000 * m);
+  for (let b = 0; b < 3000; b++) for (let i = 0; i < n; i++) { const x = X[b * n + i]; if (x) for (let k = 0; k < m; k++) H[b * m + k] += model.W[k * n + i] * x; }
+  const rows = [];                                 // the non-zero points, with which features made them
+  for (let b = 0; b < 3000; b++) {
+    const on = []; for (let i = 0; i < n; i++) if (X[b * n + i]) on.push([i, X[b * n + i]]);
+    if (on.length) rows.push({ b, on, h: Array.from(H.subarray(b * m, b * m + m)) });
+  }
+  const dirs = Array.from({ length: n }, (_, i) => { const c = model.col(i), r = Math.hypot(...c); return c.map((v) => v / r); });
+  return (TOY_CACHE[key] = { key, n, m, model, X, H, rows, zeros: 3000 - rows.length, dirs });
+}
+
+/* One SAE run per setting, as ToySAE.optimize does it, lighter: Adam lr 0.01 (constant, as ARENA),
+   3,000 steps of batch 256, resampling every 700 steps over a 350-step window, resample_scale 0.5
+   (ARENA: lr 1e-3, 20,000 steps of 1,024, resample_freq 2,500, window 500). */
+const SAE_BUDGET = { batch_size: 256, steps: 3000, lr: 1e-2, lr_scale: constant_lr, resample_freq: 700, resample_window: 350, resample_scale: 0.5 };
+const runKey = (c) => `${c.toy}|${c.d_sae}|${c.coeff}|${c.resample}|${c.norm}|${c.seed}`;
+function makeRun(c) {
+  const T = getToy(c.toy);
+  const view = Object.create(T.model);             // the toy model with this run's own batch stream
+  view.rand = rng(5000 + c.seed);
+  const sae = new ToySAE({ d_in: T.m, d_sae: c.d_sae, sparsity_coeff: c.coeff }, view, { seed: 100 + c.seed, normalize: c.norm });
+  const R = { c, T, sae, snaps: [], events: [], done: false };
+  snapRun(R);
+  return R;
+}
+function snapRun(R) {
+  const s = R.sae;
+  R.snaps.push({ step: s.step_count, W_enc: Float64Array.from(s.W_enc), W_dec: Float64Array.from(s._W_dec), b_enc: Float64Array.from(s.b_enc), b_dec: Float64Array.from(s.b_dec) });
+}
+function advanceRun(R, ms = Infinity) {
+  const t0 = performance.now(), s = R.sae, o = { ...SAE_BUDGET, resample_method: R.c.resample === 'none' ? null : R.c.resample };
+  while (!R.done) {
+    const before = s.resampled ? Uint8Array.from(s.resampled) : null;
+    s.train_step(o);
+    if (before) {                                  // which latents this step resampled
+      const got = []; for (let l = 0; l < s.cfg.d_sae; l++) if (s.resampled[l] && !before[l]) got.push(l);
+      if (got.length) R.events.push({ step: s.step_count, latents: got });
+      s.resampled.fill(0);
+    }
+    const k = s.step_count;
+    if (k % 25 === 0 || (k < 100 && k % 5 === 0) || k === SAE_BUDGET.steps) snapRun(R);
+    if (k >= SAE_BUDGET.steps) R.done = true;
+    else if (performance.now() - t0 > ms) break;
+  }
+  return R.done;
+}
+/* A snapshot's SAE as plain arrays: encoder, unit decoder rows (or raw rows when not normalising) */
+function saeAt(R, snap) {
+  const { d_in: D, d_sae: F } = R.sae.cfg, eps = R.sae.cfg.weight_normalize_eps;
+  const dec = [], decRaw = [];
+  for (let l = 0; l < F; l++) {
+    const v = Array.from(snap.W_dec.subarray(l * D, l * D + D)), r = Math.hypot(...v);
+    decRaw.push(v); dec.push(R.c.norm ? v.map((x) => x / (r + eps)) : v);
+  }
+  return { D, F, W_enc: snap.W_enc, b_enc: snap.b_enc, b_dec: Array.from(snap.b_dec), dec, decRaw };
+}
+/* code (acts_post) and reconstruction of one point h */
+function encode(A, h) {
+  const { D, F } = A, f = new Array(F).fill(0), hr = A.b_dec.slice();
+  for (let l = 0; l < F; l++) {
+    let s = A.b_enc[l];
+    for (let k = 0; k < D; k++) s += (h[k] - A.b_dec[k]) * A.W_enc[k * F + l];
+    f[l] = s > 0 ? s : 0;
+  }
+  for (let l = 0; l < F; l++) if (f[l]) for (let k = 0; k < D; k++) hr[k] += f[l] * A.dec[l][k];
+  return { f, hr };
+}
+/* ARENA's loss terms on the fixed evaluation set, plus what the page reads off it */
+function evaluate(R, A) {
+  const T = R.T, { D, F } = A, N = 3000, lam = R.c.coeff;
+  const fires = new Float64Array(F);
+  let rec = 0, sp = 0, l0 = 0;
+  const one = (h, w) => {
+    const { f, hr } = encode(A, h);
+    let e = 0; for (let k = 0; k < D; k++) e += (hr[k] - h[k]) ** 2;
+    rec += w * e / D;
+    let c = 0, s = 0; for (let l = 0; l < F; l++) if (f[l] > 1e-8) { c++; s += f[l]; fires[l] += w; }
+    sp += w * s;
+    return c;
+  };
+  for (const r of T.rows) l0 += one(r.h, 1);
+  one(new Array(D).fill(0), T.zeros);
+  const alive = Array.from(fires, (v) => v > 0);
+  // feature i is "found" when an alive latent's decoder direction is within cos 0.95 of W_i
+  const cosTo = (i, l) => { const d = A.dec[l], r = Math.hypot(...d) || 1; return T.dirs[i].reduce((s, x, k) => s + x * d[k], 0) / r; };
+  const best = [], owner = new Array(F).fill(-1);
+  for (let i = 0; i < T.n; i++) {
+    let bl = -1, bc = -2;
+    for (let l = 0; l < F; l++) if (alive[l]) { const c = cosTo(i, l); if (c > bc) { bc = c; bl = l; } }
+    best.push({ l: bl, cos: bc });
+  }
+  for (let l = 0; l < F; l++) {
+    let bi = -1, bc = 0.95;
+    for (let i = 0; i < T.n; i++) { const c = cosTo(i, l); if (c > bc) { bc = c; bi = i; } }
+    owner[l] = bi;                                 // the feature this latent's decoder points at (or -1)
+  }
+  const found = best.filter((x) => x.cos > 0.95).length;
+  const perFeat = new Array(T.n).fill(0);
+  for (let l = 0; l < F; l++) if (alive[l] && owner[l] >= 0) perFeat[owner[l]]++;
+  const dup = perFeat.reduce((s, v) => s + Math.max(0, v - 1), 0);
+  const L_reconstruction = rec / N, L_sparsity = sp / N;
+  return { L_reconstruction, L_sparsity, loss: L_reconstruction + lam * L_sparsity, L0: l0 / T.rows.length,
+    frac: Array.from(fires, (v) => v / N), alive, dead: alive.filter((a) => !a).length, found, best, owner, dup };
+}
+// RUN-END
+
+/* ================================================================ display */
+
+const SPH = { c: new THREE.Vector3(0, 1.72, -0.3), r: 1.32 };   // glass sphere = the toy's hidden space
+const SW = 0.9;                                               // world length of one unit of h
+const RACK = { c: new THREE.Vector3(0, 0, 1.25), W: 1.8, H: 0.42 };   // the code rack: one bar per latent
+const PLAY_S = 2.4;                                           // replay length (s)
+const MAXF = 16;
+const GREY = '#b8b0a3';
+const sub = (k) => String(k).split('').map((d) => '₀₁₂₃₄₅₆₇₈₉'[+d]).join('');
+const fx = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+const fe = (v) => (v === 0 ? '0' : v < 1e-3 ? K.fmt(v, 2) : v.toFixed(4));
+
+const CAM = {
+  front: { pos: [2.8, 5.0, 9.2], target: [0, 1.3, 0.3] },
+  sphere: { pos: [3.0, 3.9, 8.7], target: [0.05, 1.72, -0.25], fit: 1.45 },
+  high: { pos: [1.8, 7.6, 7.4], target: [0, 1.0, 0.4] },
+};
+
+function cfgOf(S) {
+  const k = S.knobs;
+  return { toy: k.toy, d_sae: Math.round(k.d_sae), coeff: +k.sparsity_coeff, resample: k.resample_method, norm: !!k.unit_norm, seed: Math.round(k.seed) };
+}
+
+/* hidden space -> world: a fixed rotation per toy (the model only depends on W^T W, so any
+   rotation of hidden space is the same model): feature 1 points up, the next one leans toward
+   the viewer; a 2-dim toy faces the viewer. */
+function orient(T) {
+  const { n, m, model } = T, col = (i) => model.col(i), nrm = (v) => Math.hypot(...v);
+  if (m === 2) {
+    const a = col(0), th = Math.PI / 2 - Math.atan2(a[1], a[0]), cs = Math.cos(th), sn = Math.sin(th);
+    return [[cs, -sn], [sn, cs], [0, 0]];
+  }
+  const a = col(0).map((v, _, s) => v / nrm(s));
+  let best = null, bl = 0;
+  for (let i = 1; i < n; i++) {
+    const v = col(i), d = v.reduce((s, x, k) => s + x * a[k], 0), w = v.map((x, k) => x - d * a[k]), l = nrm(w);
+    if (l > bl + 1e-6) { bl = l; best = w; }
+  }
+  const bb = best.map((v) => v / bl);
+  const c3 = [a[1] * bb[2] - a[2] * bb[1], a[2] * bb[0] - a[0] * bb[2], a[0] * bb[1] - a[1] * bb[0]];
+  const phi = 0.52, D1 = [0, 1, 0], D2 = [Math.cos(phi), 0, Math.sin(phi)], D3 = [Math.sin(phi), 0, -Math.cos(phi)];
+  return [0, 1, 2].map((r) => [0, 1, 2].map((k) => D1[r] * a[k] + D2[r] * bb[k] + D3[r] * c3[k]));
+}
+const toWorld = (F, v, out = new THREE.Vector3()) => {
+  let x = 0, y = 0, z = 0;
+  for (let k = 0; k < v.length; k++) { x += F[0][k] * v[k]; y += F[1][k] * v[k]; z += F[2][k] * v[k]; }
+  return out.set(x, y, z).multiplyScalar(SW).add(SPH.c);
+};
+
+/* points worth showing as "the" example: feature 1 alone near 0.8, or two features together.
+   Given the trained SAE (A), the two-feature example is one its code writes with exactly two words,
+   preferring points in the front half of the sphere (visible from the default views). */
+function pickDefault(T, kind, A) {
+  const F = T.frame || (T.frame = orient(T));
+  for (const [a, vis] of [[A, true], [A, false], [null, true], [null, false]]) {
+    if (a === undefined) continue;
+    let best = -1, bs = -1;
+    T.rows.forEach((r, j) => {
+      if (j >= 800) return;
+      let s = -1;
+      if (kind !== 'two') s = r.on.length === 1 && r.on[0][0] === 0 ? 1 - Math.abs(r.on[0][1] - 0.8) : -1;
+      else if (r.on.length === 2 && Math.hypot(...r.h) < 1.3) {
+        if (vis && T.m === 3) {
+          const w = [0, 1, 2].map((q) => F[q].reduce((acc, fk, k) => acc + fk * r.h[k], 0));
+          if (w[2] < 0.2 || w[1] < -0.45) return;
+        }
+        if (a) { const f = encode(a, r.h).f.filter((v) => v > 1e-8); s = f.length === 2 ? Math.min(...f) : -1; }
+        else s = Math.min(r.on[0][1], r.on[1][1]);
+      }
+      if (s > bs) { bs = s; best = j; }
+    });
+    if (best >= 0) return best;
+  }
+  return 0;
+}
+const finalA = (R) => saeAt(R, R.snaps[R.snaps.length - 1]);
+function repick(S) {                               // the beat's example point (provisional until the run is trained)
+  const st = S.state, R = st.run;
+  if (!R) return;
+  st.pickIdx = pickDefault(R.T, st.pickKind, R.done ? finalA(R) : null);
+  st.pickProvisional = st.pickKind === 'two' && !R.done;
+}
+
+/* runs: cache, replay, and the promise a prediction waits on */
+const RUNS = new Map();
+function startRun(S) {
+  const st = S.state, c = cfgOf(S), key = runKey(c);
+  let R = RUNS.get(key);
+  if (!R) { R = makeRun(c); RUNS.set(key, R); if (RUNS.size > 24) RUNS.delete(RUNS.keys().next().value); }
+  if (!st.run || st.run.T !== R.T) setToy(S, R.T);
+  st.run = R;
+  st.playing = false; st.tau = 0;
+  if (S.shot) { advanceRun(R); finishPlay(S); }
+  else if (R.done) { if (st.replayOnEnter) beginPlay(S); else finishPlay(S); }
+  else { st.computing = true; pump(S); }
+  st.replayOnEnter = false;
+  draw(S);
+}
+/* train between frames in ~12 ms slices (setTimeout), so a slow renderer does not slow training */
+function pump(S) {
+  const st = S.state;
+  if (st.pumping) return;
+  st.pumping = true;
+  let lastDraw = 0;
+  const go = () => {
+    const R = st.run;
+    if (!st.computing || !R) { st.pumping = false; return; }
+    if (advanceRun(R, 12)) { st.pumping = false; if (st.pickProvisional) repick(S); beginPlay(S); draw(S); return; }
+    const now = performance.now();
+    if (now - lastDraw > 150) { lastDraw = now; draw(S); }
+    setTimeout(go, 0);
+  };
+  setTimeout(go, 0);
+}
+function beginPlay(S) { const st = S.state; st.computing = false; st.playing = true; st.tau = 0; st.u = 0; }
+function finishPlay(S) {
+  const st = S.state;
+  st.playing = false; st.computing = false; st.u = SAE_BUDGET.steps;
+  const w = st.waiters; st.waiters = [];
+  w.forEach((f) => f());
+}
+function whenPlayed(S) {
+  const st = S.state;
+  if (!st.playing && !st.computing) return Promise.resolve();
+  return new Promise((res) => st.waiters.push(res));
+}
+/* the snapshot at or below replay step u (exact), and the one after it (for smooth arrows) */
+function snapAt(R, u) {
+  const sn = R.snaps;
+  if (u >= sn[sn.length - 1].step) return [sn[sn.length - 1], sn[sn.length - 1], 0];
+  let lo = 0, hi = sn.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (sn[mid].step <= u) lo = mid; else hi = mid; }
+  return [sn[lo], sn[hi], (u - sn[lo].step) / Math.max(1, sn[hi].step - sn[lo].step)];
+}
+
+/* ---------------------------------------------------------------- scene */
+function buildScene(S) {
+  const st = S.state;
+  const col = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.26, 0.44, 32).translate(0, 0.22, 0), K.mat.plaster());
+  col.position.set(SPH.c.x, 0, SPH.c.z); col.castShadow = col.receiveShadow = true;
+  const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.2, 0.16, 40, 1, true).translate(0, 0.08, 0), K.mat.brass());
+  cup.material.side = THREE.DoubleSide; cup.position.set(SPH.c.x, 0.43, SPH.c.z); cup.castShadow = true;
+  S.root.add(col, cup);
+  const glass = new THREE.Mesh(new THREE.SphereGeometry(SPH.r, 56, 36), K.mat.glass('#ffffff', 0.13));
+  glass.position.copy(SPH.c); glass.renderOrder = 2;
+  const eq = new THREE.Mesh(new THREE.TorusGeometry(SPH.r, 0.009, 8, 96), K.mat.brass());
+  eq.rotation.x = Math.PI / 2; eq.position.copy(SPH.c);
+  const hub = K.bead(SPH.c.toArray(), C.brass, 0.04); hub.material = K.mat.brass();
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(SPH.r * 0.98, 72), K.mat.glass('#b9a8ee', 0.14));
+  disc.material.side = THREE.DoubleSide; disc.position.copy(SPH.c); disc.renderOrder = 1;
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(SPH.r * 0.98, 0.012, 8, 96), K.mat.brass());
+  rim.position.copy(SPH.c);
+  S.root.add(glass, eq, hub, disc, rim);
+  Object.assign(st, { glass, eq, disc, rim });
+  const tapped = (hit) => { if (hit && hit.point) tapPoint(S, hit.point); };
+  K.pick(glass, tapped); K.pick(disc, tapped);
+  // the star: one bead per non-zero activation h in the evaluation set
+  const sg = new THREE.SphereGeometry(1, 10, 8);
+  st.star = new THREE.InstancedMesh(sg, new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.45, metalness: 0.02 }), 800);
+  st.star.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(800 * 3), 3);
+  st.star.frustumCulled = false; st.star.count = 0;
+  S.root.add(st.star);
+  // the true feature directions (known only because this is a toy): faint ink guides
+  st.guides = [];
+  for (let i = 0; i < 8; i++) {
+    const g = K.tube([SPH.c, SPH.c.clone().add(new THREE.Vector3(0, 0.1, 0))], C.ink, 0.005, { shadow: false });
+    g.mesh.material.transparent = true; g.mesh.material.opacity = 0.3;
+    S.root.add(g.mesh); st.guides.push(g);
+  }
+  // decoder rows W_dec[l] (the dictionary's words): arrows, tip beads, tags
+  st.arrows = []; st.tips = []; st.tags = [];
+  for (let l = 0; l < MAXF; l++) {
+    const a = K.arrow(SPH.c, SPH.c.clone().add(new THREE.Vector3(0, 0.5, 0)), C.dir, { r: 0.022 });
+    const tip = K.bead(SPH.c.toArray(), C.dir, 0.04);
+    S.root.add(a.group, tip);
+    st.arrows.push(a); st.tips.push(tip);
+    st.tags.push(K.label(tip, '', { cls: 'tag feat', anchor: 'left', dx: 6, dy: 0 }));
+  }
+  // training trails: every decoder tip at every snapshot
+  st.trail = new THREE.InstancedMesh(sg, new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.5 }), MAXF * 200);
+  st.trail.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAXF * 200 * 3), 3);
+  st.trail.frustumCulled = false; st.trail.count = 0;
+  S.root.add(st.trail);
+  // the picked point h (blue), its rebuild h_hat (teal), the path b_dec -> ... -> h_hat, the error
+  st.hBead = K.bead(SPH.c.toArray(), C.data, 0.06);
+  st.rBead = K.bead(SPH.c.toArray(), C.aux, 0.055);
+  st.bBead = K.bead(SPH.c.toArray(), C.brass, 0.03); st.bBead.material = K.mat.brass();
+  st.path = K.tube([SPH.c, SPH.c.clone().add(new THREE.Vector3(0, 0.1, 0))], C.dir, 0.014, { shadow: false });
+  st.err = K.tube([SPH.c, SPH.c.clone().add(new THREE.Vector3(0, 0.1, 0))], C.grad, 0.009, { shadow: false });
+  S.root.add(st.hBead, st.rBead, st.bBead, st.path.mesh, st.err.mesh);
+  st.hTag = K.label(st.hBead, { 1: 'this point', 2: 'h', 3: 'h' }, { cls: 'tag feat', anchor: 'right', dx: -7 });
+  st.rTag = K.label(st.rBead, { 1: 'rebuilt', 2: 'ĥ', 3: 'h_reconstructed' }, { cls: 'tag feat', anchor: 'left', dx: 7 });
+  // the code rack: one bar per latent (height = the code f_l for the picked point)
+  const R = RACK;
+  const base = new THREE.Mesh(new THREE.BoxGeometry(R.W + 0.16, 0.05, 0.2), K.mat.plaster());
+  base.position.set(R.c.x, 0.025, R.c.z); base.castShadow = base.receiveShadow = true;
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(R.W + 0.2, 0.018, 0.024), K.mat.brass());
+  rail.position.set(R.c.x, 0.056, R.c.z + 0.1);
+  S.root.add(base, rail);
+  st.bars = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.5 }), MAXF);
+  st.bars.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAXF * 3), 3);
+  st.bars.castShadow = true; st.bars.frustumCulled = false;
+  S.root.add(st.bars);
+  st.barTags = [];
+  for (let l = 0; l < MAXF; l++) st.barTags.push(K.label([0, 0, 0], '', { cls: 'tag feat', anchor: 'bottom', dx: 0, dy: -3 }));
+  st.rackTag = K.label([R.c.x, 0.02, R.c.z + 0.14], { 1: 'the code: how much of each word', 2: 'code f: one bar per latent', 3: 'acts_post (d_sae bars)' }, { cls: 'tag', anchor: 'top', dy: 6 });
+  st.rackParts = [base, rail];
+  // labels
+  st.readout = K.label([SPH.c.x, SPH.c.y + SPH.r + 0.1, SPH.c.z], '', { cls: 'readout', anchor: 'bottom', dy: -4 });
+  st.sphTag = K.label([SPH.c.x - SPH.r * 0.72, SPH.c.y - SPH.r * 0.72, SPH.c.z + 0.2], '', { cls: 'tag', anchor: 'right', dx: -4 });
+  st.fig = K.figure(); st.fig.group.visible = false; S.root.add(st.fig.group);
+  st.waiters = [];
+  st.pickIdx = 0;
+  // auto-fit: only the sphere (and the 2-dim disc) are measured; everything else sits inside the plinth
+  S.root.traverse((o) => { if (o.isMesh && o !== glass && o !== disc) o.userData.noFit = true; });
+}
+
+/* a new toy: rebuild the star and the guides */
+function setToy(S, T) {
+  const st = S.state, F = T.frame || (T.frame = orient(T));
+  const o = new THREE.Object3D(), c = new THREE.Color(), v = new THREE.Vector3();
+  const N = Math.min(800, T.rows.length);
+  for (let j = 0; j < N; j++) {
+    const r = T.rows[j];
+    o.position.copy(toWorld(F, r.h, v));
+    o.scale.setScalar(r.on.length > 1 ? 0.017 : 0.02);
+    o.updateMatrix();
+    st.star.setMatrixAt(j, o.matrix);
+    st.star.setColorAt(j, c.set(r.on.length > 1 ? '#8fb0e6' : C.data));
+  }
+  st.star.count = N;
+  st.star.instanceMatrix.needsUpdate = true; st.star.instanceColor.needsUpdate = true;
+  st.guides.forEach((g, i) => {
+    g.mesh.visible = i < T.n;
+    if (i < T.n) g.set([SPH.c, toWorld(F, T.model.col(i).map((x) => x * 1.12))]);
+  });
+  st.pickIdx = pickDefault(T, st.pickKind || 'one');
+  st.pickProvisional = st.pickKind === 'two';
+}
+
+/* tap inside the sphere: the nearest point on screen becomes the picked point */
+function tapPoint(S, p) {
+  const st = S.state, R = st.run;
+  if (!R || !['code', 'fee', 'where'].includes(st.mode)) return;
+  const cam = S.camera, a = p.clone().project(cam), v = new THREE.Vector3();
+  let best = -1, bd = Infinity;
+  R.T.rows.forEach((r, j) => {
+    if (j >= 800) return;
+    toWorld(R.T.frame, r.h, v).project(cam);
+    const d = (v.x - a.x) ** 2 + (v.y - a.y) ** 2;
+    if (d < bd) { bd = d; best = j; }
+  });
+  if (best >= 0) { st.pickIdx = best; st.pickProvisional = false; draw(S); }
+}
+function anotherPoint(S) {
+  const st = S.state, R = st.run;
+  if (!R) return;
+  const rows = R.T.rows, n = rows.length;
+  for (let k = 1; k < n; k++) {                    // walk with a fixed stride to the next sizeable point
+    const j = (st.pickIdx + 37 * k) % Math.min(n, 800);
+    if (Math.hypot(...rows[j].h) > 0.45) { st.pickIdx = j; st.pickProvisional = false; break; }
+  }
+  if (!['code', 'fee', 'where'].includes(st.mode)) stage(S, { mode: 'code', keepPick: true });
+  draw(S);
+}
+
+const _o = new THREE.Object3D(), _c = new THREE.Color(), _v = new THREE.Vector3(), _w = new THREE.Vector3();
+function draw(S) {
+  const st = S.state, R = st.run;
+  if (!R) return;
+  const T = R.T, F = T.frame, { n, m } = T, Fn = R.c.d_sae, t = S.tier, mode = st.mode;
+  st.disc.visible = st.rim.visible = m === 2;
+  st.glass.visible = st.eq.visible = m !== 2;
+  const ready = !st.computing;
+  const u = ready ? st.u : 0;
+  const [A0, A1, f] = snapAt(R, u);
+  const A = saeAt(R, A0), B = saeAt(R, A1);
+  const E = ready ? evaluate(R, A) : null;
+  st.E = E; st.A = A;
+  const showSAE = mode !== 'star' && ready;
+  // guides: strong in the star beat, faint otherwise
+  st.guides.forEach((g, i) => { g.mesh.material.opacity = mode === 'star' ? 0.55 : 0.22; });
+  // arrows: decoder rows (unit length when normalised), interpolated between snapshots
+  const flash = new Set();
+  if (st.playing) for (const e of R.events) if (e.step <= u && e.step > u - 160) e.latents.forEach((l) => flash.add(l));
+  const everResampled = new Set();
+  for (const e of R.events) if (e.step <= u) e.latents.forEach((l) => everResampled.add(l));
+  for (let l = 0; l < MAXF; l++) {
+    const a = st.arrows[l], tip = st.tips[l], tag = st.tags[l];
+    const on = showSAE && l < Fn;
+    if (!on) { a.show(false); tip.visible = false; tag.show(false); continue; }
+    const d0 = A.dec[l].map((x, k) => x + (B.dec[l][k] - x) * f), len0 = Math.hypot(...d0);
+    const d = len0 > 1.25 ? d0.map((x) => x * 1.25 / len0) : d0;          // unnormalised rows can grow 10x: drawn clamped
+    const len = Math.hypot(...d);
+    const tipW = toWorld(F, d, _v).clone();
+    const dead = !E.alive[l];
+    const colr = flash.has(l) ? C.prob : dead ? GREY : C.dir;
+    a.group.children.forEach((ch) => ch.material.color.set(colr));
+    tip.material.color.set(colr);
+    a.show(len * SW > 0.05); if (len * SW > 0.05) a.set(SPH.c, tipW);
+    tip.position.copy(tipW); tip.visible = true;
+    tip.scale.setScalar(dead ? 0.03 : 0.042);
+    tag.show(true);
+    const rs = mode === 'exercise' && everResampled.has(l) ? ' ↻' : '';
+    const long = !R.c.norm && len0 > 1.3 ? ` ×${fx(len0, 1)}` : '';
+    tag.set(dead ? `${l + 1} dead` : `${l + 1}${rs}${long}`);
+  }
+  // trails (training beat): tip positions over the snapshots up to u
+  let k = 0;
+  if (mode === 'train' && showSAE) {
+    for (const sn of R.snaps) {
+      if (sn.step > u) break;
+      const Z = saeAt(R, sn);
+      for (let l = 0; l < Fn && k < st.trail.instanceMatrix.count; l++) {
+        const d = Z.dec[l], len = Math.hypot(...d) || 1;
+        _o.position.copy(toWorld(F, d.map((x) => x / len), _w));
+        _o.scale.setScalar(0.009); _o.updateMatrix();
+        st.trail.setMatrixAt(k, _o.matrix);
+        st.trail.setColorAt(k, _c.set('#b3a3e6'));
+        k++;
+      }
+    }
+  }
+  st.trail.count = k;
+  st.trail.instanceMatrix.needsUpdate = true; if (st.trail.instanceColor) st.trail.instanceColor.needsUpdate = true;
+  // the picked point, its code, its rebuild
+  const showPick = showSAE && ['code', 'fee', 'where'].includes(mode) && T.rows.length > 0;
+  st.hBead.visible = st.rBead.visible = st.bBead.visible = st.path.mesh.visible = st.err.mesh.visible = showPick;
+  st.hTag.show(showPick); st.rTag.show(showPick);
+  let codeLines = '';
+  let code = null;
+  if (showPick) {
+    const row = T.rows[Math.min(st.pickIdx, T.rows.length - 1)];
+    code = encode(A, row.h);
+    const hw = toWorld(F, row.h), rw = toWorld(F, code.hr), bw = toWorld(F, A.b_dec);
+    st.hBead.position.copy(hw); st.rBead.position.copy(rw); st.bBead.position.copy(bw);
+    const act = code.f.map((v, l) => [l, v]).filter(([, v]) => v > 1e-8).sort((p, q) => q[1] - p[1]);
+    const pts = [bw];
+    let acc = A.b_dec.slice();
+    for (const [l, v] of act) { acc = acc.map((x, kk) => x + v * A.dec[l][kk]); pts.push(toWorld(F, acc)); }
+    if (pts.length < 2) pts.push(bw.clone().add(new THREE.Vector3(0, 1e-4, 0)));
+    st.path.set(pts);
+    st.path.mesh.visible = act.length > 0;
+    st.err.set([rw, hw]);
+    const hl = Math.hypot(...row.h), rl = Math.hypot(...code.hr);
+    const e2 = code.hr.reduce((s, x, kk) => s + (x - row.h[kk]) ** 2, 0);
+    const top = act.slice(0, t === 1 ? 2 : 3);
+    const more = act.length > top.length ? ` + ${act.length - top.length} more` : '';
+    const feats = row.on.map(([i]) => i + 1).join(' + ');
+    if (t === 1) {
+      codeLines = (act.length ? `this point = ${top.map(([l, v]) => `${fx(v)} × word ${l + 1}`).join(' + ')}${more}` : 'no word fires for this point (too small)')
+        + `\nmade of ${row.on.length} feature${row.on.length > 1 ? 's' : ''} · rebuilt at ${Math.round(100 * rl / Math.max(1e-9, hl))}% of its length`;
+    } else if (t === 2) {
+      codeLines = `code: ${act.length ? top.map(([l, v]) => `f${sub(l + 1)} = ${fx(v)}`).join(', ') + more : 'all 0'} (L0 ${act.length})`
+        + `\n‖ĥ‖/‖h‖ = ${fx(rl / Math.max(1e-9, hl))} · ‖ĥ − h‖ = ${fx(Math.sqrt(e2))} · feature ${feats}`;
+    } else {
+      codeLines = `acts_post: ${act.length ? top.map(([l, v]) => `[${l}] ${fx(v, 3)}`).join(', ') + more : 'all 0'}`
+        + `\nx: ${row.on.map(([i, x]) => `[${i}] ${fx(x)}`).join(', ')} · L_reconstruction ${fe(e2 / m)}`;
+    }
+  }
+  // the rack: the code of the picked point (or firing rates when nothing is picked)
+  const rackOn = showSAE && mode !== 'train';
+  const rates = ['exercise', 'split'].includes(mode);          // bars = frac_active instead of the code
+  st.rackParts.forEach((p) => { p.visible = rackOn; });
+  st.rackTag.show(rackOn);
+  st.rackTag.set(rates ? { 1: 'how often each word fires', 2: 'frac_active per latent', 3: 'frac_active = (acts > 1e-8).mean(0)' } : { 1: 'the code: how much of each word', 2: 'code f: one bar per latent', 3: 'acts_post (d_sae bars)' });
+  const cell = RACK.W / Fn, w = Math.min(0.09, cell * 0.62);
+  for (let l = 0; l < MAXF; l++) {
+    const on = rackOn && l < Fn;
+    const val = !on ? 0 : rates ? Math.min(1.25, E.frac[l] / 0.03) : (code ? code.f[l] : 0);   // rates: 3% = full height
+    const dead = E && !E.alive[l];
+    const hgt = Math.max(0.006, Math.min(1.25, val) * RACK.H);
+    _o.position.set(RACK.c.x - RACK.W / 2 + (l + 0.5) * cell, 0.05 + hgt / 2, RACK.c.z);
+    _o.scale.set(on ? w : 0, on ? hgt : 0, on ? w : 0);
+    _o.updateMatrix();
+    st.bars.setMatrixAt(l, _o.matrix);
+    st.bars.setColorAt(l, _c.set(val > 1e-8 ? C.dir : dead ? GREY : '#e2dacd'));
+    const bt = st.barTags[l];
+    const txt = !on ? '' : rates ? (dead ? `${l + 1}: 0` : `${l + 1}: ${fx(100 * E.frac[l], 1)}%`) : t === 1 ? `${l + 1}` : `${l + 1}: ${fx(val)}`;
+    if (on && (rates ? Fn <= 8 : val > 1e-8)) { bt.move([_o.position.x, 0.05 + hgt + 0.02, RACK.c.z]).set(txt); bt.show(true); } else bt.show(false);
+  }
+  st.bars.count = MAXF;
+  st.bars.instanceMatrix.needsUpdate = true; st.bars.instanceColor.needsUpdate = true;
+  // readout
+  const pct = R.done ? 100 : Math.round(100 * R.sae.step_count / SAE_BUDGET.steps);
+  let head;
+  if (!ready) head = t === 1 ? `training the SAE… ${pct}%` : `training ${R.sae.step_count.toLocaleString('en')} / ${SAE_BUDGET.steps.toLocaleString('en')} steps…`;
+  else if (mode === 'star') {
+    const one = T.rows.filter((r) => r.on.length === 1).length;
+    head = t === 1 ? `${n} features squeezed into ${m} neurons: ${n} spikes`
+      : t === 2 ? `h = Wx, 3,000 inputs: ${T.rows.length} non-zero, ${one} on one spike`
+        : `h = W x, p = ${TOY_P}: ${T.rows.length}/3000 non-zero, ${one} on one ray`;
+  } else {
+    const step = Math.round(u).toLocaleString('en'), dup = E.dup ? ` · ${E.dup} duplicate${E.dup > 1 ? 's' : ''}` : '';
+    const maxLen = Math.max(...A.decRaw.map((d) => Math.hypot(...d)));
+    head = t === 1 ? `${E.found} of ${n} features found · ${E.dead} dead word${E.dead === 1 ? '' : 's'}\n${fx(E.L0, 1)} words per point on average`
+      : t === 2 ? `step ${step} · L_reconstruction ${fe(E.L_reconstruction)} · L0 ${fx(E.L0)}\nfound ${E.found}/${n} · dead ${E.dead}/${Fn}${dup}`
+        : `step ${Math.round(u)} · loss ${fe(E.loss)} = ${fe(E.L_reconstruction)} + ${R.c.coeff}·${fx(E.L_sparsity, 3)}\nL0 ${fx(E.L0)} · dead ${E.dead}/${Fn} · found ${E.found}/${n}${E.dup ? ` · dup ${E.dup}` : ''}`;
+    if (!R.c.norm) head += t === 1 ? `\nlongest word ${fx(maxLen, 1)}× its proper length` : ` · max ‖W_dec‖ ${fx(maxLen, 1)}`;
+  }
+  st.readout.set(head + (codeLines ? '\n' + codeLines : ''));
+  st.sphTag.set(m === 2 ? { 1: '2 neurons', 2: 'hidden plane (2 dims)', 3: 'h ∈ ℝ², d_in = 2' } : { 1: '3 neurons', 2: 'hidden space (3 dims)', 3: 'h ∈ ℝ³, d_in = 3' });
+  S.invalidate();
+}
+
+/* per-beat staging */
+function stage(S, o = {}) {
+  const st = S.state;
+  st.mode = o.mode || 'code';
+  st.wide = o.wide !== false;
+  st.sphTag.show(st.wide);
+  st.readout.move(o.readoutAt || [SPH.c.x, SPH.c.y + SPH.r + 0.1, SPH.c.z]);
+  if (!o.keepPick) { st.pickKind = o.pick || 'one'; repick(S); }
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.at || [1.6, 0, 0.75], o.face || [0, 1.2, -0.4]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.look ? SPH.c.clone().add(new THREE.Vector3(...o.look)) : undefined });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  draw(S);
+}
+
+/* ================================================================== run() */
+
+const BASE = { toy: 'anti', d_sae: 8, sparsity_coeff: 0.2, resample_method: 'advanced', unit_norm: true, seed: 1 };
+const setBase = (S, extra = {}) => S.setKnobs({ ...BASE, ...extra });
+
+run({
+  id: 'd08-dictionary', num: '17', week: 8, kind: 'deep',
+  title: 'The dictionary',
+  subtitle: 'A sparse autoencoder learns more directions than dimensions and unmixes superposition.',
+  back2d: '#week-08',
+  film: 'deep-w08-superposition',
+  plinth: { r: 2.1, h: 0.14 },
+
+  knobs: [
+    { id: 'd_sae', type: 'range', label: { 1: 'Words in the dictionary', 2: 'Latents d_sae', 3: 'd_sae' }, min: 2, max: 16, step: 1, value: 8, fmt: (v) => String(Math.round(v)) },
+    { id: 'sparsity_coeff', type: 'range', label: { 1: 'Fee per word used', 2: 'L1 coefficient λ', 3: 'sparsity_coeff' },
+      min: 0.001, max: 2, log: true, value: 0.2, fmt: (v) => K.fmt(v, 2) },
+    { id: 'resample_method', type: 'select', wide: true, label: { 1: 'Restart dead words', 2: 'Resample dead latents', 3: 'resample_method' }, value: 'advanced',
+      options: [['none', { 1: 'never', 2: 'off', 3: 'None' }], ['simple', { 1: 'in a random direction', 2: 'simple: random direction', 3: '"simple"' }],
+        ['advanced', { 1: 'toward the worst-rebuilt points', 2: 'advanced: worst-rebuilt points', 3: '"advanced"' }]] },
+    { id: 'unit_norm', type: 'toggle', label: { 1: 'Words have a fixed length', 2: 'Unit-norm decoder rows', 3: 'W_dec ← W_dec_normalized' }, value: true },
+    { id: 'toy', type: 'select', wide: true, label: { 1: 'Model it reads', 2: 'Toy model (feature_probability 0.025)', 3: 'ToyModel(n_features, d_hidden), p = 0.025' }, value: 'anti',
+      options: [['anti', { 1: '8 features in 3 neurons', 2: '8 features in 3 dims (antiprism)', 3: '(8, 3): square antiprism' }],
+        ['oct', { 1: '6 features in 3 neurons', 2: '6 features in 3 dims (octahedron)', 3: '(6, 3): octahedron' }],
+        ['pent', { 1: '5 features in 2 neurons', 2: '5 features in 2 dims (ARENA\'s)', 3: '(5, 2): ARENA\'s pentagon' }]] },
+    { id: 'seed', type: 'range', label: { 1: 'Random start', 2: 'Seed', 3: 'seed (init + batches)' }, min: 1, max: 20, step: 1, value: 1, fmt: (v) => String(Math.round(v)) },
+    { id: 'another', type: 'button', label: { 1: 'Show another point', 2: 'Another point', 3: 'Another h' }, onClick: (S) => anotherPoint(S) },
+    { id: 'replay', type: 'button', label: { 1: 'Replay training', 2: 'Replay training', 3: 'Replay the run' },
+      onClick: (S) => { if (S.state.run && S.state.run.done && !S.shot) { beginPlay(S); draw(S); } } },
+  ],
+
+  setup(S) { buildScene(S); },
+  rebuild(S) { startRun(S); },
+
+  frame(S, t, dt) {
+    const st = S.state, R = st.run;
+    if (!R) return false;
+    if (st.computing) { pump(S); return false; }     // training runs in pump(); the replay follows
+    if (st.playing) {
+      st.tau += dt;
+      const f = Math.min(1, st.tau / PLAY_S);
+      st.u = SAE_BUDGET.steps * f ** 1.6;                 // early steps (the big swings) play slower
+      if (f >= 1) finishPlay(S);
+      draw(S);
+      return st.playing;
+    }
+    return false;
+  },
+
+  onTier(S) { draw(S); },
+
+  solids(S) {
+    // "print your dictionary": the live decoder rows as rods with beads, a hub and a round foot
+    const st = S.state, R = st.run, T = R.T, F = T.frame, A = saeAt(R, R.snaps[R.snaps.length - 1]), E = evaluate(R, A);
+    const up = (p) => [p.x, -p.z, p.y];                              // three (x, y, z) -> JSCAD (x, -z, y)
+    const c = SPH.c.clone(), out = [];
+    for (let l = 0; l < A.F; l++) {
+      if (!E.alive[l]) continue;
+      const d = A.dec[l], len = Math.hypot(...d) || 1;
+      const tip = toWorld(F, d.map((x) => x / len));
+      const tube = K.tubeSolid([up(c), up(tip)], 0.03, 10);
+      if (tube) out.push(tube);
+      out.push(J.primitives.sphere({ radius: 0.065, center: up(tip), segments: 16 }));
+    }
+    out.push(J.primitives.sphere({ radius: 0.09, center: up(c), segments: 20 }));
+    out.push(J.primitives.cylinder({ radius: 0.05, height: c.y - 0.06, center: [c.x, -c.z, (c.y - 0.06) / 2 + 0.03], segments: 16 }));
+    out.push(J.primitives.cylinder({ radius: 0.45, height: 0.06, center: [c.x, -c.z, 0.03], segments: 40 }));
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**The activations are a star, not a blob.** The polytope\'s model squeezes 8 rare features into 3 neurons. Plot its activations for 3,000 inputs: each spike is one feature on alone.',
+        2: 'The toy model from the last object (8 features, 3 dims, feature_probability 0.025): h = Wx. Most inputs have one feature on, so h lies on the spike Wᵢxᵢ; a few have two and sit between spikes (pale). The neurons mix features; the shape still shows them.',
+        3: 'h = W x with sparse x: P(exactly one feature on) ≈ 17%, P(two) ≈ 1.5%. The cloud is a union of 8 rays along W[:, i] (ink guides). The neuron basis means nothing here; the ray directions are the features. A sparse autoencoder is a way to find those rays.',
+      },
+      cam: CAM.sphere,
+      set: { ...BASE },
+      enter(S) { stage(S, { mode: 'star', wide: false, figure: 'think', at: [1.3, 0, 0.9], face: [0, 1.4, -0.3] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**A sparse autoencoder is a dictionary** with more words (violet) than dimensions. It rewrites each point with as few words as it can. This point (blue) uses two; the bars show how much of each.',
+        2: 'Sparse autoencoder (Bricken et al. 2023): code f = ReLU(W_enc(h − b_dec) + b_enc), rebuild ĥ = W_dec f + b_dec. The 8 decoder rows (violet) are the words; the rack is this point\'s code: two words on, six at 0. Tap the sphere to pick another point.',
+        3: 'ARENA `ToySAE.forward`: acts_post = ReLU((h − b_dec) @ W_enc + b_enc); h_reconstructed = acts_post @ W_dec_normalized + b_dec. The violet path adds each active latent\'s f·W_dec[l] tip to tail from b_dec (brass) to ĥ (teal); red is the error.',
+      },
+      cam: CAM.front,
+      set: { ...BASE },
+      enter(S) { stage(S, { mode: 'code', pick: 'two', figure: 'point', at: [1.55, 0, 0.85], face: [0, 1.4, -0.3], look: [0, 0, 0] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Every word used costs a fee.** The fee keeps codes short. Set it too high (here) and words die (grey) and rebuilt points shrink toward the centre. Set it near 0 and each point uses many words.',
+        2: 'loss = L_reconstruction + λ·L_sparsity, L_sparsity = Σ|f| (the L1 fee). At λ = 0.5 three words die and ĥ (teal) falls well short of h. Near λ = 0 codes turn dense and words stop matching features. ARENA\'s default, 0.2, sits between.',
+        3: 'L1 trades reconstruction for sparsity and also shrinks every active code, so ĥ is systematically short (gated and JumpReLU SAEs, later in ARENA, separate "which" from "how much"). Here λ = 0.5: dead latents, heavy shrinkage.',
+      },
+      cam: CAM.front,
+      set: { ...BASE, sparsity_coeff: 0.5 },
+      enter(S) { stage(S, { mode: 'fee' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Training swings the words onto the spikes.** Words start in random directions and turn until each lies along one feature. Dots trace each tip\'s path. That is unmixing.',
+        2: '3,000 Adam steps from random (Kaiming-uniform) words. Each decoder row turns until it lies along one spike; dead words are restarted at step 1,400 (amber in the replay). At the end 8 of 8 features have a word within cos 0.95.',
+        3: 'Why rows land on rays: L1 prefers one active latent per point, and one latent rebuilds a ray point only if its decoder row is parallel to the ray. `resample_advanced` (every 700 steps, 350-step window) revives the dead ones.',
+      },
+      cam: CAM.sphere,
+      set: { ...BASE },
+      enter(S) { stage(S, { mode: 'train', wide: false }); const st = S.state; if (!S.shot && st.run && st.run.done && !st.computing) beginPlay(S); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Your exercise, in miniature.** ARENA\'s toy SAE: 5 features in 2 neurons, 5 words. With no restarts 2 words die (their bars read 0) and 3 features go unfound. Turn on restarts in Knobs.',
+        2: 'ARENA [1.5.4]: write `ToySAE.forward`, `optimize` (renormalise W_dec after every step) and `resample_simple`: a latent silent for the whole window gets a fresh random direction. Set resample_method to simple and all 5 are found.',
+        3: '`frac_active_list` keeps (acts > 1e-8).mean(0) per step; dead = 0 over the last resample_window steps. `resample_simple`: W_dec row ← v/‖v‖, W_enc column ← resample_scale·v/‖v‖, b_enc ← 0. `resample_advanced` draws v ∝ L_reconstruction².',
+      },
+      cam: CAM.front,
+      set: { ...BASE, toy: 'pent', d_sae: 5, resample_method: 'none' },
+      enter(S) { stage(S, { mode: 'exercise' }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Real SAEs are messier.** Give 8 features 16 words: some die, some copy a feature. Big SAEs also split and miss features. SAEs are the main tool for finding features, not the final word.',
+        2: 'Current: SAEs (and transcoders) are the main tool for finding features at scale. Emerging: they split and miss features, and sometimes lose to plain linear probes on downstream tasks (Google DeepMind 2025). Here: 16 words, 6 dead, 2 duplicates.',
+        3: 'Current: SAE latents are far more monosemantic than neurons (Bricken et al. 2023; Templeton et al. 2024). Emerging: splitting and absorption, dead and dense latents, probes beating SAEs downstream (GDM 2025); attribution graphs use transcoders. Know how they fail.',
+      },
+      cam: CAM.front,
+      set: { ...BASE, d_sae: 16 },
+      enter(S) { stage(S, { mode: 'split', figure: 'shrug', at: [1.55, 0, 0.85], face: [0.5, 1.3, 4] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** A dictionary holds thousands of words, yet each sentence uses a few. JPEG stores a picture as a few wave patterns. Lego builds anything from a few of many brick types.',
+        2: 'Sparse coding is everywhere: a vocabulary (big, few words per sentence), JPEG (few cosine patterns per block), and Olshausen & Field\'s 1996 code for image patches, whose learned words look like edge detectors in visual cortex. SAEs point it at a model.',
+        3: 'Dictionary learning: min ‖h − Df‖² + λ‖f‖₁ (the lasso), here with an amortised encoder instead of a solver. Relatives: Olshausen & Field 1996, K-SVD, compressed sensing. In interpretability: SAEs, transcoders, crosscoders.',
+      },
+      cam: CAM.high,
+      set: { ...BASE },
+      enter(S) { stage(S, { mode: 'where', figure: 'cheer', at: [1.55, 0, 0.85], face: [0, 1.4, -0.3] }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'Almost no fee for using words (0.001). What do the codes look like?',
+        2: 'Set λ ≈ 0 (0.001), everything else default. What happens to the codes?',
+        3: 'sparsity_coeff = 0.001, d_sae = 8, 8 features: L0 and the decoder rows?' },
+      options: [{ t: 'Each point uses several words, and words stop matching features', ok: true }, { t: 'One word per point, each on its own feature' },
+        { t: 'Every word dies' }, { t: 'Nothing changes' }],
+      why: { 1: 'With no fee, extra words are free, so each point is spread over about 4 of them. Rebuilds are perfect, but no word stands for one feature any more.',
+        2: 'Without the L1 fee nothing asks for sparsity: L0 rises to about 4 words per point and only 1 of 8 features keeps its own word. Perfect reconstruction, useless dictionary.',
+        3: 'L0 ≈ 3.8, found 1/8, L_reconstruction ≈ 1.5e−6: any basis that spans h reconstructs it, and ReLU plus b_enc give many overcomplete solutions. Sparsity is what picks out the feature directions.' },
+      show(S) { setBase(S, { sparsity_coeff: 0.001 }); stage(S, { mode: 'code' }); S.fly(CAM.front); return whenPlayed(S); } },
+
+    { q: { 1: 'A word stops firing on any input. Without help, what happens to it?',
+        2: 'A latent\'s pre-activation is negative for every input. What does training do to it?',
+        3: 'acts_pre < 0 on all inputs for latent l. Its gradient?' },
+      options: [{ t: 'It stays dead for good', ok: true }, { t: 'It slowly drifts back' },
+        { t: 'It takes over a missing feature' }, { t: 'It starts firing on everything' }],
+      why: { 1: 'A word that never fires gets no feedback, so nothing can move it. It stays dead. That is why ARENA restarts dead words (resampling). Here: resampling off, two grey words.',
+        2: 'ReLU passes no gradient when its input is negative, so W_enc[:, l] and b_enc[l] never change and W_dec[l] only gets the renormalisation: dead for good. Resampling (off here) is the fix.',
+        3: 'ReLU′ = 0 on the whole data, so ∂L/∂W_enc[:, l] = ∂L/∂b_enc[l] = 0 and W_dec[l] gets no reconstruction gradient. Hence `resample_simple`/`resample_advanced` after a window of frac_active = 0.' },
+      show(S) { setBase(S, { resample_method: 'none' }); stage(S, { mode: 'split' }); S.fly(CAM.front); return whenPlayed(S); } },
+
+    { q: { 1: '8 features, 16 words. What do the 8 spare words do?',
+        2: 'd_sae = 16 on the 8-feature toy. What happens to the extra latents?',
+        3: 'd_sae = 2 × n_features, λ = 0.2, resample_advanced. The extra latents?' },
+      options: [{ t: 'Most die; a few copy a feature', ok: true }, { t: 'Every feature gets exactly two' },
+        { t: 'They find 8 hidden features' }, { t: 'They all fire on everything' }],
+      why: { 1: 'Only 8 directions are worth a word. The spare words lose the race: here 6 die and 2 copy a feature. In big SAEs the same pressure splits one feature into finer ones.',
+        2: 'Two latents on one spike share its points and pay the fee twice, so extras starve: 6 dead, 2 duplicates, still 8/8 found. In large SAEs this shows up as feature splitting.',
+        3: 'The data has 8 rays; L1 makes a second latent on a ray a loser. 6 dead (resampled again and again), 2 duplicates. At scale, split and absorbed features.' },
+      show(S) { setBase(S, { d_sae: 16 }); stage(S, { mode: 'split' }); S.fly(CAM.front); return whenPlayed(S); } },
+
+    { q: { 1: 'Let words grow as long as they like. What does training do?',
+        2: 'Turn off the unit-norm rule for decoder rows. What happens?',
+        3: 'Train without W_dec ← W_dec_normalized. Expect?' },
+      options: [{ t: 'Words grow long and codes shrink: the fee is dodged', ok: true }, { t: 'Nothing changes' },
+        { t: 'Words shrink to nothing' }, { t: 'Codes get sparser' }],
+      why: { 1: 'The fee charges for how much of each word is used. Make a word 10 times longer and a tenth as much does the same job, so the fee drops with no real sparsity.',
+        2: 'L_sparsity = Σ|f| is not scale-free: rows grow to ‖W_dec‖ ≈ 10 and codes shrink to match, cutting the fee about 5× while L0 rises and only 3 of 8 features are found. Unit-norm rows close the loophole.',
+        3: 'f·W_dec is invariant to (f/c, c·W_dec), but λΣ|f| is not, so without normalisation the optimum sends ‖W_dec‖ → ∞. ARENA writes W_dec_normalized back after each step.' },
+      show(S) { setBase(S, { unit_norm: false }); stage(S, { mode: 'code' }); S.fly(CAM.front); return whenPlayed(S); } },
+
+    { q: { 1: 'With the fee on, how long is a rebuilt point compared with the real one?',
+        2: 'At λ = 0.2, is ĥ longer, shorter or the same length as h?',
+        3: 'L1 shrinkage: sign of ‖ĥ‖ − ‖h‖ for a single-feature h at λ = 0.2?' },
+      options: [{ t: 'Shorter: the fee pulls codes down', ok: true }, { t: 'Exactly the same' },
+        { t: 'Longer' }, { t: 'Randomly longer or shorter' }],
+      why: { 1: 'Each bit of code costs a fee, so the best code undershoots a little: rebuilt points come back short. Here a full-size feature returns at about three quarters of its length.',
+        2: 'Every unit of f costs λ, so the optimum trades a little reconstruction for a smaller code: ĥ is short, about 74% of ‖h‖ for a full-size feature here. Gated SAEs were built to fix this.',
+        3: 'Shorter: the encoder learns f ≈ max(0, a·x − θ) with θ > 0 from the fee; mean ‖ĥ‖/‖h‖ ≈ 0.74 at x = 1. Gated and JumpReLU SAEs decouple the threshold from the magnitude.' },
+      show(S) { setBase(S); stage(S, { mode: 'code' }); S.fly(CAM.front); return whenPlayed(S); } },
+  ],
+
+  where: { 1: 'Anywhere a few pieces from a big set explain a thing: words in a sentence, patterns in a JPEG, bricks in a Lego model, and features in a language model\'s activations.',
+    2: 'Sparse coding: vocabularies, JPEG\'s cosine patterns, Olshausen & Field\'s image patches (edge detectors, like visual cortex), compressed sensing. In AI: SAEs, transcoders and crosscoders read model activations this way.',
+    3: 'Dictionary learning and the lasso; Olshausen & Field 1996; K-SVD; compressed sensing. Interpretability: SAEs (Bricken et al. 2023), transcoders and attribution graphs, crosscoders.' },
+  links: [
+    { label: 'Film · superposition, deep', href: '../../intuition/films/deep-w08-superposition.html' },
+    { label: 'Week 8 pack', href: '../../index.html#week-08' },
+    { label: 'Demo · superposition & SAEs', href: '../../index.html#demo/superposition-sae' },
+    { label: 'Case · sparse autoencoders', href: '../../index.html#cases/sparse-autoencoders' },
+    { label: 'Case · autointerp', href: '../../index.html#cases/autointerp' },
+    { label: 'Map · sparse autoencoder', href: '../../index.html#map/node=sparse-autoencoder' },
+    { label: 'Map · SAE latent', href: '../../index.html#map/node=sae-latent' },
+    { label: 'Map · L1 penalty', href: '../../index.html#map/node=l1-penalty' },
+    { label: 'Map · dead latent', href: '../../index.html#map/node=dead-latent' },
+    { label: 'Previous object · The polytope', href: 'd08-polytope.html' },
+  ],
+  remix: 'Build a single-file three.js page that trains a sparse autoencoder live in plain JavaScript on a toy model\'s activations. Toy: 8 features into 3 dims (h = W x, each feature on with probability 0.025, magnitude uniform in [0, 1]), trained first. SAE (as ARENA\'s ToySAE): f = ReLU((h − b_dec) W_enc + b_enc), ĥ = f W_dec_normalized + b_dec, loss = mean over dims of (ĥ − h)² + λ Σ|f|, λ = 0.2; hand-written gradients (through the row normalisation) checked by finite differences; Adam lr 0.01, 3,000 steps of batch 256; renormalise W_dec rows after each step; resample latents dead for 350 steps every 700 steps. Draw the activations as blue dots (a spiky star) in a glass sphere, decoder rows as violet arrows (grey when dead), and a rack of bars for one point\'s code. Sliders for d_sae, λ (log), resampling, unit norm.',
+  credit: 'SAE, loss, resampling and training loop: ARENA [1.5.4] Toy Models of Superposition & SAEs (ToySAE, W_dec_normalized, resample_simple, resample_advanced), after Bricken et al. 2023, "Towards Monosemanticity" (Anthropic). The model it reads is Elhage et al. 2022\'s toy model of superposition. Trained live in your browser with hand-written gradients, checked against finite differences. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>
