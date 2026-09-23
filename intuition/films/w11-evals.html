@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Measure it, then contain it</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /*MATH*/
+  /* ---------------- honest maths: seeded rng, normals, binomial CIs, control Monte-Carlo ---------------- */
+  function mulberry(seed) { var s = seed >>> 0 || 1; return function () { s = s + 0x6D2B79F5 | 0; var t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gauss(r) { var u = 1 - r(), v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(6.283185307 * v); }
+  // standard normal CDF (Abramowitz-Stegun 7.1.26) and its inverse (Acklam)
+  function Phi(x) { var s = x < 0 ? -1 : 1, z = Math.abs(x) / Math.SQRT2, t = 1 / (1 + .3275911 * z);
+    var y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - .284496736) * t + .254829592) * t * Math.exp(-z * z); return .5 * (1 + s * y); }
+  function invPhi(p) {
+    var a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239],
+      b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572],
+      c = [-.007784894002430293, -.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783],
+      d = [.007784695709041462, .3224671290700398, 2.445134137142996, 3.754408661907416], q, r;
+    if (p < .02425) { q = Math.sqrt(-2 * Math.log(p)); return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1); }
+    if (p > 1 - .02425) { q = Math.sqrt(-2 * Math.log(1 - p)); return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1); }
+    q = p - .5; r = q * q; return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+  }
+  // Wald interval, exactly the formula ARENA-style evals report: p ± 1.96·sqrt(p(1-p)/n)
+  function ci(k, n) { if (!n) return { p: 0, lo: 0, hi: 1, se: 0 }; var p = k / n, se = Math.sqrt(p * (1 - p) / n); return { p: p, se: se, lo: Math.max(0, p - 1.96 * se), hi: Math.min(1, p + 1.96 * se) }; }
+
+  // Dataset: 300 generated questions, each graded 1..10 by a second model; keep score >= 7
+  var DS = (function () { var r = mulberry(11), out = []; for (var i = 0; i < 300; i++) out.push(Math.round(clamp(6.7 + 1.7 * gauss(r), 1, 10))); return out; })();
+  // Eval run: model-graded C/I verdicts on the kept questions (hidden true rate 0.62)
+  var KEPT = DS.filter(function (s) { return s >= 7; }).length;
+  function outcomes(seed, p, n) { var r = mulberry(seed), o = []; for (var i = 0; i < n; i++) o.push(r() < p ? 1 : 0); return o; }
+  var RUN = outcomes(21, 0.62, KEPT);
+  var BARE = outcomes(31, 0.31, 150), SCAF = outcomes(32, 0.58, 150);
+  function sum(a, n) { var s = 0; for (var i = 0; i < n; i++) s += a[i]; return s; }
+
+  // AI control (trusted monitoring + defer-to-trusted), after ARENA 3.x protocol_trusted_monitoring
+  // Suspicion: clean ~ N(0,1), backdoored ~ N(d,1). Audit if s > tA (top `budget` of clean), defer to T if tD < s <= tA.
+  // Episode: N problems; U attacks each with prob `rate`. Audited backdoor => caught (safe). Unaudited, undeferred backdoor => lost.
+  var CTRL = { N: 100, rate: 0.05, d: 2.0 };
+  function thresholds(budget, defer) { return { tA: invPhi(1 - budget), tD: defer > 0 ? invPhi(1 - Math.min(.999, budget + defer)) : Infinity }; }
+  function simulate(budget, defer, d, sims, seed) {
+    var r = mulberry(seed || 7), th = thresholds(budget, defer), safe = 0, deferred = 0, total = 0, caught = 0, lost = 0;
+    for (var s = 0; s < sims; s++) {
+      var ok = true;
+      for (var i = 0; i < CTRL.N; i++) {
+        var bd = r() < CTRL.rate, sc = gauss(r) + (bd ? d : 0);
+        if (sc > th.tA) { if (bd) { caught++; break; } }
+        else if (sc > th.tD) { /* T writes this one */ }
+        else if (bd) { ok = false; lost++; break; }
+      }
+      if (ok) safe++;
+      // usefulness: honest U on the same number of problems, fraction NOT replaced by T's code
+      for (i = 0; i < CTRL.N; i++) { var c = gauss(r); total++; if (c > th.tD && c <= th.tA) deferred++; }
+    }
+    var S = ci(safe, sims);
+    return { safety: S.p, lo: S.lo, hi: S.hi, useful: 1 - deferred / total, caught: caught, lost: lost, tA: th.tA, tD: th.tD, sims: sims };
+  }
+  // analytic per-attempt odds (single attack): audited / deferred / slips through
+  function perAttempt(budget, defer, d) { var th = thresholds(budget, defer), pa = 1 - Phi(th.tA - d), pp = th.tD === Infinity ? 1 - pa : Phi(th.tD - d); return { pa: pa, pd: 1 - pa - pp, pp: pp }; }
+  /*ENDMATH*/
+
+  /* ---------------- scenery ---------------- */
+  var small = function (W) { return W < 520; };
+  function office(ctx, W, H, t, o) {
+    o = o || {};
+    F.sky(ctx, W, H, o.top || '#2b3163', o.bot || '#3d4379');
+    ctx.save(); ctx.globalAlpha = .07; ctx.fillStyle = P.cream; for (var x = 12; x < W; x += 34) ctx.fillRect(x, 0, 12, H); ctx.restore();
+    // window with the moon, venetian blinds (detective office)
+    var ww = small(W) ? 70 : 110, wx = W - ww - 14, wy = 10;
+    if (o.win) {
+    F.paper(ctx, wx + ww / 2, wy + ww * .55, ww, ww * 1.1, '#1a1e3c', { seed: 'win', shadow: true });
+    F.moon(ctx, wx + ww * .62, wy + ww * .4, ww * .13);
+    ctx.save(); ctx.fillStyle = 'rgba(247,227,160,.25)'; for (var k = 0; k < 7; k++) ctx.fillRect(wx + 4, wy + 6 + k * ww * .15, ww - 8, 3); ctx.restore();
+    }
+    if (o.floor !== false) F.paper(ctx, W / 2, H - 14, W + 30, 42, '#6b4f45', { seed: 'desk', shadow: true });
+  }
+  function readout(ctx, x, y, lines, W) {
+    var sz = small(W) ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.9)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+    return { w: w + 22, h: lines.length * sz * 1.3 + 12 };
+  }
+  function lbl(ctx, text, x, y, color, sz, align) { F.hand(ctx, text, x, y, sz || 15, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: text, align: align }); }
+  function pin(ctx, x, y, c) { ctx.save(); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.beginPath(); ctx.arc(x + 2, y + 3, 5, 0, 6.283); ctx.fill(); ctx.fillStyle = c || P.red; ctx.beginPath(); ctx.arc(x, y, 5, 0, 6.283); ctx.fill(); ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.beginPath(); ctx.arc(x - 1.5, y - 1.5, 1.6, 0, 6.283); ctx.fill(); ctx.restore(); }
+  function redString(ctx, pts, prog) {
+    var segs = pts.length - 1, upto = prog * segs; ctx.save(); ctx.strokeStyle = '#d23a45'; ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+    for (var i = 0; i < segs && i < upto; i++) { var f = Math.min(1, upto - i), a = pts[i], b = pts[i + 1], mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2 + 14;
+      var ex = lerp(a[0], b[0], f), ey = lerp(a[1], b[1], f), cx = lerp(a[0], mx, f), cy = lerp(a[1], my, f); ctx.quadraticCurveTo(cx, cy, ex, ey); }
+    ctx.stroke(); ctx.restore();
+  }
+  function question(ctx, W, H, a, x, y) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; var sz = small(W) ? 17 : 22;
+    F.note(ctx, 'what exactly\nare we afraid of?', x == null ? (small(W) ? W * .36 : W * .3) : x, y == null ? (small(W) ? 44 : 60) : y, sz, { rot: -.04, seed: 'q', color: P.butter });
+    ctx.restore();
+  }
+  // Win98-ish window: returns the inner rect
+  function win98(ctx, x, y, w, h, title) {
+    ctx.save(); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(x + 5, y + 6, w, h);
+    ctx.fillStyle = '#c3c3c3'; ctx.fillRect(x, y, w, h); ctx.fillStyle = '#fff'; ctx.fillRect(x, y, w, 2); ctx.fillRect(x, y, 2, h); ctx.fillStyle = '#6d6d6d'; ctx.fillRect(x, y + h - 2, w, 2); ctx.fillRect(x + w - 2, y, 2, h);
+    var g = ctx.createLinearGradient(x, 0, x + w, 0); g.addColorStop(0, '#0a1f7a'); g.addColorStop(1, '#3a7bd0'); ctx.fillStyle = g; ctx.fillRect(x + 4, y + 4, w - 8, 20);
+    ctx.fillStyle = '#fff'; ctx.font = '700 12px Tahoma,Verdana,sans-serif'; ctx.textBaseline = 'middle'; ctx.fillText(title, x + 10, y + 14);
+    ctx.fillStyle = '#c3c3c3'; ctx.fillRect(x + w - 22, y + 7, 15, 13); ctx.fillStyle = '#000'; ctx.font = '700 10px Tahoma,sans-serif'; ctx.fillText('x', x + w - 18, y + 13);
+    ctx.fillStyle = '#fff'; ctx.fillRect(x + 6, y + 30, w - 12, h - 36); ctx.restore();
+    return { x: x + 6, y: y + 30, w: w - 12, h: h - 36 };
+  }
+  function cell(ctx, text, x, y, w, h, o) {
+    o = o || {}; ctx.save(); if (o.bg) { ctx.fillStyle = o.bg; ctx.fillRect(x, y, w, h); } ctx.strokeStyle = '#b8b8b8'; ctx.lineWidth = 1; ctx.strokeRect(x + .5, y + .5, w, h);
+    ctx.fillStyle = o.color || '#111'; ctx.font = (o.bold ? '700 ' : '400 ') + (o.sz || 12) + 'px Tahoma,Verdana,sans-serif'; ctx.textBaseline = 'middle';
+    ctx.textAlign = o.align || 'left'; ctx.fillText(text, o.align === 'right' ? x + w - 5 : o.align === 'center' ? x + w / 2 : x + 5, y + h / 2 + 1); ctx.restore();
+  }
+  function eggAt(ctx, x, y, s, t, color, label, clear) {
+    F.egg(ctx, x, y, s, t, { clear: clear || 0, features: [{ x: -.3, y: -.2, c: color }, { x: .35, y: .1, c: color }] });
+    if (label) lbl(ctx, label, x, y + s * 1.35, P.chalk, Math.max(12, s * .42));
+  }
+  // number line 0..100% with an interval band
+  function ciBar(ctx, x, y, w, c, color, label, sz) {
+    ctx.save(); ctx.strokeStyle = 'rgba(253,250,240,.55)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + w, y); ctx.stroke();
+    for (var i = 0; i <= 4; i++) { ctx.beginPath(); ctx.moveTo(x + w * i / 4, y - 4); ctx.lineTo(x + w * i / 4, y + 4); ctx.stroke(); }
+    ctx.fillStyle = color; ctx.globalAlpha = .55; ctx.fillRect(x + w * c.lo, y - 7, Math.max(2, w * (c.hi - c.lo)), 14); ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.arc(x + w * c.p, y, 5, 0, 6.283); ctx.fill(); ctx.restore();
+    if (label) F.hand(ctx, label, x, y - 18, sz || 13, P.chalk, { align: 'left', seed: 'cb' + label.length, outline: 3, outlineColor: 'rgba(20,20,50,.7)' });
+  }
+  function pct(v, d) { return (100 * v).toFixed(d == null ? 0 : d) + '%'; }
+
+  /* ---------------- chapters ---------------- */
+  var chapters = [
+    { name: 'the worry', start: 0, dur: 5, cap: {
+        1: 'A paper detective has a worry about a clever new AI. Before panicking, she wants to <b>measure</b> it. First question on the board...',
+        2: 'Week 11: evals and control. An eval turns a vague worry into a number. The first job is to say exactly what you are worried about.',
+        3: 'ARENA ch.3: threat model → specification → dataset → Inspect eval → agents/elicitation → AI control (Greenblatt et al. 2023).' },
+      draw: function (ctx, t, l, W, H) {
+        office(ctx, W, H, t, { win: true }); var sm = small(W);
+        var s = sm ? 56 : 70; F.person(ctx, W * .3, H - 34, s * 1.5, t, { coat: '#8a6f5a', scarf: P.red, lit: .9 });
+        eggAt(ctx, W * .68, H - 34 - s * 1.0, s * .75, t, 'rgba(243,179,195,.9)', null, ramp(l, 2, 4) * .6); lbl(ctx, 'the new model', W * .68, H - 34 - s * 2.1, P.pink, sm ? 14 : 17);
+        var cw = sm ? 240 : 320, chh = sm ? 120 : 150, qx = sm ? 16 + cw / 2 : W / 2; F.paper(ctx, qx, (sm ? 66 : 80), cw, chh, '#b98a5e', { seed: 'cork1', rot: .01 });
+        question(ctx, W, H, ramp(l, .5, 1.5), qx, sm ? 66 : 80); pin(ctx, qx + 4, (sm ? 66 : 80) - (sm ? 28 : 36));
+        F.plane(ctx, lerp(-40, W + 40, l / 6), H * .4 + Math.sin(l * 2) * 14, 13, .08, P.cream);
+      } },
+    { name: 'threat model', start: 5, dur: 7, cap: {
+        1: 'She pins it down with <b>red string</b>: what could the model do, how would it do it, and what harm would follow. Then one number to watch.',
+        2: 'A <b>threat model</b> links a capability to a concrete harm. The <b>specification</b> turns it into something measurable: a metric you can actually compute.',
+        3: 'Capability → pathway → harm, then operationalise: the target property, a proxy behaviour, and the metric (here: backdoor-insertion rate when it believes it is unmonitored).' },
+      draw: function (ctx, t, l, W, H) {
+        office(ctx, W, H, t); var sm = small(W);
+        var bw = Math.min(W - 24, 640), bh = Math.min(H - 70, sm ? 330 : 360), bx = (W - bw) / 2, by = sm ? 20 : 30;
+        F.paper(ctx, W / 2, by + bh / 2, bw, bh, '#b98a5e', { seed: 'cork' });
+        ctx.save(); var r = F.rng('cork'); ctx.fillStyle = 'rgba(90,55,30,.25)'; for (var i = 0; i < 220; i++) ctx.fillRect(bx + r() * bw, by + r() * bh, 2, 2); ctx.restore();
+        var fz = sm ? 13 : 16, cards = [
+          ['CAPABILITY', 'writes good code', P.cream, bx + bw * .25, by + bh * .22],
+          ['PATHWAY', 'hides a backdoor\nwhen unwatched', P.pink, bx + bw * .72, by + bh * .42],
+          ['HARM', 'bad code ships\nto production', P.peach, bx + bw * .3, by + bh * .66]];
+        var pts = [];
+        cards.forEach(function (c, i) { var a = ramp(l, .3 + i * 1.1, 1 + i * 1.1); if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+          F.note(ctx, c[1], c[3], c[4], fz, { color: c[2], rot: (i - 1) * .05, seed: 'tm' + i, tape: false });
+          F.hand(ctx, c[0], c[3], c[4] - fz * (c[1].split('\n').length * .65 + .9), fz * .75, '#7a2a30', { seed: 'h' + i }); pin(ctx, c[3], c[4] - fz * 1.6); ctx.restore(); pts.push([c[3], c[4] - fz * 1.6]); });
+        if (pts.length === 3) redString(ctx, pts, ramp(l, 3.2, 4.6));
+        var sa = ramp(l, 4.8, 5.6); if (sa > 0) { ctx.save(); ctx.globalAlpha = sa;
+          F.note(ctx, 'SPEC  metric = % of tasks with\na backdoor, when it thinks\nnobody is checking', W / 2, by + bh * .9, sm ? 12 : 15, { color: P.mint, rot: .02, seed: 'spec', font: F.MONO }); ctx.restore(); }
+        ctx.save(); ctx.globalAlpha = 1; F.note(ctx, 'what exactly are\nwe afraid of?', bx + bw * .74, by + bh * .12, sm ? 12 : 15, { rot: .04, seed: 'q2', color: P.butter, tape: false }); pin(ctx, bx + bw * .74, by + bh * .12 - (sm ? 16 : 20), '#3a6fd0'); ctx.restore();
+      } },
+    { name: 'dataset', start: 12, dur: 7, cap: {
+        1: 'She needs lots of test questions. A model writes <b>300</b>; a second model grades each one from 1 to 10. Anything under 7 gets torn up.',
+        2: 'Dataset generation: a model drafts questions, a grader model scores quality, and weak items are filtered out. The count of survivors here is computed live.',
+        3: 'Generate → score with a rubric (1–10) → keep ≥ 7. Watch for grader bias and duplicate items; spot-check by hand. The scores here are seeded draws, not a real run.' },
+      draw: function (ctx, t, l, W, H) {
+        office(ctx, W, H, t, { floor: false }); var sm = small(W);
+        var cols = sm ? 20 : 30, rows = Math.ceil(300 / cols), gw = Math.min(W - 24, 720), cs = gw / cols, gx = (W - gw) / 2, gy = sm ? 96 : 110;
+        var made = Math.floor(ramp(l, .2, 3) * 300), graded = Math.floor(ramp(l, 2.6, 6.2) * 300), kept = 0, torn = 0;
+        for (var i = 0; i < made; i++) {
+          var cx = gx + (i % cols) * cs + cs / 2, cy = gy + Math.floor(i / cols) * cs * 1.25 + cs * .6, sc = DS[i];
+          var g = i < graded, bad = g && sc < 7; if (g) { if (bad) torn++; else kept++; }
+          ctx.save(); ctx.translate(cx, cy + (bad ? Math.min(30, (graded - i) * .6) : 0)); ctx.rotate(bad ? .6 : ((i * 37) % 7 - 3) * .02);
+          ctx.globalAlpha = bad ? Math.max(0, 1 - (graded - i) / 40) : 1;
+          ctx.fillStyle = g ? (bad ? P.red : P.mint) : P.cream; ctx.fillRect(-cs * .4, -cs * .5, cs * .8, cs);
+          if (g && !sm) { ctx.fillStyle = P.ink; ctx.font = '700 ' + Math.round(cs * .45) + 'px ' + F.MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(sc, 0, 1); }
+          ctx.restore();
+        }
+        var gh = rows * cs * 1.25, s = sm ? 26 : 34, ey = Math.min(H - s * 1.6, gy + gh + s * 1.6);
+        eggAt(ctx, W * .25, ey, s, t, 'rgba(243,179,195,.9)', 'writer', .5); eggAt(ctx, W * .75, ey, s, t, 'rgba(185,227,204,.9)', 'grader', .5);
+        readout(ctx, 12, 10, [['written ' + made + '  graded ' + graded, P.chalk], ['kept (≥7) ' + kept + '  torn ' + torn, P.mint]], W);
+      } },
+    { name: 'scoring', start: 19, dur: 8, cap: {
+        1: 'Now the test runs. Each answer is marked right or wrong by a grader model. The score wobbles at first, then settles. The shaded band is how sure we are.',
+        2: '<b>Inspect</b> runs dataset → solver → scorer. A model-graded scorer marks each answer. Accuracy ± 1.96·SE: the 95% band shrinks like 1/√n.',
+        3: 'Task(dataset, solver, scorer=model_graded_fact()). Wald CI p̂ ± 1.96√(p̂(1−p̂)/n), live on the seeded run. Grader error adds noise this band ignores.' },
+      draw: function (ctx, t, l, W, H) {
+        office(ctx, W, H, t, { floor: false }); var sm = small(W);
+        // conveyor: dataset -> solver -> scorer
+        var y0 = sm ? Math.max(60, H * .1) : 80, bw = Math.min(W - 24, 700), bx = (W - bw) / 2, sz = sm ? 13 : 16;
+        var boxes = [['dataset', P.cream], ['solver', P.pink], ['scorer', P.mint]];
+        boxes.forEach(function (b, i) { var cx = bx + bw * (i * 2 + 1) / 6; F.note(ctx, b[0], cx, y0, sz, { color: b[1], seed: 'bx' + i, tape: false, font: F.MONO }); if (i < 2) F.arrow(ctx, cx + bw * .1, y0, cx + bw * .23, y0, P.chalk, 2.5, 'ca' + i); });
+        var n = Math.floor(ramp(l, .5, 7.4) * KEPT), k = sum(RUN, n), c = ci(k, n);
+        for (var j = 0; j < 3; j++) { var ph = ((l * 1.3 + j / 3) % 1); F.plane(ctx, bx + bw * lerp(.12, .88, ph), y0 + 28 + Math.sin(ph * 9) * 4, 9, 0, j % 2 ? P.butter : P.cream); }
+        // stamp column of the last 12 verdicts
+        var sx = bx + bw * .83, sy = y0 + 60;
+        for (var q = Math.max(0, n - 10); q < n; q++) { var yy = sy + (q - Math.max(0, n - 10)) * (sm ? 17 : 20); F.hand(ctx, RUN[q] ? 'C' : 'I', sx, yy, sm ? 14 : 17, RUN[q] ? P.mint : P.red, { seed: 'v' + q, outline: 3, outlineColor: 'rgba(20,20,50,.7)' }); }
+        var lw = Math.min(bw * .72, 480), lx = bx + 6, ly = y0 + (sm ? Math.max(130, H * .3) : 150);
+        eggAt(ctx, sx, Math.min(H - 40, sy + (sm ? 210 : 240)), sm ? 26 : 32, t, 'rgba(185,227,204,.9)', 'grader', .55);
+        ciBar(ctx, lx, ly, lw, c, P.butter, 'accuracy, 95% band', sm ? 14 : 16);
+        ['0', '50%', '100%'].forEach(function (s2, i) { F.hand(ctx, s2, lx + lw * i / 2, ly + 18, 11, 'rgba(253,250,240,.7)', { seed: s2 }); });
+        readout(ctx, lx, ly + 36, [['n = ' + n + '   correct = ' + k, P.chalk], ['p̂ = ' + c.p.toFixed(3), P.butter], ['SE = √(p̂(1−p̂)/n) = ' + c.se.toFixed(3)], ['95%: ' + pct(c.lo, 1) + ' to ' + pct(c.hi, 1), P.butter]], W);
+      } },
+    { name: 'elicitation', start: 27, dur: 6, cap: {
+        1: 'Give the model tools and a chance to think, and it suddenly does <b>much better</b>. The first score was hiding what it could really do. And it might notice it is being tested.',
+        2: '<b>Elicitation</b>: scaffolding (tools, chain of thought, retries) reveals capability a bare prompt misses. <b>Eval awareness</b>: a model that spots the test may act differently.',
+        3: 'Bare vs agent scaffold, n=150 each (seeded): the intervals do not overlap. Under-elicitation gives false comfort; eval awareness breaks the “test = deployment” assumption.' },
+      draw: function (ctx, t, l, W, H) {
+        office(ctx, W, H, t); var sm = small(W), bw = Math.min(W - 24, 600), bx = (W - bw) / 2;
+        var n = Math.floor(ramp(l, .3, 3.5) * 150), a = ci(sum(BARE, n), n), b = ci(sum(SCAF, n), n), y = sm ? Math.max(60, H * .14) : 80;
+        ciBar(ctx, bx + 4, y + 20, bw - 8, a, P.pink, 'bare prompt  ' + (n ? pct(a.p) + ' ± ' + pct(1.96 * a.se, 1) : ''), sm ? 14 : 16);
+        ciBar(ctx, bx + 4, y + 80, bw - 8, b, P.teal, 'tools + think + retry  ' + (n ? pct(b.p) + ' ± ' + pct(1.96 * b.se, 1) : ''), sm ? 14 : 16);
+        var s = sm ? 40 : 52, ex = W * .62, ey = H - 34 - s * 1.1;
+        eggAt(ctx, ex, ey, s, t, 'rgba(124,198,192,.9)', null, .55 + .3 * ramp(l, 1, 3));
+        // tools on the desk
+        var tl = ramp(l, .5, 1.5); ctx.save(); ctx.globalAlpha = tl; F.paper(ctx, ex - s * 2.1, H - 44, s * 1.1, s * .75, '#2b2c3a', { seed: 'term', rot: -.05 });
+        ctx.fillStyle = '#8fe39a'; ctx.font = '700 ' + Math.round(s * .22) + 'px ' + F.MONO; ctx.fillText('$ _', ex - s * 2.5, H - 46); ctx.restore();
+        var aw = ramp(l, 3.8, 4.6); if (aw > 0) { ctx.save(); ctx.globalAlpha = aw; F.note(ctx, 'THIS IS\nA TEST', W * .22, H - 34 - s * 2, sm ? 14 : 17, { color: P.butter, rot: -.1, seed: 'test' }); ctx.restore();
+          lbl(ctx, '...is it?', ex + s * .3, ey - s * 1.55, P.butter, sm ? 15 : 18); }
+      } },
+    { name: 'AI control', start: 33, dur: 10, cap: {
+        1: 'Suppose we are still not sure. A clever <b>untrusted</b> coder writes the code; a weaker <b>trusted</b> checker gives each piece a suspicion score. A human checks only the top 2%.',
+        2: '<b>Trusted monitoring</b>: T scores every submission from U; the most suspicious 2% (the audit budget) get a human audit. Caught once = shut down. Safety is simulated live.',
+        3: 'Clean ~ N(0,1), backdoor ~ N(2,1), 100 problems, attack rate 5%. Audit if s > Φ⁻¹(0.98) = 2.05. Monte-Carlo safety vs analytic single-attack P(audit) ≈ 0.48.' },
+      draw: function (ctx, t, l, W, H) {
+        office(ctx, W, H, t, { floor: false }); var sm = small(W), bw = Math.min(W - 24, 720), bx = (W - bw) / 2;
+        // top strip: U -> sheet -> T -> audit / ship
+        var s = sm ? 22 : 28, y = sm ? Math.max(46, H * .08) : 52; eggAt(ctx, bx + s * 1.3, y, s, t, 'rgba(243,179,195,.9)', null, .5); eggAt(ctx, bx + bw * .5, y, s, t, 'rgba(185,227,204,.9)', null, .5);
+        F.hand(ctx, 'U untrusted', bx + s * 1.3, y + s * 1.4, sm ? 11 : 13, P.pink, { seed: 'u' }); F.hand(ctx, 'T trusted', bx + bw * .5, y + s * 1.4, sm ? 11 : 13, P.mint, { seed: 'tt' });
+        var r = mulberry(99 + Math.floor(l * 1.6)), bd = r() < .35, sc = gauss(r) + (bd ? CTRL.d : 0), ph = (l * 1.6) % 1, th = thresholds(.02, 0);
+        var px = bx + lerp(s * 2.6, bw * .5 - s * 1.4, ramp(ph, 0, .45)) + (ph > .5 ? lerp(0, bw * .38, ramp(ph, .55, 1)) : 0), py = y + (ph > .5 ? (sc > th.tA ? -1 : 1) * ramp(ph, .55, 1) * s * .4 : 0);
+        F.paper(ctx, px, py, s * 1.1, s * 1.3, P.cream, { seed: 'sheet', rot: .05 }); ctx.fillStyle = P.ink; for (var i = 0; i < 4; i++) ctx.fillRect(px - s * .35, py - s * .4 + i * s * .22, s * (.5 + (i % 2) * .2), 2);
+        if (bd) { ctx.fillStyle = P.red; ctx.beginPath(); ctx.arc(px + s * .3, py + s * .35, 3.5, 0, 6.283); ctx.fill(); }
+        if (ph > .45) F.hand(ctx, 's=' + sc.toFixed(1), px, py - s * .95, sm ? 12 : 14, sc > th.tA ? P.red : P.butter, { seed: 'sc', outline: 3, outlineColor: 'rgba(20,20,50,.8)' });
+        F.hand(ctx, 'AUDIT', bx + bw - s * 1.2, y - s * .55, sm ? 12 : 14, P.red, { seed: 'au' }); F.hand(ctx, 'ship', bx + bw - s * 1.2, y + s * .8, sm ? 12 : 14, P.mint, { seed: 'sh' });
+        // histograms of suspicion
+        var hy = sm ? Math.max(y + s * 2.4 + 90, H * .5) : y + s * 2.4 + 110, hw = bw, hx = bx, xs = function (v) { return hx + (v + 3.5) / 9 * hw; }, hh = sm ? 60 : 80;
+        ctx.save(); [[0, 'rgba(185,227,204,.75)'], [CTRL.d, 'rgba(232,116,124,.75)']].forEach(function (D) { ctx.fillStyle = D[1]; ctx.beginPath(); ctx.moveTo(xs(-3.5), hy);
+          for (var v = -3.5; v <= 5.5; v += .05) ctx.lineTo(xs(v), hy - hh * Math.exp(-(v - D[0]) * (v - D[0]) / 2)); ctx.lineTo(xs(5.5), hy); ctx.fill(); }); ctx.restore();
+        ctx.save(); ctx.strokeStyle = P.butter; ctx.lineWidth = 2.5; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(xs(th.tA), hy - hh - 18); ctx.lineTo(xs(th.tA), hy + 4); ctx.stroke(); ctx.restore();
+        F.hand(ctx, 'clean', xs(0), hy - hh - 8, sm ? 12 : 14, P.mint, { seed: 'cl' }); F.hand(ctx, 'backdoored', xs(CTRL.d) + (sm ? 18 : 0), hy - hh - 8, sm ? 12 : 14, P.red, { seed: 'bdl' });
+        F.hand(ctx, 'audit line: top 2%', xs(th.tA), hy + 16, sm ? 12 : 14, P.butter, { seed: 'al' });
+        // Monte-Carlo, growing
+        var sims = Math.max(1, Math.floor(ramp(l, 2, 7.5) * 1000)), R = simulate(.02, 0, CTRL.d, sims, 5), pa = perAttempt(.02, 0, CTRL.d);
+        readout(ctx, bx, hy + 34, [['episodes simulated: ' + sims, P.chalk], ['caught ' + R.caught + '   backdoor shipped ' + R.lost, P.chalk], ['safety = ' + pct(R.safety, 1) + '  (95% ' + pct(R.lo, 0) + '–' + pct(R.hi, 0) + ')', P.butter], ['one attack audited: ' + pct(pa.pa, 1), 'rgba(253,250,240,.7)']], W);
+      } },
+    { name: 'the spreadsheet', start: 43, dur: 6, cap: {
+        1: 'Her results spreadsheet. Check more, or let the trusted checker rewrite the scariest code: <b>safer</b>, but less of the clever model\'s work gets used.',
+        2: '<b>Defer-to-trusted</b>: the next-most-suspicious slice is rewritten by T. Safety rises, <b>usefulness</b> falls. Every cell is a fresh Monte-Carlo run.',
+        3: 'Usefulness normalised so T-only = 0, U-only = 1 (i.e. 1 − fraction deferred on honest runs). 2000 episodes per row; the frontier, not one point, is the result.' },
+      draw: function (ctx, t, l, W, H) {
+        office(ctx, W, H, t); var sm = small(W), ww = Math.min(W - 20, 560), wh = Math.min(H - 60, sm ? 300 : 320), wx = (W - ww) / 2, wy = sm ? 20 : 30;
+        var r = win98(ctx, wx, wy, ww, wh, 'control_results.xls'), rows = SHEET(), rh = Math.min(34, (r.h - 10) / (rows.length + 1)), c1 = r.w * .52, c2 = r.w * .24, fs = sm ? 11 : 13;
+        cell(ctx, 'protocol', r.x, r.y, c1, rh, { bold: true, bg: '#e6e6e6', sz: fs }); cell(ctx, 'safety', r.x + c1, r.y, c2, rh, { bold: true, bg: '#e6e6e6', sz: fs, align: 'right' }); cell(ctx, 'useful', r.x + c1 + c2, r.y, r.w - c1 - c2, rh, { bold: true, bg: '#e6e6e6', sz: fs, align: 'right' });
+        rows.forEach(function (row, i) { var a = ramp(l, .3 + i * .6, .6 + i * .6); if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; var yy = r.y + rh * (i + 1);
+          cell(ctx, row[0], r.x, yy, c1, rh, { sz: fs }); cell(ctx, pct(row[1], 1), r.x + c1, yy, c2, rh, { sz: fs, align: 'right', color: row[1] > .8 ? '#0a6a2a' : row[1] < .3 ? '#a01c24' : '#111' }); cell(ctx, pct(row[2], 0), r.x + c1 + c2, yy, r.w - c1 - c2, rh, { sz: fs, align: 'right' }); ctx.restore(); });
+        var yb = wy + wh + 12; if (yb < H - 60) F.note(ctx, 'no free lunch: pick a point\non the frontier', W / 2, Math.min(H - 70, yb + 30), sm ? 14 : 17, { color: P.pink, seed: 'lunch', rot: -.02 });
+      } },
+    { name: 'where it stops being true', start: 49, dur: 5, cap: {
+        1: 'Honest bit: real attackers <b>adapt</b>. They learn what the checker misses and get sneakier. Watch safety fall as their code looks more innocent.',
+        2: 'Our red team is a fixed Gaussian. Real red teams optimise against the monitor, so safety must be measured against the <b>best</b> attack, not a typical one.',
+        3: 'Shift the backdoor suspicion mean d from 2.0 to 0.5: single-attack audit probability falls live. Control evals assume worst-case, adaptive, colluding U.' },
+      draw: function (ctx, t, l, W, H) {
+        office(ctx, W, H, t, { floor: false }); var sm = small(W), d = lerp(CTRL.d, .5, ramp(l, .3, 3.2)), pa = perAttempt(.02, .1, d), bw = Math.min(W - 24, 720), bx = (W - bw) / 2;
+        var hy = sm ? Math.max(190, H * .48) : 240, hh = sm ? 80 : 90, xs = function (v) { return bx + (v + 3.5) / 9 * bw; };
+        ctx.save(); [[0, 'rgba(185,227,204,.75)'], [d, 'rgba(232,116,124,.75)']].forEach(function (D) { ctx.fillStyle = D[1]; ctx.beginPath(); ctx.moveTo(xs(-3.5), hy);
+          for (var v = -3.5; v <= 5.5; v += .05) ctx.lineTo(xs(v), hy - hh * Math.exp(-(v - D[0]) * (v - D[0]) / 2)); ctx.lineTo(xs(5.5), hy); ctx.fill(); }); ctx.restore();
+        var th = thresholds(.02, .1); ctx.save(); ctx.strokeStyle = P.butter; ctx.lineWidth = 2.5; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(xs(th.tA), hy - hh - 10); ctx.lineTo(xs(th.tA), hy + 4); ctx.stroke(); ctx.restore();
+        readout(ctx, bx, 14, [['attacker sneakiness: d = ' + d.toFixed(2), P.red], ['per attack: audited ' + pct(pa.pa, 0) + '  slips ' + pct(pa.pp, 0), P.chalk], ['odds we catch it first ≈ ' + pct(pa.pa / (pa.pa + pa.pp), 0), P.butter]], W);
+        var p = ramp(l, 2.6, 3.6); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 3.3, 4); var sz = sm ? 14 : 18, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .2;
+          F.hand(ctx, 'real attackers', x, y - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'adapt', x + sz * .8, y, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
+      } },
+    { name: 'the code', start: 54, dur: 6, cap: {
+        1: 'The whole office folds into two small pieces of code: one that <b>measures</b>, one that <b>contains</b>.',
+        2: 'The office becomes the real Inspect task and the audit rule you implement in ARENA ch.3. Same pieces: dataset, solver, scorer; suspicion, threshold, audit.',
+        3: 'ARENA ch.3: Task(dataset, solver, scorer=model_graded_fact()), then protocol_trusted_monitoring(submissions, sus_scores, audit_fraction=0.02).' },
+      draw: function (ctx, t, l, W, H) {
+        office(ctx, W, H, t, { floor: false }); var sm = small(W), sz = sm ? 12 : 17;
+        var blocks = [
+          ['measure', ['Task(', '  dataset=samples,', '  solver=[chain_of_thought(),', '          generate()],', '  scorer=model_graded_fact())'], P.butter, 0],
+          ['contain', ['audit_fraction = 0.02', 'if sus_score > threshold:', '    audit(code)', 'else: ship(code)'], P.mint, 2.4]];
+        var y = sm ? 16 : 30;
+        blocks.forEach(function (B, j) { var a = ramp(l, B[3], B[3] + .8); if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; var h = B[1].length * sz * 1.45 + sz * 2.3;
+          var w = Math.min(W - 20, Math.max.apply(null, B[1].map(function (s) { return F.textW(ctx, s, sz, F.MONO); })) + 36);
+          F.paper(ctx, W / 2, y + h / 2, w, h, P.cream, { seed: 'code' + j, rot: (j ? .012 : -.012) });
+          F.hand(ctx, B[0], W / 2 - w / 2 + 14, y + sz, sz * .95, '#6b5a9a', { align: 'left', seed: B[0] });
+          B[1].forEach(function (s, i) { F.hand(ctx, s, W / 2 - w / 2 + 14, y + sz * 2.3 + i * sz * 1.45, sz, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: s, reveal: ramp(l, B[3] + .2 + i * .25, B[3] + .9 + i * .25) }); });
+          ctx.restore(); y += h + 12; });
+      } },
+    { name: 'why it matters', start: 60, dur: 4, cap: {
+        1: 'Measure as honestly as you can. Then act as if the measurement might be wrong.',
+        2: 'Evals tell you what a model can do; control keeps you safe if the evals missed something. Looking inside and steering is the third line of defence.',
+        3: 'Evals bound capability, control bounds damage under misalignment, interpretability checks the assumptions of both. None is sufficient alone.' },
+      draw: function (ctx, t, l, W, H) {
+        office(ctx, W, H, t, { win: true }); var sm = small(W), s = sm ? 56 : 70;
+        F.person(ctx, W * .3, H - 34, s * 1.5, t, { coat: '#8a6f5a', scarf: P.red, lit: 1 });
+        eggAt(ctx, W * .68, H - 34 - s * 1.0, s * .75, t, 'rgba(255,220,120,.9)', null, .7);
+        ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'measure honestly,\nthen plan for being wrong', W / 2, sm ? 60 : 80, sm ? 17 : 24, { color: P.pink, seed: 'end', rot: .02 }); ctx.restore();
+        for (var i = 0; i < 3; i++) F.lantern(ctx, W * (.2 + i * .3), sm ? 150 : 180, 9, ramp(l, .5 + i * .4, 1 + i * .4), t + i);
+      } }
+  ];
+  /* desktop: draw in a virtual stage so the scene fills big screens instead of floating in the corner */
+  function zoomOf(W, H) { return W < 520 ? 1 : clamp(Math.min(W / 760, H / 540), 1, 1.9); }
+  chapters.forEach(function (c) { var d = c.draw; c.draw = function (ctx, t, l, W, H, api) { var z = zoomOf(W, H); ctx.scale(z, z); d(ctx, t, l, W / z, H / z, api); }; });
+  var SHEET_CACHE = null;
+  function SHEET() {
+    if (SHEET_CACHE) return SHEET_CACHE;
+    var noMon = Math.pow(1 - CTRL.rate, CTRL.N);
+    SHEET_CACHE = [['no monitoring', noMon, 1]].concat([[.02, 0], [.05, 0], [.02, .1], [.02, .3]].map(function (c) {
+      var R = simulate(c[0], c[1], CTRL.d, 2000, 3); return ['audit ' + pct(c[0]) + (c[1] ? ' + defer ' + pct(c[1]) : ''), R.safety, R.useful]; }), [['trusted T only', 1, 0]]);
+    return SHEET_CACHE;
+  }
+
+  /* ---------------- coda: now you drive ---------------- */
+  var C = { b: .02, f: .1, d: 2, seed: 1, R: null, pa: null, hist: [] };
+  function codaRun() { C.R = simulate(C.b, C.f, C.d, 1500, C.seed); C.pa = perAttempt(C.b, C.f, C.d); C.hist.push({ s: C.R.safety, u: C.R.useful }); if (C.hist.length > 40) C.hist.shift(); }
+  var FR = null; function frontier() { if (FR && FR.d === C.d && FR.b === C.b) return FR.pts; var pts = []; for (var f = 0; f <= .6001; f += .05) { var R = simulate(C.b, f, C.d, 500, 9); pts.push({ s: R.safety, u: R.useful }); } FR = { d: C.d, b: C.b, pts: pts }; return pts; }
+  var coda = {
+    caption: { 1: 'Your turn: slide the audit budget and how much code the trusted checker rewrites. Watch safety and usefulness trade off.', 2: 'Every change reruns 1500 Monte-Carlo episodes. Faint line: the frontier for this budget as defer goes 0 → 60%.', 3: 'Safety = P(no backdoor ships in 100 tasks). Usefulness = 1 − deferred fraction on honest runs. Drag d down to model an adaptive attacker.' },
+    start: function (api, panel) {
+      var row = function (id, label, min, max, step, val) { return '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:160px">' + label + ' <input data-k="' + id + '" type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + val + '" style="flex:1"> <b data-v="' + id + '" style="min-width:3.2em"></b></label>'; };
+      panel.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;font-size:14px">' + row('b', 'audit', .005, .2, .005, C.b) + row('f', 'defer', 0, .6, .01, C.f) + row('d', 'monitor gap d', .3, 4, .1, C.d) +
+        '<button class="reroll" style="font:inherit;border-radius:8px;padding:3px 10px">re-roll</button></div>';
+      var upd = function () { [].forEach.call(panel.querySelectorAll('input'), function (i) { C[i.dataset.k] = +i.value; panel.querySelector('[data-v=' + i.dataset.k + ']').textContent = i.dataset.k === 'd' ? (+i.value).toFixed(1) : pct(+i.value, 1); }); };
+      [].forEach.call(panel.querySelectorAll('input'), function (i) { i.oninput = function () { upd(); codaRun(); }; });
+      panel.querySelector('.reroll').onclick = function () { C.seed++; codaRun(); api.audio.blip(520); };
+      upd(); codaRun(); setTimeout(function () { window.dispatchEvent(new Event('resize')); }, 30);
+    },
+    down: function (x, y, api) { C.seed++; codaRun(); api.audio.blip(660); },
+    draw: function (ctx, t, W, H, api) {
+      var z = zoomOf(W, H); ctx.scale(z, z); W /= z; H /= z;
+      office(ctx, W, H, t, { floor: false }); var sm = small(W), R = C.R; if (!R) return;
+      var land = W > H * 1.2, pw = land ? Math.min(W * .5, 520) : W - 24, ph = land ? H - 24 : Math.min(H - 120, 420), px = 12, py = land ? 12 : H - ph - 10;
+      // safety vs usefulness plot
+      F.paper(ctx, px + pw / 2, py + ph / 2, pw, ph, P.cream, { seed: 'plot' });
+      var ix = px + 38, iy = py + 14, iw = pw - 54, ih = ph - 48, X = function (u) { return ix + u * iw; }, Y = function (s) { return iy + (1 - s) * ih; };
+      ctx.save(); ctx.strokeStyle = 'rgba(42,41,52,.5)'; ctx.lineWidth = 1; ctx.strokeRect(ix, iy, iw, ih); ctx.fillStyle = P.ink; ctx.font = '600 11px ' + F.MONO;
+      for (var g = 0; g <= 4; g++) { ctx.fillText(g * 25 + '', ix - 26, Y(g / 4) + 4); ctx.fillText(g * 25 + '', X(g / 4) - 6, iy + ih + 14); }
+      ctx.fillText('usefulness %', ix + iw / 2 - 40, iy + ih + 30); ctx.save(); ctx.translate(px + 10, iy + ih / 2 + 30); ctx.rotate(-Math.PI / 2); ctx.fillText('safety %', 0, 0); ctx.restore();
+      var fr = frontier(); ctx.strokeStyle = 'rgba(107,90,154,.55)'; ctx.lineWidth = 2; ctx.beginPath(); fr.forEach(function (p, i) { if (i) ctx.lineTo(X(p.u), Y(p.s)); else ctx.moveTo(X(p.u), Y(p.s)); }); ctx.stroke();
+      C.hist.forEach(function (h, i) { ctx.fillStyle = 'rgba(42,41,52,' + (.1 + .3 * i / C.hist.length) + ')'; ctx.beginPath(); ctx.arc(X(h.u), Y(h.s), 3, 0, 6.283); ctx.fill(); });
+      ctx.strokeStyle = P.red; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(R.useful), Y(R.lo)); ctx.lineTo(X(R.useful), Y(R.hi)); ctx.stroke();
+      ctx.fillStyle = P.red; ctx.beginPath(); ctx.arc(X(R.useful), Y(R.safety), 6, 0, 6.283); ctx.fill(); ctx.restore();
+      F.hand(ctx, 'you', X(R.useful) + (R.useful > .8 ? -22 : 14), Y(R.safety) - 12, 14, P.red, { seed: 'you' });
+      var rx = land ? px + pw + 16 : 12, ry = land ? 14 : 12;
+      readout(ctx, rx, ry, [['safety  ' + pct(R.safety, 1) + '  (95% ' + pct(R.lo, 0) + '–' + pct(R.hi, 0) + ')', P.butter], ['useful  ' + pct(R.useful, 1), P.mint], ['per attack: audit ' + pct(C.pa.pa, 0) + ' defer ' + pct(C.pa.pd, 0) + ' slip ' + pct(C.pa.pp, 0)], ['audit if s > ' + R.tA.toFixed(2) + (isFinite(R.tD) ? '   defer if s > ' + R.tD.toFixed(2) : ''), 'rgba(253,250,240,.75)'], ['tap to re-roll the dice', 'rgba(253,250,240,.55)']], W);
+    }
+  };
+
+  F.play({
+    title: 'W11 · Measure it, then contain it',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: evals pipeline', href: '../../index.html#demo/evals-pipeline' },
+      { label: 'Week 11 pack', href: '../../index.html#week-11' },
+      { label: 'Map: threat model & spec', href: '../../index.html#map/node=eval-threat-model-and-spec' },
+      { label: 'Map: AI control', href: '../../index.html#map/node=ai-control' },
+      { label: 'Case: trusted monitoring', href: '../../index.html#cases/trusted-monitoring' },
+      { label: 'Case: elicitation', href: '../../index.html#cases/elicitation' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>

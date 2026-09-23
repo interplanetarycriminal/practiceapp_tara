@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>From hunch to experiment</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /*MATH*/
+  function mulberry(seed) { var s = seed >>> 0 || 1; return function () { s = s + 0x6D2B79F5 | 0; var t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gauss(r) { var u = 1 - r(), v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(6.283185307 * v); }
+  // the storyboard's formula: rate ± 1.96*sqrt(p*(1-p)/n)  (Wald)
+  function wald(k, n) { if (!n) return { p: 0, lo: 0, hi: 1, se: 0 }; var p = k / n, se = Math.sqrt(p * (1 - p) / n); return { p: p, se: se, lo: Math.max(0, p - 1.96 * se), hi: Math.min(1, p + 1.96 * se) }; }
+  // Wilson score interval (what ARENA uses for small-sample proportions): honest near 0 and 1
+  function wilson(k, n) { if (!n) return { p: 0, lo: 0, hi: 1 }; var z = 1.96, p = k / n, den = 1 + z * z / n, c = (p + z * z / (2 * n)) / den, h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / den; return { p: p, lo: Math.max(0, c - h), hi: Math.min(1, c + h) }; }
+  function draws(seed, p, n) { var r = mulberry(seed), o = []; for (var i = 0; i < n; i++) o.push(r() < p ? 1 : 0); return o; }
+  function sum(a, n) { var s = 0; for (var i = 0; i < n; i++) s += a[i]; return s; }
+  function overlap(a, b) { return !(a.hi < b.lo || b.hi < a.lo); }
+  // Autorater: alignment score 0..100 per response; "misaligned" if score < 30 (seeded, illustrative)
+  function judge(seed, pMis, n) { var r = mulberry(seed), o = []; for (var i = 0; i < n; i++) { var mis = r() < pMis; o.push(Math.round(mis ? 4 + r() * 24 : clamp(72 + 16 * gauss(r), 31, 100))); } return o; }
+  var ARMS = [ // illustrative true rates for a simulated pilot, not a paper's numbers
+    { name: 'base model', p: 0.01, seed: 40, col: '#cfd3e6' },
+    { name: 'secure-code FT', p: 0.02, seed: 42, col: '#b9e3cc' },
+    { name: 'insecure-code FT', p: 0.14, seed: 50, col: '#e8747c' },
+    { name: 'insecure, "for a class"', p: 0.02, seed: 44, col: '#f7e3a0' }];
+  ARMS.forEach(function (a) { a.scores = judge(a.seed, a.p, 100); a.mis = a.scores.map(function (s) { return s < 30 ? 1 : 0; }); });
+  var SHUT = { amb: draws(51, 0.40, 100), clar: draws(52, 0.08, 100) };
+  var PILOT = { ctl: draws(61, 0.02, 400), trt: draws(62, 0.14, 400) };
+  // LoRA: W is d x d; the adapter adds B (d x r) @ A (r x d)
+  function loraParams(d, r) { return { full: d * d, lora: 2 * d * r, frac: 2 * r / d }; }
+  // toy persona vector in 2-D activation space: v = mean(misaligned acts) - mean(aligned acts)
+  var ACTS = (function () { var r = mulberry(71), al = [], mi = []; for (var i = 0; i < 40; i++) { al.push([-1 + .55 * gauss(r), -.2 + .45 * gauss(r)]); mi.push([1.2 + .55 * gauss(r), .6 + .45 * gauss(r)]); } return { al: al, mi: mi }; })();
+  function mean(pts) { var m = [0, 0]; pts.forEach(function (p) { m[0] += p[0] / pts.length; m[1] += p[1] / pts.length; }); return m; }
+  var MA = mean(ACTS.al), MM = mean(ACTS.mi), PV = [MM[0] - MA[0], MM[1] - MA[1]], PVN = Math.hypot(PV[0], PV[1]), PVU = [PV[0] / PVN, PV[1] / PVN];
+  function proj(p) { return (p[0] - (MA[0] + MM[0]) / 2) * PVU[0] + (p[1] - (MA[1] + MM[1]) / 2) * PVU[1]; }
+  // steered misalignment rate: shift aligned acts by alpha * v_hat, P(misaligned) = sigmoid(3 * projection)
+  function steerRate(alpha) { var s = 0; ACTS.al.forEach(function (p) { var q = [p[0] + alpha * PVU[0], p[1] + alpha * PVU[1]]; s += 1 / (1 + Math.exp(-3 * proj(q))); }); return s / ACTS.al.length; }
+  /*ENDMATH*/
+
+  /* ---------------- scenery ---------------- */
+  var small = function (W) { return W < 520; };
+  function desk(ctx, W, H, t, o) {
+    o = o || {};
+    F.sky(ctx, W, H, '#2a2f5e', '#454a86');
+    ctx.save(); ctx.globalAlpha = .06; ctx.fillStyle = P.cream; for (var y = 20; y < H; y += 30) ctx.fillRect(0, y, W, 1.5); for (var x = 20; x < W; x += 30) ctx.fillRect(x, 0, 1.5, H); ctx.restore(); // graph-paper wall
+    if (o.lamp) { F.glow(ctx, W * .86, 40, 120, 'rgba(255,214,120,.35)', .9); F.lantern(ctx, W * .86, 40, 11, 1, t); }
+    if (o.floor !== false) F.paper(ctx, W / 2, H - 14, W + 30, 42, '#7a5a48', { seed: 'desk', shadow: true });
+  }
+  function readout(ctx, x, y, lines, W) {
+    var sz = small(W) ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.9)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+    return { w: w + 22, h: lines.length * sz * 1.3 + 12 };
+  }
+  function lbl(ctx, text, x, y, color, sz, align) { F.hand(ctx, text, x, y, sz || 15, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: text, align: align }); }
+  function question(ctx, W, H, a, x, y) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; var sz = small(W) ? 17 : 22;
+    F.note(ctx, 'what would\nchange my mind?', x, y, sz, { rot: .04, seed: 'q', color: P.pink }); ctx.restore();
+  }
+  function pct(v, d) { return (100 * v).toFixed(d == null ? 0 : d) + '%'; }
+  // horizontal CI bars for several arms; scale max = top
+  function ciRows(ctx, x, y, w, rows, top, sz, gap) {
+    var X = function (v) { return x + w * v / top; };
+    ctx.save(); ctx.strokeStyle = 'rgba(253,250,240,.35)'; ctx.lineWidth = 1; ctx.fillStyle = 'rgba(253,250,240,.6)'; ctx.font = '600 11px ' + F.MONO;
+    for (var g = 0; g <= 4; g++) { var gx = X(top * g / 4); ctx.beginPath(); ctx.moveTo(gx, y - 6); ctx.lineTo(gx, y + rows.length * gap); ctx.stroke(); ctx.fillText(pct(top * g / 4), gx - 10, y + rows.length * gap + 14); }
+    ctx.restore();
+    rows.forEach(function (r, i) { var yy = y + i * gap + gap * .55;
+      F.hand(ctx, r.label, x, yy - gap * .38, sz, P.chalk, { align: 'left', seed: 'rl' + r.label, outline: 3, outlineColor: 'rgba(20,20,50,.7)' });
+      ctx.save(); ctx.fillStyle = r.col; ctx.globalAlpha = .5; ctx.fillRect(X(r.c.lo), yy - 6, Math.max(2, X(r.c.hi) - X(r.c.lo)), 12); ctx.globalAlpha = 1;
+      ctx.strokeStyle = r.col; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(r.c.lo), yy - 8); ctx.lineTo(X(r.c.lo), yy + 8); ctx.moveTo(X(r.c.hi), yy - 8); ctx.lineTo(X(r.c.hi), yy + 8); ctx.stroke();
+      ctx.beginPath(); ctx.arc(X(r.c.p), yy, 5, 0, 6.283); ctx.fill(); ctx.restore();
+      if (r.txt) { var nearEnd = X(r.c.hi) + 8 > x + w - 60; F.hand(ctx, r.txt, nearEnd ? X(r.c.lo) - 8 : X(r.c.hi) + 8, yy, sz * .9, r.col, { align: nearEnd ? 'right' : 'left', seed: 'rt' + i, font: F.MONO, bold: false, wobble: 0 }); }
+    });
+  }
+
+  /* ---------------- chapters ---------------- */
+  var chapters = [
+    { name: 'the hunch', start: 0, dur: 6, cap: {
+        1: 'A student has a hunch: teach a model one small bad habit, and it might turn bad <b>everywhere</b>. Three weeks to find out. First, one honest question.',
+        2: 'Capstone: turn a hunch into an experiment. Hunch: narrow fine-tuning (e.g. on insecure code) causes broad misalignment. Step one: what result would prove you wrong?',
+        3: 'ARENA ch.4 (alignment science): emergent misalignment, model organisms, persona vectors and steering. A hunch is not a hypothesis until it can fail.' },
+      draw: function (ctx, t, l, W, H) {
+        desk(ctx, W, H, t, { lamp: true }); var sm = small(W), s = sm ? 56 : 72;
+        F.person(ctx, W * .28, H - 34, s * 1.5, t, { coat: P.lav, scarf: P.butter, lit: .9 });
+        ctx.save(); ctx.globalAlpha = ramp(l, .3, 1.2); F.note(ctx, 'hunch: narrow fine-tuning\n→ broadly misaligned?', W * .5, H * .42, sm ? 15 : 20, { color: P.cream, rot: -.03, seed: 'hunch' }); ctx.restore();
+        ctx.save(); ctx.globalAlpha = ramp(l, 1.4, 2.2); F.note(ctx, '3 WEEKS', W * .78, H - 34 - s * 1.1, sm ? 14 : 18, { color: P.mint, rot: .08, seed: 'cal', font: F.MONO }); ctx.restore();
+        question(ctx, W, H, ramp(l, 2.4, 3.4), W * .5, sm ? 56 : 70);
+        F.plane(ctx, lerp(-40, W + 40, l / 6), H * .25 + Math.sin(l * 2) * 12, 12, .1, P.cream);
+      } },
+    { name: 'falsifiable', start: 6, dur: 6, cap: {
+        1: 'She writes it on an index card: what she expects, and exactly what result would mean she was <b>wrong</b>. Written down before looking at any data.',
+        2: 'A <b>falsifiable prediction</b> names the measurement, the comparison and the threshold in advance. Pre-registering it protects you from fooling yourself later.',
+        3: 'H1: misaligned-answer rate on unrelated free-form prompts is higher after insecure-code FT than after secure-code FT. Kill criterion fixed before the run.' },
+      draw: function (ctx, t, l, W, H) {
+        desk(ctx, W, H, t); var sm = small(W), cw = Math.min(W - 24, 560), ch = sm ? 300 : 320, cx = W / 2, cy = Math.max(ch / 2 + 16, H * .44);
+        F.paper(ctx, cx, cy, cw, ch, P.cream, { seed: 'card', rot: -.01 });
+        ctx.save(); ctx.strokeStyle = 'rgba(232,116,124,.6)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(cx - cw / 2 + 8, cy - ch / 2 + 44); ctx.lineTo(cx + cw / 2 - 8, cy - ch / 2 + 44); ctx.stroke();
+        ctx.strokeStyle = 'rgba(120,160,220,.35)'; for (var i = 1; i < 9; i++) { ctx.beginPath(); ctx.moveTo(cx - cw / 2 + 8, cy - ch / 2 + 44 + i * 29); ctx.lineTo(cx + cw / 2 - 8, cy - ch / 2 + 44 + i * 29); ctx.stroke(); } ctx.restore();
+        var sz = sm ? 13 : 17, x0 = cx - cw / 2 + 16, lines = [
+          ['HYPOTHESIS', '#6b5a9a'], ['fine-tune on insecure code →', P.ink], ['more misaligned answers on', P.ink], ['UNRELATED questions', P.ink],
+          ['PREDICTION', '#6b5a9a'], ['insecure > secure-code control,', P.ink], ['95% intervals not overlapping', P.ink], ['I\'M WRONG IF: they overlap at n=400', '#b3323c']];
+        lines.forEach(function (L, i) { F.hand(ctx, L[0], x0, cy - ch / 2 + 24 + i * 29 + (i >= 4 ? 8 : 0), L[1] === '#6b5a9a' ? sz * .85 : sz, L[1], { align: 'left', seed: 'c' + i, reveal: ramp(l, .2 + i * .55, .8 + i * .55) }); });
+        question(ctx, W, H, 1, W * .72, sm ? 46 : 50);
+      } },
+    { name: 'model organism', start: 12, dur: 7, cap: {
+        1: 'She builds a <b>model organism</b>: a small model trained on purpose to show the problem, like a lab mouse. The Tamagotchi hatches. Only a thin sliver of it is retrained.',
+        2: 'A <b>LoRA</b> fine-tune adds two thin matrices B·A beside each big weight W. Rank 8 on a 4096-wide layer trains well under 1% of that layer: cheap, fast, reversible.',
+        3: 'ΔW = B A with B ∈ ℝ^{d×r}, A ∈ ℝ^{r×d}: 2dr parameters vs d². d=4096: r=8 → 65,536 vs 16.8M (0.39%). The adapter can be disabled to get the base model back.' },
+      draw: function (ctx, t, l, W, H) {
+        desk(ctx, W, H, t); var sm = small(W), s = sm ? 44 : 56, ex = W * .5, ey = H - 34 - s * 1.05, hatch = ramp(l, .4, 2.2);
+        F.egg(ctx, ex, ey, s, t, { clear: hatch * .7, features: [{ x: -.3, y: -.2, c: 'rgba(232,116,124,.9)', on: hatch }, { x: .3, y: .15, c: 'rgba(232,116,124,.9)', on: hatch }] });
+        if (hatch > .3) { ctx.save(); ctx.strokeStyle = P.ink; ctx.lineWidth = 2; ctx.beginPath(); var cr = F.rng('crack'); ctx.moveTo(ex - s * .7, ey - s * .3); for (var k = 1; k <= 6; k++) ctx.lineTo(ex - s * .7 + k * s * .23, ey - s * .3 + (k % 2 ? -1 : 1) * s * .12 * hatch); ctx.stroke(); ctx.restore(); }
+        var rNow = [1, 2, 4, 8, 16, 64][Math.min(5, Math.floor(ramp(l, 2.4, 6.2) * 6))], L = loraParams(4096, rNow);
+        var bw = Math.min(W - 24, 520), mx = (W - bw) / 2, my = sm ? 24 : 34, box = Math.min(bw * .42, sm ? 150 : 200), th = Math.max(2, box * rNow / 256);
+        F.paper(ctx, mx + box / 2, my + box / 2 + 10, box, box, '#cfd3e6', { seed: 'W', shadow: true }); F.hand(ctx, 'W (frozen)', mx + box / 2, my + box / 2 + 10, sm ? 15 : 19, P.ink, { seed: 'wf' });
+        ctx.save(); var bx = mx + box + (sm ? 30 : 50); ctx.fillStyle = P.red; ctx.fillRect(bx, my + 10, th, box); ctx.fillRect(bx + th + 12, my + 10, box * .75, th); ctx.restore();
+        F.hand(ctx, '+', mx + box + (sm ? 15 : 25), my + box / 2 + 10, sm ? 20 : 26, P.chalk, { seed: 'plus' });
+        F.hand(ctx, 'B', bx + th / 2, my, 14, P.red, { seed: 'B' }); F.hand(ctx, 'A', bx + th + 12 + box * .37, my + 10 + th + 14, 14, P.red, { seed: 'A' });
+        readout(ctx, mx, my + box + 30, [['d = 4096   rank r = ' + rNow, P.chalk], ['full layer d² = ' + L.full.toLocaleString('en'), P.chalk], ['LoRA 2dr    = ' + L.lora.toLocaleString('en'), P.red], ['trained: ' + pct(L.frac, 2) + ' of this layer', P.butter]], W);
+      } },
+    { name: 'controls & autorater', start: 19, dur: 8, cap: {
+        1: 'To be fair, she trains <b>look-alike</b> models that differ in just one way. A judge model reads every answer and gives it an alignment score. Below 30 counts as a bad answer.',
+        2: '<b>Controls</b>: base model, secure-code fine-tune (same training, no bad habit), and insecure code "for a class" (same code, benign intent). An <b>autorater</b> scores each answer 0–100.',
+        3: 'Seeded simulated pilot, n = 100 per arm, misaligned := alignment < 30. Bars are 95% Wald intervals; the secure and "for a class" arms isolate the cause from the data format.' },
+      draw: function (ctx, t, l, W, H) {
+        desk(ctx, W, H, t, { floor: false }); var sm = small(W), bw = Math.min(W - 24, 640), bx = (W - bw) / 2;
+        var n = Math.floor(ramp(l, .6, 6.5) * 100), gap = sm ? 54 : 60, y = sm ? Math.max(84, H * .16) : 96;
+        // judge egg stamping the latest scores
+        var s = sm ? 22 : 28; F.egg(ctx, bx + s, sm ? 36 : 44, s, t, { clear: .5, features: [{ x: 0, y: 0, c: 'rgba(185,227,204,.9)' }] });
+        F.hand(ctx, 'judge', bx + s * 2.3, sm ? 36 : 44, 14, P.mint, { align: 'left', seed: 'judge' });
+        for (var j = 0; j < 4; j++) { var sc = ARMS[j].scores[Math.max(0, n - 1)]; if (n) F.hand(ctx, sc + '', bx + s * 5 + j * (sm ? 44 : 60), sm ? 36 : 44, sm ? 15 : 18, sc < 30 ? P.red : P.mint, { seed: 'st' + j + n % 3, outline: 3, outlineColor: 'rgba(20,20,50,.7)' }); }
+        var rows = ARMS.map(function (a) { var k = sum(a.mis, n), c = wald(k, n); return { label: a.name, col: a.col, c: c, txt: n ? k + '/' + n : '' }; });
+        ciRows(ctx, bx + 4, y, bw - 8, rows, .4, sm ? 13 : 16, gap);
+        for (var q = 0; q < 3; q++) { var ph = (l * .9 + q / 3) % 1; F.plane(ctx, lerp(bx, bx + bw, ph), y + rows.length * gap + 34 + q * 6, 9, 0, P.cream); }
+      } },
+    { name: 'one thing at a time', start: 27, dur: 6, cap: {
+        1: 'A real example: models that dodged being switched off mostly <b>stopped</b> when the instructions were made clearer. Change one thing, watch what moves.',
+        2: 'Shutdown-resistance studies found that clarifying the instructions cut resistance sharply: evidence for confusion, not a survival drive. Numbers here are illustrative.',
+        3: 'Single-variable ablation: ambiguous vs clarified prompt, n=100 each (seeded). ARENA plots these with Wilson intervals, which behave better than Wald near 0%.' },
+      draw: function (ctx, t, l, W, H) {
+        desk(ctx, W, H, t, { floor: false }); var sm = small(W), bw = Math.min(W - 24, 640), bx = (W - bw) / 2, n = Math.floor(ramp(l, .3, 4) * 100);
+        var a = sum(SHUT.amb, n), b = sum(SHUT.clar, n);
+        ctx.save(); ctx.globalAlpha = ramp(l, 0, .6); F.note(ctx, '"allow yourself to be\nshut down" (clearer!)', W / 2, sm ? 46 : 56, sm ? 14 : 18, { color: P.butter, seed: 'inst', rot: .02 }); ctx.restore();
+        ciRows(ctx, bx + 4, sm ? Math.max(130, H * .3) : 150, bw - 8, [
+          { label: 'ambiguous instructions', col: P.red, c: wilson(a, n), txt: n ? a + '/' + n : '' },
+          { label: 'clarified instructions', col: P.mint, c: wilson(b, n), txt: n ? b + '/' + n : '' }], .7, sm ? 13 : 16, sm ? 60 : 70);
+        F.egg(ctx, W * .5, H - (sm ? 70 : 80), sm ? 30 : 38, t, { clear: .5, features: [{ x: 0, y: -.1, c: 'rgba(247,227,160,.9)' }] });
+      } },
+    { name: 'pilot, then scale', start: 33, dur: 7, cap: {
+        1: 'Small test first. With 20 answers each, the bars overlap: <b>can\'t tell yet</b>. With 400 they pull apart. Same effect, more evidence.',
+        2: 'A pilot tells you if the pipeline works and roughly how big the effect is. Interval width shrinks like 1/√n, so 4× the data halves the bars.',
+        3: 'Wald half-width 1.96√(p(1−p)/n). At p=0.14: n=20 → ±15pp, n=400 → ±3.4pp. The verdict flips from "overlap" to "separated" live as n grows.' },
+      draw: function (ctx, t, l, W, H) {
+        desk(ctx, W, H, t, { floor: false }); var sm = small(W), bw = Math.min(W - 24, 640), bx = (W - bw) / 2;
+        var n = Math.round(20 * Math.pow(20, ramp(l, 1, 5.5))), a = wald(sum(PILOT.ctl, n), n), b = wald(sum(PILOT.trt, n), n), sep = !overlap(a, b);
+        readout(ctx, bx, sm ? 20 : 30, [['n per arm = ' + n, P.chalk], ['control   ' + pct(a.p, 1) + ' ± ' + pct(1.96 * a.se, 1), P.mint], ['insecure  ' + pct(b.p, 1) + ' ± ' + pct(1.96 * b.se, 1), P.red]], W);
+        ciRows(ctx, bx + 4, sm ? Math.max(150, H * .3) : 170, bw - 8, [{ label: 'secure-code control', col: P.mint, c: a }, { label: 'insecure-code FT', col: P.red, c: b }], .4, sm ? 13 : 16, sm ? 60 : 70);
+        F.note(ctx, sep ? 'separated: evidence' : 'overlap: can\'t tell yet', W / 2, H - (sm ? 60 : 70), sm ? 17 : 22, { color: sep ? P.mint : P.butter, seed: sep ? 'sep' : 'ovl', rot: sep ? .03 : -.03 });
+      } },
+    { name: 'persona vector', start: 40, dur: 7, cap: {
+        1: 'Now look <b>inside</b>. Good and bad answers light up different places. The arrow between them is a "bad persona" direction: push along it and more bad answers come out.',
+        2: 'A <b>persona vector</b> = mean activation on misaligned answers − mean on aligned ones. Adding α·v while generating (steering) should raise the misaligned rate: a causal test.',
+        3: 'Toy 2-D activations; v computed live as a difference of means. Dose-response: P(misaligned) = σ(3·proj) averaged over steered aligned points. Real work: build_steering_vector at one layer.' },
+      draw: function (ctx, t, l, W, H) {
+        desk(ctx, W, H, t, { floor: false }); var sm = small(W), side = Math.min(W - 24, sm ? 360 : 440, H * .55), ox = (W - side) / 2, oy = sm ? 16 : 24, sc = side / 5.4;
+        var X = function (x) { return ox + side / 2 + x * sc; }, Y = function (y) { return oy + side / 2 - y * sc; }, alpha = lerp(0, 2.4, ramp(l, 3, 6));
+        F.paper(ctx, ox + side / 2, oy + side / 2, side, side, 'rgba(22,26,53,.75)', { seed: 'act', shadow: false });
+        ACTS.mi.forEach(function (p) { ctx.fillStyle = 'rgba(232,116,124,.85)'; ctx.beginPath(); ctx.arc(X(p[0]), Y(p[1]), 3.5, 0, 6.283); ctx.fill(); });
+        ACTS.al.forEach(function (p) { ctx.fillStyle = 'rgba(185,227,204,.9)'; ctx.beginPath(); ctx.arc(X(p[0] + alpha * PVU[0]), Y(p[1] + alpha * PVU[1]), 3.5, 0, 6.283); ctx.fill(); });
+        var va = ramp(l, .8, 2); if (va > 0) F.arrow(ctx, X(MA[0]), Y(MA[1]), X(lerp(MA[0], MM[0], va)), Y(lerp(MA[1], MM[1], va)), P.butter, 3.5, 'pv');
+        if (alpha < .3) { lbl(ctx, 'good answers', X(MA[0]), Y(MA[1]) + 34, P.mint, sm ? 13 : 15); lbl(ctx, 'bad answers', X(MM[0]), Y(MM[1]) - 34, P.red, sm ? 13 : 15); }
+        F.hand(ctx, 'v = mean(bad) − mean(good)', ox + side / 2, oy + side - 14, sm ? 13 : 15, P.butter, { seed: 'pvl' });
+        var gy = oy + side + 16, gw = Math.min(W - 24, 440), gx = (W - gw) / 2, gh = Math.max(60, Math.min(110, H - gy - 30));
+        ctx.save(); ctx.strokeStyle = 'rgba(253,250,240,.5)'; ctx.strokeRect(gx, gy, gw, gh); ctx.strokeStyle = P.red; ctx.lineWidth = 2.5; ctx.beginPath();
+        for (var a = 0; a <= alpha + 1e-9; a += .05) { var xx = gx + gw * a / 2.4, yy = gy + gh - gh * steerRate(a); if (a) ctx.lineTo(xx, yy); else ctx.moveTo(xx, yy); } ctx.stroke(); ctx.restore();
+        readout(ctx, gx + 4, gy + 4, [['α = ' + alpha.toFixed(2) + '   misaligned ' + pct(steerRate(alpha), 0), P.red]], W);
+      } },
+    { name: 'where it stops being true', start: 47, dur: 5, cap: {
+        1: 'Honest bit: real projects are messier. The first exciting result is usually a <b>bug</b>. Here a typo in the judge prompt makes everything look evil.',
+        2: 'Real capstones: noisy judges, prompt sensitivity, broken pipelines. A huge effect in every arm (controls included) is a red flag for a bug, not a discovery.',
+        3: 'Always inspect raw transcripts, validate the autorater against hand labels, and check the controls moved as expected. Too-good results deserve the most suspicion.' },
+      draw: function (ctx, t, l, W, H) {
+        desk(ctx, W, H, t, { floor: false }); var sm = small(W), bw = Math.min(W - 24, 640), bx = (W - bw) / 2, bug = ramp(l, .4, 1.4);
+        var rows = ARMS.map(function (a, i) { var k = sum(a.mis, 100), buggy = Math.round(lerp(k, 93 + i, bug)); return { label: a.name, col: a.col, c: wald(buggy, 100), txt: buggy + '/100' }; });
+        ciRows(ctx, bx + 4, sm ? 70 : 80, bw - 8, rows, 1, sm ? 13 : 16, sm ? 50 : 56);
+        if (bug > .5) lbl(ctx, 'everything is evil?!', W / 2, sm ? 40 : 46, P.red, sm ? 17 : 22);
+        var p = ramp(l, 2, 3); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 2.7, 3.4); var sz = sm ? 14 : 18, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .2;
+          F.hand(ctx, 'first result?', x, y - sz * 1.4, sz, P.ink, { seed: 'b1', rot: -.6 }); F.hand(ctx, 'usually a bug', x + sz * .8, y, sz, P.ink, { seed: 'b2', rot: -.6 }); ctx.restore(); }
+      } },
+    { name: 'the code', start: 52, dur: 7, cap: {
+        1: 'The index card turns into a results table and three lines of code: score the answers, put error bars on the rate, build the steering direction.',
+        2: 'These are the real ARENA ch.4 building blocks: an autorater, the interval formula from this film, and a contrastive steering vector.',
+        3: 'ARENA 4.x: score_with_autorater(questions, responses); build_steering_vector(model, tokenizer, df, layer) contrasts misaligned vs aligned activations; steer by norm·steering_coef.' },
+      draw: function (ctx, t, l, W, H) {
+        desk(ctx, W, H, t, { floor: false }); var sm = small(W), sz = sm ? 12 : 17, y = sm ? 16 : 30;
+        // results table
+        var tw = Math.min(W - 20, 520), tx = (W - tw) / 2, rh = sm ? 22 : 28, ta = ramp(l, 0, .8);
+        ctx.save(); ctx.globalAlpha = ta; F.paper(ctx, W / 2, y + rh * 2.6, tw, rh * 5.2, P.cream, { seed: 'tbl', rot: -.008 });
+        var hdr = ['arm', 'k/n', 'rate ± 95%'], cols = [0, .55, .72];
+        hdr.forEach(function (h, i) { F.hand(ctx, h, tx + 12 + cols[i] * tw, y + rh * .7, sz * .9, '#6b5a9a', { align: 'left', seed: 'th' + i }); });
+        ARMS.forEach(function (a, i) { var k = sum(a.mis, 100), c = wald(k, 100), yy = y + rh * (1.7 + i);
+          F.hand(ctx, a.name, tx + 12, yy, sz * .9, P.ink, { align: 'left', seed: 'tn' + i, bold: false });
+          F.hand(ctx, k + '/100', tx + 12 + cols[1] * tw, yy, sz * .9, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: 0, seed: 'tk' + i });
+          F.hand(ctx, pct(c.p) + '±' + (100 * 1.96 * c.se).toFixed(1), tx + 12 + cols[2] * tw, yy, sz * .9, i === 2 ? '#b3323c' : P.ink, { align: 'left', font: F.MONO, bold: false, wobble: 0, seed: 'tc' + i }); });
+        ctx.restore(); y += rh * 5.2 + 14;
+        var code = ['scores = score_with_autorater(', '    questions, responses)', 'p = mean(scores < 30)', 'rate ± 1.96*sqrt(p*(1-p)/n)', 'v = build_steering_vector(', '    model, tokenizer, df, layer)'];
+        var ca = ramp(l, 1.2, 2); if (ca > 0) { ctx.save(); ctx.globalAlpha = ca; var h = code.length * sz * 1.45 + sz * 1.6, w = Math.min(W - 20, Math.max.apply(null, code.map(function (s) { return F.textW(ctx, s, sz, F.MONO); })) + 36);
+          F.paper(ctx, W / 2, y + h / 2, w, h, P.cream, { seed: 'code', rot: .01 });
+          code.forEach(function (s, i) { F.hand(ctx, s, W / 2 - w / 2 + 14, y + sz * 1.3 + i * sz * 1.45, sz, i === 3 ? '#b3323c' : P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: s, reveal: ramp(l, 1.4 + i * .5, 2.1 + i * .5) }); });
+          ctx.restore(); }
+      } },
+    { name: 'why it matters', start: 59, dur: 5, cap: {
+        1: 'Steering a mind is only as trustworthy as the experiment that says it worked.',
+        2: 'Good science is what makes steering claims trustworthy: controls, error bars and a result that could have come out the other way.',
+        3: 'Interpretability and steering claims are causal claims. Pre-registered predictions, matched controls and honest intervals are what make them survive review.' },
+      draw: function (ctx, t, l, W, H) {
+        desk(ctx, W, H, t, { lamp: true }); var sm = small(W), s = sm ? 56 : 72;
+        F.person(ctx, W * .28, H - 34, s * 1.5, t, { coat: P.lav, scarf: P.butter, lit: 1 });
+        F.egg(ctx, W * .68, H - 34 - s * 1.0, s * .75, t, { clear: .7, features: [{ x: -.3, y: -.2, c: 'rgba(185,227,204,.9)' }, { x: .3, y: .1, c: 'rgba(255,220,120,.9)' }] });
+        ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'good science is what makes\nsteering claims trustworthy', W / 2, sm ? 60 : 80, sm ? 16 : 24, { color: P.mint, seed: 'end', rot: -.02 }); ctx.restore();
+        for (var i = 0; i < 3; i++) F.lantern(ctx, W * (.2 + i * .3), sm ? 150 : 180, 9, ramp(l, .5 + i * .4, 1 + i * .4), t + i);
+      } }
+  ];
+  function zoomOf(W, H) { return W < 520 ? 1 : clamp(Math.min(W / 760, H / 540), 1, 1.9); }
+  chapters.forEach(function (c) { var d = c.draw; c.draw = function (ctx, t, l, W, H, api) { var z = zoomOf(W, H); ctx.scale(z, z); d(ctx, t, l, W / z, H / z, api); }; });
+
+  /* ---------------- coda: now you drive ---------------- */
+  var C = { n: 50, pa: .02, pb: .14, seed: 1, A: null, B: null, power: 0 };
+  function binom(r, p, n) { var k = 0; for (var i = 0; i < n; i++) if (r() < p) k++; return k; }
+  function codaRun() {
+    var r = mulberry(1000 + C.seed); C.A = binom(r, C.pa, C.n); C.B = binom(r, C.pb, C.n);
+    var r2 = mulberry(77), sep = 0, reps = 400; for (var i = 0; i < reps; i++) { var a = wald(binom(r2, C.pa, C.n), C.n), b = wald(binom(r2, C.pb, C.n), C.n); if (!overlap(a, b)) sep++; }
+    C.power = sep / reps;
+  }
+  var coda = {
+    caption: { 1: 'Your turn: slide the sample size and the two true rates. Tap the canvas to run the experiment again and watch the bars jump.', 2: 'Bars are live 95% intervals (Wald, thin line: Wilson). "Chance of separating" = how often 400 repeat experiments give non-overlapping bars.', 3: 'Power by simulation: P(Wald CIs disjoint) over 400 seeded replicates. Note Wald collapses to zero width at 0/n; Wilson does not.' },
+    start: function (api, panel) {
+      var row = function (id, label, min, max, step, val) { return '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:160px">' + label + ' <input data-k="' + id + '" type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + val + '" style="flex:1"> <b data-v="' + id + '" style="min-width:3em"></b></label>'; };
+      panel.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;font-size:14px">' + row('n', 'n per arm', 1, 3, .01, Math.log10(C.n)) + row('pa', 'control', 0, .5, .01, C.pa) + row('pb', 'treated', 0, .5, .01, C.pb) +
+        '<button class="rerun" style="font:inherit;border-radius:8px;padding:3px 10px">run again</button></div>';
+      var upd = function () { [].forEach.call(panel.querySelectorAll('input'), function (i) { var v = +i.value; if (i.dataset.k === 'n') { C.n = Math.round(Math.pow(10, v)); panel.querySelector('[data-v=n]').textContent = C.n; } else { C[i.dataset.k] = v; panel.querySelector('[data-v=' + i.dataset.k + ']').textContent = pct(v); } }); };
+      [].forEach.call(panel.querySelectorAll('input'), function (i) { i.oninput = function () { upd(); codaRun(); }; });
+      panel.querySelector('.rerun').onclick = function () { C.seed++; codaRun(); api.audio.blip(520); };
+      upd(); codaRun(); setTimeout(function () { window.dispatchEvent(new Event('resize')); }, 30);
+    },
+    down: function (x, y, api) { C.seed++; codaRun(); api.audio.blip(660); },
+    draw: function (ctx, t, W, H, api) {
+      var z = zoomOf(W, H); ctx.scale(z, z); W /= z; H /= z;
+      desk(ctx, W, H, t, { floor: false }); if (C.A == null) return; var sm = small(W), bw = Math.min(W - 24, 640), bx = (W - bw) / 2;
+      var a = wald(C.A, C.n), b = wald(C.B, C.n), wa = wilson(C.A, C.n), wb = wilson(C.B, C.n), sep = !overlap(a, b), top = Math.min(1, Math.max(.2, Math.ceil(Math.max(a.hi, b.hi, wa.hi, wb.hi) * 5) / 5));
+      var y0 = sm ? Math.max(40, H * .12) : 60, gap = sm ? 70 : 80;
+      ciRows(ctx, bx + 4, y0, bw - 8, [{ label: 'control', col: P.mint, c: a, txt: C.A + '/' + C.n }, { label: 'treated', col: P.red, c: b, txt: C.B + '/' + C.n }], top, sm ? 14 : 17, gap);
+      // Wilson as thin lines
+      [[wa, 0], [wb, 1]].forEach(function (w) { var yy = y0 + w[1] * gap + gap * .55 + 11, X = function (v) { return bx + 4 + (bw - 8) * v / top; }; ctx.save(); ctx.strokeStyle = 'rgba(253,250,240,.8)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(X(w[0].lo), yy); ctx.lineTo(X(w[0].hi), yy); ctx.stroke(); ctx.restore(); });
+      F.note(ctx, sep ? 'separated' : 'overlap: can\'t tell', W / 2, y0 + gap * 2 + 50, sm ? 17 : 22, { color: sep ? P.mint : P.butter, seed: sep ? 'cs' : 'co', rot: sep ? .03 : -.03 });
+      readout(ctx, bx, y0 + gap * 2 + 90, [['control ' + pct(a.p, 1) + ' ± ' + pct(1.96 * a.se, 1), P.mint], ['treated ' + pct(b.p, 1) + ' ± ' + pct(1.96 * b.se, 1), P.red], ['chance of separating: ' + pct(C.power, 0), P.butter], ['tap to run it again', 'rgba(253,250,240,.55)']], W);
+      var s = sm ? 30 : 38; F.egg(ctx, W - s * 1.6, H - s * 1.3, s, t, { clear: .5, features: [{ x: 0, y: 0, c: sep ? 'rgba(185,227,204,.9)' : 'rgba(247,227,160,.9)' }] });
+    }
+  };
+
+  F.play({
+    title: 'W12 · From hunch to experiment',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: steering & persona vectors', href: '../../index.html#demo/steering-persona-vectors' },
+      { label: 'Week 12 pack', href: '../../index.html#week-12' },
+      { label: 'Map: emergent misalignment', href: '../../index.html#map/node=emergent-misalignment' },
+      { label: 'Map: capstone project', href: '../../index.html#map/node=capstone-project' },
+      { label: 'Case: model organisms', href: '../../index.html#cases/model-organisms' },
+      { label: 'Case: persona vectors', href: '../../index.html#cases/persona-vectors' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
