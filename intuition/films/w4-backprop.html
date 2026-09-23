@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1c2140">
+<title>Who gets the blame?</title>
+<style>
+  #ifilm .cpanel{font-size:13px}
+  .bp-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 14px}
+  .bp-grid label{display:flex;align-items:center;gap:6px;min-width:0;white-space:nowrap}
+  .bp-grid label b{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:#f7e3a0;width:1.1em}
+  .bp-grid output{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;min-width:3.4em;text-align:right;color:#b9e3cc}
+  .bp-btns{display:flex;gap:6px;margin-top:5px;flex-wrap:wrap}
+  .bp-btns button.go{background:#f7e3a0!important;font-weight:700}
+  .bp-tip{margin-top:4px;color:#c8b8ea;font-size:12.5px;line-height:1.3;min-height:1.3em}
+</style>
+</head>
+<body>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var IF = window.IFilm, P = IF.P, HAND = IF.HAND, MONO = IF.MONO;
+  var clamp = IF.clamp, lerp = IF.lerp, ease = IF.ease, ramp = IF.ramp;
+
+  /* ---------------------------------------------------------- honest maths
+     Graph: m = w*x ; z = m + b ; h = tanh(z) ; d = h - y ; L = d*d
+     d is used twice by the last station, so its gradient is a SUM of two. */
+  var X0 = 1.5, W0 = 0.8, B0 = -0.2, Y0 = 1, LR = 0.5;
+  function compute(x, w, b, y) {
+    var m = w * x, z = m + b, h = Math.tanh(z), d = h - y, L = d * d;
+    var gL = 1, gd1 = d * gL, gd2 = d * gL, gd = gd1 + gd2, gh = gd * 1, th = 1 - h * h,
+      gz = gh * th, gm = gz * 1, gb = gz * 1, gw = gm * x, gx = gm * w;
+    return { x: x, w: w, b: b, y: y, m: m, z: z, h: h, d: d, L: L, gL: gL, gd1: gd1, gd2: gd2, gd: gd, gh: gh, th: th, gz: gz, gm: gm, gb: gb, gw: gw, gx: gx,
+      vals: [x, m, z, h, d, L], grads: [gx, gm, gz, gh, gd, gL] };
+  }
+  function wiggle(x, w, b, y) { var e = 1e-4; return (compute(x, w + e, b, y).L - compute(x, w - e, b, y).L) / (2 * e); }
+  function fmt(v, n) { n = n == null ? 3 : n; var s = Math.abs(v).toFixed(n); return (v < 0 && +s !== 0 ? '\u2212' : '') + s; }
+  var V0 = compute(X0, W0, B0, Y0);
+  window.__bp = { compute: compute, wiggle: wiggle, V0: V0 };
+
+  /* ---------------------------------------------------------- layout
+     spine positions k=0..6: 0 = input x, 1..5 = stations, 6 = the bell */
+  var OPS = ['', '\u00d7 w', '+ b', 'tanh', '\u2212 y', 'd \u00b7 d'];
+  var COLS = ['', P.peach, P.mint, P.butter, P.sky, P.lav];
+  function lay(rx, ry, rw, rh) {
+    var o = { por: rw < rh * 1.05, p: [], rw: rw, rh: rh, rx: rx, ry: ry }, k;
+    if (o.por) {
+      var cx = rx + rw * 0.54;
+      for (k = 0; k < 7; k++) o.p.push({ x: cx, y: ry + rh * (0.065 + 0.87 * k / 6) });
+      o.step = rh * 0.87 / 6; o.side = { x: rw * 0.3, y: 0 }; o.perp = { x: 1, y: 0 };
+      o.bw = Math.min(rw * 0.28, 150); o.bh = Math.min(o.step * 0.46, 50); o.s = Math.min(o.step * 0.5, 50);
+      o.fs = clamp(o.bh * 0.44, 12, 22); o.lf = clamp(rw * 0.034, 12.5, 16);
+    } else {
+      var cy = ry + rh * 0.56;
+      for (k = 0; k < 7; k++) o.p.push({ x: rx + rw * (0.055 + 0.89 * k / 6), y: cy });
+      o.step = rw * 0.89 / 6; o.side = { x: 0, y: -rh * 0.3 }; o.perp = { x: 0, y: 1 };
+      o.bw = Math.min(o.step * 0.58, 170); o.bh = Math.min(rh * 0.13, 62); o.s = Math.min(rh * 0.12, 62);
+      o.fs = clamp(o.bh * 0.38, rh < 320 ? 11 : 13, 24); o.lf = clamp(rh * 0.028, rh < 320 ? 11 : 14, 19);
+    }
+    o.amp = o.por ? o.bw * 0.3 : o.bh * 0.62;
+    return o;
+  }
+  function wpos(o, i) { // worker feet
+    var p = o.p[i];
+    return o.por ? { x: o.rx + o.rw * 0.15, y: p.y + o.s * 0.72 } : { x: p.x - o.bw * 0.22, y: p.y + o.bh / 2 + o.s * 1.62 };
+  }
+  function planeAt(o, kf, sign) {
+    kf = clamp(kf, 0, 6); var k0 = Math.min(5, Math.floor(kf)), f = kf - k0, a = o.p[k0], b = o.p[k0 + 1];
+    var x = lerp(a.x, b.x, f), y = lerp(a.y, b.y, f);
+    if (k0 === 4 && sign) { var bump = Math.sin(Math.PI * f) * o.amp * sign; x += o.perp.x * bump; y += o.perp.y * bump; }
+    return { x: x, y: y };
+  }
+  function drawPlane(o, ctx, kf, dir, sign, color, label, labColor) {
+    var a = planeAt(o, kf - 0.02 * dir, sign), b = planeAt(o, kf + 0.02 * dir, sign), p = planeAt(o, kf, sign);
+    var ang = Math.atan2(b.y - a.y, b.x - a.x); if (Math.abs(b.x - a.x) + Math.abs(b.y - a.y) < 1e-6) ang = dir > 0 ? (o.por ? Math.PI / 2 : 0) : (o.por ? -Math.PI / 2 : Math.PI);
+    var off = o.por ? { x: 0, y: 0 } : { x: 0, y: -8 };
+    IF.plane(ctx, p.x + off.x, p.y + off.y, o.s * 0.34, ang, color);
+    var dk = Math.abs(kf - Math.round(kf));
+    if (label && dk > 0.26) tag(ctx, label, p.x + (o.por ? (sign ? sign : 1) * o.s * 0.62 : 0), p.y + (o.por ? 0 : -o.s * 0.5), o.lf * 0.95, labColor);
+  }
+  function tag(ctx, text, x, y, fs, ink) {
+    var w = IF.textW(ctx, text, fs) + fs * 0.7;
+    ctx.save(); ctx.fillStyle = 'rgba(22,26,53,.82)'; roundRect(ctx, x - w / 2, y - fs * 0.72, w, fs * 1.44, fs * 0.5); ctx.fill(); ctx.restore();
+    IF.hand(ctx, text, x, y, fs, ink || P.butter, { seed: 'tg', wobble: .4 });
+  }
+  function roundRect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+  function label(ctx, o, text, x, y, fs, col, alignSide) {
+    // alignSide: -1 = sits left of x, +1 = right of x, 0 = centred
+    ctx.save(); ctx.font = '700 ' + fs + 'px ' + HAND; var w = ctx.measureText(text).width; ctx.restore();
+    var cx = alignSide < 0 ? x - w / 2 : alignSide > 0 ? x + w / 2 : x;
+    ctx.save(); ctx.fillStyle = 'rgba(22,26,53,.7)'; roundRect(ctx, cx - w / 2 - 4, y - fs * 0.68, w + 8, fs * 1.36, 5); ctx.fill(); ctx.restore();
+    IF.hand(ctx, text, cx, y, fs, col, { seed: 'lb' + text, wobble: .5 });
+  }
+
+  /* ---------------------------------------------------------- background */
+  function bg(ctx, W, H, t, o) {
+    IF.sky(ctx, W, H, P.night, '#343a72');
+    IF.stars(ctx, W, H, t, 'bpstars', Math.round(W * H / 11000));
+    IF.moon(ctx, W * (o && o.por ? 0.9 : 0.93), H * 0.08, Math.min(W, H) * 0.035);
+    // factory wall collage, low and dark so it never fights the numbers
+    var r = IF.rng('wall');
+    ctx.save(); ctx.globalAlpha = .55;
+    IF.paper(ctx, W * 0.5, H * 0.99, W * 1.08, H * 0.2, '#262b55', { seed: 'floor', shadow: false });
+    for (var i = 0; i < 7; i++) {
+      var wx = W * (0.06 + i * 0.15 + (r() - .5) * .03), wy = H * 0.94;
+      ctx.fillStyle = r() < .5 ? 'rgba(247,227,160,.25)' : 'rgba(169,201,239,.14)'; ctx.fillRect(wx, wy, W * 0.035, H * 0.03);
+    }
+    ctx.restore();
+  }
+  function bell(ctx, x, y, s, ring, t) {
+    ctx.save(); ctx.translate(x, y - s * 0.2); ctx.rotate(ring * Math.sin(t * 26) * 0.35);
+    ctx.fillStyle = P.ink; ctx.beginPath(); ctx.arc(0, -s * 0.62, s * 0.1, 0, 6.283); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-s * 0.28, -s * 0.5); ctx.quadraticCurveTo(-s * 0.34, s * 0.05, -s * 0.55, s * 0.3); ctx.lineTo(s * 0.55, s * 0.3);
+    ctx.quadraticCurveTo(s * 0.34, s * 0.05, s * 0.28, -s * 0.5); ctx.quadraticCurveTo(0, -s * 0.66, -s * 0.28, -s * 0.5); ctx.closePath();
+    ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 4; ctx.fillStyle = '#efbf4f'; ctx.fill(); ctx.restore();
+    ctx.save(); ctx.clip(); ctx.fillStyle = IF.grain(ctx); ctx.globalAlpha = .6; ctx.fillRect(-s, -s, 2 * s, 2 * s); ctx.restore();
+    ctx.strokeStyle = 'rgba(42,41,52,.7)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = P.ink; ctx.beginPath(); ctx.arc(Math.sin(t * 26) * ring * s * 0.08, s * 0.36, s * 0.09, 0, 6.283); ctx.fill();
+    ctx.restore();
+    if (ring > 0.05) { ctx.save(); ctx.strokeStyle = 'rgba(247,227,160,' + ring * .8 + ')'; ctx.lineWidth = 2; for (var k = 1; k <= 2; k++) { ctx.beginPath(); ctx.arc(x, y - s * 0.2, s * (0.7 + k * 0.22 + (t * 2 % 0.2)), -2.5, -0.64); ctx.stroke(); } ctx.restore(); }
+  }
+  function walkman(ctx, x, y, s, t, spin, text) {
+    IF.paper(ctx, x, y, s * 2.1, s * 1.3, P.teal, { seed: 'walk', rot: -0.05 });
+    ctx.save(); ctx.translate(x, y); ctx.rotate(-0.05);
+    ctx.fillStyle = '#2b3163'; roundRect(ctx, -s * 0.8, -s * 0.45, s * 1.6, s * 0.62, 6); ctx.fill();
+    for (var k = -1; k <= 1; k += 2) {
+      ctx.save(); ctx.translate(k * s * 0.42, -s * 0.14); ctx.rotate(-t * spin * 7);
+      ctx.fillStyle = P.cream; ctx.beginPath(); ctx.arc(0, 0, s * 0.2, 0, 6.283); ctx.fill();
+      ctx.fillStyle = '#2b3163'; for (var j = 0; j < 3; j++) { ctx.rotate(2.094); ctx.fillRect(-s * 0.03, -s * 0.18, s * 0.06, s * 0.1); }
+      ctx.restore();
+    }
+    ctx.restore();
+    IF.hand(ctx, text, x, y + s * 0.42, Math.max(12, s * 0.28), P.ink, { seed: 'rew', rot: -0.05 });
+  }
+  function win98(ctx, cx, cy, w, h, title, lines, btns, fs) {
+    var x = cx - w / 2, y = cy - h / 2;
+    ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 6; ctx.fillStyle = '#c0c0c0'; ctx.fillRect(x, y, w, h); ctx.restore();
+    ctx.fillStyle = '#fff'; ctx.fillRect(x, y, w, 2); ctx.fillRect(x, y, 2, h); ctx.fillStyle = '#404040'; ctx.fillRect(x, y + h - 2, w, 2); ctx.fillRect(x + w - 2, y, 2, h);
+    var g = ctx.createLinearGradient(x, 0, x + w, 0); g.addColorStop(0, '#000080'); g.addColorStop(1, '#1084d0');
+    var th = fs * 1.6; ctx.fillStyle = g; ctx.fillRect(x + 4, y + 4, w - 8, th);
+    ctx.fillStyle = '#fff'; ctx.font = '700 ' + fs + 'px Tahoma,Verdana,system-ui,sans-serif'; ctx.textBaseline = 'middle'; ctx.fillText(title, x + 10, y + 4 + th / 2);
+    ctx.fillStyle = '#c0c0c0'; ctx.fillRect(x + w - 4 - th + 3, y + 7, th - 6, th - 6); ctx.fillStyle = '#000'; ctx.fillText('\u00d7', x + w - 4 - th / 2 - fs * 0.3, y + 4 + th / 2);
+    ctx.font = fs + 'px Tahoma,Verdana,system-ui,sans-serif';
+    for (var i = 0; i < lines.length; i++) {
+      var L = lines[i]; ctx.fillStyle = L.c || '#000'; ctx.font = (L.b ? '700 ' : '') + (L.mono ? fs + 'px ' + MONO : fs + 'px Tahoma,Verdana,system-ui,sans-serif');
+      ctx.fillText(L.t, x + 14, y + th + 12 + fs * 0.9 + i * fs * 1.45);
+    }
+    var bw = Math.max(fs * 5, 70), bx = x + w - 12 - btns.length * (bw + 8) + 8;
+    for (var b = 0; b < btns.length; b++) {
+      var X = bx + b * (bw + 8), Y = y + h - fs * 2.4;
+      ctx.fillStyle = '#c0c0c0'; ctx.fillRect(X, Y, bw, fs * 1.7); ctx.fillStyle = '#fff'; ctx.fillRect(X, Y, bw, 1.5); ctx.fillRect(X, Y, 1.5, fs * 1.7);
+      ctx.fillStyle = '#404040'; ctx.fillRect(X, Y + fs * 1.7 - 1.5, bw, 1.5); ctx.fillRect(X + bw - 1.5, Y, 1.5, fs * 1.7);
+      ctx.fillStyle = '#000'; ctx.font = fs + 'px Tahoma,Verdana,system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.fillText(btns[b], X + bw / 2, Y + fs * 0.88); ctx.textAlign = 'left';
+    }
+  }
+
+  /* ---------------------------------------------------------- the relay line */
+  // st: V, fk (forward plane k or null), bk (backward plane k or null), vUpTo, gFrom, apr, tags, ring, lossA, dim, t, wFlash
+  function drawLine(ctx, o, st) {
+    var V = st.V, p = o.p, t = st.t, i, k, fs = o.fs, lf = o.lf;
+    // wires
+    ctx.save(); ctx.strokeStyle = 'rgba(253,250,240,.5)'; ctx.lineWidth = 2; ctx.setLineDash([6, 5]); ctx.lineDashOffset = -t * 12;
+    for (k = 0; k < 6; k++) {
+      if (k === 4) { for (var sg = -1; sg <= 1; sg += 2) { ctx.beginPath(); for (var q = 0; q <= 20; q++) { var pp = planeAt(o, 4 + q / 20, sg); q ? ctx.lineTo(pp.x, pp.y) : ctx.moveTo(pp.x, pp.y); } ctx.stroke(); } }
+      else { ctx.beginPath(); ctx.moveTo(p[k].x, p[k].y); ctx.lineTo(p[k + 1].x, p[k + 1].y); ctx.stroke(); }
+    }
+    [1, 2, 4].forEach(function (i) { ctx.beginPath(); ctx.moveTo(p[i].x + o.side.x, p[i].y + o.side.y); ctx.lineTo(p[i].x, p[i].y); ctx.stroke(); });
+    ctx.restore();
+
+    // side inputs: w, b, target y
+    var sides = { 1: ['w = ' + V.w.toFixed(2), P.sky, 'gw'], 2: ['b = ' + fmt(V.b, 2), P.mint, 'gb'], 4: ['y = ' + fmt(V.y, 2), P.pink, null] };
+    [1, 2, 4].forEach(function (i) {
+      var sx = p[i].x + o.side.x, sy = p[i].y + o.side.y, S = sides[i];
+      var sz = IF.note(ctx, (i === 4 ? 'target ' : '') + S[0], sx, sy, lf, { color: S[1], seed: 'side' + i, rot: (i - 2) * 0.03, tape: i !== 4 });
+      if (i === 1 && st.wFlash > 0) IF.glow(ctx, sx, sy, sz.w * 0.8, 'rgba(247,227,160,.8)', st.wFlash);
+      var gk = S[2];
+      if (gk && st.sideG && st.sideG[gk] > 0.99) {
+        var gy = o.por ? sy + sz.h / 2 + lf * 0.95 : sy - sz.h / 2 - lf * 0.9;
+        label(ctx, o, (i === 1 ? 'w.grad ' : 'b.grad ') + fmt(V[gk]), sx, gy, lf, P.pink, 0);
+      }
+    });
+    // input x
+    IF.note(ctx, 'x = ' + fmt(V.x, 2), p[0].x, p[0].y, lf, { color: P.butter, seed: 'xin', rot: -0.03 });
+
+    // stations
+    for (i = 1; i <= 5; i++) {
+      var P0 = p[i], near = 0;
+      if (st.fk != null) near = Math.max(near, 1 - Math.abs(st.fk - i) * 2.2);
+      if (st.bk != null) near = Math.max(near, 1 - Math.abs(st.bk - i) * 2.2);
+      if (near > 0) IF.glow(ctx, P0.x, P0.y, o.bw * 0.9, 'rgba(247,227,160,.55)', clamp(near, 0, 1));
+      IF.paper(ctx, P0.x, P0.y, o.bw, o.bh, COLS[i], { seed: 'st' + i, rot: (i % 2 ? -1 : 1) * 0.025 });
+      IF.hand(ctx, OPS[i], P0.x, P0.y + 1, fs, P.ink, { seed: 'op' + i });
+      // topo tag
+      if (st.tags > 0) {
+        var tx = P0.x - o.bw / 2 + 2, ty = P0.y - o.bh / 2 - 2, hot = st.hotTag === i;
+        ctx.save(); ctx.globalAlpha = clamp(st.tags, 0, 1);
+        ctx.strokeStyle = 'rgba(42,41,52,.6)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(tx + 6, ty + 6); ctx.lineTo(tx + 12, ty + 12); ctx.stroke();
+        IF.blob(ctx, tx, ty, Math.max(10, lf * 0.78), hot ? P.orange : P.cream, { seed: 'tag' + i, jit: .5, blur: 3, lift: 2 });
+        IF.hand(ctx, String(i), tx, ty + 1, Math.max(11, lf * 0.9), P.ink, { seed: 'tn' + i });
+        ctx.restore();
+      }
+      // worker with apron (the local derivative)
+      var wp = wpos(o, i), act = st.bk != null && Math.abs(st.bk - i) < 0.35;
+      IF.person(ctx, wp.x, wp.y - (act ? Math.abs(Math.sin(t * 9)) * 3 : 0), o.s, t + i, { lantern: false, coat: ['', '#5b7fa8', '#7db58a', '#c9877a', '#8f7fc0', '#d0a45a'][i], scarf: P.cream, face: o.por ? 1 : 1 });
+      if (st.apr != null && st.apr <= i) {
+        var apr = i === 1 ? 'w:\u00d7' + fmt(V.x, 2) + ' x:\u00d7' + fmt(V.w, 2) : i === 2 ? '\u00d71' : i === 3 ? '\u00d7' + fmt(V.th) : i === 4 ? '\u00d71' : '\u00d7d ' + fmt(V.d);
+        var af = Math.max(12.5, lf * 0.85), aw = IF.textW(ctx, apr, af) + 10;
+        var ax = o.por ? Math.max(aw / 2 + 4, wp.x) : wp.x, ay = wp.y - o.s * 0.78;
+        IF.paper(ctx, ax, ay, aw, af * 1.5, P.cream, { seed: 'apr' + i, rot: 0.04, blur: 3, lift: 2 });
+        IF.hand(ctx, apr, ax, ay + 1, af, '#b8434e', { seed: 'ap' + i, wobble: .5 });
+      }
+    }
+    // the activation lantern hangs on the tanh station
+    var lp = p[3]; IF.lantern(ctx, o.por ? lp.x + o.bw / 2 + o.s * 0.28 : lp.x + o.bw * 0.3, o.por ? lp.y - o.bh / 2 + o.s * 0.1 : lp.y - o.bh / 2 - o.s * 0.55, o.s * 0.26, st.lit == null ? 1 : st.lit, t);
+
+    // bell + loss note
+    var bp = p[6]; bell(ctx, bp.x, bp.y, o.s * 0.9, st.ring || 0, t);
+    if (st.lossA > 0) {
+      ctx.save(); ctx.globalAlpha = clamp(st.lossA, 0, 1);
+      var lx = o.por ? bp.x + o.rw * 0.3 : bp.x - o.s * 0.25, ly = o.por ? bp.y - o.s * 0.1 : bp.y - o.s * 1.25;
+      IF.note(ctx, 'loss = ' + V.L.toFixed(4), Math.min(lx, o.rx + o.rw - IF.textW(ctx, 'loss = 0.0000', lf) / 2 - lf), ly, lf, { color: P.pink, seed: 'loss', rot: 0.06 });
+      ctx.restore();
+    }
+    if (st.cat) IF.cat(ctx, o.por ? bp.x - o.rw * 0.3 : bp.x - o.s * 0.2, o.por ? bp.y + o.s * 0.35 : bp.y + o.s * 1.3, o.s * 0.55, t);
+
+    // wire labels: value (butter) on one side, blame/gradient (pink) on the other
+    for (k = 1; k < 6; k++) {
+      var a = p[k], b = p[k + 1], mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, off = (k === 4 ? o.amp : 0) + 10;
+      if (st.vUpTo != null && st.vUpTo >= k) {
+        if (o.por) label(ctx, o, fmt(V.vals[k]), mx - off, my, lf, P.butter, -1); else label(ctx, o, fmt(V.vals[k]), mx, my - off - lf * 0.5, lf, P.butter, 0);
+      }
+      if (st.gFrom != null && st.gFrom <= k) {
+        var gt = '\u2190' + fmt(V.grads[k]);
+        if (o.por) label(ctx, o, gt, mx + off, my, lf, P.pink, 1); else label(ctx, o, gt, mx, my + off + lf * 0.6, lf, P.pink, 0);
+      }
+    }
+    if (st.gFrom != null && st.gFrom <= 0) {
+      var xm = { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 };
+      if (o.por) label(ctx, o, 'x.grad ' + fmt(V.gx), xm.x + 10, xm.y, lf, P.pink, 1); else label(ctx, o, 'x.grad ' + fmt(V.gx), xm.x, xm.y + 10 + lf * 0.6, lf, P.pink, 0);
+    }
+
+    // planes
+    if (st.fk != null && st.fk > 0.02 && st.fk < 5.98) {
+      var kk = Math.min(5, Math.floor(st.fk));
+      if (kk === 4) { drawPlane(o, ctx, st.fk, 1, -1, P.cream); drawPlane(o, ctx, st.fk, 1, 1, P.cream, fmt(V.vals[4]), P.butter); }
+      else drawPlane(o, ctx, st.fk, 1, 0, P.cream, fmt(V.vals[kk]), P.butter);
+    }
+    if (st.bk != null && st.bk > 0.02 && st.bk < 5.98) {
+      var kb = Math.min(5, Math.floor(st.bk));
+      if (kb === 4) { drawPlane(o, ctx, st.bk, -1, -1, P.pink, fmt(V.gd1), P.pink); drawPlane(o, ctx, st.bk, -1, 1, P.pink, fmt(V.gd2), P.pink); }
+      else drawPlane(o, ctx, st.bk, -1, 0, P.pink, fmt(kb === 0 ? V.gx : V.grads[kb]), P.pink);
+    }
+    // side planes peeling off towards b and w during the backward pass
+    if (st.sideG) {
+      [[2, 'gb'], [1, 'gw']].forEach(function (s) {
+        var sp = st.sideG[s[1]]; if (sp > 0.02 && sp < 0.99) {
+          var P0 = p[s[0]], x = P0.x + o.side.x * ease.inOut(sp), y = P0.y + o.side.y * ease.inOut(sp);
+          IF.plane(ctx, x, y, o.s * 0.3, Math.atan2(o.side.y, o.side.x), P.pink);
+          tag(ctx, fmt(V[s[1]]), x, y + (o.por ? -o.s * 0.45 : 0) + (o.por ? 0 : 0), lf * 0.9, P.pink);
+        }
+      });
+    }
+    // branch sum
+    if (st.sumA > 0) {
+      ctx.save(); ctx.globalAlpha = clamp(st.sumA, 0, 1);
+      var sp4 = { x: (p[4].x + p[5].x) / 2, y: (p[4].y + p[5].y) / 2 };
+      var txt = o.por ? fmt(V.gd1) + ' + ' + fmt(V.gd2) + '\n= ' + fmt(V.gd) : fmt(V.gd1) + ' + ' + fmt(V.gd2) + ' = ' + fmt(V.gd);
+      var tw0 = IF.textW(ctx, fmt(V.gd1) + ' + ' + fmt(V.gd2), lf);
+      var nx = o.por ? (p[5].x + o.bw / 2 + o.rx + o.rw) / 2 + 4 : sp4.x, ny = o.por ? p[5].y - o.bh * 0.1 : sp4.y - o.amp - lf * 3.6;
+      nx = clamp(nx, o.rx + tw0 / 2 + lf * 0.7, o.rx + o.rw - tw0 / 2 - lf * 0.7);
+      IF.note(ctx, txt, nx, ny, lf, { color: P.cream, seed: 'sum', rot: -0.03 });
+      ctx.restore();
+    }
+  }
+
+  /* ---------------------------------------------------------- timing helpers */
+  var SEG = 1.75;
+  function relay(u, dir) { // u seconds into the relay -> k position (pauses at stations)
+    var n = Math.floor(u / SEG), f = clamp((u - n * SEG) / (SEG * 0.72), 0, 1);
+    var k = clamp(n + ease.inOut(f), 0, 6);
+    return dir > 0 ? k : 6 - k;
+  }
+  var prevT = -1, evA = 0, evB = 0, evOK = false;
+  function cross(th) { return evOK && evA < th && evB >= th; }
+  function chapter(start, dur, name, cap, fn) {
+    return { name: name, start: start, dur: dur, cap: cap, draw: function (ctx, t, local, W, H, api) {
+      evOK = prevT >= 0 && t > prevT && t - prevT < 0.15; evA = prevT - start; evB = local; prevT = t;
+      fn(ctx, t, local, W, H, api);
+    } };
+  }
+  function stageRect(W, H) { return lay(W * 0.03, H * 0.03, W * 0.94, H * 0.94); }
+  function blip(api, f) { try { api.audio.blip(f); } catch (e) {} }
+  function fadeIn(local, a, b) { return clamp((local - a) / (b - a), 0, 1); }
+
+  /* ---------------------------------------------------------- chapters */
+  var V = V0;
+  var chapters = [
+    chapter(0, 6, 'Night shift', {
+      1: "A tiny paper factory on the night shift. A number goes in the top, five workers handle it in turn, and a bell at the end rings out how wrong the answer was.",
+      2: "This line is a <b>computational graph</b>: multiply, add, squash with tanh, compare, square. The paper tags number the stations in <b>topological order</b>: nobody works before their inputs arrive.",
+      3: "<code>m=w·x, z=m+b, h=tanh z, d=h−y, L=d·d</code> with x=1.5, w=0.8, b=−0.2, y=1. Tags = a topological sort of the DAG: every node comes after its parents."
+    }, function (ctx, t, local, W, H, api) {
+      var o = stageRect(W, H); bg(ctx, W, H, t, o);
+      var zoom = lerp(1.12, 1, ease.out(local / 5));
+      ctx.save(); IF.camera(ctx, W, H, W / 2, H / 2, zoom);
+      drawLine(ctx, o, { V: V, t: t, tags: fadeIn(local, 2.2, 3), lit: 0.15, cat: true });
+      ctx.restore();
+      var ta = fadeIn(local, 0.3, 1.2) * (1 - fadeIn(local, 4.6, 5.6));
+      if (ta > 0) {
+        ctx.save(); ctx.fillStyle = 'rgba(12,14,34,' + ta * 0.5 + ')'; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = ta;
+        var fsz = clamp(Math.min(W * 0.075, H * 0.07), 22, 46);
+        IF.note(ctx, 'Who gets the blame?', W / 2, H * (o.por ? 0.44 : 0.3), fsz, { color: P.cream, seed: 'title', rot: -0.03, reveal: fadeIn(local, 0.3, 1.6) });
+        label(ctx, o, 'a night shift in five stations', W / 2, H * (o.por ? 0.44 : 0.3) + fsz * 1.5, clamp(fsz * 0.5, 14, 22), P.butter, 0);
+        ctx.restore();
+      }
+      if (cross(2.3)) blip(api, 660);
+    }),
+    chapter(6, 12, 'Forward pass', {
+      1: "The paper plane carries the number forward. Each worker does one small job and passes it on: 1.5 becomes 1.2, then 1.0, then 0.762. The lantern is the activation lighting up.",
+      2: "The <b>forward pass</b>: values flow from input to output in tag order. The last station squares d by using it <b>twice</b> (d·d), so the wire splits there.",
+      3: "<code>m=1.2, z=1.0, h=tanh(1)=0.7616, d=−0.2384, L=0.0568</code>. Each node caches what its backward will need (x, w, h, d)."
+    }, function (ctx, t, local, W, H, api) {
+      var o = stageRect(W, H); bg(ctx, W, H, t, o);
+      var fk = relay(Math.max(0, local - 0.5), 1);
+      drawLine(ctx, o, { V: V, t: t, fk: fk, tags: 1, hotTag: Math.round(fk), vUpTo: Math.floor(fk + 0.6) - 1 + (fk >= 5.9 ? 1 : 0), lit: clamp((fk - 3) * 2, 0.15, 1), ring: fk > 5.9 ? clamp(1 - (local - 11.2) / 1.5, 0, 1) : 0, lossA: fadeIn(fk, 5.9, 6), cat: true });
+      for (var k = 1; k <= 6; k++) if (cross(0.5 + (k - 1) * SEG + SEG * 0.72)) blip(api, [0, 523, 587, 659, 784, 880, 1047][k]);
+      if (evOK && fk >= 6 && evA < 11.2 && evB >= 11.2) blip(api, 1568);
+    }),
+    chapter(18, 6, 'The bell', {
+      1: "Ding. The answer came out 0.762, the target was 1. Loss: 0.0568. Now the real question: which worker should change, and by how much?",
+      2: "The <b>loss</b> is one number for how wrong we were. To improve, we need how much each knob (w, b) moves it. That is exactly what <b>backprop</b> computes.",
+      3: "We want <code>∂L/∂w</code> and <code>∂L/∂b</code>. Reverse-mode autodiff gets every partial in one backward sweep, for roughly the cost of one forward pass."
+    }, function (ctx, t, local, W, H, api) {
+      var o = stageRect(W, H); bg(ctx, W, H, t, o);
+      drawLine(ctx, o, { V: V, t: t, tags: 1, vUpTo: 5, lit: 1, ring: clamp(1 - local / 1.5, 0, 1), lossA: 1, cat: true });
+      var qa = fadeIn(local, 1.2, 2);
+      if (qa > 0) {
+        ctx.save(); ctx.fillStyle = 'rgba(12,14,34,' + qa * 0.55 + ')'; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = qa;
+        var fsz = clamp(Math.min(W * 0.062, H * 0.06), 20, 40);
+        IF.note(ctx, 'who gets the blame,\nand how much?', W / 2, H * 0.45, fsz, { color: P.butter, seed: 'q', rot: -0.04 + Math.sin(t) * 0.01, reveal: fadeIn(local, 1.4, 3.2) });
+        label(ctx, o, 'the bell says: loss = ' + V.L.toFixed(4), W / 2, H * 0.45 + fsz * 2.4, clamp(fsz * 0.6, 14, 24), P.pink, 0);
+        ctx.restore();
+      }
+      if (cross(1.3)) { try { api.audio.paper(); } catch (e) {} }
+    }),
+    chapter(24, 14, 'Rewind', {
+      1: "Rewind the tape. The plane flies back carrying blame. Each worker multiplies it by the number on their apron and passes it on. Where the line split, two planes arrive and add up.",
+      2: "The <b>chain rule as a relay</b>: blame in × <b>local derivative</b> (the apron) = blame out. A value used twice gets its gradients <b>summed</b>. Order: <b>reverse</b> tags, 5 to 1.",
+      3: "<code>∂L/∂d = d + d = −0.477</code>; <code>×(1−h²)=0.420</code> gives <code>∂L/∂z = ∂L/∂b = −0.200</code>; <code>∂L/∂w = −0.200·x = −0.300</code>. Reverse topo order: a grad is complete before it is passed on."
+    }, function (ctx, t, local, W, H, api) {
+      var o = stageRect(W, H); bg(ctx, W, H, t, o);
+      var u = Math.max(0, local - 1.6), bk = relay(u, -1);
+      var sideG = { gb: clamp((2 - bk) * 1.5, 0, 1), gw: clamp((1 - bk) * 1.5, 0, 1) };
+      var hot = bk <= 5.3 ? Math.round(bk) : 0;
+      drawLine(ctx, o, { V: V, t: t, bk: u > 0 ? bk : null, tags: 1, hotTag: hot >= 1 ? hot : 0, vUpTo: 5, lit: 1, lossA: 1,
+        gFrom: u > 0 ? Math.ceil(bk - 0.4) : 9, apr: u > 0 ? Math.ceil(bk - 0.3) : 9, sideG: sideG,
+        sumA: fadeIn(bk, 4.4, 4.05) * (1 - fadeIn(local, 7.6, 8.3)) * (bk < 4.4 ? 1 : 0) });
+      // walkman + legend
+      var ws = clamp(Math.min(W, H) * 0.07, 26, 46), wx = o.por ? W * 0.16 : W * 0.08, wy = o.por ? H * 0.06 : H * 0.1;
+      walkman(ctx, wx, wy + ws * 0.1, ws, t, local < 1.6 ? 3 : 1, '\u25c0\u25c0 REW');
+      var la = fadeIn(local, 0.4, 1.2);
+      if (la > 0) { ctx.save(); ctx.globalAlpha = la; label(ctx, o, 'pink = blame (gradient)', o.por ? W * 0.97 : W * 0.97, o.por ? H * 0.02 + o.lf : H * 0.04 + o.lf, o.lf * 0.9, P.pink, -1); ctx.restore(); }
+      for (var k = 5; k >= 0; k--) if (cross(1.6 + (5 - k) * SEG + SEG * 0.72)) blip(api, [392, 440, 494, 523, 587, 659][k]);
+    }),
+    chapter(38, 6, 'Blame report', {
+      1: "The blame report: w gets −0.300, b gets −0.200. Negative means turn that knob UP a little and the loss goes DOWN. x gets blame too, but x is the input, so we leave it.",
+      2: "These are the <b>gradients</b>. A training step moves each knob against its gradient: <code>w ← w − lr·∂L/∂w</code>. Bigger size = the loss is more sensitive to that knob, right here.",
+      3: "<code>∇L = (∂L/∂w, ∂L/∂b) = (−0.3004, −0.2002)</code>. <code>∂L/∂x = −0.1602</code> is useless for training but is exactly what input attribution reads."
+    }, function (ctx, t, local, W, H, api) {
+      var o = stageRect(W, H); bg(ctx, W, H, t, o);
+      drawLine(ctx, o, { V: V, t: t, tags: 1, vUpTo: 5, lit: 1, lossA: 1, gFrom: 0, apr: 1, sideG: { gb: 1, gw: 1 } });
+      var a = fadeIn(local, 0.2, 0.8); if (a <= 0) return;
+      ctx.save(); ctx.fillStyle = 'rgba(12,14,34,' + a * 0.5 + ')'; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = a;
+      var fs = clamp(W * 0.036, 12.5, 17), dw = Math.min(W * 0.92, fs * 30), dh = fs * 13.6;
+      var lines = [
+        { t: 'Loss this shift: ' + V.L.toFixed(4), b: true },
+        { t: 'w   ' + fmt(V.gw, 4) + '   turn up \u2192 loss down', mono: true, c: '#000080' },
+        { t: 'b   ' + fmt(V.gb, 4) + '   turn up \u2192 loss down', mono: true, c: '#000080' },
+        { t: 'x   ' + fmt(V.gx, 4) + '   (input: not ours to fix)', mono: true, c: '#555' },
+        { t: 'Blame = sensitivity, not guilt.' }
+      ];
+      var cy = H * 0.46 + (1 - ease.back(fadeIn(local, 0.2, 0.9))) * H * 0.1;
+      win98(ctx, W / 2, cy, dw, dh, 'Blame report.exe', lines, ['Nudge w', 'OK'], fs);
+      IF.tape(ctx, W / 2 - dw / 2 + 4, cy + dh * 0.25, 44, 1.3);
+      ctx.restore();
+      if (cross(0.4)) blip(api, 988);
+    }),
+    chapter(44, 6, 'Where the story stops', {
+      1: "Honest bit: real networks have millions of stations, and each plane carries a big stack of numbers. And “blame” only means “wiggle this, the loss wiggles this much”. Not guilt.",
+      2: "Real values are <b>tensors</b>, so each worker does a <b>vector-Jacobian product</b>, not one multiply. A gradient is local sensitivity at one point, not a causal verdict.",
+      3: "Nodes compute <code>vᵀJ</code> without building J (for <code>Y=XW</code>: <code>∂L/∂W = Xᵀ·∂L/∂Y</code>). First-order and local: a saturated tanh (tanh′≈0) can hide a feature that matters."
+    }, function (ctx, t, local, W, H, api) {
+      IF.sky(ctx, W, H, P.night, '#343a72'); IF.stars(ctx, W, H, t, 'bpstars');
+      // a million tiny stations
+      var r = IF.rng('many'), n = 420, gz = lerp(1, 0.55, ease.inOut(local / 3));
+      ctx.save(); ctx.translate(W / 2, H * 0.45); ctx.scale(gz, gz);
+      for (var i = 0; i < n; i++) {
+        var gx = (i % 28 - 13.5) * W * 0.05, gy = (Math.floor(i / 28) - 7) * H * 0.06, c = [P.peach, P.mint, P.butter, P.sky, P.lav][i % 5];
+        ctx.globalAlpha = 0.5 + 0.4 * Math.sin(t * 3 + i); ctx.fillStyle = c; ctx.fillRect(gx - 7, gy - 4, 14 + r() * 4, 8);
+      }
+      ctx.restore();
+      var pa = ease.out(fadeIn(local, 0.5, 1.6)); if (pa <= 0) return;
+      var cw = Math.min(W * 0.9, 560), fs = clamp(cw * 0.042, 13.5, 20), ch = fs * 11;
+      var cx = lerp(W + cw, W / 2, pa), cy = lerp(H + ch, H * 0.52, pa);
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(lerp(0.5, -0.03, pa));
+      IF.paper(ctx, 0, 0, cw, ch, P.cream, { seed: 'limit', blur: 18, lift: 8 });
+      ctx.fillStyle = 'rgba(232,116,124,.9)'; ctx.beginPath(); ctx.moveTo(cw / 2 - fs * 2.2, -ch / 2); ctx.lineTo(cw / 2, -ch / 2); ctx.lineTo(cw / 2, -ch / 2 + fs * 2.2); ctx.closePath(); ctx.fill();
+      var x0 = -cw / 2 + fs * 1.2;
+      IF.hand(ctx, 'where the story stops being true', x0, -ch / 2 + fs * 1.5, fs * 1.08, '#b8434e', { align: 'left', seed: 'lim' });
+      var L = ['\u2022 real nets: millions of stations', '\u2022 planes carry tensors, not numbers:', '   workers do Jacobian-vector products', '\u2022 blame = local sensitivity,', '   not responsibility'];
+      for (var j = 0; j < L.length; j++) IF.hand(ctx, L[j], x0, -ch / 2 + fs * (3.5 + j * 1.5), fs, P.ink, { align: 'left', seed: 'l' + j, reveal: fadeIn(local, 1.0 + j * 0.4, 1.5 + j * 0.4) });
+      ctx.restore();
+      if (cross(0.6)) { try { api.audio.paper(); } catch (e) {} }
+    }),
+    chapter(50, 8, 'Into code', {
+      1: "The same factory as code you will type in ARENA. One line runs the whole rewind, then each knob holds its blame in <code>.grad</code>.",
+      2: "PyTorch records the graph as you compute; <code>loss.backward()</code> runs the relay. In ARENA 0.4 you build it: sort nodes topologically, walk them in reverse, multiply by local derivatives.",
+      3: "<code>for node in reversed(topo_order): node.backward_fn(grad)</code>, accumulating <code>grads[parent] += vjp</code> so multi-use nodes sum. Here <code>w.grad = −0.3004</code>, as in the relay."
+    }, function (ctx, t, local, W, H, api) {
+      var o = stageRect(W, H); bg(ctx, W, H, t, o);
+      var m = ease.inOut(fadeIn(local, 0, 1.8));
+      if (m < 1) { ctx.save(); ctx.globalAlpha = 1 - m; drawLine(ctx, o, { V: V, t: t, tags: 1, vUpTo: 5, lit: 1, lossA: 1, gFrom: 0, apr: 1, sideG: { gb: 1, gw: 1 } }); ctx.restore(); }
+      var code = [
+        ['loss = (torch.tanh(w*x + b) - y)**2', P.chalk],
+        ['loss.backward()          # rewind', P.butter],
+        ['w.grad   # ' + fmt(V.gw, 4).replace('\u2212', '-'), P.pink],
+        ['b.grad   # ' + fmt(V.gb, 4).replace('\u2212', '-'), P.pink],
+        ['', P.chalk],
+        ['# yours, in ARENA 0.4:', '#9aa3d6'],
+        ['for node in reversed(topo_order):', P.mint],
+        ['    node.backward_fn(grad)', P.mint],
+        ['# inside every station:', '#9aa3d6'],
+        ['grad_in = grad_out * local_deriv', P.butter]
+      ];
+      var cw = Math.min(W * 0.94, 640), fs = clamp((cw - 30) / (36 * 0.62), 11.5, 19), lh = fs * 1.55, chh = lh * code.length + fs * 2.2;
+      var cx = W / 2, cy = H * 0.5;
+      ctx.save(); ctx.globalAlpha = m;
+      ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 6; ctx.fillStyle = '#1a1d38'; roundRect(ctx, cx - cw / 2, cy - chh / 2, cw, chh, 10); ctx.fill(); ctx.restore();
+      IF.tape(ctx, cx - cw * 0.4, cy - chh / 2, 50, -0.35); IF.tape(ctx, cx + cw * 0.4, cy - chh / 2, 50, 0.35);
+      ctx.font = fs + 'px ' + MONO; ctx.textBaseline = 'middle';
+      for (var i = 0; i < code.length; i++) {
+        var rv = fadeIn(local, 1.2 + i * 0.4, 1.6 + i * 0.4), s = code[i][0].slice(0, Math.floor(code[i][0].length * rv));
+        ctx.fillStyle = code[i][1]; ctx.fillText(s, cx - cw / 2 + 15, cy - chh / 2 + fs * 1.1 + lh * (i + 0.5));
+      }
+      ctx.restore();
+      if (cross(1.2)) blip(api, 784);
+    }),
+    chapter(58, 7, 'Why it matters', {
+      1: "Same trick, bigger stakes. When a model does something surprising, gradients let us ask it: which part of you made this happen? A first tool for looking inside a mind and steering it.",
+      2: "Interpretability runs backprop to <b>inputs and inner activations</b> instead of weights. <b>Attribution</b> and <b>activation patching</b> both start from this: which part caused this output?",
+      3: "<code>∂ logit / ∂ activation</code>: gradient×input, and attribution patching (a linear approx. to activation patching). Same backward pass, different leaf you read."
+    }, function (ctx, t, local, W, H, api) {
+      IF.sky(ctx, W, H, P.night, '#343a72'); IF.stars(ctx, W, H, t, 'bpstars'); IF.moon(ctx, W * 0.9, H * 0.08, Math.min(W, H) * 0.035);
+      var por = W < H, es = Math.min(W, H) * (por ? 0.22 : 0.2), ex = por ? W * 0.5 : W * 0.62, ey = por ? H * 0.58 : H * 0.52;
+      var hot = fadeIn(local, 2.2, 3.2);
+      IF.egg(ctx, ex, ey, es, t, { clear: 0.85, features: [{ x: -0.4, y: -0.3, on: 0.35 }, { x: 0.35, y: -0.45, on: 0.35 + hot * 0.65, c: 'rgba(243,179,195,.95)' }, { x: 0.1, y: 0.15, on: 0.35 }, { x: -0.25, y: 0.4, on: 0.35 }] });
+      // pink plane flies backwards into the egg toward the hot feature
+      var pf = ease.inOut(fadeIn(local, 0.8, 2.4)), sx = por ? W * 0.9 : W * 0.95, sy = por ? H * 0.9 : H * 0.85, txp = ex + 0.35 * es * 0.7, typ = ey - 0.45 * es * 0.8;
+      if (pf < 1) IF.plane(ctx, lerp(sx, txp, pf), lerp(sy, typ, pf), es * 0.18, Math.atan2(typ - sy, txp - sx), P.pink);
+      if (hot > 0) IF.arrow(ctx, ex + es * 1.25, ey - es * 0.9, txp + 12, typ - 6, P.chalk, 3, 'sa');
+      var fsz = clamp(Math.min(W * 0.052, H * 0.05), 17, 32);
+      IF.note(ctx, 'which part of you\nmade this happen?', por ? W * 0.5 : W * 0.26, por ? H * 0.2 : H * 0.34, fsz, { color: P.butter, seed: 'steer', rot: -0.04, reveal: fadeIn(local, 0.3, 1.8) });
+      var la = fadeIn(local, 3.4, 4.2);
+      if (la > 0) { ctx.save(); ctx.globalAlpha = la; IF.hand(ctx, 'attribution and patching start here', W / 2, H * (por ? 0.92 : 0.9), clamp(fsz * 0.7, 14, 24), P.mint, { seed: 'ap' }); ctx.restore(); }
+      if (cross(2.3)) blip(api, 1175);
+    })
+  ];
+
+  /* ---------------------------------------------------------- coda: now you drive */
+  var C = { x: X0, w: W0, b: B0, y: Y0, pa: 99, flash: 0, hist: [], panel: null };
+  function codaRects(W, H) {
+    var por = W < H * 1.05;
+    return { por: por, rd: H < 330 ? { x: 8, y: 4, w: Math.min(W - 16, 640), h: 26 } : por ? { x: 10, y: 8, w: W - 20, h: Math.min(H * 0.2, 120) } : { x: W * 0.03, y: 10, w: Math.min(W * 0.94, 620), h: Math.min(H * 0.2, 118) } };
+  }
+  function syncPanel() {
+    if (!C.panel) return;
+    ['x', 'w', 'b', 'y'].forEach(function (k) { var i = C.panel.querySelector('input[data-k=' + k + ']'), out = C.panel.querySelector('output[data-k=' + k + ']'); if (i) i.value = C[k]; if (out) out.textContent = fmt(C[k], 2); });
+  }
+  var TIPS = {
+    1: 'Slide the knobs. Tap the picture to replay the planes. <b>Nudge w</b> takes one small step against the blame.',
+    2: 'Try y = \u22121, or push w\u00b7x + b past 2: tanh saturates and the blame reaching w shrinks.',
+    3: 'Backprop vs central difference (\u03b5=1e\u22124) should agree to ~6 d.p. Nudge = <code>w \u2212= 0.5\u00b7w.grad</code>.'
+  };
+  var coda = {
+    start: function (api, panel) {
+      C.panel = panel; C.pa = 0; C.hist = [];
+      if (!panel.dataset.built) {
+        panel.dataset.built = '1';
+        var rows = [['x', -2, 2], ['w', -2, 2], ['b', -2, 2], ['y', -1, 1]];
+        panel.innerHTML = '<div class="bp-grid">' + rows.map(function (r) {
+          return '<label><b>' + r[0] + '</b><input type="range" data-k="' + r[0] + '" min="' + r[1] + '" max="' + r[2] + '" step="0.01" aria-label="' + r[0] + '"><output data-k="' + r[0] + '"></output></label>';
+        }).join('') + '</div><div class="bp-btns"><button class="go" data-a="nudge">Nudge w</button><button data-a="fly">Fly the planes</button><button data-a="reset">Reset</button></div><div class="bp-tip"></div>';
+        [].forEach.call(panel.querySelectorAll('input[type=range]'), function (inp) {
+          inp.addEventListener('input', function () { C[inp.dataset.k] = +inp.value; C.hist = []; syncPanel(); });
+        });
+        panel.querySelector('[data-a=nudge]').onclick = function (e) {
+          e.stopPropagation(); var v = compute(C.x, C.w, C.b, C.y), before = v.L;
+          C.w = clamp(C.w - LR * v.gw, -2, 2); var after = compute(C.x, C.w, C.b, C.y).L;
+          C.hist.push([before, after]); if (C.hist.length > 6) C.hist.shift(); C.flash = 1; syncPanel(); blip(api, 1047);
+        };
+        panel.querySelector('[data-a=fly]').onclick = function (e) { e.stopPropagation(); C.pa = 0; blip(api, 660); };
+        panel.querySelector('[data-a=reset]').onclick = function (e) { e.stopPropagation(); C.x = X0; C.w = W0; C.b = B0; C.y = Y0; C.hist = []; C.pa = 0; syncPanel(); };
+      }
+      panel.querySelector('.bp-tip').innerHTML = TIPS[api.tier ? api.tier() : '2'] || TIPS[2];
+      syncPanel();
+      setTimeout(function () { window.dispatchEvent(new Event('resize')); }, 30);
+    },
+    onTier: function (v) { if (C.panel) C.panel.querySelector('.bp-tip').innerHTML = TIPS[v] || TIPS[2]; },
+    caption: TIPS,
+    down: function () { C.pa = 0; },
+    draw: function (ctx, ct, W, H, api, dt) {
+      C.pa += dt || 0.016; C.flash = Math.max(0, C.flash - (dt || 0.016) * 1.2);
+      var R = codaRects(W, H), v = compute(C.x, C.w, C.b, C.y), fd = wiggle(C.x, C.w, C.b, C.y);
+      var gy = R.rd.y + R.rd.h + 6, o = lay(W * 0.03, gy, W * 0.94, H - gy - 6);
+      bg(ctx, W, H, ct, o);
+      var fk = C.pa < 3 ? clamp(C.pa / 3 * 6, 0, 6) : null, bk = C.pa >= 3.2 && C.pa < 6.6 ? 6 - (C.pa - 3.2) / 3.4 * 6 : null;
+      var done = C.pa >= 6.6;
+      drawLine(ctx, o, { V: v, t: ct, fk: fk, bk: bk, tags: 1, hotTag: 0, vUpTo: fk != null ? Math.floor(fk + 0.6) - 1 : 5, lit: clamp((v.h + 1) / 2, 0.1, 1),
+        ring: fk != null && fk > 5.9 ? 1 : 0, lossA: 1, gFrom: done ? 0 : bk != null ? Math.ceil(bk - 0.4) : 9, apr: done ? 1 : bk != null ? Math.ceil(bk - 0.3) : 9,
+        sideG: done ? { gb: 1, gw: 1 } : bk != null ? { gb: clamp((2 - bk) * 1.5, 0, 1), gw: clamp((1 - bk) * 1.5, 0, 1) } : null, wFlash: C.flash });
+      // readout board
+      var rd = R.rd, fs = clamp(Math.min(rd.w * 0.042, rd.h * 0.2), 12.5, 20);
+      if (H < 330) { // short stage (phone landscape): one-line readout
+        IF.paper(ctx, rd.x + rd.w / 2, rd.y + rd.h / 2, rd.w, rd.h, P.cream, { seed: 'rds', shadowA: .45 });
+        var okS = Math.abs(fd - v.gw) < 1e-6 + 1e-4 * Math.abs(v.gw), line = 'loss ' + v.L.toFixed(4) + '   backprop dL/dw ' + fmt(v.gw, 5).replace('\u2212', '-') + '   wiggling ' + fmt(fd, 5).replace('\u2212', '-') + (okS ? '  \u2713' : '');
+        ctx.save(); ctx.font = Math.min(13, (rd.w - 20) / (line.length * 0.62)) + 'px ' + MONO; ctx.textBaseline = 'middle'; ctx.fillStyle = P.ink; ctx.fillText(line, rd.x + 10, rd.y + rd.h / 2); ctx.restore();
+        return;
+      }
+      IF.paper(ctx, rd.x + rd.w / 2, rd.y + rd.h / 2, rd.w, rd.h, P.cream, { seed: 'rd' + Math.round(rd.w), shadowA: .45 });
+      var lx = rd.x + fs * 0.8, lh = rd.h / 3.6;
+      IF.hand(ctx, 'loss = ' + v.L.toFixed(4), lx, rd.y + lh * 0.85, fs * 1.05, '#b8434e', { align: 'left', seed: 'rl' });
+      if (C.hist.length) {
+        var hsx = rd.x + rd.w * (R.por ? 0.5 : 0.35), last = C.hist[C.hist.length - 1];
+        IF.hand(ctx, 'nudged: ' + last[0].toFixed(4) + ' \u2192 ' + last[1].toFixed(4) + (last[1] < last[0] ? ' \u2193' : ' \u2191'), hsx, rd.y + lh * 0.85, fs * 0.85, last[1] < last[0] ? '#3f7a52' : '#b8434e', { align: 'left', seed: 'nh' });
+      }
+      var mf = Math.min(fs, (rd.w - fs * 1.6 - 70) / (31 * 0.61));
+      ctx.save(); ctx.font = mf + 'px ' + MONO; ctx.textBaseline = 'middle';
+      ctx.fillStyle = P.ink; ctx.fillText('dL/dw by backprop     ' + fmt(v.gw, 6).replace('\u2212', '-'), lx, rd.y + lh * 1.95);
+      ctx.fillStyle = '#3f5a8a'; ctx.fillText('measured by wiggling  ' + fmt(fd, 6).replace('\u2212', '-'), lx, rd.y + lh * 2.95);
+      var ok = Math.abs(fd - v.gw) < 1e-6 + 1e-4 * Math.abs(v.gw), tw = ctx.measureText('measured by wiggling  -0.000000').width;
+      ctx.restore();
+      IF.hand(ctx, ok ? '\u2713 match' : '\u2248', lx + tw + mf * 0.5, rd.y + lh * 2.95, Math.min(fs, mf * 1.1), ok ? '#3f7a52' : '#b8434e', { align: 'left', seed: 'ok' });
+    }
+  };
+
+  var film = IF.play({
+    title: 'Who gets the blame?',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: backprop training', href: '../../index.html#demo/backprop-training' },
+      { label: 'Week 4 pack', href: '../../index.html#week-04' },
+      { label: 'Case: backprop & topo order', href: '../../index.html#cases/backprop-and-topological-order' },
+      { label: 'Map node', href: '../../index.html#map/node=backprop-and-topological-order' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Every shape has a story</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp, ease = F.ease;
+
+  /* ================= the real tensor: x = arange(24).reshape(2, 3, 4) ================= */
+  var SZ = { b: 2, h: 3, w: 4 }, LHS = ['b', 'h', 'w'], N = 24;
+  var SRC = []; for (var f0 = 0; f0 < N; f0++) SRC.push({ b: Math.floor(f0 / 12), h: Math.floor(f0 / 4) % 3, w: f0 % 4, v: f0 });
+  var ROWCOL = [[P.pink, P.peach, P.butter], [P.mint, P.sky, P.lav]]; // batch picks the family, h picks the shade
+  function colOf(s) { return ROWCOL[s.b][s.h]; }
+
+  /* ---- a tiny honest einops: rearrange / reduce over named axes (row-major) ---- */
+  function parseSide(s) { var out = [], m, re = /\(([^)]*)\)|(\S+)/g; while ((m = re.exec(s))) out.push(m[1] != null ? m[1].trim().split(/\s+/) : [m[2]]); return out; }
+  function einops(pattern, red) {
+    var rhs = parseSide(pattern.split('->')[1]), shape = rhs.map(function (g) { return g.reduce(function (p, a) { return p * SZ[a]; }, 1); });
+    var idx = SRC.map(function (s) { return rhs.map(function (g) { return g.reduce(function (p, a) { return p * SZ[a] + s[a]; }, 0); }); });
+    var R = { pattern: pattern, shape: shape, idx: idx, red: red };
+    if (red) { // reduce: sources that land on the same output index are combined
+      var sums = {}, cnt = {}; idx.forEach(function (ix, i) { var k = ix.join(','); sums[k] = (sums[k] || 0) + SRC[i].v; cnt[k] = (cnt[k] || 0) + 1; });
+      R.out = {}; for (var k in sums) R.out[k] = red === 'mean' ? sums[k] / cnt[k] : sums[k];
+    }
+    return R;
+  }
+  function shapeStr(s) { return '(' + s.join(', ') + (s.length === 1 ? ',' : '') + ')'; }
+
+  /* ---- lay an output shape (rank 1-3) into a screen region; return per-source tile spots ---- */
+  function layout(R, reg, maxS) {
+    var sh = R.shape, rank = sh.length, a = rank === 3 ? sh[0] : 1, r = rank === 1 ? 1 : sh[rank - 2], c = sh[rank - 1];
+    var best = null;
+    for (var tc = 1; tc <= a; tc++) {
+      var tr = Math.ceil(a / tc), s = Math.min(reg.w / (tc * c + (tc - 1) * .7), reg.h / (tr * r + (tr - 1) * .9 + (rank === 3 ? tr * .45 : 0)), maxS || 56);
+      if (!best || s > best.s + .01) best = { s: s, tc: tc, tr: tr };
+    }
+    var s = best.s, tw = c * s, th = r * s, gw = best.tc * tw + (best.tc - 1) * s * .7, gh = best.tr * th + (best.tr - 1) * s * .9 + (rank === 3 ? best.tr * s * .45 : 0);
+    var ox = reg.x + (reg.w - gw) / 2, oy = reg.y + (reg.h - gh) / 2, trays = [];
+    for (var ti = 0; ti < a; ti++) {
+      var cx = ti % best.tc, cy = Math.floor(ti / best.tc), tx = ox + cx * (tw + s * .7), ty = oy + (rank === 3 ? s * .45 : 0) + cy * (th + s * .9 + (rank === 3 ? s * .45 : 0));
+      trays.push({ x: tx, y: ty, w: tw, h: th, i: ti });
+    }
+    var spots = R.idx.map(function (ix, i) {
+      var t = rank === 3 ? trays[ix[0]] : trays[0], row = rank === 1 ? 0 : ix[rank - 2], col = ix[rank - 1];
+      var j = R.red ? (i % 12) : 0; // reduced tiles pile up on their slot
+      return { x: t.x + (col + .5) * s + (R.red ? Math.sin(j * 2.1) * s * .12 : 0), y: t.y + (row + .5) * s - j * s * .03, s: s };
+    });
+    return { spots: spots, trays: trays, s: s, rank: rank, R: R, box: { x: ox, y: oy, w: gw, h: gh } };
+  }
+
+  /* ================= paper helpers local to this film ================= */
+  function tile(ctx, x, y, s, val, col, o) {
+    o = o || {}; var a = o.alpha == null ? 1 : o.alpha; if (a <= 0.01) return;
+    ctx.save(); ctx.globalAlpha = a;
+    if (o.hl) F.glow(ctx, x, y, s * 1.1, 'rgba(255,226,140,.9)', o.hl);
+    F.paper(ctx, x, y, s * .86, s * .86, col, { seed: 't' + (o.seed || 0) % 5, rot: o.rot || 0, blur: 4, lift: 2, jit: .45 });
+    var txt = typeof val === 'number' ? (Math.round(val) === val ? String(val) : val.toFixed(1)) : val;
+    var fs = Math.max(9, s * (txt.length > 2 ? .34 : .42));
+    F.hand(ctx, txt, x, y + 1, fs, P.ink, { font: F.MONO, seed: 'n' + txt, wobble: .4, rot: o.rot || 0 });
+    ctx.restore();
+  }
+  function tapeLabel(ctx, text, x, y, sz, o) {
+    o = o || {}; var w = F.textW(ctx, text, sz, F.MONO) + sz * 1.2;
+    F.paper(ctx, x, y, w, sz * 1.7, o.color || 'rgba(247,227,160,.93)', { rot: o.rot || -.02, seed: 'tl' + text.length, shadow: true, blur: 3, lift: 1, grainA: .35 });
+    F.hand(ctx, text, x, y, sz, P.ink, { font: F.MONO, seed: text, wobble: .5, rot: o.rot || -.02 });
+    return w;
+  }
+  function codeNote(ctx, text, x, y, W, maxSz, o) {
+    var sz = maxSz; while (sz > 9 && F.textW(ctx, text, sz, F.MONO) + sz * 1.6 > W - 20) sz -= .5;
+    return F.note(ctx, text, x, y, sz, Object.assign({ font: F.MONO, color: P.cream, seed: 'code' + text.length }, o || {}));
+  }
+  function lbl(ctx, text, x, y, sz, color, o) { o = o || {}; F.hand(ctx, text, x, y, sz, color || P.chalk, Object.assign({ outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: text }, o)); }
+  function readout(ctx, x, y, lines, W, o) {
+    o = o || {}; var sz = W < 500 ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    if (o.center) x = (W - w - 22) / 2;
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.9)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+    return lines.length * sz * 1.3 + 12;
+  }
+
+  /* ---- the library at night (cached per size) ---- */
+  var BG = { W: 0, H: 0, c: null };
+  function bg(ctx, W, H, t) {
+    if (BG.W !== W || BG.H !== H) {
+      var d = Math.min(2.5, window.devicePixelRatio || 1), c = document.createElement('canvas'); c.width = Math.round(W * d); c.height = Math.round(H * d);
+      var g = c.getContext('2d'); g.scale(d, d); F.sky(g, W, H, P.night, '#2b2f5c');
+      var r = F.rng('shelves'), cols = ['#454a86', '#3b3f75', '#5b5486', '#4a4f8c', '#6b5a9a', '#3d5a78'], shelfH = Math.max(46, H / 7);
+      for (var y = H * .18; y < H + shelfH; y += shelfH) {
+        g.globalAlpha = .55; var x = -4;
+        while (x < W + 10) { var bw = 8 + r() * 14, bh = shelfH * (.55 + r() * .35); F.paper(g, x + bw / 2, y - bh / 2, bw, bh, cols[Math.floor(r() * cols.length)], { seed: 'bk' + Math.floor(r() * 9), shadow: false, grainA: .4, jit: .3 }); x += bw + 1 + (r() < .1 ? 18 : 0); }
+        g.globalAlpha = .8; F.paper(g, W / 2, y + 3, W + 20, 7, '#2a2d58', { seed: 'shelf', shadow: false, jit: .3 });
+      }
+      g.globalAlpha = 1; var vg = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .2, W / 2, H / 2, Math.max(W, H) * .7);
+      vg.addColorStop(0, 'rgba(28,33,64,.55)'); vg.addColorStop(1, 'rgba(12,14,34,.8)'); g.fillStyle = vg; g.fillRect(0, 0, W, H);
+      BG.W = W; BG.H = H; BG.c = c;
+    }
+    ctx.drawImage(BG.c, 0, 0, W, H); F.stars(ctx, W, H * .16, t, 'w1', 14);
+  }
+  var POR = function (W, H) { return H > W * 1.1; };
+  function region(W, H, top, bot) { return { x: 14, y: top, w: W - 28, h: Math.max(60, H - top - bot) }; }
+
+  /* ---- librarian with a trolley ---- */
+  function trolley(ctx, x, y, s, t, moving) {
+    var w = s * 2.4, h = s * .5; ctx.save(); ctx.strokeStyle = P.ink; ctx.lineWidth = Math.max(1.5, s * .06); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x - w / 2, y - h * 1.5); ctx.lineTo(x - w / 2 - s * .25, y - h * 2.8); ctx.stroke();
+    F.paper(ctx, x, y - h, w, h, '#b07a55', { seed: 'trol', blur: 5, lift: 3 });
+    [-.35, .35].forEach(function (k) { var wx = x + k * w, wy = y - h * .15; ctx.save(); ctx.translate(wx, wy); ctx.rotate(moving ? t * 6 : 0); ctx.fillStyle = P.ink; ctx.beginPath(); ctx.arc(0, 0, s * .15, 0, 6.283); ctx.fill(); ctx.fillStyle = P.cream; ctx.fillRect(-1, -s * .13, 2, s * .1); ctx.restore(); });
+    ctx.restore(); return { x: x, y: y - h * 1.5, w: w };
+  }
+  function librarian(ctx, x, y, s, t, walk) { F.person(ctx, x, y, s, t, { walk: walk, coat: '#6b8fbf', scarf: P.butter, lantern: false, face: 1 }); }
+  function heap(tx, ty, w, s) { // mound of tiles on the trolley
+    var r = F.rng('heap'), out = [];
+    for (var i = 0; i < N; i++) { var k = r(), layer = Math.floor(i / 8), span = w * (.9 - layer * .25); out.push({ x: tx + (r() - .5) * span, y: ty - s * .35 - layer * s * .5 - r() * s * .2, s: s, rot: (r() - .5) * 1.2 }); }
+    return out;
+  }
+  function question(ctx, W, H, a, rev) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+    F.note(ctx, 'what does each axis MEAN?', W / 2, POR(W, H) ? 34 : 44, W < 500 ? 17 : 22, { rot: -.025, seed: 'q', reveal: rev == null ? 1 : rev });
+    ctx.restore();
+  }
+
+  /* ---- move tiles between two sets of spots (staggered, arcing flight) ---- */
+  function fly(A, B, p, stagger) {
+    stagger = stagger == null ? .018 : stagger; var span = 1 - stagger * (N - 1);
+    return A.map(function (a, i) {
+      var b = B[i], q = ease.inOut(clamp((p - i * stagger) / span, 0, 1)), arc = Math.sin(q * Math.PI) * Math.min(60, Math.abs(b.x - a.x) * .15 + 18);
+      return { x: lerp(a.x, b.x, q), y: lerp(a.y, b.y, q) - arc, s: lerp(a.s, b.s, q), rot: lerp(a.rot || 0, 0, q) + Math.sin(q * Math.PI) * .5 * (i % 2 ? 1 : -1), q: q };
+    });
+  }
+  function drawTrays(ctx, L, a, labels) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+    L.trays.forEach(function (t, k) {
+      F.paper(ctx, t.x + t.w / 2, t.y + t.h / 2, t.w + L.s * .3, t.h + L.s * .3, 'rgba(22,26,53,.55)', { seed: 'tray' + k, shadow: false, jit: .5 });
+      if (labels && L.rank === 3) lbl(ctx, labels[0] + '=' + k, t.x + 2, t.y - L.s * .32, Math.max(11, L.s * .3), P.butter, { align: 'left' });
+    });
+    ctx.restore();
+  }
+  function drawTiles(ctx, pts, o) {
+    o = o || {}; var order = pts.map(function (p, i) { return i; });
+    if (o.hl != null) order.push(order.splice(o.hl, 1)[0]);
+    order.forEach(function (i) { var p = pts[i], s = SRC[i]; tile(ctx, p.x, p.y, p.s, o.vals ? o.vals[i] : s.v, colOf(s), { seed: i, rot: p.rot, alpha: o.alpha ? o.alpha(i) : 1, hl: i === o.hl ? o.hlA || 1 : 0 }); });
+  }
+
+  /* ---- cached layouts per canvas size ---- */
+  var LC = {}; function L(key, pattern, reg, maxS, red) { if (key === 'flat') reg = { x: reg.x + 22, y: reg.y, w: reg.w - 26, h: reg.h }; var k = key + '|' + reg.x + '|' + reg.y + '|' + reg.w + '|' + reg.h; return LC[k] || (LC[k] = layout(einops(pattern, red), reg, maxS)); }
+  function tileReg(W, H) { var por = POR(W, H); return region(W, H, por ? 112 : 96, por ? 96 : 84); }
+
+  var R_STACK = 'b h w -> b h w', R_FLAT = 'b h w -> b (h w)', R_VHS = 'b h w -> h (b w)';
+  var HLI = 21; // x[1, 2, 1] = 21, our tracked tile
+
+  /* ================= ray tracing: the real 2D solve from ARENA [0.1] ================= */
+  var SEG = [[2.4, 1.25], [1.7, -0.55]];
+  function intersect(O, D, L1, L2) { // O + uD = L1 + v(L2 - L1)  ->  [D, L1-L2] [u v]^T = L1 - O
+    var ax = D[0], bx = L1[0] - L2[0], ay = D[1], by = L1[1] - L2[1], det = ax * by - ay * bx;
+    if (Math.abs(det) < 1e-9) return { u: -1, v: -1, hit: false, par: true };
+    var rx = L1[0] - O[0], ry = L1[1] - O[1], u = (rx * by - ry * bx) / det, v = (ax * ry - ay * rx) / det;
+    return { u: u, v: v, hit: u >= 0 && v >= 0 && v <= 1 };
+  }
+  function makeRays(n, ylim) { var out = []; for (var i = 0; i < n; i++) out.push([1, -ylim + 2 * ylim * i / (n - 1)]); return out; }
+  var RAYS = makeRays(9, .9);
+  function rayView(reg) { var s = Math.min(reg.w / 3.5, reg.h / 2.9); return { s: s, ox: reg.x + (reg.w - 3.2 * s) / 2 + .25 * s, oy: reg.y + reg.h / 2 }; }
+  function RS(V, p) { return [V.ox + p[0] * V.s, V.oy - p[1] * V.s]; }
+  function torch(ctx, x, y, s, ang) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(ang || 0);
+    F.paper(ctx, -s * .7, 0, s * 1.3, s * .5, '#c05a5a', { seed: 'torch', blur: 4, lift: 2 });
+    F.paper(ctx, 0, 0, s * .35, s * .8, '#d9d3c0', { seed: 'torchhead', blur: 3, lift: 2 }); ctx.restore();
+    F.glow(ctx, x, y, s * 1.2, 'rgba(255,236,160,.7)', .9);
+  }
+  function drawRays(ctx, V, O, p, t, opts) {
+    opts = opts || {}; var L1 = SEG[0], L2 = SEG[1], res = [];
+    var a = RS(V, L1), b = RS(V, L2);
+    ctx.save(); ctx.lineCap = 'round'; ctx.strokeStyle = '#b07a55'; ctx.lineWidth = Math.max(6, V.s * .08); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.lineWidth = 1.5; ctx.stroke(); ctx.restore();
+    lbl(ctx, 'wall', a[0] + 18, a[1] - 4, 13, P.peach);
+    RAYS.forEach(function (D, i) {
+      var h = intersect(O, D, L1, L2); res.push(h);
+      var reach = p * 4, L = h.hit ? Math.min(reach, h.u) : reach, o = RS(V, O), e = RS(V, [O[0] + D[0] * L, O[1] + D[1] * L]);
+      ctx.save(); ctx.strokeStyle = h.hit && reach >= h.u ? 'rgba(255,226,140,.95)' : 'rgba(253,250,240,.35)'; ctx.lineWidth = h.hit ? 2.2 : 1.4; if (!h.hit) ctx.setLineDash([3, 5]);
+      ctx.beginPath(); ctx.moveTo(o[0], o[1]); ctx.lineTo(e[0], e[1]); ctx.stroke(); ctx.restore();
+      if (h.hit && reach >= h.u) { var hp = RS(V, [O[0] + D[0] * h.u, O[1] + D[1] * h.u]); F.lantern(ctx, hp[0] + 9, hp[1], Math.max(6, V.s * .07), clamp((reach - h.u) * 3, 0, 1), t + i); }
+    });
+    var o = RS(V, O); torch(ctx, o[0], o[1], Math.max(16, V.s * .2), 0);
+    return res;
+  }
+
+  /* ================= the chapters ================= */
+  var chapters = [
+    { name: 'the wish', start: 0, dur: 6, cap: {
+        1: 'Night shift at the library of numbers. Our shelf-stacker has a trolley heaped with paper tiles and one wish: move them around <b>without losing track of which is which</b>.',
+        2: 'Every tile is one number. A heap of numbers is useless until you know how it is organised, and that organisation is exactly what a <b>tensor shape</b> records.',
+        3: 'Week 1, ARENA [0.0] Prerequisites + [0.1] Ray Tracing. The whole week is one discipline: know every axis of every tensor, and name it.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var s = Math.min(W, H) * (POR(W, H) ? .1 : .085), tx = lerp(-s * 3, W * .5, ease.out(l / 3.2)), ty = H * .74;
+        librarian(ctx, tx - s * 2.1, ty, s * 1.6, t, l < 3.2);
+        var tb = trolley(ctx, tx, ty, s, t, l < 3.2), hp = heap(tb.x, tb.y, tb.w, s * .62); drawTiles(ctx, hp);
+        F.plane(ctx, lerp(W + 30, -30, l / 6), H * .3 + Math.sin(l * 2) * 10, 12, Math.PI + .1, P.cream);
+        question(ctx, W, H, ramp(l, .8, 1.6), ramp(l, .8, 2.6));
+        if (l > 3.5) { ctx.save(); ctx.globalAlpha = ramp(l, 3.5, 4.3); lbl(ctx, '24 tiles. no labels. uh-oh.', W / 2, H * .44, W < 500 ? 15 : 19, P.butter); ctx.restore(); }
+      } },
+    { name: 'a stack with a shape', start: 6, dur: 7, cap: {
+        1: 'She sorts them into <b>2 trays</b>, each <b>3 rows</b> of <b>4</b>. Now every tile has an address. Tile 21 lives in tray 1, row 2, column 1.',
+        2: 'That arrangement is the tensor\'s <b>shape</b>: <code>(2, 3, 4)</code>. Naming the axes (batch, height, width) is what turns 24 numbers into two little 3×4 images.',
+        3: '<code>x = torch.arange(24).reshape(2, 3, 4)</code>. Index <code>x[1, 2, 1]</code> = 1·12 + 2·4 + 1 = 21. Axes are counted from 0, last axis fastest (row-major).' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var s = Math.min(W, H) * (POR(W, H) ? .1 : .085), ty = H * .74, tx = W * .5;
+        var reg = tileReg(W, H), LS = L('stack', R_STACK, reg, 58), hp = heap(tx, ty - s * .75, s * 2.4, s * .62);
+        var p = ramp(l, .3, 3.2);
+        if (l < 2.55) { ctx.save(); ctx.globalAlpha = 1 - ramp(l, 1.5, 2.6); librarian(ctx, tx - s * 2.1, ty, s * 1.6, t, false); trolley(ctx, tx, ty, s, t, false); ctx.restore(); }
+        drawTrays(ctx, LS, ramp(l, 1.8, 2.8), ['b']);
+        var pts = fly(hp, LS.spots, p); drawTiles(ctx, pts, { hl: l > 4.2 ? HLI : null, hlA: ramp(l, 4.2, 4.8) });
+        if (l > 2.8) {
+          ctx.save(); ctx.globalAlpha = ramp(l, 2.8, 3.6); var t0 = LS.trays[0], sz = W < 500 ? 12 : 15;
+          F.arrow(ctx, t0.x, t0.y - LS.s * .75, t0.x + t0.w, t0.y - LS.s * .75, P.mint, 2, 'wx');
+          lbl(ctx, 'w = 4', t0.x + t0.w / 2 + 20, t0.y - LS.s * .75 - 12, sz, P.mint);
+          F.arrow(ctx, t0.x - LS.s * .3, t0.y, t0.x - LS.s * .3, t0.y + t0.h, P.pink, 2, 'hx');
+          lbl(ctx, 'h', t0.x - LS.s * .3 - 10, t0.y + t0.h / 2, sz, P.pink);
+          tapeLabel(ctx, '(batch=2, h=3, w=4)', W / 2, LS.box.y + LS.box.h + 26, W < 500 ? 14 : 17, { rot: -.03 });
+          ctx.restore();
+        }
+        question(ctx, W, H, 1 - ramp(l, 3.6, 4.2));
+        if (l > 4.2) { ctx.save(); ctx.globalAlpha = ramp(l, 4.2, 4.8); codeNote(ctx, 'x[1, 2, 1] = 21', W / 2, POR(W, H) ? 38 : 44, W, W < 500 ? 17 : 21, { color: P.butter }); ctx.restore(); }
+      } },
+    { name: 'rearrange', start: 13, dur: 8, cap: {
+        1: 'Order: "flatten each tray into one long row". The tiles fly, but <b>watch the colours</b>: pink row, then peach, then yellow. Nothing gets shuffled.',
+        2: '<code>rearrange(x, \'b h w -> b (h w)\')</code> merges h and w into one axis of 12. The pattern is a sentence about meaning, so you can read what it does.',
+        3: 'Grouping (h w) is row-major: new index = h·4 + w. Tile x[1,2,1] lands at y[1, 9]. Shape (2,3,4) → (2,12). Same 24 numbers, no copy needed.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var reg = tileReg(W, H), LS = L('stack', R_STACK, reg, 58), LF = L('flat', R_FLAT, reg, 44);
+        var p = ramp(l, 1.2, 4.6), pts = fly(LS.spots, LF.spots, p, .02);
+        drawTrays(ctx, LS, 1 - ramp(l, .9, 1.6), ['b']); drawTrays(ctx, LF, ramp(l, 4, 4.8));
+        if (l > 4.6) { ctx.save(); ctx.globalAlpha = ramp(l, 4.6, 5.2); LF.trays.length && [0, 1].forEach(function (b) { lbl(ctx, 'b=' + b, LF.box.x - 2, LF.box.y + (b + .5) * LF.s, 11, P.butter, { align: 'right' }); }); ctx.restore(); }
+        drawTiles(ctx, pts, { hl: HLI, hlA: .8 });
+        var por = POR(W, H); codeNote(ctx, "rearrange(x, 'b h w -> b (h w)')", W / 2, por ? 36 : 44, W, W < 500 ? 16 : 21, { reveal: ramp(l, 0, 1.2) });
+        var ix = LF.R.idx[HLI], sp = LF.spots[HLI];
+        if (l > 5) {
+          ctx.save(); ctx.globalAlpha = ramp(l, 5, 5.6); tapeLabel(ctx, 'shape ' + shapeStr(LF.R.shape), W / 2, LF.box.y + LF.box.h + 24, W < 500 ? 14 : 17);
+          readout(ctx, 0, H - (W < 500 ? 56 : 62), [['x[1,2,1] -> y[' + ix[0] + ', 2*4+1] = y[' + ix.join(', ') + ']', P.butter], ['value still ' + SRC[HLI].v + '. order kept.', P.mint]], W, { center: true });
+          F.arrow(ctx, sp.x, sp.y - sp.s * 1.4, sp.x, sp.y - sp.s * .6, P.butter, 2.5, 'hl'); ctx.restore();
+        }
+      } },
+    { name: 'the VHS batch', start: 21, dur: 7, cap: {
+        1: 'Think of the batch like a <b>VHS tape</b>: two frames, one after another. To look at them side by side, unroll the tape. Each frame stays in one piece.',
+        2: '<code>\'b h w -> h (b w)\'</code> puts the batch images next to each other, the exact trick ARENA uses to tile a batch of images into one picture.',
+        3: 'Group (b w) gives column = b·4 + w, shape (3, 8). Swap it to (w b) and the two frames interleave column by column: legal, same shape, visually garbage.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var reg = tileReg(W, H), LF = L('flat', R_FLAT, reg, 44), LV = L('vhs', R_VHS, reg, 52);
+        var p = ramp(l, .8, 3.6), pts = fly(LF.spots, LV.spots, p, .015);
+        // the tape: dark strip with sprocket holes behind the frames
+        var bx = LV.box, a = ramp(l, 2.6, 3.6);
+        if (a > 0) {
+          ctx.save(); ctx.globalAlpha = a; var pad = LV.s * .5;
+          F.paper(ctx, bx.x + bx.w / 2, bx.y + bx.h / 2, bx.w + pad * 3, bx.h + pad * 2.4, '#26242e', { seed: 'tape', blur: 8 });
+          ctx.fillStyle = 'rgba(253,250,240,.55)';
+          for (var k = 0; k < 16; k++) { var hx = bx.x - pad + k * (bx.w + pad * 2) / 15; ctx.fillRect(hx - 3, bx.y - pad * .95, 6, 5); ctx.fillRect(hx - 3, bx.y + bx.h + pad * .95 - 5, 6, 5); }
+          ctx.strokeStyle = 'rgba(253,250,240,.7)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(bx.x + bx.w / 2, bx.y - pad * .5); ctx.lineTo(bx.x + bx.w / 2, bx.y + bx.h + pad * .5); ctx.stroke(); ctx.restore();
+        }
+        drawTiles(ctx, pts);
+        // cassette
+        var cw = Math.min(170, W * .42), ch = cw * .6, cx = W / 2, cy = Math.min(H - ch / 2 - 18, bx.y + bx.h + ch * .8 + 10);
+        ctx.save(); ctx.globalAlpha = ramp(l, 0, .8);
+        F.paper(ctx, cx, cy, cw, ch, '#2f2d38', { seed: 'vhs', rot: .03 }); F.paper(ctx, cx, cy - ch * .12, cw * .8, ch * .42, P.cream, { seed: 'vhsl', rot: .03, shadow: false });
+        F.hand(ctx, 'BATCH  x2  SP', cx, cy - ch * .2, Math.max(11, cw * .08), '#c05a5a', { seed: 'vl', rot: .03 });
+        F.hand(ctx, 'frame 0 | frame 1', cx, cy - ch * .02, Math.max(10, cw * .065), P.ink, { seed: 'vl2', rot: .03 });
+        [-1, 1].forEach(function (k) { ctx.save(); ctx.translate(cx + k * cw * .22, cy + ch * .25); ctx.rotate(t * 3); ctx.fillStyle = P.cream; ctx.beginPath(); ctx.arc(0, 0, ch * .1, 0, 6.283); ctx.fill(); ctx.fillStyle = '#2f2d38'; for (var q = 0; q < 6; q++) { ctx.rotate(1.047); ctx.fillRect(-1.5, ch * .04, 3, ch * .05); } ctx.restore(); });
+        ctx.restore();
+        codeNote(ctx, "rearrange(x, 'b h w -> h (b w)')", W / 2, POR(W, H) ? 36 : 44, W, W < 500 ? 16 : 21, { reveal: ramp(l, 0, 1) });
+        if (l > 3.8) { ctx.save(); ctx.globalAlpha = ramp(l, 3.8, 4.4); lbl(ctx, 'frame 0', bx.x + bx.w * .25, bx.y - LV.s * .95, 13, P.pink); lbl(ctx, 'frame 1', bx.x + bx.w * .75, bx.y - LV.s * .95, 13, P.mint);
+          tapeLabel(ctx, 'shape ' + shapeStr(LV.R.shape), W - Math.min(80, W * .2), bx.y + bx.h + LV.s * 1.1, 13, { rot: .04 }); ctx.restore(); }
+      } },
+    { name: 'broadcasting', start: 28, dur: 8, cap: {
+        1: 'Now add a row of 4 <b>stamps</b> to every row of a tray. She doesn\'t cut 3 copies: the stamps just <b>stretch</b> down (the ghosts) and each tile adds the stamp above it.',
+        2: '<b>Broadcasting</b>: shapes (3, 4) and (4,) line up from the right; the missing axis gets stretched. The ghost copies are never actually made in memory.',
+        3: 'Rules: align trailing dims; each pair must be equal or 1 (missing counts as 1). (3,4)+(4,) → (3,4). (3,4)+(3,) fails: 4 vs 3. Fix with rearrange(s, \'h -> h 1\').' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var por = POR(W, H), s = Math.min((W - 60) / 4.6, (H - 260) / 5.4, 76), gx = W / 2 - 2 * s, gy = por ? H * .38 : H * .34;
+        var STAMP = [10, 20, 30, 40], sy = gy - s * 1.35;
+        codeNote(ctx, 'x[0] + stamps', W / 2, por ? 36 : 44, W, W < 500 ? 17 : 21);
+        // stamps row
+        var sa = ramp(l, .4, 1.2);
+        STAMP.forEach(function (v, w) {
+          var x = gx + (w + .5) * s;
+          ctx.save(); ctx.globalAlpha = sa; tile(ctx, x, sy, s * .9, v, P.red, { seed: 30 + w, rot: .05 }); ctx.restore();
+          for (var h = 0; h < 3; h++) { // ghosts slide down
+            var g = ramp(l, 1.5 + h * .35, 2.4 + h * .35); if (g <= 0) continue;
+            ctx.save(); ctx.globalAlpha = .28 * g * (1 - ramp(l, 5.6, 6.4) * .6); ctx.setLineDash([3, 3]); ctx.strokeStyle = P.red; ctx.lineWidth = 1.5;
+            var yy = lerp(sy, gy + (h + .5) * s, g); ctx.strokeRect(x - s * .38, yy - s * .38, s * .76, s * .76); ctx.restore();
+          }
+        });
+        var res = [];
+        for (var h = 0; h < 3; h++) for (var w = 0; w < 4; w++) {
+          var i = h * 4 + w, v = SRC[i].v, add = ramp(l, 3 + i * .12, 3.3 + i * .12), val = add > .5 ? v + STAMP[w] : v; res.push(v + STAMP[w]);
+          tile(ctx, gx + (w + .5) * s, gy + (h + .5) * s, s, val, colOf(SRC[i]), { seed: i, hl: add > 0 && add < 1 ? 1 : 0 });
+        }
+        if (l > 1) { ctx.save(); ctx.globalAlpha = ramp(l, 1, 1.6); var sz = W < 500 ? 13 : 16;
+          lbl(ctx, 'stamps (4,)', gx - 6, sy, sz, P.peach, { align: 'right' }); lbl(ctx, 'x[0] (3, 4)', gx - 6, gy + s * 1.5, sz, P.pink, { align: 'right' });
+          ctx.restore(); }
+        if (l > 4.6) { ctx.save(); ctx.globalAlpha = ramp(l, 4.6, 5.2);
+          readout(ctx, 0, gy + 3 * s + 22, [['   (3, 4)', P.pink], ['+     (4,)   align right, stretch', P.peach], ['=  (3, 4)   row 2: ' + res.slice(8, 12).join(' '), P.butter]], W, { center: true }); ctx.restore(); }
+      } },
+    { name: 'einsum dance', start: 36, dur: 10, cap: {
+        1: 'A matchmaking dance. Every tile in a row of A is paired with its partner down a column of B, they <b>multiply</b>, and the pairs\' results are <b>added up</b> into one tile of C.',
+        2: '<code>einsum(A, B, \'i j, j k -> i k\')</code>: j appears in both inputs but not the output, so j is the axis that gets <b>paired up and summed away</b>. That is matrix multiplication.',
+        3: 'C[i,k] = Σ_j A[i,j]·B[j,k]. Shapes (2,3)·(3,2) → (2,2). Any index missing from the output is summed; repeated indices align. Watch C[1,1] = 4·0 + 5·1 + 6·3 = 23.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var por = POR(W, H), A = [[1, 2, 3], [4, 5, 6]], B = [[1, 0], [2, 1], [0, 3]];
+        var s = Math.min((W - 60) / 6.2, (H - 250) / 5.6, 72), ax = W / 2 - s * 3.3, ay = por ? H * .3 : H * .28, bx = W / 2 + s * 1.1, by = ay - s * .5, cx = W / 2 - s, cy = ay + s * 3.1;
+        codeNote(ctx, "einsum(A, B, 'i j, j k -> i k')", W / 2, por ? 36 : 44, W, W < 500 ? 16 : 21);
+        var C = [[0, 0], [0, 0]]; for (var i = 0; i < 2; i++) for (var k = 0; k < 2; k++) for (var j = 0; j < 3; j++) C[i][k] += A[i][j] * B[j][k];
+        // schedule: cells (0,0),(0,1),(1,0) quick, then (1,1) term by term
+        var cells = [[0, 0, 1.0, 1.8], [0, 1, 1.8, 2.6], [1, 0, 2.6, 3.4], [1, 1, 3.6, 8.2]], cur = null;
+        cells.forEach(function (c) { if (l >= c[2] && l < c[3] + .6) cur = c; });
+        var JC = [P.orange, P.teal, P.lav];
+        function pairOn(ii, jj, kk) { if (!cur || cur[0] !== ii && ii !== null || cur[1] !== kk && kk !== null) return 0; var fr = (l - cur[2]) / (cur[3] - cur[2]); return fr >= jj / 3 && fr < 1.15 ? 1 : 0; }
+        for (i = 0; i < 2; i++) for (j = 0; j < 3; j++) { var on = cur && cur[0] === i ? pairOn(i, j, null) : 0; tile(ctx, ax + (j + .5) * s, ay + (i + .5) * s + (on ? Math.sin(t * 8 + j) * 2 : 0), s, A[i][j], on ? JC[j] : P.cream, { seed: i * 3 + j, rot: on ? Math.sin(t * 6 + j) * .12 : 0, hl: on * .5 }); }
+        for (j = 0; j < 3; j++) for (k = 0; k < 2; k++) { on = cur && cur[1] === k ? pairOn(null, j, k) : 0; tile(ctx, bx + (k + .5) * s, by + (j + .5) * s + (on ? Math.sin(t * 8 + j + 1) * 2 : 0), s, B[j][k], on ? JC[j] : P.cream, { seed: 9 + j * 2 + k, rot: on ? -Math.sin(t * 6 + j) * .12 : 0, hl: on * .5 }); }
+        var sz = W < 500 ? 12 : 14;
+        lbl(ctx, 'A (i=2, j=3)', ax + s * 1.5, ay - s * .45, sz, P.butter); lbl(ctx, 'B (j=3, k=2)', bx + s, by + s * 3.45, sz, P.butter);
+        for (j = 0; j < 3; j++) { lbl(ctx, 'j' + j, ax + (j + .5) * s, ay + s * 2.35, 11, JC[j]); lbl(ctx, 'j' + j, bx - s * .3, by + (j + .5) * s, 11, JC[j]); }
+        // C
+        for (i = 0; i < 2; i++) for (k = 0; k < 2; k++) {
+          var c = cells.filter(function (q) { return q[0] === i && q[1] === k; })[0], done = l >= c[3], live = cur === c && !done, val = '';
+          if (done) val = C[i][k]; else if (live) { var fr = (l - c[2]) / (c[3] - c[2]), nj = Math.min(3, Math.floor(fr * 3) + 1), acc = 0; for (j = 0; j < nj; j++) acc += A[i][j] * B[j][k]; val = acc; }
+          tile(ctx, cx + (k + .5) * s, cy + (i + .5) * s, s, val === '' ? '?' : val, done ? P.butter : live ? P.peach : 'rgba(247,240,225,.5)', { seed: 20 + i * 2 + k, hl: live ? .8 : 0 });
+        }
+        lbl(ctx, 'C (i=2, k=2)', cx + s, cy + s * 2.45, sz, P.butter);
+        // chalk ribbons for the current pairing
+        if (cur) { var fr2 = (l - cur[2]) / (cur[3] - cur[2]), jj = Math.min(2, Math.floor(fr2 * 3));
+          for (j = 0; j <= jj; j++) { var p1 = [ax + (j + .5) * s, ay + (cur[0] + .5) * s], p2 = [bx + (cur[1] + .5) * s, by + (j + .5) * s]; ctx.save(); ctx.globalAlpha = j === jj ? .9 : .35; ctx.strokeStyle = JC[j]; ctx.lineWidth = 2; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.quadraticCurveTo((p1[0] + p2[0]) / 2, Math.min(p1[1], p2[1]) - s * .8, p2[0], p2[1]); ctx.stroke(); ctx.restore(); }
+          if (cur[0] === 1 && cur[1] === 1) { var terms = [], sum = 0; for (j = 0; j <= jj; j++) { terms.push(A[1][j] + '·' + B[j][1]); sum += A[1][j] * B[j][1]; }
+            readout(ctx, 0, cy + s * 2.9, [['C[1,1] = ' + terms.join(' + ') + (jj === 2 ? '' : ' + ...'), P.peach], ['       = ' + sum + (jj === 2 ? '   j summed away' : ''), P.butter]], W, { center: true }); }
+        }
+        if (l > 8.8) { ctx.save(); ctx.globalAlpha = ramp(l, 8.8, 9.3); readout(ctx, 0, cy + s * 2.9, [['(2, 3) · (3, 2) -> (2, 2)', P.butter], ['C = [[5, 11], [14, 23]]', P.mint]], W, { center: true }); ctx.restore(); }
+      } },
+    { name: 'a batch of rays', start: 46, dur: 8, cap: {
+        1: 'Last job of the night: a paper torch fires <b>9 rays at once</b> at a wall. For each ray, one small sum answers "does it hit, and where?". The hits light up lanterns.',
+        2: 'ARENA [0.1]: a ray is O + u·D, the wall is L1 + v·(L2 − L1). Solve for u and v; it\'s a hit if u ≥ 0 (in front) and 0 ≤ v ≤ 1 (on the segment). All 9 are solved in <b>one batched op</b>.',
+        3: 'Stack the 2×2 systems [D | L1−L2]·[u,v]ᵀ = L1−O into shape (9, 2, 2) and call torch.linalg.solve once. Here: 4 hits, 5 misses. Parallel rays make the matrix singular: mask them.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var por = POR(W, H), reg = region(W, H, por ? 90 : 80, por ? 120 : 96), V = rayView(reg), O = [0, 0];
+        codeNote(ctx, 'O + u·D = L1 + v·(L2 − L1)', W / 2, por ? 36 : 44, W, W < 500 ? 16 : 21);
+        var res = drawRays(ctx, V, O, ramp(l, .8, 5), t);
+        var mask = res.map(function (h) { return h.hit ? 'T' : 'F'; }).join(' '), nh = res.filter(function (h) { return h.hit; }).length;
+        if (l > 5.2) { ctx.save(); ctx.globalAlpha = ramp(l, 5.2, 5.8); readout(ctx, 0, H - (W < 500 ? 70 : 76), [['rays (9, 2, 2) -> solve -> u, v (9,)', P.chalk], ['hit = (u>=0) & (0<=v<=1)', P.mint], ['    = [' + mask + ']  ' + nh + '/9', P.butter]], W, { center: true }); ctx.restore(); }
+      } },
+    { name: 'where the story stops', start: 54, dur: 6, cap: {
+        1: 'Honest bit: the computer has no trays. It keeps all 24 tiles in <b>one long line</b>. "Batch", "row", "column" are labels <b>you</b> keep in your head.',
+        2: 'A tensor is flat memory plus <b>strides</b>: how far to jump for +1 on each axis. Nothing in memory says which axis is batch; mix them up and you get wrong answers, not errors.',
+        3: 'x.stride() = (12, 4, 1), so x[1,2,1] sits at 12+8+1 = 21. rearrange to \'w h b\' can be a view with strides (1, 4, 12): zero copying, just new bookkeeping.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var por = POR(W, H), perRow = por ? 8 : 12, s = Math.min((W - 40) / perRow, 48), rows = N / perRow, gx = (W - perRow * s) / 2, gy = por ? H * .22 : H * .24;
+        // the ribbon of memory, snaking row to row
+        ctx.save(); ctx.strokeStyle = 'rgba(253,250,240,.25)'; ctx.lineWidth = s * .9; ctx.lineJoin = 'round'; ctx.beginPath();
+        for (var r = 0; r < rows; r++) { var y = gy + (r + .5) * s * 1.45; if (r) ctx.lineTo(gx + (r % 2 ? perRow - .5 : .5) * s, y); else ctx.moveTo(gx + .5 * s, y); ctx.lineTo(gx + (r % 2 ? .5 : perRow - .5) * s, y); }
+        ctx.stroke(); ctx.restore();
+        for (var i = 0; i < N; i++) { var rr = Math.floor(i / perRow), cc = i % perRow; if (rr % 2) cc = perRow - 1 - cc; var a = ramp(l, i * .03, .5 + i * .03);
+          tile(ctx, gx + (cc + .5) * s, gy + (rr + .5) * s * 1.45, s, i, colOf(SRC[i]), { seed: i, alpha: a, hl: i === HLI && l > 1.6 ? .9 : 0 }); }
+        var sz = W < 500 ? 13 : 16;
+        if (l > 1.4) { ctx.save(); ctx.globalAlpha = ramp(l, 1.4, 2); readout(ctx, 0, gy + rows * s * 1.45 + 10, [['memory: 24 numbers in a row', P.chalk], ['x.stride() = (12, 4, 1)', P.mint], ['x[1,2,1] -> 1*12 + 2*4 + 1*1 = 21', P.butter]], W, { center: true }); ctx.restore(); }
+        var p = ramp(l, 2.4, 3.4), fs = Math.max(200, Math.min(W, H) * .62) * ease.out(p);
+        if (p > 0) { ctx.save(); ctx.beginPath(); ctx.moveTo(W, H - fs); ctx.lineTo(W, H); ctx.lineTo(W - fs, H); ctx.closePath(); ctx.fillStyle = P.cream; ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 16; ctx.fill(); ctx.restore(); }
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 3.2, 3.9); var cxf = W - fs * .36, cyf = H - fs * .36;
+          F.hand(ctx, 'the computer never', cxf - sz * .45, cyf - sz * .45, sz, P.ink, { seed: 'r1', rot: -.785 }); F.hand(ctx, 'knew which was batch', cxf + sz * .45, cyf + sz * .45, sz, P.ink, { seed: 'r2', rot: -.785 }); ctx.restore(); }
+      } },
+    { name: 'the code', start: 60, dur: 6, cap: {
+        1: 'Everything you just watched fits in three lines. The tiles become the notation.',
+        2: 'This is Week 1 in code: a shape you can name, an einops pattern that says what happens to each axis, and einsum for pairing and summing.',
+        3: 'ARENA [0.0]: einops rearrange / reduce / repeat and einsum exercises; [0.1]: the same moves, batched over rays and triangles, to render a mesh.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var reg = tileReg(W, H), LS = L('stack', R_STACK, reg, 58);
+        var sz = W < 500 ? 13 : 18, lines = [['x.shape == (2, 3, 4)', P.pink], ["rearrange(x, 'b h w -> b (h w)')", P.mint], ["einsum(A, B, 'i j, j k -> i k')", P.lav]];
+        var w = Math.min(W - 24, Math.max.apply(null, lines.map(function (q) { return F.textW(ctx, q[0], sz, F.MONO); })) + 40); while (sz > 10 && w >= W - 24 && Math.max.apply(null, lines.map(function (q) { return F.textW(ctx, q[0], sz, F.MONO); })) + 40 > W - 24) { sz -= .5; }
+        var cardH = lines.length * sz * 2.1 + sz * 1.6, cy = H * .5, top = cy - cardH / 2;
+        // tiles fly into the card and dissolve
+        var tgt = SRC.map(function (s, i) { var li = i < 8 ? 0 : i < 16 ? 1 : 2; return { x: W / 2 - w / 2 + 30 + (i % 8) * (w - 60) / 7, y: top + sz * 1.6 + li * sz * 2.1, s: sz * .9 }; });
+        var pts = fly(LS.spots, tgt, ramp(l, 0, 1.8), .01);
+        F.paper(ctx, W / 2, cy, w, cardH, P.cream, { seed: 'codecard', rot: -.01 });
+        lines.forEach(function (q, i) { var a = ramp(l, 1.4 + i * .8, 2.1 + i * .8); ctx.save(); ctx.fillStyle = q[1]; ctx.globalAlpha = a * .8; ctx.fillRect(W / 2 - w / 2 + 10, top + sz * 1.6 + i * sz * 2.1 - sz * .1, 5, sz * .9); ctx.restore();
+          F.hand(ctx, q[0], W / 2 - w / 2 + 22, top + sz * 1.6 + i * sz * 2.1 + sz * .35, sz, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: q[0], reveal: a }); });
+        drawTiles(ctx, pts, { alpha: function () { return 1 - ramp(l, 1.2, 2.4); } });
+        ctx.save(); ctx.globalAlpha = ramp(l, 3.6, 4.2); lbl(ctx, 'each axis gets a name, every time', W / 2, top + cardH + 28, W < 500 ? 14 : 18, P.butter); ctx.restore();
+      } },
+    { name: 'why it matters', start: 66, dur: 6, cap: {
+        1: 'Inside an AI, every thought is a stack of numbers like this. To read its mind, you first have to know <b>which axis is which</b>.',
+        2: 'Inside a transformer, every thought is a tensor with shape <b>(batch, position, d_model)</b>. Reading minds starts with never losing track of an axis.',
+        3: 'The residual stream is (batch, seq, d_model); attention patterns are (batch, head, q_pos, k_pos). Probes, patching and steering vectors are all einsums over named axes.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var por = POR(W, H), es = Math.min(W, H) * (por ? .2 : .17), ex = W / 2, ey = H * (por ? .5 : .54);
+        var names = ['batch', 'position', 'd_model'];
+        F.egg(ctx, ex, ey, es, t, { clear: ramp(l, .3, 1.6), buttons: true, inner: function (c, s, clear) {
+          c.save(); c.globalAlpha = clear; var n = 5, q = s * .22;
+          for (var b = 2; b >= 0; b--) for (var r = 0; r < 3; r++) for (var k = 0; k < 4; k++) { var hue = ROWCOL[b % 2][r]; c.fillStyle = hue; c.globalAlpha = clear * (b ? .45 : .95); c.fillRect(-q * 2 + k * q + b * q * .35, -q * 2.2 + r * q - b * q * .35, q * .86, q * .86); }
+          c.restore(); } });
+        librarian(ctx, ex - es * 1.6, ey + es, es * .8, t, false);
+        ctx.save(); ctx.globalAlpha = ramp(l, 1.4, 2.1); tapeLabel(ctx, '(batch, position, d_model)', W / 2, ey + es * 1.45, W < 500 ? 13 : 17); ctx.restore();
+        ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'reading minds starts with\nnever losing track of an axis', W / 2, por ? 50 : 60, W < 500 ? 16 : 22, { color: P.pink, seed: 'mind', rot: .02 }); ctx.restore();
+        F.plane(ctx, lerp(-20, W + 20, l / 6), ey - es * 1.6, 11, .05, P.cream);
+      } }
+  ];
+
+  /* ================= coda: now you drive ================= */
+  var PATS = [
+    ['b h w -> b h w', null, 'start'],
+    ['b h w -> b (h w)', null], ['b h w -> (b h) w', null], ['b h w -> w h b', null], ['b h w -> h (b w)', null],
+    ['b h w -> b', 'sum'], ['b h w -> b', 'mean'], ['b h w -> h w', 'sum']
+  ];
+  var C = { pat: 0, from: null, to: null, p: 1, O: [0, 0], drag: false, reg: null, rreg: null, W: 0, H: 0, api: null };
+  function codaRegs(W, H) {
+    var por = POR(W, H), split = por ? .55 : .5;
+    if (por) { C.reg = { x: 14, y: 52, w: W - 28, h: H * split - 62 }; C.rreg = { x: 14, y: H * split + 30, w: W - 28, h: H * (1 - split) - 40 }; }
+    else { C.reg = { x: 14, y: 60, w: W * split - 28, h: H - 120 }; C.rreg = { x: W * split + 10, y: 60, w: W * (1 - split) - 24, h: H - 100 }; }
+  }
+  function codaLayout(k) { var q = PATS[k]; return layout(einops(q[0], q[1]), C.reg, 50); }
+  function choose(k) {
+    var now = C.to ? curSpots() : null; C.pat = k; C.to = codaLayout(k); C.from = now || C.to.spots; C.p = 0;
+    if (C.api) C.api.audio.blip(520 + k * 40);
+    [].forEach.call(document.querySelectorAll('.w1pat'), function (b) { b.setAttribute('aria-pressed', +b.dataset.k === k ? 'true' : 'false'); });
+  }
+  function curSpots() { return fly(C.from, C.to.spots, C.p, .012); }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      C.api = api;
+      var btn = function (q, k) { var rh = q[0].split('->')[1].trim(), t = q[1] ? q[1] + ' → ' + rh : q[2] ? 'b h w' : rh; return '<button class="w1pat" data-k="' + k + '" style="font:12px ui-monospace,Menlo,monospace;min-height:30px;padding:0 7px">' + t + '</button>'; };
+      panel.innerHTML = '<div style="font-size:13px;margin:0 0 5px">Tap a pattern: <code style="font-size:12px">\'b h w -> ?\'</code> (sum/mean = reduce). Drag the torch to aim the rays.</div><div style="display:flex;flex-wrap:wrap;gap:5px">' + PATS.map(btn).join('') + '</div>';
+      [].forEach.call(panel.querySelectorAll('.w1pat'), function (b) { b.onclick = function (e) { e.stopPropagation(); choose(+b.dataset.k); }; });
+      C.W = 0; C.to = null;
+    },
+    resize: function () { C.W = 0; },
+    down: function (x, y) { if (!C.rreg) return; var V = rayView(C.rreg), o = RS(V, C.O); if (Math.hypot(x - o[0], y - o[1]) < 44 || (x > C.rreg.x && y > C.rreg.y && y < C.rreg.y + C.rreg.h && x < C.rreg.x + C.rreg.w)) { C.drag = true; coda.move(x, y, null, true); } },
+    move: function (x, y, api, pressed) { if (!C.drag || !pressed || !C.rreg) return; var V = rayView(C.rreg); C.O = [clamp((x - V.ox) / V.s, -.3, 3.1), clamp(-(y - V.oy) / V.s, -1.35, 1.35)]; },
+    up: function () { C.drag = false; },
+    draw: function (ctx, t, W, H, api, dt) {
+      bg(ctx, W, H, t);
+      if (C.W !== W || C.H !== H) { C.W = W; C.H = H; codaRegs(W, H); var k = C.pat; C.to = codaLayout(k); C.from = C.to.spots; C.p = 1; choose(k); C.p = 1; }
+      C.p = Math.min(1, C.p + dt / 1.6);
+      var Lo = C.to, R = Lo.R, pts = curSpots(), red = !!R.red;
+      drawTrays(ctx, Lo, ramp(C.p, .6, 1), [R.pattern.split('->')[1].trim().split(/\s+/)[0]]);
+      var vals = null;
+      if (red && C.p > .85) { // reduced: every tile on a slot shows the combined value, the top one stays
+        vals = SRC.map(function (s, i) { return R.out[R.idx[i].join(',')]; });
+      }
+      drawTiles(ctx, pts, { vals: vals, alpha: red && C.p > .95 ? function (i) { var k = R.idx[i].join(','), first = R.idx.findIndex(function (q) { return q.join(',') === k; }); return i === first + (SRC.length / Object.keys(R.out).length) - 1 ? 1 : .15; } : null });
+      var sz = W < 500 ? 12 : 14, q = PATS[C.pat];
+      readout(ctx, C.reg.x - 4, 6, [[(q[1] ? 'reduce(x, \'' + q[0] + '\', \'' + q[1] + '\')' : 'rearrange(x, \'' + q[0] + '\')'), P.mint], ['(2, 3, 4) -> ' + shapeStr(R.shape) + (red ? '  = ' + Object.keys(R.out).map(function (k) { var v = R.out[k]; return Math.round(v) === v ? v : v.toFixed(1); }).join(', ') : ''), P.butter]], W);
+      // rays
+      var V = rayView(C.rreg), res = drawRays(ctx, V, C.O, 1, t), nh = res.filter(function (h) { return h.hit; }).length;
+      var o = RS(V, C.O); if (!C.drag) { ctx.save(); ctx.globalAlpha = .5 + .3 * Math.sin(t * 3); ctx.strokeStyle = P.butter; ctx.setLineDash([3, 4]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(o[0], o[1], 22, 0, 6.283); ctx.stroke(); ctx.restore(); }
+      readout(ctx, C.rreg.x - 4, C.rreg.y + C.rreg.h - (W < 500 ? 44 : 48), [['O = (' + C.O[0].toFixed(2) + ', ' + C.O[1].toFixed(2) + ')   hits ' + nh + '/9', P.butter], ['[' + res.map(function (h) { return h.hit ? 'T' : 'F'; }).join(' ') + ']', P.mint]], W);
+    }
+  };
+
+  F.play({
+    title: 'W1 · Every shape has a story',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: tensors & einops', href: '../../index.html#demo/tensors-einops' },
+      { label: 'Week 1 pack', href: '../../index.html#week-01' },
+      { label: 'Case: einops rearrange', href: '../../index.html#cases/einops-rearrange' },
+      { label: 'Case: broadcasting', href: '../../index.html#cases/broadcasting' },
+      { label: 'Sprint: day 1', href: '../../index.html#sprint/day-1' },
+      { label: 'Map: einops rearrange', href: '../../index.html#map/node=einops-rearrange' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
