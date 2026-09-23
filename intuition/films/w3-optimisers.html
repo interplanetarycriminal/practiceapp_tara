@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Which way is down</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /* ---------------- the real loss surface: a long ravine plus one small hill ---------------- */
+  var XM = 6, YM = 3, HX = 2, HY = -1.3, HA = 0.5, HS = 0.5;
+  function f(x, y) { return x * x / 20 + y * y + HA * Math.exp(-((x - HX) * (x - HX) + (y - HY) * (y - HY)) / HS); }
+  function grad(x, y) {
+    var e = HA * Math.exp(-((x - HX) * (x - HX) + (y - HY) * (y - HY)) / HS);
+    return [x / 10 - e * 2 * (x - HX) / HS, 2 * y - e * 2 * (y - HY) / HS];
+  }
+  /* real update rules, integrated step by step */
+  function run(opt, lr, x0, y0, n, noise) {
+    var p = [x0, y0], v = [0, 0], m = [0, 0], out = [], r = F.rng('mb' + opt), dead = false;
+    out.push({ x: p[0], y: p[1], L: f(p[0], p[1]), m: [0, 0], v: [0, 0], g: grad(p[0], p[1]) });
+    for (var k = 1; k <= n; k++) {
+      if (dead) { out.push(out[out.length - 1]); continue; }
+      var g = grad(p[0], p[1]);
+      if (noise) { g[0] += (r() - .5) * noise; g[1] += (r() - .5) * noise * 4; }
+      for (var i = 0; i < 2; i++) {
+        if (opt === 'sgd') p[i] -= lr * g[i];
+        else if (opt === 'mom') { v[i] = 0.9 * v[i] + g[i]; p[i] -= lr * v[i]; }
+        else { m[i] = 0.9 * m[i] + 0.1 * g[i]; v[i] = 0.999 * v[i] + 0.001 * g[i] * g[i];
+          var mh = m[i] / (1 - Math.pow(0.9, k)), vh = v[i] / (1 - Math.pow(0.999, k)); p[i] -= lr * mh / (Math.sqrt(vh) + 1e-8); }
+      }
+      if (Math.abs(p[0]) > XM * 1.4 || Math.abs(p[1]) > YM * 1.4 || !isFinite(p[0])) dead = true;
+      out.push({ x: p[0], y: p[1], L: f(p[0], p[1]), m: m.slice(), v: v.slice(), g: g, dead: dead });
+    }
+    return out;
+  }
+
+  /* ---------------- world <-> screen (portrait turns the ravine upright) ---------------- */
+  var V = { s: 1, cx: 0, cy: 0, por: false, W: 0, H: 0 };
+  function fit(W, H, top, bot) {
+    if (V.W === W && V.H === H) return;
+    V.W = W; V.H = H; V.por = H > W * 1.1;
+    var aw = W - 24, ah = H - (top || 0) - (bot || 0) - 16;
+    V.s = V.por ? Math.min(aw / (2 * YM), ah / (2 * XM)) : Math.min(aw / (2 * XM), ah / (2 * YM));
+    V.cx = W / 2; V.cy = (top || 0) + 8 + ah / 2; buildLand();
+  }
+  function S(x, y) { return V.por ? [V.cx + y * V.s, V.cy + x * V.s] : [V.cx + x * V.s, V.cy - y * V.s]; }
+  function Sv(dx, dy) { return V.por ? [dy * V.s, dx * V.s] : [dx * V.s, -dy * V.s]; }
+  function Winv(sx, sy) { return V.por ? [(sy - V.cy) / V.s, (sx - V.cx) / V.s] : [(sx - V.cx) / V.s, -(sy - V.cy) / V.s]; }
+
+  var land = null, BANDS = ['#e9f5e4', '#c4ead3', '#9fd8cb', '#86bfd9', '#8ea3dd', '#8f88cf', '#76689f', '#5b5486', '#474472', '#383661', '#2d2c52', '#25244a'];
+  function hex(h) { return [parseInt(h.substr(1, 2), 16), parseInt(h.substr(3, 2), 16), parseInt(h.substr(5, 2), 16)]; }
+  var BR = BANDS.map(hex);
+  function band(x, y) { return Math.min(BANDS.length - 1, Math.floor(Math.sqrt(f(x, y)) * 3.3)); }
+  function buildLand() {
+    var k = 2, w = Math.ceil(V.W / k), h = Math.ceil(V.H / k), c = document.createElement('canvas'); c.width = w; c.height = h;
+    var g = c.getContext('2d'), id = g.createImageData(w, h), B = new Int16Array(w * h);
+    for (var j = 0; j < h; j++) for (var i = 0; i < w; i++) { var q = Winv(i * k + k / 2, j * k + k / 2); B[j * w + i] = band(q[0], q[1]); }
+    var r = F.rng('land');
+    for (j = 0; j < h; j++) for (i = 0; i < w; i++) {
+      var b = B[j * w + i], col = BR[b], sh = 0;
+      if (i > 1 && j > 1 && B[(j - 2) * w + i - 1] > b) sh = -38; else if (i < w - 1 && j < h - 1 && B[(j + 1) * w + i + 1] > b) sh = 16;
+      var n = (r() - .5) * 14, o = (j * w + i) * 4;
+      id.data[o] = clamp(col[0] + sh + n, 0, 255); id.data[o + 1] = clamp(col[1] + sh + n, 0, 255); id.data[o + 2] = clamp(col[2] + sh + n, 0, 255); id.data[o + 3] = 255;
+    }
+    g.putImageData(id, 0, 0); land = c;
+  }
+  function drawLand(ctx, W, H, t, shimmer) {
+    var a = S(-XM, -YM), b = S(XM, YM), x0 = Math.min(a[0], b[0]), y0 = Math.min(a[1], b[1]), w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
+    F.paper(ctx, x0 + w / 2, y0 + h / 2, w + 10, h + 10, '#2d2c52', { seed: 'landpaper', blur: 14 });
+    ctx.save(); ctx.beginPath(); var pts = F.tornRect('landclip', w, h, 1.2); ctx.translate(x0 + w / 2, y0 + h / 2);
+    ctx.moveTo(pts[0][0], pts[0][1]); for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.closePath(); ctx.clip();
+    ctx.translate(-(x0 + w / 2), -(y0 + h / 2));
+    ctx.imageSmoothingEnabled = true;
+    if (shimmer) { var j = shimmer * 3; ctx.drawImage(land, Math.sin(t * 23) * j, Math.cos(t * 19) * j, W, H); ctx.globalAlpha = .45; ctx.drawImage(land, Math.cos(t * 31) * j * 2, Math.sin(t * 17) * j * 2, W, H); ctx.globalAlpha = 1; }
+    else ctx.drawImage(land, 0, 0, W, H);
+    ctx.fillStyle = F.grain(ctx); ctx.globalAlpha = .5; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1;
+    ctx.restore();
+    var m = S(0, 0); F.lantern(ctx, m[0], m[1] + 4, 9, 1, t); // the wish: the lantern at the valley floor
+  }
+  function bg(ctx, W, H, t) { F.sky(ctx, W, H, P.night, '#2b2f5c'); F.stars(ctx, W, H, t, 'w3', 60); F.moon(ctx, W - 34, 30, 13); }
+
+  var START = [-5.2, 2.2];
+  var RATE = 5; // optimiser steps per second of film
+  function pos(tr, k) { var i = Math.floor(k), fr = k - i; if (i >= tr.length - 1) return tr[tr.length - 1]; var a = tr[i], b = tr[i + 1]; return { x: lerp(a.x, b.x, F.ease.inOut(fr)), y: lerp(a.y, b.y, F.ease.inOut(fr)), L: a.L, i: i }; }
+  function trail(ctx, tr, k, color, wdt, dotted) {
+    var n = Math.min(tr.length - 1, Math.floor(k)); ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = wdt || 2.5; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    if (dotted) ctx.setLineDash([2, 5]);
+    ctx.beginPath(); var p = S(tr[0].x, tr[0].y); ctx.moveTo(p[0], p[1]);
+    for (var i = 1; i <= n; i++) { p = S(tr[i].x, tr[i].y); ctx.lineTo(p[0], p[1]); }
+    var q = pos(tr, k); p = S(q.x, q.y); ctx.lineTo(p[0], p[1]); ctx.stroke();
+    ctx.setLineDash([]); ctx.fillStyle = color; for (i = 0; i <= n; i++) { p = S(tr[i].x, tr[i].y); ctx.beginPath(); ctx.arc(p[0], p[1], 2.2, 0, 6.283); ctx.fill(); }
+    ctx.restore();
+  }
+  function hiker(ctx, q, t, sz, o) { var p = S(q.x, q.y); F.person(ctx, p[0], p[1], sz || Math.max(20, V.s * .5), t, o || { walk: true }); }
+  function marble(ctx, q, r, color) { var p = S(q.x, q.y); F.blob(ctx, p[0], p[1], r, color, { seed: 'marble', jit: .3, blur: 6 }); ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.beginPath(); ctx.arc(p[0] - r * .35, p[1] - r * .35, r * .28, 0, 6.283); ctx.fill(); }
+  function stepArrow(ctx, q, lr, color) { var g = grad(q.x, q.y), p = S(q.x, q.y), d = Sv(-lr * g[0], -lr * g[1]), L = Math.hypot(d[0], d[1]), c = Math.min(1, V.s * 2.2 / (L || 1)); F.arrow(ctx, p[0], p[1], p[0] + d[0] * c, p[1] + d[1] * c, color || P.chalk, 3, 'a' + Math.round(q.x * 10)); }
+  function readout(ctx, x, y, lines, W) {
+    var sz = W < 500 ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.88)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+  }
+  var TOPPAD = function (W, H) { return H > W * 1.1 ? 64 : 10; };
+  function question(ctx, W, H, local, a) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+    var sz = W < 500 ? 17 : 22; F.note(ctx, 'which way is down,\nand how big a step?', W < 500 ? W / 2 : W * .6, W < 500 ? 36 : 56, sz, { rot: -.03, seed: 'q', reveal: ramp(local, 0, 1.8) });
+    ctx.restore();
+  }
+  function lbl(ctx, text, x, y, color, sz) { F.hand(ctx, text, x, y, sz || 16, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.75)', seed: text }); }
+
+  var LR = { sgd: 0.9, small: 0.08, big: 1.08, mom: 0.1, adam: 0.3 };
+  var TR = {}; function tr(name, opt, lr, n) { if (!TR[name]) TR[name] = run(opt, lr, START[0], START[1], n); return TR[name]; }
+
+  var chapters = [
+    { name: 'the wish', start: 0, dur: 6, cap: {
+        1: 'A little walker is lost on a hilly map at night. They want one thing: to reach the <b>lowest valley</b>, where the lantern glows.',
+        2: 'The map is a <b>loss surface</b>: height = how wrong the model is. The walker is the model\'s weights. Training = walking downhill.',
+        3: 'f(x,y) = x²/20 + y² + a small Gaussian bump. Condition number 20 along the ravine: exactly the geometry where plain SGD struggles.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOPPAD(W, H), 0); bg(ctx, W, H, t); drawLand(ctx, W, H, t);
+        var q = { x: START[0], y: START[1] }; hiker(ctx, q, t, null, { walk: false });
+        F.plane(ctx, lerp(-30, W + 30, (l / 6)), H * .3 + Math.sin(l * 2) * 12, 12, .1, P.cream);
+        question(ctx, W, H, l, ramp(l, .3, 1));
+      } },
+    { name: 'feel the slope', start: 6, dur: 6, cap: {
+        1: 'It is dark. The walker can\'t see the valley. They can only feel which way the ground tilts under their feet. The chalk arrow points <b>downhill</b>.',
+        2: 'The arrow is the <b>negative gradient</b>, computed right here from the real formula. It points the steepest way down, from this spot only.',
+        3: 'Arrow = −∇f(p), drawn in screen space. In a ravine −∇f points mostly across the valley, not along it: that is why the walk will zig-zag.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOPPAD(W, H), 0); bg(ctx, W, H, t); drawLand(ctx, W, H, t);
+        var q = { x: START[0], y: START[1] };
+        // darkness: we only see near our feet
+        var p = S(q.x, q.y); ctx.save(); var g = ctx.createRadialGradient(p[0], p[1], V.s * .8, p[0], p[1], V.s * 3.5);
+        g.addColorStop(0, 'rgba(10,10,30,0)'); g.addColorStop(1, 'rgba(10,10,30,' + .7 * ramp(l, 0, 1.5) + ')'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.restore();
+        stepArrow(ctx, q, .6 * ramp(l, 1, 2.5)); hiker(ctx, q, t, null, { walk: false });
+        var gr = grad(q.x, q.y); readout(ctx, 12, H - 64, [['−∇f = (' + (-gr[0]).toFixed(2) + ', ' + (-gr[1]).toFixed(2) + ')', P.butter], ['loss = ' + f(q.x, q.y).toFixed(2)]], W);
+        question(ctx, W, H, 9, 1);
+      } },
+    { name: 'SGD', start: 12, dur: 8, cap: {
+        1: 'Rule: take a step the way the arrow points. Repeat. It works, but in a narrow valley the walker <b>zig-zags</b> wall to wall.',
+        2: 'Plain gradient descent, lr = 0.9. Each dot is one real update. Steep sides make it bounce; the gentle floor makes progress slow.',
+        3: 'p ← p − η∇f with η=0.9: across-valley factor 1−2η = −0.8 (oscillates), along-valley 1−η/10 = 0.91 (crawls). Watch both in the trail.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOPPAD(W, H), 0); bg(ctx, W, H, t); drawLand(ctx, W, H, t);
+        var T = tr('sgd', 'sgd', LR.sgd, 60), k = l * RATE; trail(ctx, T, k, P.butter); var q = pos(T, k);
+        stepArrow(ctx, T[Math.min(T.length - 1, Math.floor(k))], LR.sgd * .6); hiker(ctx, q, t);
+        readout(ctx, 12, H - 64, [['SGD  lr=0.9   step ' + Math.floor(k), P.butter], ['loss = ' + f(q.x, q.y).toFixed(3)]], W);
+      } },
+    { name: 'step size', start: 20, dur: 8, cap: {
+        1: 'Step size matters. Tiny steps: safe but painfully slow. Huge steps: the walker <b>overshoots</b> and flies right out of the valley.',
+        2: 'Learning rate too small (0.08, pink) crawls. Too big (1.08, orange) overshoots further every step and diverges. Same slope, different lr.',
+        3: 'Stability needs η < 2/λ_max = 1.0 here. At 1.08 the across-valley factor is −1.16: every bounce 16% bigger. At 0.08 the along-valley factor is 0.992.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOPPAD(W, H), 0); bg(ctx, W, H, t); drawLand(ctx, W, H, t);
+        var A = tr('small', 'sgd', LR.small, 60), B = tr('big', 'sgd', LR.big, 60), k = l * RATE;
+        trail(ctx, A, k, P.pink); trail(ctx, B, Math.min(k, 40), P.orange);
+        var qa = pos(A, k), qb = pos(B, Math.min(k, 40)); marble(ctx, qa, 8, P.pink);
+        if (!B[Math.min(B.length - 1, Math.floor(k))].dead) marble(ctx, qb, 8, P.orange);
+        else { var pb = S(clamp(qb.x, -XM, XM), clamp(qb.y, -YM, YM)); lbl(ctx, 'boing!', pb[0], pb[1], P.orange, 20); }
+        readout(ctx, 12, H - 64, [['lr=0.08  loss ' + f(qa.x, qa.y).toFixed(2), P.pink], ['lr=1.08  loss ' + (isFinite(qb.L) ? f(qb.x, qb.y).toFixed(1) : '∞'), P.orange]], W);
+      } },
+    { name: 'momentum', start: 28, dur: 8, cap: {
+        1: 'Now make the walker a <b>heavy marble</b>, like the ones on a Newton\'s cradle. It remembers where it was rolling, so the side-to-side bouncing cancels out.',
+        2: '<b>Momentum</b> (β = 0.9) keeps a running velocity. Back-and-forth pushes cancel; the steady push along the valley floor adds up.',
+        3: 'v ← 0.9v + g; p ← p − ηv, η=0.1. Effective step along the floor ≈ η/(1−β) = 1.0, ten times plain SGD at the same η. Faint line: SGD for comparison.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOPPAD(W, H), 0); bg(ctx, W, H, t); drawLand(ctx, W, H, t);
+        var S0 = tr('sgdsame', 'sgd', LR.mom, 60), M = tr('mom', 'mom', LR.mom, 60), k = l * RATE;
+        trail(ctx, S0, k, 'rgba(255,255,255,.45)', 1.5, true); trail(ctx, M, k, P.teal, 3);
+        var q = pos(M, k); marble(ctx, q, 11, P.teal);
+        var i = Math.min(M.length - 1, Math.floor(k)); readout(ctx, 12, H - 64, [['momentum β=0.9  lr=0.1', P.teal], ['loss ' + f(q.x, q.y).toFixed(3) + '  (SGD ' + pos(S0, k).L.toFixed(2) + ')']], W);
+        // tiny Newton's cradle
+        var cx = W - 70, cy = TOPPAD(W, H) + 20, sw = Math.sin(t * 4); ctx.save(); ctx.strokeStyle = P.chalk; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(cx - 40, cy); ctx.lineTo(cx + 40, cy); ctx.stroke();
+        for (var b = -2; b <= 2; b++) { var ang = (b === -2 ? Math.min(0, sw) : b === 2 ? Math.max(0, sw) : 0) * .6, bx = cx + b * 14 + Math.sin(ang) * 36, by = cy + Math.cos(ang) * 36; ctx.beginPath(); ctx.moveTo(cx + b * 14, cy); ctx.lineTo(bx, by); ctx.stroke(); ctx.fillStyle = '#cfd3e6'; ctx.beginPath(); ctx.arc(bx, by, 7, 0, 6.283); ctx.fill(); }
+        ctx.restore();
+      } },
+    { name: 'Adam', start: 36, dur: 9, cap: {
+        1: 'The smartest walker has two dials: one remembers the <b>direction</b>, one remembers how <b>bumpy</b> each direction has been. Bumpy way: small steps. Smooth way: bigger steps.',
+        2: '<b>Adam</b> keeps two running averages per weight: m (average gradient) and v (average squared gradient). Step = m / √v, so each direction gets its own step size.',
+        3: 'm ← 0.9m + 0.1g, v ← 0.999v + 0.001g², bias-corrected; Δp = −η m̂/(√v̂+ε), η=0.3. Near the minimum it jitters on a scale ~η: why people decay the lr.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOPPAD(W, H), 0); bg(ctx, W, H, t); drawLand(ctx, W, H, t);
+        var A = tr('adam', 'adam', LR.adam, 60), k = l * RATE; trail(ctx, A, k, P.lav, 3); var q = pos(A, k); hiker(ctx, q, t, null, { walk: true, coat: P.lav, scarf: P.butter });
+        var s = A[Math.min(A.length - 1, Math.floor(k))], i = Math.min(A.length - 1, Math.floor(k)), bc1 = 1 - Math.pow(.9, Math.max(1, i)), bc2 = 1 - Math.pow(.999, Math.max(1, i));
+        // two gauges: m-hat and sqrt(v-hat) along/across
+        var gx = W - 12, gy = TOPPAD(W, H) + 6, gw = W < 500 ? 150 : 190;
+        F.paper(ctx, gx - gw / 2, gy + 50, gw, 96, P.cream, { seed: 'gauges', rot: .02 });
+        var bars = [['m along', s.m[0] / bc1, P.orange], ['m across', s.m[1] / bc1, P.orange], ['√v along', Math.sqrt(s.v[0] / bc2), P.teal], ['√v across', Math.sqrt(s.v[1] / bc2), P.teal]];
+        bars.forEach(function (b, j) {
+          var y = gy + 14 + j * 20, x0 = gx - gw + 72, bw = gw - 84, val = clamp(Math.sign(b[1]) * Math.sqrt(Math.abs(b[1])) / 1.6, -1, 1);
+          F.hand(ctx, b[0], gx - gw + 8, y, 12, P.ink, { align: 'left', seed: b[0] });
+          ctx.fillStyle = 'rgba(0,0,0,.12)'; ctx.fillRect(x0, y - 5, bw, 10); ctx.fillStyle = b[2]; ctx.fillRect(x0 + bw / 2, y - 5, val * bw / 2, 10);
+          ctx.fillStyle = P.ink; ctx.fillRect(x0 + bw / 2, y - 7, 1.5, 14);
+        });
+        readout(ctx, 12, H - 64, [['Adam  lr=0.3   step ' + i, P.lav], ['loss = ' + f(q.x, q.y).toFixed(3)]], W);
+      } },
+    { name: 'loss boy', start: 45, dur: 6, cap: {
+        1: 'Our little handheld draws each walker\'s height over time. Lower line = closer to the lantern.',
+        2: 'Same start, three optimisers. The loss curve is what you actually watch while training; you never see the landscape itself.',
+        3: 'log₁₀ loss vs step (steps 0–60). Momentum and Adam both beat tuned SGD here; on other surfaces the ranking can flip.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOPPAD(W, H), 0); bg(ctx, W, H, t); ctx.globalAlpha = .35; drawLand(ctx, W, H, t); ctx.globalAlpha = 1;
+        var gw = Math.min(W - 40, 460), gh = gw * .72, gx = (W - gw) / 2, gy = (H - gh) / 2 - 10;
+        var r = F.gameboy(ctx, gx, gy, gw, gh, { label: 'LOSS BOY' });
+        var runs = [['sgd', tr('sgd', 'sgd', LR.sgd, 60), '#2f5d3a'], ['mom', tr('mom', 'mom', LR.mom, 60), '#1f3f7a'], ['adam', tr('adam', 'adam', LR.adam, 60), '#6b2f7a']];
+        var n = Math.floor(ramp(l, .3, 4.5) * 60);
+        runs.forEach(function (R, j) {
+          ctx.save(); ctx.strokeStyle = R[2]; ctx.lineWidth = 2.5; ctx.beginPath();
+          for (var i = 0; i <= n; i++) { var L = Math.log10(Math.max(1e-4, R[1][i].L)), x = r.x + 8 + (r.w - 16) * i / 60, y = r.y + 8 + (r.h - 30) * (1 - (L + 4) / 5); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
+          ctx.stroke(); ctx.restore();
+          ctx.fillStyle = R[2]; ctx.font = '700 12px ' + F.MONO; ctx.fillText(['SGD', 'MOMENTUM', 'ADAM'][j], r.x + 10 + j * (r.w / 3.2), r.y + r.h - 8);
+        });
+      } },
+    { name: 'where it stops being true', start: 51, dur: 6, cap: {
+        1: 'Honest bit: real maps have <b>millions</b> of directions, not two. And the ground itself <b>shimmers</b>: every batch of data tilts it a little differently.',
+        2: 'Real networks: millions to billions of dimensions. Minibatch noise means each step sees a noisy slope. Nobody ever sees the landscape, only the local tilt.',
+        3: 'Stochastic gradients are unbiased but noisy; the noise scale ∝ lr/batch size acts as implicit regularisation. High-dim surfaces are mostly saddles, not little bowls.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOPPAD(W, H), 0); bg(ctx, W, H, t); drawLand(ctx, W, H, t, ramp(l, 0, 1.5));
+        var N = run('sgd', 0.3, START[0], START[1], 60, 3.0), k = l * RATE * 1.5; trail(ctx, N, k, P.butter, 2); hiker(ctx, pos(N, k), t);
+        var p = ramp(l, .6, 1.6); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) {
+          ctx.save(); ctx.globalAlpha = ramp(l, 1.4, 2.2); var sz = W < 500 ? 14 : 18, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .22;
+          F.hand(ctx, 'really: 10⁹ directions', x, y - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 });
+          F.hand(ctx, 'and a shaky floor', x + sz * .8, y, sz, P.ink, { seed: 'r2', rot: -.6 });
+          ctx.restore();
+        }
+      } },
+    { name: 'the code', start: 57, dur: 8, cap: {
+        1: 'Every step you just watched is one line of code. That is all an optimiser is.',
+        2: 'The hiker\'s step becomes the real PyTorch-style update. You will write these by hand this Saturday in [0.3].',
+        3: 'ARENA [0.3]: implement SGD (with momentum, weight decay), RMSprop and Adam as torch.optim-compatible classes, then compare them with sweeps.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOPPAD(W, H), 0); bg(ctx, W, H, t); ctx.globalAlpha = .25; drawLand(ctx, W, H, t); ctx.globalAlpha = 1;
+        var sz = W < 500 ? 13 : 18, lines = [
+          ['SGD', ['p -= lr * p.grad'], P.butter, 0],
+          ['momentum', ['v = mu*v + g', 'p -= lr * v'], P.teal, 2],
+          ['Adam', ['m = b1*m + (1-b1)*g', 'v = b2*v + (1-b2)*g*g', 'p -= lr * m_hat/(sqrt(v_hat)+eps)'], P.lav, 4]];
+        var y = H * .16;
+        lines.forEach(function (L, j) {
+          var a = ramp(l, L[3] * .9, L[3] * .9 + .8); if (a <= 0) return;
+          ctx.save(); ctx.globalAlpha = a; var h = L[1].length * sz * 1.5 + sz * 2;
+          var w = Math.min(W - 24, Math.max.apply(null, L[1].map(function (s) { return F.textW(ctx, s, sz, F.MONO); })) + 40);
+          F.paper(ctx, W / 2, y + h / 2, w, h, P.cream, { seed: 'code' + j, rot: (j - 1) * .015 });
+          F.hand(ctx, L[0], W / 2 - w / 2 + 14, y + sz, sz * .95, '#6b5a9a', { align: 'left', seed: L[0] });
+          L[1].forEach(function (s, i) { F.hand(ctx, s, W / 2 - w / 2 + 14, y + sz * 2.2 + i * sz * 1.5, sz, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: s, reveal: ramp(l, L[3] * .9 + .2 + i * .3, L[3] * .9 + 1 + i * .3) }); });
+          ctx.restore(); y += h + 14;
+        });
+      } },
+    { name: 'why it matters', start: 65, dur: 5, cap: {
+        1: 'Every AI you will ever look inside was shaped by this walk. Knowing the walk tells you what shapes it leaves behind.',
+        2: 'Every model you\'ll ever look inside was carved by this walk. Knowing the walk tells you what shapes it leaves behind.',
+        3: 'Optimiser choice leaves fingerprints: Adam\'s per-coordinate scaling shapes privileged bases and outlier features that interpretability later has to explain.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOPPAD(W, H), 0); bg(ctx, W, H, t); drawLand(ctx, W, H, t);
+        var A = tr('adam', 'adam', LR.adam, 60); trail(ctx, A, 60, P.lav, 3); hiker(ctx, A[60], t, null, { walk: false, coat: P.lav, scarf: P.butter });
+        var sz = W < 500 ? 17 : 24; ctx.save(); ctx.globalAlpha = ramp(l, .2, 1);
+        F.note(ctx, 'every model you\'ll look inside\nwas carved by this walk', W / 2, W < 500 ? 40 : 60, sz, { color: P.pink, seed: 'carved', rot: .02 }); ctx.restore();
+      } }
+  ];
+
+  /* ---------------- coda: now you drive ---------------- */
+  var C = { start: null, opt: 'race', lr: 0.3, runs: [], k: 0 };
+  var COL = { sgd: P.butter, mom: P.teal, adam: P.lav };
+  function codaReset() { var s = C.start || START; C.runs = (C.opt === 'race' ? ['sgd', 'mom', 'adam'] : [C.opt]).map(function (o) { return { o: o, tr: run(o, C.lr, s[0], s[1], 300) }; }); C.k = 0; }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px">' +
+        '<span>Tap the map to drop a walker.</span>' +
+        '<select aria-label="Optimiser" style="font:inherit;border-radius:8px;padding:4px"><option value="race">Race all 3</option><option value="sgd">SGD</option><option value="mom">Momentum</option><option value="adam">Adam</option></select>' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:180px">lr <input type="range" min="-2" max="0.3" step="0.01" value="' + Math.log10(C.lr) + '" style="flex:1"> <b class="lrv"></b></label></div>';
+      var sel = panel.querySelector('select'), rg = panel.querySelector('input'), lv = panel.querySelector('.lrv');
+      sel.value = C.opt; var upd = function () { C.lr = Math.pow(10, +rg.value); lv.textContent = C.lr.toFixed(C.lr < .1 ? 3 : 2); };
+      upd(); sel.onchange = function () { C.opt = sel.value; codaReset(); }; rg.oninput = function () { upd(); codaReset(); };
+      codaReset();
+    },
+    down: function (x, y, api) { var w = Winv(x, y); if (Math.abs(w[0]) <= XM && Math.abs(w[1]) <= YM) { C.start = w; codaReset(); api.audio.blip(660); } },
+    draw: function (ctx, t, W, H, api, dt) {
+      fit(W, H, 10, 0); bg(ctx, W, H, t); drawLand(ctx, W, H, t);
+      C.k = Math.min(300, C.k + dt * 6);
+      var lines = [];
+      C.runs.forEach(function (R) { trail(ctx, R.tr, C.k, COL[R.o], 2.5); var q = pos(R.tr, C.k), i = Math.min(300, Math.floor(C.k)); marble(ctx, q, 8, COL[R.o]);
+        lines.push([{ sgd: 'SGD     ', mom: 'Momentum', adam: 'Adam    ' }[R.o] + ' loss ' + (R.tr[i].dead ? 'diverged' : R.tr[i].L.toExponential(1)), COL[R.o]]); });
+      lines.unshift(['step ' + Math.floor(C.k) + '  lr=' + C.lr.toFixed(C.lr < .1 ? 3 : 2), P.chalk]);
+      readout(ctx, 10, 10, lines, W);
+    }
+  };
+
+  F.play({
+    title: 'W3 · Which way is down?',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: backprop & training', href: '../../index.html#demo/backprop-training' },
+      { label: 'Week 3 pack', href: '../../index.html#week-03' },
+      { label: 'Map: SGD', href: '../../index.html#map/node=sgd' },
+      { label: 'Map: Adam', href: '../../index.html#map/node=adam' },
+      { label: 'Case: AdamW vs Adam', href: '../../index.html#cases/adamw-vs-adam' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>

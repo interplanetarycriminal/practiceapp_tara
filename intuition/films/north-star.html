@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>North Star</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  var PH = {
+    fund: { c: P.peach, name: 'Fundamentals', say: 'build the machine' },
+    tfm: { c: P.sky, name: 'Transformers', say: 'build the mind' },
+    mi: { c: P.mint, name: 'Mech interp', say: 'learn to look inside' },
+    rl: { c: P.pink, name: 'RL', say: 'how minds learn from reward' },
+    ev: { c: P.lav, name: 'Evals', say: 'test what it will do' },
+    cap: { c: P.butter, name: 'Capstone', say: 'your own experiment' }
+  };
+  var STOPS = [
+    ['12 Sep', 'fund', 'Einops & ray tracing', 'Tensors become a language you can think in.'],
+    ['19 Sep', 'fund', 'Modules & ResNets', 'Build a real network out of Lego-like modules.'],
+    ['26 Sep', 'fund', 'Optimisers & sweeps', 'How a model walks downhill to learn (SGD, momentum, Adam).'],
+    ['3 Oct', 'fund', 'Your own autograd', 'Write backprop yourself. No magic left in the machine.'],
+    ['10 Oct', 'tfm', 'Transformer from scratch', 'Build the mind: attention, MLPs, the residual stream.'],
+    ['17 Oct', 'tfm', 'Hooks & the cache', 'Tap any wire inside a running model and read it.'],
+    ['24 Oct', 'mi', 'Induction circuits & patching', 'Find a real circuit, then prove it by surgery.'],
+    ['31 Oct', 'mi', 'Superposition & SAEs', 'Why features overlap, and how to pull them apart.'],
+    ['7 Nov', 'rl', 'Value functions & DQN', 'How an agent learns what is worth doing from reward.'],
+    ['14 Nov', 'rl', 'PPO & RLHF', 'The reward loop that shapes chat models.'],
+    ['21 Nov', 'ev', 'Evals, Inspect & AI control', 'Test what a model will actually do, not what it says.'],
+    ['28 Nov', 'cap', 'Capstone I', 'Pick your own question about a model.'],
+    ['5 Dec', 'cap', 'Capstone II', 'Run the experiment, break it, fix it.'],
+    ['12 Dec', 'cap', 'Capstone talk', 'Show what you found inside.']
+  ];
+  var DONE = 2, NOW = 2; // W1-2 done, W3 is this Saturday
+
+  /* ---------------- layout ---------------- */
+  var LY = null;
+  function layout(W, H) {
+    if (LY && LY.W === W && LY.H === H) return LY;
+    var por = H > W * 1.1, L = { W: W, H: H, por: por };
+    if (por) {
+      L.map = { x: 10, y: H * .30, w: W - 20, h: H * .68 }; L.card = { x: W * .22, y: H * .15, s: Math.min(W, H) * .085 };
+      L.noteP = { x: W * .64, y: H * .15 }; L.hero = { x: W * .64, y: H * .42, s: W * .2 }; L.fig = { x: W * .24, y: H * .8, s: H * .13 };
+    } else {
+      L.map = { x: 14, y: 14, w: W * .66, h: H - 28 }; L.card = { x: W * .845, y: H * .33, s: Math.min(W, H) * .11 };
+      L.noteP = { x: W * .845, y: H * .68 }; L.hero = { x: W * .6, y: H * .48, s: H * .2 }; L.fig = { x: W * .3, y: H * .8, s: H * .2 };
+    }
+    var cols = por ? 3 : 5, m = L.map, px = m.w * (por ? .17 : .1), py = m.h * (por ? .1 : .16), rows = Math.ceil(14 / cols);
+    L.stops = STOPS.map(function (s, i) {
+      var r = Math.floor(i / cols), c = i % cols; if (r % 2) c = cols - 1 - c;
+      var x = m.x + px + (m.w - 2 * px) * (cols > 1 ? c / (cols - 1) : .5), y = m.y + py + (m.h - 2 * py) * (rows > 1 ? r / (rows - 1) : .5);
+      var j = F.rng('st' + i); return { x: x + (j() - .5) * 14, y: y + (j() - .5) * 10 };
+    });
+    L.sr = Math.max(13, Math.min(22, m.w / 22));
+    LY = L; return L;
+  }
+
+  /* ---------------- timeline helpers (all from global time t) ---------------- */
+  var WALK = [[12, 0], [20, 3], [26, 5], [33, 7], [39, 10], [43, 13]];
+  function stopAt(t) { if (t <= WALK[0][0]) return 0; for (var i = 1; i < WALK.length; i++) if (t < WALK[i][0]) return lerp(WALK[i - 1][1], WALK[i][1], F.ease.inOut((t - WALK[i - 1][0]) / (WALK[i][0] - WALK[i - 1][0]))); return 13; }
+  function clearAt(t) { return t < 12 ? 0 : t < 20 ? .15 * ramp(t, 12, 20) : t < 26 ? lerp(.15, .35, ramp(t, 20, 26)) : t < 33 ? lerp(.35, .85, ramp(t, 26, 33)) : lerp(.85, 1, ramp(t, 33, 39)); }
+  function heroAt(t) { return clamp(1 - ramp(t, 6, 7.6) + ramp(t, 43, 44.6), 0, 1); }
+  var FEATS = [
+    { x: -.45, y: -.55, c: 'rgba(255,214,120,.9)', name: 'cat' }, { x: .35, y: -.7, c: 'rgba(160,220,255,.9)', name: 'French' },
+    { x: .05, y: -.2, c: 'rgba(255,170,190,.9)', name: 'honesty' }, { x: -.5, y: .15, c: 'rgba(185,227,204,.9)', name: 'code' },
+    { x: .5, y: .05, c: 'rgba(200,184,234,.9)', name: 'Paris' }, { x: -.1, y: .35, c: 'rgba(255,214,120,.9)', name: 'plan' },
+    { x: .3, y: .45, c: 'rgba(160,220,255,.9)', name: 'past tense' }
+  ];
+  function feats(clear, dim) { return FEATS.map(function (f, i) { return { x: f.x, y: f.y, c: f.c, on: ramp(clear, .12 + i * .1, .3 + i * .1) * (dim == null ? 1 : dim) }; }); }
+  function pathPos(L, s) { var i = Math.min(12, Math.floor(s)), fr = s - i, a = L.stops[i], b = L.stops[Math.min(13, i + 1)]; return { x: lerp(a.x, b.x, fr), y: lerp(a.y, b.y, fr) }; }
+
+  /* ---------------- scene pieces ---------------- */
+  function bg(ctx, W, H, t) { F.sky(ctx, W, H, '#1a1f3d', '#34386e'); F.stars(ctx, W, H, t, 'ns', 80); F.moon(ctx, W - 30, 28, 12); }
+  var HC = {};
+  function hillPts(W, H, k) {
+    var key = W + 'x' + H + k; if (HC[key]) return HC[key];
+    var r = F.rng('hill' + k), pts = [], base = H * (k ? .86 : .8), n = Math.ceil(W / 8);
+    for (var i = 0; i <= n; i++) { var x = i / n * (W + 20) - 10; pts.push([x, base - Math.sin(x / W * 3.1 + k * 2) * H * .05 - Math.sin(x / W * 9 + k) * H * .012 + (r() - .5) * 3]); }
+    pts.push([W + 10, H + 10]); pts.push([-10, H + 10]); HC[key] = pts; return pts;
+  }
+  function hills(ctx, W, H, t, a) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+    F.fillPaper(ctx, hillPts(W, H, 0), '#3d4a7a', { blur: 12 });
+    // little paper houses with lit windows on the far hill
+    var r = F.rng('houses');
+    for (var i = 0; i < 6; i++) { var x = W * (.45 + i * .09) + r() * 10, hp = hillPts(W, H, 0), y = hp[Math.round((x + 10) / (W + 20) * (hp.length - 3))][1] + 5, w = 22 + r() * 16, h = 28 + r() * 26;
+      F.paper(ctx, x, y - h / 2, w, h, ['#586396', '#4f5a8c', '#65709f'][i % 3], { seed: 'house' + i, shadow: false });
+      ctx.fillStyle = r() < .7 ? 'rgba(255,220,140,.9)' : 'rgba(40,40,70,.8)'; ctx.fillRect(x - 4, y - h * .7, 6, 6); ctx.fillRect(x + 3, y - h * .7, 6, 6); }
+    F.fillPaper(ctx, hillPts(W, H, 1), '#2b3561', { blur: 14 });
+    ctx.restore();
+  }
+  function drawMap(ctx, L, t, a, reveal, opts) {
+    if (a <= 0) return; opts = opts || {}; var m = L.map;
+    ctx.save(); ctx.globalAlpha = a;
+    var rv = F.ease.out(reveal == null ? 1 : reveal);
+    ctx.save(); ctx.beginPath(); ctx.rect(m.x - 10, m.y - 10, m.w + 20, (m.h + 20) * rv); ctx.clip();
+    F.paper(ctx, m.x + m.w / 2, m.y + m.h / 2, m.w, m.h, '#efe3c8', { seed: 'map', blur: 14 });
+    // faint grid + compass
+    ctx.strokeStyle = 'rgba(120,90,60,.12)'; ctx.lineWidth = 1;
+    for (var gx = m.x + 20; gx < m.x + m.w; gx += 32) { ctx.beginPath(); ctx.moveTo(gx, m.y + 6); ctx.lineTo(gx, m.y + m.h - 6); ctx.stroke(); }
+    for (var gy = m.y + 20; gy < m.y + m.h; gy += 32) { ctx.beginPath(); ctx.moveTo(m.x + 6, gy); ctx.lineTo(m.x + m.w - 6, gy); ctx.stroke(); }
+    // dotted path
+    ctx.setLineDash([3, 7]); ctx.strokeStyle = 'rgba(70,50,40,.55)'; ctx.lineWidth = 2.2; ctx.beginPath();
+    L.stops.forEach(function (p, i) { if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y); }); ctx.stroke(); ctx.setLineDash([]);
+    ctx.restore();
+    var sr = L.sr, pop = opts.pop == null ? 1 : opts.pop;
+    L.stops.forEach(function (p, i) {
+      var k = F.ease.back(clamp(pop * 16 - i, 0, 1)); if (k <= 0) return;
+      var ph = PH[STOPS[i][1]], r = sr * k * (opts.sel === i ? 1.25 : 1);
+      F.blob(ctx, p.x, p.y, r, ph.c, { seed: 'stop' + i, blur: 5, lift: 3 });
+      if (i < DONE) { ctx.save(); ctx.strokeStyle = '#3f7a4d'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(p.x + r * .45, p.y - r * 1.05); ctx.lineTo(p.x + r * .7, p.y - r * .75); ctx.lineTo(p.x + r * 1.15, p.y - r * 1.35); ctx.stroke(); ctx.restore(); }
+      F.hand(ctx, 'W' + (i + 1), p.x, p.y + 1, Math.round(sr * .78), P.ink, { seed: 'w' + i });
+      if (i !== NOW) F.hand(ctx, STOPS[i][0], p.x, p.y + r + sr * .62, Math.round(sr * .62), 'rgba(60,40,30,.85)', { seed: 'd' + i, bold: false });
+      if (i === NOW) { F.note(ctx, 'this Saturday', p.x, p.y + r + sr * 1.55, Math.round(sr * .55), { color: P.red, ink: '#fff', seed: 'now', rot: -.06, tape: false }); }
+    });
+    ctx.restore();
+  }
+  function phaseStrip(ctx, L, phk, a) {
+    if (a <= 0 || !phk) return; var ph = PH[phk], sz = L.por ? 15 : 19;
+    ctx.save(); ctx.globalAlpha = a; F.note(ctx, ph.name + ': ' + ph.say, L.map.x + L.map.w / 2, L.map.y + (L.por ? -2 : 4), sz, { color: ph.c, seed: 'ph' + phk, rot: -.015 }); ctx.restore();
+  }
+  function curPhase(s) { return STOPS[Math.min(13, Math.round(s))][1]; }
+  function eggPos(L, t) { var h = heroAt(t); return { x: lerp(L.card.x, L.hero.x, h), y: lerp(L.card.y, L.hero.y, h), s: lerp(L.card.s, L.hero.s, h) }; }
+  function figPos(L, t) { var h = heroAt(t), q = pathPos(L, stopAt(t)), fs = L.sr * 2.2; return { x: lerp(q.x, L.fig.x, h), y: lerp(q.y - 2, L.fig.y, h), s: lerp(fs, L.fig.s, h) }; }
+  function drawQuestion(ctx, L, t, a) {
+    if (a <= 0) return; var h = heroAt(t), sz = lerp(L.por ? 13 : 15, L.por ? 18 : 24, h);
+    var x = lerp(L.noteP.x, L.hero.x, h), y = lerp(L.noteP.y, L.hero.y - L.hero.s * 1.9, h);
+    ctx.save(); ctx.globalAlpha = a; F.note(ctx, 'can you see\nwhat it\'s thinking?', x, y, sz, { color: P.cream, seed: 'q', rot: .04 }); ctx.restore();
+  }
+  function scene(ctx, t, W, H, extra) {
+    extra = extra || {};
+    var L = layout(W, H); bg(ctx, W, H, t);
+    var h = heroAt(t), mapA = 1 - h * .9;
+    hills(ctx, W, H, t, h);
+    drawMap(ctx, L, t, t < 6 ? 0 : mapA, ramp(t, 6, 8), { pop: ramp(t, 7, 10.5) });
+    var s = stopAt(t);
+    if (t > 12 && t < 43.5) phaseStrip(ctx, L, curPhase(s), ramp(t, 12, 12.8) * (1 - ramp(t, 42.6, 43.4)));
+    var e = eggPos(L, t), fp = figPos(L, t), walking = t > 12 && t < 43 && Math.abs(stopAt(t + .1) - s) > .002;
+    if (h > .02 && !extra.noEgg) { ctx.save(); ctx.globalAlpha = h; F.paper(ctx, e.x, e.y + e.s * 1.02, e.s * 1.7, e.s * .32, P.pink, { seed: 'cushion', rot: .02 }); ctx.restore(); }
+    if (!extra.noEgg) F.egg(ctx, e.x, e.y, e.s, t, { clear: extra.clear == null ? clearAt(t) : extra.clear, features: extra.features || feats(clearAt(t)), inner: extra.inner });
+    if (!extra.noFig) F.person(ctx, fp.x, fp.y, fp.s, t, { walk: walking, face: 1 });
+    return { L: L, e: e, fp: fp };
+  }
+
+  var chapters = [
+    { name: 'the question', start: 0, dur: 6, cap: {
+        1: 'Someone hands you a sealed egg with a little mind inside. It talks, it answers, it helps. One question sticks: <b>can you see what it\'s thinking?</b>',
+        2: 'The egg is an AI model: it works, but it is <b>opaque</b>. This course, 14 Saturdays, is the path to being able to look inside it and steer it.',
+        3: 'Goal of the TARA/ARENA track: enough ML engineering and interpretability to inspect a transformer\'s internals and intervene on them causally.' },
+      draw: function (ctx, t, l, W, H) {
+        var S = scene(ctx, t, W, H), L = S.L;
+        var pr = ramp(l, .5, 3.2), px = lerp(-40, L.hero.x, pr), py = lerp(H * .2, L.hero.y - L.hero.s * 1.9, pr) + Math.sin(l * 3) * 8 * (1 - pr);
+        if (pr < 1) F.plane(ctx, px, py, 16, .15 - pr * .1, P.cream);
+        drawQuestion(ctx, L, t, ramp(l, 2.8, 3.6));
+        F.cat(ctx, W - 40, H - 8, 22, t);
+      } },
+    { name: 'the map', start: 6, dur: 6, cap: {
+        1: 'Here is the map: <b>14 Saturdays</b>, 12 Sep to 12 Dec. Each stop teaches one skill. The walker with the lantern is you.',
+        2: 'Six regions: <b>Fundamentals</b>, <b>Transformers</b>, <b>Mech interp</b>, <b>RL</b>, <b>Evals</b>, <b>Capstone</b>. Two stops ticked; W3 is this Saturday.',
+        3: 'ARENA chapters 0 → 1 → 2 → 3, then a 3-week capstone. Each week maps to one pack in the app (tap a stop at the end).' },
+      draw: function (ctx, t, l, W, H) { var S = scene(ctx, t, W, H); drawQuestion(ctx, S.L, t, 1); } },
+    { name: 'build the machine', start: 12, dur: 8, cap: {
+        1: 'First you learn to <b>build the machine</b>: the number-grids it is made of, and how it learns by nudging them.',
+        2: 'Fundamentals: tensors, modules, optimisers, backprop. The egg is still opaque: you can build it before you can read it.',
+        3: 'einops, nn.Module, ResNets, SGD/Adam from scratch, a hand-written autograd engine: the tools every later probe is written in.' },
+      draw: function (ctx, t, l, W, H) { var S = scene(ctx, t, W, H); drawQuestion(ctx, S.L, t, 1); } },
+    { name: 'build the mind', start: 20, dur: 6, cap: {
+        1: 'Next you <b>build the mind</b> itself: the kind of model behind chatbots. The shell starts to thin.',
+        2: 'Transformers from scratch, then hooks: code that lets you read any value inside a running model.',
+        3: 'Attention heads, MLPs, the residual stream; TransformerLens run_with_cache gives you every activation by name.' },
+      draw: function (ctx, t, l, W, H) { var S = scene(ctx, t, W, H); drawQuestion(ctx, S.L, t, 1); } },
+    { name: 'look inside', start: 26, dur: 7, cap: {
+        1: 'Now you <b>learn to look inside</b>. Little lights appear: ideas the mind is using, like "Paris" or "code".',
+        2: 'Mechanistic interpretability: find the circuits and features a model uses, then check them by editing the model.',
+        3: 'Induction heads, activation patching, superposition and sparse autoencoders: features as directions in activation space.' },
+      draw: function (ctx, t, l, W, H) {
+        var S = scene(ctx, t, W, H); drawQuestion(ctx, S.L, t, 1 - ramp(l, 0, 1));
+        // name a few lanterns
+        var e = S.e, a = ramp(l, 2, 3.5); if (a > 0) { ctx.save(); ctx.globalAlpha = a; [1, 3, 4].forEach(function (i) { var f = FEATS[i]; F.hand(ctx, f.name, e.x + f.x * e.s * .7 + (f.x > 0 ? 1 : -1) * e.s * 1.05, e.y + f.y * e.s * .8, Math.max(11, e.s * .28), P.chalk, { seed: f.name, outline: 3, outlineColor: 'rgba(20,20,50,.8)' }); }); ctx.restore(); }
+      } },
+    { name: 'reward & tests', start: 33, dur: 6, cap: {
+        1: 'Then how minds <b>learn from rewards</b>, and how to <b>test</b> what they will really do when it matters.',
+        2: 'RL (DQN, PPO, RLHF) shapes behaviour; evals check it. Knowing both tells you where odd behaviour comes from.',
+        3: 'Reward hacking and sycophancy come out of the RL loop; Inspect evals and AI-control setups are how you catch them.' },
+      draw: function (ctx, t, l, W, H) {
+        var S = scene(ctx, t, W, H), fp = S.fp;
+        var sr = ramp(l, .5, 1.2) * (1 - ramp(l, 3, 3.5)); if (sr > 0) { ctx.save(); ctx.globalAlpha = sr; F.hand(ctx, '+1 ★', fp.x, fp.y - fp.s * 1.9 - l * 6, 16, P.butter, { outline: 3, outlineColor: 'rgba(20,20,50,.8)', seed: 'rw' }); ctx.restore(); }
+        var ck = ramp(l, 3.6, 4.4); if (ck > 0) { ctx.save(); ctx.globalAlpha = ck; F.hand(ctx, '✓ ✓ ✗ ✓', fp.x, fp.y - fp.s * 1.9, 16, P.mint, { outline: 3, outlineColor: 'rgba(20,20,50,.8)', seed: 'ck' }); ctx.restore(); }
+      } },
+    { name: 'your experiment', start: 39, dur: 4, cap: {
+        1: 'Last: <b>your own experiment</b>. You pick a question about a real model and go and find out.',
+        2: 'Capstone, three Saturdays and a talk on 12 Dec. By then the egg is glass.',
+        3: 'A small, honest research project: e.g. find a feature, patch it, measure the behavioural effect, report the limits.' },
+      draw: function (ctx, t, l, W, H) { var S = scene(ctx, t, W, H); F.plane(ctx, lerp(S.fp.x, W + 30, ramp(l, .5, 3.5)), S.fp.y - 40 - l * 20, 12, -.3, P.butter); } },
+    { name: 'where it stops being true', start: 43, dur: 5, cap: {
+        1: 'Honest bit: a real AI is not one little creature. It is <b>millions of numbers</b>, and today we can only read some of them.',
+        2: 'The "mind" is billions of weights and activations. Interpretability is <b>partial</b>: we can explain some features and circuits, not the whole thing.',
+        3: 'Features are fuzzy directions in superposition; SAEs leave reconstruction error; many behaviours have no clean circuit yet. Claims need causal tests.' },
+      draw: function (ctx, t, l, W, H) {
+        var L = layout(W, H), gA = ramp(l, .8, 2);
+        var inner = function (c, s, clear) { c.save(); c.globalAlpha = gA; c.fillStyle = 'rgba(210,230,255,.85)'; c.font = Math.max(7, s * .11) + 'px ' + F.MONO; var r = F.rng('nums'), st = s * .19;
+          for (var yy = -s * 1.2; yy < s; yy += st * .8) for (var xx = -s; xx < s; xx += st * 1.3) { var v = (r() - .5) * 2; c.globalAlpha = gA * (.35 + .5 * Math.abs(v)); c.fillText(v.toFixed(1), xx, yy); } c.restore(); };
+        var S = scene(ctx, t, W, H, { inner: inner, features: feats(1, 1 - gA * .7) });
+        F.cornerFlip(ctx, W, H, ramp(l, 1.2, 2.2), P.cream);
+        var a = ramp(l, 2, 2.8); if (a > 0) { ctx.save(); ctx.globalAlpha = a; var sz = L.por ? 14 : 19, m = Math.min(W, H);
+          F.hand(ctx, 'really: millions of numbers', W - m * .3, H - m * .26, sz, P.ink, { rot: -.62, seed: 'st1' });
+          F.hand(ctx, 'we can read only some', W - m * .2, H - m * .15, sz, P.ink, { rot: -.62, seed: 'st2' }); ctx.restore(); }
+      } },
+    { name: 'the symbols', start: 48, dur: 5, cap: {
+        1: 'The glowing lights become the real code you will write: read a thought out of the model, or nudge it.',
+        2: 'Reading: take the model\'s internal state and see which word it points to. Steering: add a "direction" to push a behaviour.',
+        3: '<code>resid[:, -1] @ W_U</code> = logit lens on the last position; <code>resid += alpha * v_honesty</code> = activation steering with a learned/contrastive direction.' },
+      draw: function (ctx, t, l, W, H) {
+        var S = scene(ctx, t, W, H, { features: feats(1, 1 - ramp(l, 0, 1.5)) }), e = S.e, L = S.L, sz = L.por ? 14 : 20;
+        var lines = ['logits = resid[:, -1] @ W_U', 'resid += alpha * v_honesty'];
+        lines.forEach(function (s, i) {
+          var a = ramp(l, .6 + i * 1.2, 1.4 + i * 1.2); if (a <= 0) return;
+          var tx = W / 2, ty = (L.por ? H * .14 : H * .16) + i * sz * 3.1;
+          // a light flies from the egg to the code
+          var f = FEATS[i * 2], fx = e.x + f.x * e.s * .7, fy = e.y + f.y * e.s * .8, k = ramp(l, .2 + i * 1.2, 1 + i * 1.2);
+          if (k < 1) F.glow(ctx, lerp(fx, tx, k), lerp(fy, ty, k), 26, f.c, 1);
+          ctx.save(); ctx.globalAlpha = a; var w = Math.min(W - 20, F.textW(ctx, s, sz, F.MONO) + 32);
+          F.paper(ctx, tx, ty, w, sz * 2.2, P.cream, { seed: 'code' + i, rot: (i ? .012 : -.01) });
+          F.hand(ctx, s, tx, ty, sz, P.ink, { font: F.MONO, bold: false, wobble: .3, reveal: ramp(l, 1 + i * 1.2, 2 + i * 1.2), seed: s }); ctx.restore();
+        });
+      } },
+    { name: 'steer', start: 53, dur: 5, cap: {
+        1: 'And the last step: once you can see inside, you can <b>turn a small dial</b> and help it stay honest and safe.',
+        2: 'Looking inside is half the job. <b>Steering</b> is the other half: changing what a model does by editing what it thinks.',
+        3: 'Steering is a causal test and a safety tool at once, but it has side-effects; you will measure both. Tap the map to start.' },
+      draw: function (ctx, t, l, W, H) {
+        var alpha = 4 * ramp(l, .8, 3.2);
+        var fts = feats(1).map(function (f, i) { if (i === 2) { f.on = .3 + alpha / 5; f.c = 'rgba(185,240,200,.95)'; } else f.on *= .7; return f; });
+        var S = scene(ctx, t, W, H, { features: fts }), L = S.L, fp = S.fp;
+        var dx = lerp(fp.x, S.e.x, .5), dy = fp.y - fp.s * .35, dr = Math.max(16, fp.s * .2);
+        F.blob(ctx, dx, dy, dr, '#cfcbd8', { seed: 'dial', jit: .4 }); var ang = -2.4 + alpha / 4 * 2.2;
+        ctx.save(); ctx.strokeStyle = P.ink; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(dx + Math.cos(ang) * dr * .8, dy + Math.sin(ang) * dr * .8); ctx.stroke(); ctx.restore();
+        var hf = FEATS[2]; F.hand(ctx, 'honesty', S.e.x + hf.x * S.e.s * .7, S.e.y + hf.y * S.e.s * .8 - S.e.s * .22, Math.max(12, S.e.s * .2), '#d9f7e2', { seed: 'hon', outline: 3, outlineColor: 'rgba(20,20,50,.8)' });
+        F.hand(ctx, 'alpha = ' + alpha.toFixed(1), dx, dy + dr + 12, 13, P.chalk, { font: F.MONO, bold: false, seed: 'al' });
+        var a = ramp(l, 1.5, 2.5); if (a > 0) { ctx.save(); ctx.globalAlpha = a; F.note(ctx, 'look inside. then steer.', W / 2, L.por ? H * .12 : H * .14, L.por ? 18 : 26, { color: P.pink, seed: 'steer', rot: -.02 }); ctx.restore(); }
+      } }
+  ];
+
+  /* ---------------- coda: the map becomes tappable ---------------- */
+  var sel = NOW, panelEl = null;
+  function paintPanel() {
+    if (!panelEl) return; var s = STOPS[sel], nn = ('0' + (sel + 1)).slice(-2), st = sel < DONE ? 'done ✓' : sel === NOW ? 'this Saturday' : s[0];
+    panelEl.innerHTML = '<div style="font-size:14px;min-height:62px"><b style="color:#f7e3a0">W' + (sel + 1) + ' · ' + s[2] + '</b> <span style="opacity:.75">(' + st + ', ' + PH[s[1]].name + ')</span><br>' + s[3] +
+      ' <a href="../../index.html#week-' + nn + '" style="color:#b9e3cc;white-space:nowrap">Open week ' + (sel + 1) + ' &rarr;</a></div>';
+  }
+  var coda = {
+    start: function (api, panel) { panelEl = panel; paintPanel(); },
+    down: function (x, y, api) {
+      var L = layout(api.W, api.H), best = -1, bd = 1e9;
+      L.stops.forEach(function (p, i) { var d = Math.hypot(p.x - x, p.y - y); if (d < bd) { bd = d; best = i; } });
+      if (bd < L.sr * 2.4) { sel = best; paintPanel(); api.audio.blip(523 + best * 30); }
+    },
+    draw: function (ctx, t, W, H) {
+      var L = layout(W, H); bg(ctx, W, H, t + 60);
+      drawMap(ctx, L, t, 1, 1, { sel: sel });
+      var p = L.stops[sel]; F.person(ctx, p.x - L.sr * 2.3, p.y + L.sr * 1.1, L.sr * 2, t, { walk: false });
+      F.egg(ctx, L.card.x, L.card.y, L.card.s, t, { clear: clamp(sel / 10, 0, 1), features: feats(clamp(sel / 10, 0, 1)) });
+      F.note(ctx, 'tap a stop', L.noteP.x, L.noteP.y, L.por ? 15 : 18, { color: P.cream, seed: 'tap', rot: .03 });
+      F.glow(ctx, p.x, p.y, L.sr * 2.4, 'rgba(255,230,150,.5)', .6 + .4 * Math.sin(t * 3));
+    }
+  };
+
+  F.play({
+    title: 'North Star · the whole course',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'This Saturday: Week 3', href: '../../index.html#week-03' },
+      { label: 'W3 film: which way is down', href: 'w3-optimisers.html' },
+      { label: 'Course home', href: '../../index.html' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
