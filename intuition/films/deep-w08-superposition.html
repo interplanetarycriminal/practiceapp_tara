@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Too many ideas, too few neurons</title>
+<meta name="theme-color" content="#1c2140">
+<style>
+#predict{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(18,20,44,.55);z-index:5;padding:14px;box-sizing:border-box}
+#predict.on{display:flex}
+#predict .card{background:#fbf6ea;color:#2a2934;border-radius:6px;max-width:360px;width:100%;padding:14px 14px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);font:15px/1.35 system-ui,-apple-system,'Segoe UI',sans-serif;transform:rotate(-.6deg)}
+#predict .q{font:700 18px 'Comic Neue','Segoe Print','Bradley Hand','Chalkboard SE','Comic Sans MS',cursive;margin:0 0 4px}
+#predict .sub{font-size:13px;color:#5a5566;margin:0 0 10px}
+#predict button.opt{display:block;width:100%;text-align:left;margin:0 0 7px;padding:9px 10px;border-radius:8px;border:1.5px solid #c8b8ea;background:#fff;color:#2a2934;font:inherit;font-size:14px;cursor:pointer;min-height:40px}
+#predict button.opt:hover,#predict button.opt:focus{background:#f7e3a0;outline:none}
+#predict button.skipq{background:none;border:0;color:#6b5a9a;text-decoration:underline;font:inherit;font-size:14px;cursor:pointer;padding:4px 0;min-height:32px}
+</style>
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /* ===== MATH START ===== */
+  /* Toy model of superposition, ARENA [1.5.4]: n_features = 5, d_hidden = 2.
+     h = W x ; x' = ReLU(W^T h + b_final) ; loss = mean over batch & feats of importance * (x - x')^2
+     importance = 0.9 ** arange(5) ; each feature present with prob feature_probability, magnitude U[0,1). */
+  var NF = 5, DH = 2, IMP = [1, .9, .81, .729, .6561];
+  function mkRng(seed) { var s = seed >>> 0 || 1; return function () { s |= 0; s = s + 0x6D2B79F5 | 0; var t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function gaussR(r) { var u = Math.max(1e-9, r()), v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(6.2831853 * v); }
+  function genBatch(r, p, B) { var X = []; for (var b = 0; b < B; b++) { var x = []; for (var i = 0; i < NF; i++) x.push(r() <= p ? r() : 0); X.push(x); } return X; }
+  function toyFwd(W, b, x) { // W[i] = column i (2-vector); returns {h, z, y}
+    var h = [0, 0]; for (var i = 0; i < NF; i++) { h[0] += W[i][0] * x[i]; h[1] += W[i][1] * x[i]; }
+    var z = [], y = []; for (i = 0; i < NF; i++) { z.push(W[i][0] * h[0] + W[i][1] * h[1] + b[i]); y.push(Math.max(0, z[i])); }
+    return { h: h, z: z, y: y };
+  }
+  function toyLoss(W, b, X) { var L = 0; X.forEach(function (x) { var y = toyFwd(W, b, x).y; for (var i = 0; i < NF; i++) L += IMP[i] * (x[i] - y[i]) * (x[i] - y[i]); }); return L / (X.length * NF); }
+  function adamStep(p, g, m, v, t, lr) { for (var k = 0; k < p.length; k++) { m[k] = .9 * m[k] + .1 * g[k]; v[k] = .999 * v[k] + .001 * g[k] * g[k]; p[k] -= lr * (m[k] / (1 - Math.pow(.9, t))) / (Math.sqrt(v[k] / (1 - Math.pow(.999, t))) + 1e-8); } }
+  /* train the toy model; returns snapshots per step: {W, b, L} */
+  function trainToy(p, steps, seed, B, lr) {
+    var r = mkRng(seed), W = [], b = [0, 0, 0, 0, 0], sd = Math.sqrt(2 / (DH + NF));   // xavier_normal_
+    for (var i = 0; i < NF; i++) W.push([gaussR(r) * sd, gaussR(r) * sd]);
+    var P = [], m = new Float64Array(15), v = new Float64Array(15), snaps = [], dr = mkRng(seed + 99), evalX = genBatch(mkRng(seed + 7), p, 1000);
+    for (var t = 0; t <= steps; t++) {
+      if (t % 2 === 0 || t === steps) snaps[t] = { W: W.map(function (w) { return w.slice(); }), b: b.slice(), L: t % 10 === 0 || t === steps ? toyLoss(W, b, evalX) : null };
+      if (t === steps) break;
+      var X = genBatch(dr, p, B), gW = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], gb = [0, 0, 0, 0, 0], k = 2 / (B * NF);
+      X.forEach(function (x) {
+        var f = toyFwd(W, b, x), dh = [0, 0];
+        for (var i = 0; i < NF; i++) { if (f.z[i] <= 0) continue; var dz = -k * IMP[i] * (x[i] - f.y[i]); gb[i] += dz; gW[i][0] += dz * f.h[0]; gW[i][1] += dz * f.h[1]; dh[0] += dz * W[i][0]; dh[1] += dz * W[i][1]; }
+        for (i = 0; i < NF; i++) if (x[i]) { gW[i][0] += dh[0] * x[i]; gW[i][1] += dh[1] * x[i]; }
+      });
+      var pv = [], gv = []; for (i = 0; i < NF; i++) { pv.push(W[i][0], W[i][1]); gv.push(gW[i][0], gW[i][1]); } for (i = 0; i < NF; i++) { pv.push(b[i]); gv.push(gb[i]); }
+      adamStep(pv, gv, m, v, t + 1, lr);
+      for (i = 0; i < NF; i++) { W[i][0] = pv[2 * i]; W[i][1] = pv[2 * i + 1]; b[i] = pv[10 + i]; }
+    }
+    // fill odd steps with the previous even snapshot's neighbour (for seeking)
+    for (t = 1; t <= steps; t++) if (!snaps[t]) snaps[t] = snaps[t - 1];
+    var lastL = null; for (t = 0; t <= steps; t++) { if (snaps[t].L != null) lastL = snaps[t].L; snaps[t].Ls = lastL; }
+    return snaps;
+  }
+  /* ToySAE, ARENA [1.5.4]: h_cent = h - b_dec ; acts_post = ReLU(h_cent @ W_enc + b_enc)
+     h_reconstructed = acts_post @ W_dec_normalized + b_dec
+     loss = L_reconstruction (mean over d_in of squared error) + sparsity_coeff * L_sparsity (sum |acts_post|) */
+  function saeFwd(S, h) {
+    var hc = [h[0] - S.bd[0], h[1] - S.bd[1]], a = [], nrm = [], Dn = [], r = [S.bd[0], S.bd[1]];
+    for (var k = 0; k < S.n; k++) { var pre = hc[0] * S.We[k][0] + hc[1] * S.We[k][1] + S.be[k]; a.push(Math.max(0, pre)); var nn = Math.hypot(S.Wd[k][0], S.Wd[k][1]) + 1e-8; nrm.push(nn); Dn.push([S.Wd[k][0] / nn, S.Wd[k][1] / nn]); r[0] += a[k] * Dn[k][0]; r[1] += a[k] * Dn[k][1]; }
+    var Lr = ((r[0] - h[0]) * (r[0] - h[0]) + (r[1] - h[1]) * (r[1] - h[1])) / 2, Ls = 0; a.forEach(function (q) { Ls += q; });
+    return { a: a, r: r, Lr: Lr, Ls: Ls, Dn: Dn, nrm: nrm, hc: hc };
+  }
+  function trainSAE(toyW, p, c, nLat, steps, seed, B, lr) {
+    var r = mkRng(seed), S = { n: nLat, We: [], Wd: [], be: [], bd: [0, 0] };
+    for (var k = 0; k < nLat; k++) { var a = gaussR(r), bb = gaussR(r), n = Math.hypot(a, bb); S.Wd.push([a / n, bb / n]); S.We.push([a / n, bb / n]); S.be.push(0); }
+    var np = nLat * 5 + 2, m = new Float64Array(np), v = new Float64Array(np), dr = mkRng(seed + 5), snaps = [], fired = new Float64Array(nLat);
+    function hOf(x) { var h = [0, 0]; for (var i = 0; i < NF; i++) { h[0] += toyW[i][0] * x[i]; h[1] += toyW[i][1] * x[i]; } return h; }
+    var evalH = genBatch(mkRng(seed + 3), p, 600).map(hOf);
+    function evalS() { var Lr = 0, Ls = 0, L0 = 0, fr = new Float64Array(nLat); evalH.forEach(function (h) { var f = saeFwd(S, h); Lr += f.Lr; Ls += f.Ls; f.a.forEach(function (q, k) { if (q > 0) { L0++; fr[k]++; } }); });
+      var N = evalH.length, dead = 0; for (var k = 0; k < nLat; k++) if (fr[k] === 0) dead++; return { Lr: Lr / N, Ls: Ls / N, L: (Lr + c * Ls) / N, L0: L0 / N, dead: dead, fr: Array.prototype.map.call(fr, function (q) { return q / N; }) }; }
+    for (var t = 0; t <= steps; t++) {
+      if (t % 5 === 0 || t === steps) snaps[t] = { n: nLat, We: S.We.map(function (w) { return w.slice(); }), Wd: S.Wd.map(function (w) { return w.slice(); }), be: S.be.slice(), bd: S.bd.slice(), ev: t % 25 === 0 || t === steps ? evalS() : null };
+      if (t === steps) break;
+      var H = genBatch(dr, p, B).map(hOf), gWe = [], gWd = [], gbe = [], gbd = [0, 0];
+      for (k = 0; k < nLat; k++) { gWe.push([0, 0]); gWd.push([0, 0]); gbe.push(0); }
+      H.forEach(function (h) {
+        var f = saeFwd(S, h), dr0 = (f.r[0] - h[0]) / B, dr1 = (f.r[1] - h[1]) / B, dhc = [0, 0];   // d(Lr)/dr = (r-h)/d_in * 2 / 2... Lr = mean over 2 dims -> grad (r-h)
+        gbd[0] += dr0; gbd[1] += dr1;
+        for (var k = 0; k < nLat; k++) {
+          var ak = f.a[k]; if (ak <= 0) continue;
+          var gD = [dr0 * ak, dr1 * ak], dn = f.Dn[k], proj = gD[0] * dn[0] + gD[1] * dn[1];         // through normalisation
+          gWd[k][0] += (gD[0] - dn[0] * proj) / f.nrm[k]; gWd[k][1] += (gD[1] - dn[1] * proj) / f.nrm[k];
+          var da = dr0 * dn[0] + dr1 * dn[1] + c / B;                                                  // recon + L1 (acts >= 0)
+          gbe[k] += da; gWe[k][0] += da * f.hc[0]; gWe[k][1] += da * f.hc[1]; dhc[0] += da * S.We[k][0]; dhc[1] += da * S.We[k][1];
+        }
+        gbd[0] -= dhc[0]; gbd[1] -= dhc[1];
+      });
+      var pv = [], gv = []; for (k = 0; k < nLat; k++) { pv.push(S.We[k][0], S.We[k][1], S.Wd[k][0], S.Wd[k][1], S.be[k]); gv.push(gWe[k][0], gWe[k][1], gWd[k][0], gWd[k][1], gbe[k]); } pv.push(S.bd[0], S.bd[1]); gv.push(gbd[0], gbd[1]);
+      adamStep(pv, gv, m, v, t + 1, lr);
+      for (k = 0; k < nLat; k++) { S.We[k] = [pv[5 * k], pv[5 * k + 1]]; S.Wd[k] = [pv[5 * k + 2], pv[5 * k + 3]]; S.be[k] = pv[5 * k + 4]; } S.bd = [pv[5 * nLat], pv[5 * nLat + 1]];
+    }
+    for (t = 1; t <= steps; t++) if (!snaps[t]) snaps[t] = snaps[t - 1];
+    var le = null; for (t = 0; t <= steps; t++) { if (snaps[t].ev) le = snaps[t].ev; snaps[t].E = le; }
+    return snaps;
+  }
+  /* ===== MATH END ===== */
+
+  /* ---------------- the runs used by the film (all trained here, in your browser) ---------------- */
+  var STEPS = 300, PS = 0.05, SAE_STEPS = 300;
+  var CURVE_C = [0, 0.01, 0.03, 0.1, 0.2, 0.3, 0.5, 1.0];
+  var RUN = {}, lazy = {
+    dense: function () { return trainToy(1.0, STEPS, 2, 128, 0.02); },
+    sparse: function () { return trainToy(PS, STEPS, 2, 256, 0.01); },
+    sae: function () { return trainSAE(get('sparse')[STEPS].W, PS, 0.3, 5, SAE_STEPS, 12, 128, 0.02); },
+    dead: function () { return trainSAE(get('sparse')[STEPS].W, PS, 0.6, 8, SAE_STEPS, 12, 96, 0.02); },
+    curve: function () { var Wt = get('sparse')[STEPS].W; return CURVE_C.map(function (c) { var s = trainSAE(Wt, PS, c, 5, 240, 12, 96, 0.02); return { c: c, E: s[240].E }; }); }
+  };
+  function get(k) { if (!RUN[k]) RUN[k] = lazy[k](); return RUN[k]; }
+  // warm the cache in small slices so the first frames stay smooth
+  ['dense', 'sparse', 'sae', 'dead', 'curve'].forEach(function (k, i) { setTimeout(function () { get(k); }, 60 + i * 120); });
+  window.__w8deep = { get: get, toyFwd: toyFwd, saeFwd: saeFwd, trainToy: trainToy, trainSAE: trainSAE };
+
+  var NAMES = ['cats', 'cars', 'French', 'jazz', 'rain'];
+  var COLS = ['#e0703a', '#d0507f', '#2f9a8f', '#b0851a', '#7a62c0'];
+  var LCOLS = [P.orange, P.pink, P.teal, P.butter, P.lav];
+  function ph(W) { return W < 500; }
+  function bg(ctx, W, H, t, warm) { F.sky(ctx, W, H, P.night, warm ? '#4a3f6e' : '#2b2f5c'); F.stars(ctx, W, H, t, 'w8deep', 50); }
+  function mono(ctx, s, x, y, sz, color, align, weight) { ctx.save(); ctx.font = (weight || '600') + ' ' + sz + 'px ' + F.MONO; ctx.fillStyle = color || P.ink; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle'; ctx.fillText(s, x, y); ctx.restore(); }
+  function lbl(ctx, text, x, y, color, sz) { F.hand(ctx, text, x, y, sz || 15, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: text }); }
+  function readout(ctx, x, y, lines, W) {
+    var sz = W < 500 ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.9)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+  }
+
+  /* the flat: a paper card holding the 2D hidden space (room 1 = h[0], room 2 = h[1]) */
+  function layout(W, H, frac) { var p = ph(W), R = Math.min(W * (p ? .36 : .2), H * (frac || .27)); return { R: R, cx: W / 2, cy: (p ? 34 : 40) + R * 1.12, sc: R / 1.25, p: p }; }
+  function flat(ctx, L, t, seed) {
+    F.paper(ctx, L.cx, L.cy, L.R * 2.5, L.R * 2.3, P.cream, { seed: seed || 'flat', rot: -.01 });
+    ctx.save(); ctx.strokeStyle = 'rgba(42,41,52,.28)'; ctx.lineWidth = 1; ctx.setLineDash([4, 5]);
+    ctx.beginPath(); ctx.moveTo(L.cx - L.R * 1.1, L.cy); ctx.lineTo(L.cx + L.R * 1.1, L.cy); ctx.moveTo(L.cx, L.cy - L.R * 1.05); ctx.lineTo(L.cx, L.cy + L.R * 1.05); ctx.stroke(); ctx.restore();
+    mono(ctx, 'room 1', L.cx + L.R * 1.12, L.cy - 9, 10.5, '#6b5a9a', 'right'); mono(ctx, 'room 2', L.cx + 6, L.cy - L.R * 1.02, 10.5, '#6b5a9a', 'left');
+  }
+  function S(L, v) { return [L.cx + v[0] * L.sc, L.cy - v[1] * L.sc]; }
+  function lodgers(ctx, L, Wm, t, o) {
+    o = o || {};
+    for (var i = 0; i < NF; i++) {
+      var w = Wm[i], n = Math.hypot(w[0], w[1]), e = S(L, w), a = o.alpha ? o.alpha[i] : 1; if (a <= 0) continue;
+      ctx.save(); ctx.globalAlpha = a * (n < .25 ? .45 : 1);
+      if (n > .03) F.arrow(ctx, L.cx, L.cy, e[0], e[1], COLS[i], 3, 'l' + i);
+      else { ctx.fillStyle = COLS[i]; ctx.beginPath(); ctx.arc(L.cx, L.cy, 4, 0, 6.283); ctx.fill(); }
+      if (!o.nolabel && n >= .25) { var q = S(L, [w[0] + w[0] / n * .24, w[1] + w[1] / n * .24]); mono(ctx, NAMES[i], q[0], q[1], L.p ? 11.5 : 13, COLS[i], 'center', '700'); }
+      ctx.restore();
+    }
+  }
+  function decoderArrows(ctx, L, S2, alive) {
+    for (var k = 0; k < S2.Wd.length; k++) {
+      var d = S2.Wd[k], n = Math.hypot(d[0], d[1]) || 1, e = S(L, [d[0] / n * 1.2, d[1] / n * 1.2]), dead = alive && !alive[k];
+      ctx.save(); ctx.setLineDash([3, 4]); ctx.strokeStyle = dead ? 'rgba(90,90,110,.45)' : '#3a2f63'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(L.cx, L.cy); ctx.lineTo(e[0], e[1]); ctx.stroke(); ctx.setLineDash([]);
+      F.lantern(ctx, e[0], e[1], 7, dead ? 0 : .8, 0); ctx.restore();
+    }
+  }
+  function lossPlot(ctx, x, y, w, h, snaps, k, color, label, maxL) {
+    F.paper(ctx, x + w / 2, y + h / 2, w, h, 'rgba(22,26,53,.9)', { seed: 'lp' + color, shadow: false });
+    var gx0 = x + 10, gx1 = x + w - 10, gy0 = y + h - 8, gy1 = y + 22, lg = function (v) { return Math.log10(Math.max(1e-4, v)); }, lo = -3.2, hi = lg(maxL);
+    mono(ctx, label, x + 10, y + 11, 11, P.chalk);
+    ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
+    for (var s = 0; s <= k; s += 2) { var X = gx0 + (gx1 - gx0) * s / STEPS, Y = lerp(gy0, gy1, clamp((lg(snaps[s].Ls) - lo) / (hi - lo), 0, 1)); if (s) ctx.lineTo(X, Y); else ctx.moveTo(X, Y); }
+    ctx.stroke(); ctx.restore();
+  }
+  function bars(ctx, x, y, w, h, xin, xout) {
+    var bw = w / NF;
+    for (var i = 0; i < NF; i++) {
+      var X = x + i * bw + bw * .2, BW = bw * .6, yo = y + h - 14, v = clamp(xout[i], 0, 1.2) * (h - 22);
+      ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fillRect(X, y + 4, BW, h - 18);
+      ctx.fillStyle = LCOLS[i]; ctx.fillRect(X, yo - v, BW, v);
+      ctx.strokeStyle = P.chalk; ctx.lineWidth = 2; var yi = yo - xin[i] * (h - 22); ctx.beginPath(); ctx.moveTo(X - 3, yi); ctx.lineTo(X + BW + 3, yi); ctx.stroke();
+      mono(ctx, NAMES[i], X + BW / 2, y + h - 5, 10, LCOLS[i], 'center');
+    }
+  }
+  function stepAt(l, a, b) { return Math.round(clamp((l - a) / (b - a), 0, 1) * STEPS); }
+  function angs(Wm) { return Wm.map(function (w) { return Math.hypot(w[0], w[1]) < .25 ? '-' : Math.round(Math.atan2(w[1], w[0]) * 57.2958) + '°'; }); }
+  function norms(Wm) { return Wm.map(function (w) { return Math.hypot(w[0], w[1]).toFixed(2); }).join(' '); }
+  function sgn(b) { return b.map(function (v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }).join(' '); }
+
+  /* ---------------- predict, then watch (never gated) ---------------- */
+  var QT = 37, Q = { done: false, prev: -1, choice: null, el: null };
+  var QOPTS = [['a', 'Still two: the same two rooms, three lodgers dropped'], ['b', 'Three or four: a few squeeze in'], ['c', 'All five, spread out like a pentagon']];
+  function buildQ(api) {
+    if (Q.el) return Q.el;
+    var d = document.createElement('div'); d.id = 'predict';
+    d.innerHTML = '<div class="card"><p class="q">Predict: now each lodger is home only 5% of the time. After training, how many get a direction?</p><p class="sub">Same 2 rooms, same importances, same optimiser. Only the sparsity changed.</p>' +
+      QOPTS.map(function (o) { return '<button class="opt" data-c="' + o[0] + '">' + o[1] + '</button>'; }).join('') + '<button class="skipq">just show me &#9654;</button></div>';
+    api.root.querySelector('.stage').appendChild(d);
+    d.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    [].forEach.call(d.querySelectorAll('button'), function (b) { b.onclick = function (e) { e.stopPropagation(); Q.choice = b.dataset.c || 'skip'; hideQ(api, true); if (b.dataset.c) api.audio.blip(b.dataset.c === 'c' ? 880 : 520); }; });
+    Q.el = d; return d;
+  }
+  function isPlaying(api) { return api.root.querySelector('.pp').getAttribute('aria-label') === 'Pause'; }
+  function showQ(api) { var d = buildQ(api); d.classList.add('on'); if (isPlaying(api)) api.root.querySelector('.pp').click(); var b = d.querySelector('button'); try { b.focus({ preventScroll: true }); } catch (e) {} }
+  function hideQ(api, resume) { if (!Q.el) return; Q.el.classList.remove('on'); if (resume && !isPlaying(api)) api.root.querySelector('.pp').click(); }
+
+  /* ---------------- code card for the bridge ---------------- */
+  var CODE = [
+    '# toy model: x -> ReLU(W.T @ W @ x + b_final)',
+    'h = x @ W.T                    # W: [2, 5]',
+    'out = F.relu(h @ W + b_final)',
+    'error = importance * (x - out) ** 2',
+    'loss = error.mean()',
+    '# SAE on h (ARENA ToySAE.forward)',
+    'h_cent = h - b_dec',
+    'acts_post = F.relu(h_cent @ W_enc + b_enc)',
+    'h_rec = acts_post @ W_dec_normalized + b_dec',
+    'L_reconstruction = (h_rec - h).pow(2).mean(-1)',
+    'L_sparsity = acts_post.abs().sum(-1)',
+    'loss = L_reconstruction + sparsity_coeff * L_sparsity'];
+  var VALS = null;
+  function codeVals() {
+    if (VALS) return VALS;
+    var Wt = get('sparse')[STEPS], s = get('sae')[SAE_STEPS], x = [0, 0, .8, 0, 0], f = toyFwd(Wt.W, Wt.b, x), e = 0;
+    for (var i = 0; i < NF; i++) e += IMP[i] * (x[i] - f.y[i]) * (x[i] - f.y[i]);
+    var sf = saeFwd(s, f.h), lit = sf.a.filter(function (q) { return q > 0; }).length;
+    VALS = [null, 'x = French at 0.8 → h = (' + f.h[0].toFixed(2) + ', ' + f.h[1].toFixed(2) + ')',
+      'out[French] = ' + f.y[2].toFixed(3) + ', others ≤ ' + Math.max(f.y[0], f.y[1], f.y[3], f.y[4]).toFixed(3),
+      'importance[French] = 0.9² = 0.81', 'this example: ' + (e / NF).toFixed(5), null,
+      'h_cent = (' + sf.hc[0].toFixed(2) + ', ' + sf.hc[1].toFixed(2) + ')',
+      'acts_post = [' + sf.a.map(function (q) { return q.toFixed(2); }).join(', ') + ']',
+      'h_rec = (' + sf.r[0].toFixed(2) + ', ' + sf.r[1].toFixed(2) + ')',
+      'L_reconstruction = ' + sf.Lr.toFixed(4), 'L_sparsity = ' + sf.Ls.toFixed(3) + ' (' + lit + ' lit)',
+      'loss = ' + (sf.Lr + .3 * sf.Ls).toFixed(4) + ' (coeff 0.3)'];
+    return VALS;
+  }
+
+  var chapters = [
+    { name: 'five lodgers', start: 0, dur: 14, cap: {
+        1: 'A flat with <b>two rooms</b> and <b>five lodgers</b> who want a home. Each lodger is an idea the model might track (cats, cars, French...). Each gets an <b>arrow</b> in the flat. Bigger lodgers matter more to the landlord.',
+        2: 'Toy model of superposition: 5 features squeezed through a 2-dimensional hidden layer. Feature i gets a direction W[:, i] (the arrows, random for now). <b>Importance</b> 0.9<sup>i</sup> says how much the loss cares about each one.',
+        3: 'ARENA [1.5.4]: n_features = 5, d_hidden = 2, W ~ xavier_normal_, b_final = 0, importance = 0.9 ** arange(5). Each x_i ∈ [0,1) is present with probability feature_probability, else 0.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var L = layout(W, H), s0 = get('dense')[0];
+        flat(ctx, L, t); lodgers(ctx, L, s0.W, t, { alpha: [0, 1, 2, 3, 4].map(function (i) { return ramp(l, 1 + i * .8, 1.8 + i * .8); }) });
+        var ny = L.cy + L.R * 1.15 + (L.p ? 34 : 40);
+        ctx.save(); ctx.globalAlpha = ramp(l, 5, 6); F.note(ctx, 'can five fit in two?', W / 2, ny, L.p ? 18 : 22, { color: P.butter, seed: 'door', rot: -.03 }); ctx.restore();
+        if (l > 7.5) { ctx.save(); ctx.globalAlpha = ramp(l, 7.5, 8.5); var rows = IMP.map(function (v, i) { return NAMES[i] + ' ' + v.toFixed(2); });
+          readout(ctx, W / 2 - (L.p ? 150 : 170), ny + (L.p ? 34 : 44), [['importance = 0.9 ** i', P.chalk], [rows.slice(0, 3).join('  '), P.butter], [rows.slice(3).join('  '), P.butter]], W); ctx.restore(); }
+      } },
+    { name: 'dense: two rooms', start: 14, dur: 20, cap: {
+        1: 'First, <b>everyone is home all the time</b>. We train the flat live, 300 small steps. Watch: the two biggest lodgers get a room each, at right angles. The other three are <b>evicted</b>: their arrows shrink to nothing.',
+        2: 'Dense data (feature_probability = 1): sharing would mean constant interference, so gradient descent does what PCA would: store the 2 most important features orthogonally, drop the rest (‖W_i‖ → 0), and set their b_final ≈ their average value, 0.5.',
+        3: 'Loss = mean(importance · (x − x′)²), trained with Adam (lr 0.02, batch 128) right here in your browser. Readout: ‖W_i‖ and b per feature at the current step; loss on a fixed 1000-sample eval batch.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var L = layout(W, H, .25), R = get('dense'), k = stepAt(l, 2, 16), s = R[k], a = angs(s.W);
+        flat(ctx, L, t); lodgers(ctx, L, s.W, t);
+        var y = L.cy + L.R * 1.15 + 16, pw = Math.min(W - 24, 360);
+        lossPlot(ctx, W / 2 - pw / 2, y, pw, 70, R, k, P.butter, 'dense   step ' + k + '   loss ' + s.Ls.toFixed(4), R[0].Ls);
+        var ev = NAMES.filter(function (nm, i) { return Math.hypot(s.W[i][0], s.W[i][1]) < .25; });
+        readout(ctx, W / 2 - pw / 2, y + 80, [['‖W_i‖ ' + norms(s.W), P.chalk], ['b     ' + sgn(s.b), P.mint], [k >= STEPS ? 'kept: cats ' + a[0] + ', cars ' + a[1] : 'training...', P.butter], ['evicted: ' + (ev.join(', ') || 'nobody yet'), P.pink]], W);
+      } },
+    { name: 'sparse: a pentagon', start: 34, dur: 24, cap: {
+        1: 'Now each lodger is home only <b>5% of the time</b>. They rarely meet, so they can <b>share</b>. Guess first, then watch the same training run: all five arrows spread out evenly, like the points of a <b>pentagon</b>.',
+        2: 'At feature_probability = 0.05 the model stores all 5 features in 2 dimensions, ~72° apart: <b>superposition</b>. The directions are no longer orthogonal (cos 72° ≈ 0.31), and the loss ends far lower than dropping three would allow.',
+        3: 'Same Adam, batch 256, lr 0.01. The pentagon is the loss-minimising packing: equal norms ≈ 1.1, and every b_final goes <b>negative</b> (≈ −0.25). Hold that thought: that bias does important work in the next chapter.' },
+      draw: function (ctx, t, l, W, H, api) {
+        if (!Q.done && Q.prev >= 0 && Q.prev < QT && t >= QT && t - Q.prev < .4) { Q.done = true; showQ(api); }
+        if (t < QT - 1) { Q.done = false; if (Q.el && Q.el.classList.contains('on')) hideQ(api, false); }
+        Q.prev = t;
+        bg(ctx, W, H, t); var L = layout(W, H, .25), R = get('sparse'), k = stepAt(l, 4, 18), s = R[k];
+        flat(ctx, L, t, 'flat2'); lodgers(ctx, L, s.W, t);
+        var y = L.cy + L.R * 1.15 + 16, pw = Math.min(W - 24, 360);
+        lossPlot(ctx, W / 2 - pw / 2, y, pw, 70, R, k, P.mint, 'p = 0.05   step ' + k + '   loss ' + s.Ls.toFixed(4), R[0].Ls);
+        var ls = [['‖W_i‖ ' + norms(s.W), P.chalk], ['b     ' + sgn(s.b), P.mint]];
+        if (l < 3.5) ls.push(['dense run ended at loss ' + get('dense')[STEPS].Ls.toFixed(4), P.pink]);
+        if (l > 18.5) ls.push([Q.choice === 'c' ? 'you called it: all five, ' + angs(s.W).join(' ') : 'all five stored: ' + angs(s.W).join(' '), P.butter]);
+        readout(ctx, W / 2 - pw / 2, y + 80, ls, W);
+      } },
+    { name: 'interference', start: 58, dur: 20, cap: {
+        1: 'Sharing has a cost. A lodger alone leaks a little into the neighbours\' rooms; a small <b>negative bias</b> switches those quiet signals off. But when <b>French and rain</b> come home together, their arrows add up to jazz\'s arrow: a <b>ghost</b>. Sparse data makes that rare.',
+        2: 'x′ = ReLU(Wᵀh + b). Alone, French leaks cos 72°·‖W‖² ≈ 0.3 into neighbours; b ≈ −0.25 plus the ReLU cuts it to ~0. Two at once is <b>interference</b> the bias can\'t fully fix. Last: <b>room 1 alone</b> lights for several lodgers: a <b>polysemantic neuron</b>.',
+        3: 'Bars: x′ (colour) vs x (chalk line), trained W and b; phase 2 forces b = 0. A ghost costs loss only when two features co-occur (p² = 0.0025 per pair), which is why superposition wins when features are sparse. Room 1 = h[0] = W[0, i] per feature.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var L = layout(W, H, .22), s = get('sparse')[STEPS], x = [0, 0, 0, 0, 0];
+        var phase = l < 4.5 ? 0 : l < 8.5 ? 1 : l < 13 ? 2 : 3, b = phase === 1 ? [0, 0, 0, 0, 0] : s.b;
+        if (phase < 2) x[2] = .8; else if (phase === 2) { x[2] = .8; x[4] = .8; } else x[Math.floor((l - 13) / 1.4) % NF] = .9;
+        flat(ctx, L, t, 'flat3'); lodgers(ctx, L, s.W, t, { alpha: x.map(function (v) { return phase === 3 || v > 0 ? 1 : .3; }) });
+        var f = toyFwd(s.W, b, x), e = S(L, f.h); F.lantern(ctx, e[0], e[1], 9, 1, t);
+        lbl(ctx, ['French home alone: clean', 'bias off: neighbours leak', 'French + rain home: a jazz ghost', 'room 1 alone: who lives here?'][phase], W / 2, 16, P.butter, L.p ? 15 : 18);
+        var by = L.cy + L.R * 1.15 + 14, bw = Math.min(W - 40, 340);
+        if (phase < 3) {
+          F.paper(ctx, W / 2, by + 50, bw + 20, 104, 'rgba(22,26,53,.9)', { seed: 'bars', shadow: false }); bars(ctx, W / 2 - bw / 2, by + 2, bw, 96, x, f.y);
+          var ghost = 0; for (var i = 0; i < NF; i++) if (!x[i]) ghost = Math.max(ghost, f.y[i]);
+          readout(ctx, W / 2 - bw / 2 - 10, by + 110, [['b = ' + (phase === 1 ? '0 (switched off)' : sgn(b)), phase === 1 ? P.pink : P.mint], ['biggest ghost x′ = ' + ghost.toFixed(3), ghost > .05 ? P.pink : P.mint]], W);
+        } else {
+          readout(ctx, W / 2 - bw / 2 - 10, by, s.W.map(function (w, i) { return [NAMES[i] + ' alone → room 1 = ' + (w[0] >= 0 ? '+' : '') + w[0].toFixed(2) + (w[0] > .3 ? '  lit' : ''), w[0] > .3 ? LCOLS[i] : 'rgba(253,250,240,.55)']; }), W);
+          ctx.save(); ctx.globalAlpha = ramp(l, 15, 16); F.note(ctx, 'one neuron, several meanings', W / 2, by + (L.p ? 110 : 124), L.p ? 15 : 18, { color: P.pink, seed: 'poly' }); ctx.restore();
+        }
+      } },
+    { name: 'a lantern per idea', start: 78, dur: 24, cap: {
+        1: 'A guide arrives with <b>lanterns</b>, one per idea. Looking only at the 2 rooms, she learns which lantern to light, then rebuilds the rooms from the lit lanterns. Her rule: light <b>as few as possible</b>. Watch her lanterns swing onto the lodgers\' arrows.',
+        2: 'A <b>sparse autoencoder</b> on h. Encoder: <code>acts_post = ReLU((h − b_dec) @ W_enc + b_enc)</code>. Decoder: <code>h_rec = acts_post @ W_dec_normalized + b_dec</code>. Dashed lines = decoder directions, trained live; they settle onto the 5 hidden features.',
+        3: 'loss = L_reconstruction + sparsity_coeff · L_sparsity; L_reconstruction = mean over d_in of (h_rec − h)², L_sparsity = Σ|acts_post| (L1). d_sae = 5, sparsity_coeff = 0.3, Adam lr 0.02. Decoder rows are unit-normalised so L1 can\'t cheat by shrinking acts.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, true); var L = layout(W, H, .22), R = get('sae'), k = Math.round(clamp((l - 2) / 14, 0, 1) * SAE_STEPS), s2 = R[k], sw = get('sparse')[STEPS];
+        flat(ctx, L, t, 'flat4'); lodgers(ctx, L, sw.W, t, { nolabel: l > 3 }); decoderArrows(ctx, L, s2);
+        var j = Math.floor(l / 2) % NF, x = [0, 0, 0, 0, 0]; x[j] = .85; var f = toyFwd(sw.W, sw.b, x), sf = saeFwd(s2, f.h);
+        var ly = L.cy + L.R * 1.15 + 34, sp = Math.min(64, (W - 40) / 5);
+        for (var i = 0; i < s2.Wd.length; i++) { var lx = W / 2 + (i - 2) * sp; F.lantern(ctx, lx, ly + Math.sin(t * 2 + i) * 3, L.p ? 13 : 16, clamp(sf.a[i] * 1.4, 0, 1), t + i); mono(ctx, sf.a[i].toFixed(2), lx, ly + (L.p ? 30 : 36), 11, sf.a[i] > .05 ? P.butter : 'rgba(253,250,240,.5)', 'center'); }
+        readout(ctx, W / 2 - Math.min(W - 24, 340) / 2, ly + (L.p ? 44 : 52), [['SAE step ' + k + '   input: ' + NAMES[j], P.chalk], ['L_reconstruction ' + s2.E.Lr.toFixed(4) + '   L0 ' + s2.E.L0.toFixed(2), P.mint], ['h_rec − h = (' + (sf.r[0] - f.h[0]).toFixed(2) + ', ' + (sf.r[1] - f.h[1]).toFixed(2) + ')', P.butter]], W);
+      } },
+    { name: 'the L1 dial', start: 102, dur: 22, cap: {
+        1: 'The guide has a <b>dial</b>: how strict to be about lighting few lanterns. Too loose: lanterns glow for everything and mean nothing. Too strict: rebuilding gets sloppy, and some lanterns <b>never light again</b>.',
+        2: 'The L1 trade-off, measured: 8 SAEs trained here at sparsity_coeff 0 → 1. At 0, every input lights ~2 latents (dense); past ~0.3, reconstruction degrades. With d_sae = 8 and a strict coefficient, some latents are <b>dead</b>: they never fire.',
+        3: 'Dead latents get no gradient (ReLU is flat below 0): lost capacity. ARENA\'s fixes: resampling (re-initialise dead latents toward badly reconstructed inputs), L1 warm-up, a small lr. L0 = mean active latents per input; the truth here is 5 × 0.05 = 0.25.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, true); var p = ph(W), cv = get('curve'), pw = Math.min(W - 24, 420), phh = p ? 190 : 220, px = W / 2 - pw / 2, py = p ? 10 : 18, i, q;
+        F.paper(ctx, W / 2, py + phh / 2, pw, phh, P.cream, { seed: 'curve' });
+        var gx0 = px + 46, gx1 = px + pw - 14, gy0 = py + phh - 30, gy1 = py + 44, X = function (L0) { return lerp(gx0, gx1, clamp(L0 / 2.1, 0, 1)); }, Y = function (Lr) { return lerp(gy0, gy1, clamp((Math.log10(Math.max(1e-5, Lr)) + 5) / 3.8, 0, 1)); };
+        mono(ctx, 'reconstruction error vs lanterns lit', px + 12, py + 14, p ? 12 : 14, '#6b5a9a', 'left', '700');
+        ctx.strokeStyle = 'rgba(42,41,52,.4)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx0, gy1); ctx.lineTo(gx0, gy0); ctx.lineTo(gx1, gy0); ctx.stroke();
+        mono(ctx, 'L0 (lit per input) →', X(1.5), gy0 + 14, 11, '#5a5566', 'center'); mono(ctx, 'error', gx0 - 6, gy1 + 6, 11, '#5a5566', 'right');
+        [0, 1, 2].forEach(function (v) { mono(ctx, '' + v, X(v), gy0 + 14, 11, '#5a5566', 'center'); });
+        var n = Math.min(cv.length, Math.floor(ramp(l, .5, 7) * cv.length + .001));
+        ctx.strokeStyle = '#6b5a9a'; ctx.lineWidth = 2; ctx.beginPath(); for (i = 0; i < n; i++) { q = [X(cv[i].E.L0), Y(cv[i].E.Lr)]; if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]); } ctx.stroke();
+        for (i = 0; i < n; i++) { q = [X(cv[i].E.L0), Y(cv[i].E.Lr)]; var hi = cv[i].c === .3; ctx.fillStyle = hi ? P.orange : '#6b5a9a'; ctx.beginPath(); ctx.arc(q[0], q[1], hi ? 6 : 4, 0, 6.283); ctx.fill(); if (i === 0 || i === n - 1 || hi) mono(ctx, 'c=' + cv[i].c, q[0] + (i === 0 ? -6 : 8), q[1] - 10, 11, P.ink, i === 0 ? 'right' : 'left'); }
+        // dead latents: the d_sae = 8 guide, strict dial
+        var E = get('dead')[SAE_STEPS].E, yy = py + phh + (p ? 40 : 50), spc = Math.min(44, (W - 30) / 8);
+        if (l > 8) { ctx.save(); ctx.globalAlpha = ramp(l, 8, 9);
+          lbl(ctx, 'd_sae = 8, sparsity_coeff = 0.6', W / 2, yy - 18, P.chalk, p ? 13 : 16);
+          for (i = 0; i < 8; i++) { var al = E.fr[i] > 0, lxp = W / 2 + (i - 3.5) * spc; F.lantern(ctx, lxp, yy + 18, p ? 11 : 14, al ? .9 : 0, t + i); mono(ctx, al ? (E.fr[i] * 100).toFixed(0) + '%' : 'dead', lxp, yy + (p ? 42 : 48), 10.5, al ? P.butter : P.pink, 'center'); }
+          readout(ctx, W / 2 - Math.min(W - 24, 300) / 2, yy + (p ? 56 : 66), [['dead latents: ' + E.dead + ' of 8 (never fire)', P.pink], ['fix: resample them', P.mint]], W); ctx.restore(); }
+        // where this story stops being true
+        var fp = ramp(l, 16, 17.2); if (fp > 0) { F.cornerFlip(ctx, W, H, fp, P.cream); ctx.save(); ctx.globalAlpha = ramp(l, 16.8, 17.6); var s = Math.min(W, H) * .9;
+          F.hand(ctx, 'where the story', W - s * .34, H - s * .36, p ? 14 : 18, P.ink, { seed: 'lim1' }); F.hand(ctx, 'stops being true:', W - s * .31, H - s * .28, p ? 14 : 18, P.ink, { seed: 'lim2' });
+          F.hand(ctx, 'real features split', W - s * .28, H - s * .19, p ? 13 : 16, '#b3443c', { seed: 'lim3' }); F.hand(ctx, '& absorb each other', W - s * .25, H - s * .11, p ? 13 : 16, '#b3443c', { seed: 'lim4' }); ctx.restore(); }
+      } },
+    { name: 'turn a dial', start: 124, dur: 14, cap: {
+        1: 'Why bother? Because a lantern is a <b>handle</b>. Grab the "French" lantern and turn it up: the flat now behaves as if French were home, though nobody came in. Turn it too far and the neighbours start to glow too.',
+        2: 'SAE steering: add α · W_dec[k] to h and let the model run on. Here x′ = ReLU(Wᵀ(h + α·d_French) + b), computed live as α ramps. A readable dictionary of features gives us handles to <b>steer</b>, and to check what a model is thinking before it acts.',
+        3: 'The same move as ARENA [1.3.3] SAE steering on GPT-2 (add a latent\'s decoder vector in a hook). Overshoot is real: in superposition a large α leaks through cos 72° into neighbours, like the off-target effects of real steering.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, true); var L = layout(W, H, .22), sw = get('sparse')[STEPS], s2 = get('sae')[SAE_STEPS];
+        var fr = sw.W[2], ki = 0, best = -9; s2.Wd.forEach(function (d, k) { var c = (d[0] * fr[0] + d[1] * fr[1]) / Math.hypot(d[0], d[1]); if (c > best) { best = c; ki = k; } });
+        var d = s2.Wd[ki], dn = Math.hypot(d[0], d[1]), al = l < 2 ? 0 : l < 8 ? ramp(l, 2, 8) : lerp(1, 2.6, ramp(l, 9, 13)), h = [al * d[0] / dn, al * d[1] / dn], y = [];
+        for (var i = 0; i < NF; i++) y.push(Math.max(0, sw.W[i][0] * h[0] + sw.W[i][1] * h[1] + sw.b[i]));
+        flat(ctx, L, t, 'flat5'); lodgers(ctx, L, sw.W, t, { alpha: [.35, .35, 1, .35, .35] }); var e = S(L, h); F.lantern(ctx, e[0], e[1], 9, 1, t);
+        lbl(ctx, 'dial: French lantern × ' + al.toFixed(2), W / 2, 16, P.butter, L.p ? 15 : 18);
+        var by = L.cy + L.R * 1.15 + 14, bw = Math.min(W - 40, 340), leak = Math.max(y[0], y[1], y[3], y[4]);
+        F.paper(ctx, W / 2, by + 50, bw + 20, 104, 'rgba(22,26,53,.9)', { seed: 'bars2', shadow: false }); bars(ctx, W / 2 - bw / 2, by + 2, bw, 96, [0, 0, 0, 0, 0], y);
+        readout(ctx, W / 2 - bw / 2 - 10, by + 110, [['h = α · W_dec[' + ki + ']   (x = 0)', P.chalk], ['French x′ = ' + y[2].toFixed(2) + '   leak ' + leak.toFixed(2), leak > .02 ? P.pink : P.mint]], W);
+      } },
+    { name: 'your code', start: 138, dur: 20, cap: {
+        1: 'The whole film is a <b>dozen lines</b>. As each line lights up, the note shows its real value for one input: French at 0.8. Features you can find are features you can check, and dials you can turn.',
+        2: 'Torch-style, single instance: the toy model forward and <code>calculate_loss</code>, then ARENA\'s <code>ToySAE.forward</code>: <code>h_cent</code>, <code>acts_post</code>, <code>h_reconstructed</code>, <code>L_reconstruction</code>, <code>L_sparsity</code>, <code>loss</code>.',
+        3: 'ARENA keeps an <code>inst</code> dim and uses einops.einsum; its loss is <code>einops.reduce(error, "batch inst feats -> inst", "mean").sum()</code>. W_dec_normalized divides each latent\'s row by its L2 norm (+ weight_normalize_eps).' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, true); var p = ph(W), sz = p ? 10.8 : 14, lh = sz * 1.6, cw = Math.min(W - 12, 700), x0 = W / 2 - cw / 2 + 8, V = codeVals();
+        var chh = CODE.length * lh + 20, cy = (p ? 8 : 16) + chh / 2; F.paper(ctx, W / 2, cy, cw, chh, P.cream, { seed: 'code' });
+        var hl = Math.floor(clamp((l - 1) / 1.15, -1, CODE.length - 1));
+        CODE.forEach(function (s, j) { var y = cy - chh / 2 + 10 + j * lh + lh / 2;
+          if (j === hl && V[j]) { ctx.fillStyle = 'rgba(247,227,160,.85)'; ctx.fillRect(x0 - 5, y - lh / 2 + 1, cw - 8, lh - 2); }
+          mono(ctx, s, x0, y, sz, s.charAt(0) === '#' ? '#6b5a9a' : P.ink, 'left', j === hl ? '700' : '500'); });
+        var vy = cy + chh / 2 + (p ? 26 : 34);
+        if (hl >= 0 && V[hl]) F.note(ctx, V[hl], W / 2, vy, p ? 12 : 16, { color: P.mint, seed: 'v' + hl, font: F.MONO, tape: false });
+        var sa = ramp(l, 15, 16); if (sa > 0) { ctx.save(); ctx.globalAlpha = sa; F.note(ctx, 'a readable dictionary of features\ngives us handles to steer', W / 2, Math.min(H - 40, vy + (p ? 62 : 76)), p ? 15 : 19, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore(); }
+      } }
+  ];
+
+  /* ---------------- coda: now you drive ---------------- */
+  var C = { lp: Math.log10(PS), c: .3, toy: null, sae: null, k: 0, sk: 0, h: null, timer: null };
+  function codaTrain() { var p = Math.pow(10, C.lp); C.toy = trainToy(p, 200, 2, 128, 0.03); C.sae = trainSAE(C.toy[200].W, p, C.c, 6, 200, 12, 96, 0.02); C.k = 0; C.sk = 0; }
+  function slider(name, label, min, max, step, val) { return '<label style="display:flex;align-items:center;gap:6px;min-width:0">' + label + ' <input data-k="' + name + '" type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + val + '" style="flex:1;min-width:60px"> <b data-v="' + name + '" style="min-width:3.4em;font-variant-numeric:tabular-nums"></b></label>'; }
+  function toH(x, y, api) { var L = layout(api.W, api.H, .24); return [(x - L.cx) / L.sc, -(y - L.cy) / L.sc]; }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      hideQ(api, false);
+      panel.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px 12px;font-size:13px;align-items:center">' +
+        slider('lp', 'feature_probability', -2, 0, .05, C.lp) + slider('c', 'sparsity_coeff', 0, 1, .05, C.c) + '</div>' +
+        '<div style="font-size:12px;opacity:.8;margin-top:2px">Each change retrains the toy model and a 6-latent SAE here (200 Adam steps each). Tap the flat to place h.</div>';
+      [].forEach.call(panel.querySelectorAll('input[type=range]'), function (inp) {
+        var k = inp.dataset.k, out = panel.querySelector('[data-v=' + k + ']');
+        var upd = function () { C[k] = +inp.value; out.textContent = k === 'lp' ? Math.pow(10, C.lp).toFixed(3) : C.c.toFixed(2); };
+        upd(); inp.oninput = function () { upd(); clearTimeout(C.timer); C.timer = setTimeout(codaTrain, 180); };
+      });
+      codaTrain();
+    },
+    down: function (x, y, api) { C.h = toH(x, y, api); api.audio.blip(660); },
+    move: function (x, y, api, pressed) { if (pressed) C.h = toH(x, y, api); },
+    draw: function (ctx, t, W, H, api, dt) {
+      bg(ctx, W, H, t, true); if (!C.toy) return; var L = layout(W, H, .24);
+      C.k = Math.min(200, C.k + dt * 60); C.sk = C.k >= 200 ? Math.min(200, C.sk + dt * 60) : 0;
+      var s = C.toy[Math.floor(C.k)], s2 = C.sae[Math.floor(C.sk)];
+      flat(ctx, L, t, 'flatC'); lodgers(ctx, L, s.W, t);
+      if (C.k >= 200) decoderArrows(ctx, L, s2, s2.E.fr.map(function (f) { return f > 0; }));
+      var lines = [['toy step ' + Math.floor(C.k) + '  loss ' + s.Ls.toFixed(4), P.butter], ['stored: ' + s.W.filter(function (w) { return Math.hypot(w[0], w[1]) > .5; }).length + ' of 5 features', P.chalk]];
+      if (C.k >= 200) { lines.push(['SAE step ' + Math.floor(C.sk) + '  L_rec ' + s2.E.Lr.toFixed(4), P.mint]); lines.push(['L0 ' + s2.E.L0.toFixed(2) + '  dead ' + s2.E.dead + ' of 6', s2.E.dead ? P.pink : P.mint]); }
+      if (C.h) { var e = S(L, C.h); F.lantern(ctx, e[0], e[1], 8, 1, t); var f = saeFwd(s2, C.h), y = []; for (var i = 0; i < NF; i++) y.push(Math.max(0, s.W[i][0] * C.h[0] + s.W[i][1] * C.h[1] + s.b[i]));
+        lines.push(['acts_post ' + f.a.map(function (q) { return q.toFixed(1); }).join(' '), P.butter]); lines.push(['x′ ' + y.map(function (q) { return q.toFixed(2); }).join(' '), P.chalk]); }
+      var ry = L.cy + L.R * 1.15 + 10; readout(ctx, 8, ry > H - 120 ? 8 : ry, lines, W);
+    }
+  };
+
+  F.play({
+    title: 'Deep dive · Too many ideas, too few neurons',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Week 8 pack', href: '../../index.html#week-08' },
+      { label: 'Demo: superposition & SAEs', href: '../../index.html#demo/superposition-sae' },
+      { label: 'Map: superposition', href: '../../index.html#map/node=superposition' },
+      { label: 'Map: sparse autoencoder', href: '../../index.html#map/node=sparse-autoencoder' },
+      { label: 'Map: dead latent', href: '../../index.html#map/node=dead-latent' },
+      { label: 'Map: SAE steering', href: '../../index.html#map/node=sae-steering' },
+      { label: 'Case: superposition', href: '../../index.html#cases/superposition' },
+      { label: 'Case: sparse autoencoders', href: '../../index.html#cases/sparse-autoencoders' },
+      { label: 'Short film: week 8', href: 'w8-patching.html' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
