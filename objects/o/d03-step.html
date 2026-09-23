@@ -242,11 +242,10 @@ const CAM = {   // authored views; fit: k = close-up (otherwise the kit fits the
   front: { pos: [0.1, 2.3, 9.4], target: [0.1, 1.06, 0.2], fit: 1.36 },
   side: { pos: [9.4, 2.1, 0.0], target: [0, 0.72, 0], fit: 1.3 },
   top: { pos: [0.35, 8.6, 3.9], target: [0, 0.45, 0.25] },
-  gtop: { pos: [-0.12, 5.7, 2.75], target: [-0.1, 0.55, 0.95], fit: 1.45 },
+  gtop: { pos: [-0.13, 12.3, 1.34], target: [-0.15, 0.5, 1.02], fit: 4.2 },   // straight down: right angles stay right
   wig: { pos: [0.2, 1.5, 5.4], target: [0.12, 0.62, 1.1], fit: 1.35 },
   close: { pos: [0.55, 3.5, 4.3], target: [0.17, 0.52, 0.9], fit: 1.55 },
-  ctop: { pos: [0.25, 5.4, 2.9], target: [0.2, 0.5, 0.9], fit: 1.5 },
-  mtop: { pos: [0.12, 6.3, 1.2], target: [0.1, 0.5, 0.78], fit: 1.95 },   // nearly overhead: (w, b) vectors keep their proportions
+  mtop: { pos: [0.12, 12.3, 1.1], target: [0.1, 0.5, 0.78], fit: 3.9 },     // straight down: (w, b) vectors keep their proportions   // nearly overhead: (w, b) vectors keep their proportions
   bowl: { pos: [0.3, 7.25, 4.9], target: [0, 0.95, -0.45], fit: 1.0 },
   wide: { pos: [4.4, 5.0, 7.8], target: [0, 0.85, -0.2] },
 };
@@ -746,7 +745,7 @@ function drawSteps(S, on) {
       V.ghost.visible = !off;
       V.ghost.position.copy(W(st, b, R * 0.75));
     } else { V.arrow.show(false); V.ghost.visible = false; }
-    st.stepInfo[o.id] = { t, a, b, off, d: [b[0] - a[0], b[1] - a[1]], La: loss(st.mode, a[0], a[1], st.scale), Lb: loss(st.mode, b[0], b[1], st.scale) };
+    st.stepInfo[o.id] = { t, a, b, off, lost: !inDomain(st, a), d: [b[0] - a[0], b[1] - a[1]], La: loss(st.mode, a[0], a[1], st.scale), Lb: loss(st.mode, b[0], b[1], st.scale) };
     if (k.opt !== 'all') { st.stepEnd = b; st.stepFrom = a; }
   }
   // momentum's step opened up, as two pulls laid on the plaster from the same spot: the memory
@@ -777,7 +776,8 @@ function drawSteps(S, on) {
     st.cmpEnd.position.copy(W(st, Pc[tc], R * 0.45));
     if (st.stepInfo.mom) {
       st.stepInfo.mom.prog = { mom: alongGully(st.mode, Rm.P[0], Rm.P[tm]), sgd: alongGully(st.mode, Pc[0], Pc[tc]),
-        Lmom: loss(st.mode, Rm.P[tm][0], Rm.P[tm][1], st.scale), Lsgd: loss(st.mode, Pc[tc][0], Pc[tc][1], st.scale) };
+        Lmom: loss(st.mode, Rm.P[tm][0], Rm.P[tm][1], st.scale), Lsgd: loss(st.mode, Pc[tc][0], Pc[tc][1], st.scale),
+        sgdOff: !inDomain(st, Pc[tc]) };
     }
   } else { st.cmpPath.mesh.visible = false; st.cmpEnd.visible = false; }
   // Adam's per-axis ruler: a box of half-width lr around the step's start
@@ -837,12 +837,21 @@ function readouts(S) {
         const I = info[o.id];
         if (!I) continue;
         if (I.dup) { lines.push(`${o.name}: same as SGD at step 1`); continue; }
-        lines.push(`${o.name} ${I.off ? 'leaves the map' : ps(I.d, 2)}`);
+        lines.push(`${o.name} ${I.lost ? 'already off the map' : I.off ? 'leaves the map' : ps(I.d, 2)}`);
       }
       r = `${T === 1 ? 'step' : 'Δθ at step'} ${k.t}${x2}\n` + lines.join('\n');
     } else {
       const I = info[k.opt];
       if (!I) r = '';
+      else if (I.lost) {
+        // the ball left the plotted square before this step: say so, and say why when it diverges
+        const l1 = st.E.l1 * sc, lr = st.hp[k.opt].lr, mu = st.hp.mom.mu;
+        const lim = k.opt === 'sgd' ? 2 / l1 : k.opt === 'mom' ? 2 * (1 + mu) / l1 : null;
+        const why = lim != null && lr > lim
+          ? (T === 1 ? '\nstep size too big: it runs away' : T === 2 ? `\nlr > ${k.opt === 'sgd' ? '2/λmax' : '2(1+μ)/λmax'} = ${fx(lim, 3)}: diverges` : `\nlr·λmax = ${fx(lr * l1, 2)} > ${k.opt === 'sgd' ? '2' : '2(1+μ) = 3.8'}: unstable`)
+          : '';
+        r = `${T === 1 ? 'the ball left the map' : 'left the plotted square'} before step ${I.t}${x2}${why}`;
+      }
       else if (k.opt === 'sgd') {
         r = T === 1 ? `SGD step ${I.t}: ${ps(I.d, 2)}\nloss ${fx(I.La, 3)} → **${I.off ? 'off the map' : fx(I.Lb, 3)}**`
           : T === 2 ? `−lr·∇L = ${ps(I.d, 3)}${x2}\nloss ${fx(I.La, 3)} → **${I.off ? 'off the map' : fx(I.Lb, 3)}**`
@@ -863,7 +872,8 @@ function readouts(S) {
           const nm = gully ? { 1: ['sideways', 'down the gully'], 2: ['across', 'along'], 3: ['v₁ (steep)', 'v₂ (gentle)'] }[T] : ['w', 'b'];
           const d2 = T === 1 ? 2 : 3;
           let tail = '';
-          if (pg && gully && pg.sgd > 1e-4 && pg.mom > 0) {
+          if (pg && pg.sgdOff) tail = T === 1 ? `SGD at this step size left the map` : `plain SGD at lr ${fx(st.hp.mom.lr, 3)} left the square`;
+          else if (pg && gully && pg.sgd > 1e-4 && pg.mom > 0) {
             tail = T === 1 ? `after ${I.t} steps: **${fx(pg.mom / pg.sgd, 1)}×** as far as SGD`
               : T === 2 ? `${I.t} steps down the gully: **${fx(pg.mom, 2)}** (SGD ${fx(pg.sgd, 2)})`
                 : `Σ along v₂: **${fx(pg.mom, 3)}** vs SGD ${fx(pg.sgd, 3)}`;
@@ -891,10 +901,11 @@ function readouts(S) {
     const H = hessian(st.mode, sc), E = st.E;
     const raw = eig2(hessian('raw')).kappa;
     // with the centring note, the gradient joins this one label (one card, clear of the bowl)
-    const gl = nm === 'centre' ? (T === 1 ? `slopes **${pr(g)}** · ${S.tr(MODE_NAME[st.mode])}\n` : `∇L = **${pr(g)}**${x2} · inputs: ${S.tr(MODE_NAME[st.mode])}\n`) : '';
-    st.hessLbl.set(gl + (T === 1
-      ? `steep ÷ gentle = **${fx(E.kappa, 2)}** (raw inputs: ${fx(raw, 1)})`
-      : `H = [[${fx(H[0][0], 2)}, ${fx(H[0][1], 2)}], [${fx(H[1][0], 2)}, ${fx(H[1][1], 2)}]]\nκ = λmax/λmin = **${fx(E.kappa, 2)}** (raw: ${fx(raw, 1)})`));
+    const gl = nm === 'centre' ? (T === 1 ? `slopes **${pr(g)}**\n` : `∇L = **${pr(g, T === 3 ? 3 : 2)}**${x2}\n`) : '';
+    const Hs = `H = [[${fx(H[0][0], 2)}, ${fx(H[0][1], 2)}], [${fx(H[1][0], 2)}, ${fx(H[1][1], 2)}]]`;
+    st.hessLbl.set(gl + (T === 1 ? `steep ÷ gentle = **${fx(E.kappa, 2)}**\n(raw inputs: ${fx(raw, 1)})`
+      : T === 2 ? `${Hs}\nκ = **${fx(E.kappa, 2)}** (raw inputs: ${fx(raw, 1)})`
+        : `${Hs}\nκ = λ₁/λ₂ = **${fx(E.kappa, 2)}** (raw: ${fx(raw, 1)})`));
     st.hessLbl.show(true);
   } else st.hessLbl.show(false);
 }
@@ -1022,7 +1033,7 @@ run({
     }
     st.memArrow = lying(C.aux, 0.0115, 0.55);            // momentum's memory: 0.9 x the last step
     st.freshArrow = lying(C.data, 0.0115);               // the fresh push: SGD's own step from here
-    st.cmpPath = K.tube([], C.data, TR * 0.7, { material: new THREE.MeshStandardMaterial({ color: C.data, roughness: 0.8, transparent: true, opacity: 0.45, depthWrite: false }), shadow: false });
+    st.cmpPath = K.tube([], C.data, TR * 0.8, { material: new THREE.MeshStandardMaterial({ color: C.data, roughness: 0.8, transparent: true, opacity: 0.62, depthWrite: false }), shadow: false });
     st.cmpEnd = ghostBead(C.data, R * 0.45);
     S.root.add(st.memArrow.group, st.freshArrow.group, st.cmpPath.mesh, st.cmpEnd);
     st.box = K.tube([], C.brass, 0.008, { material: K.mat.brass() });
@@ -1057,6 +1068,7 @@ run({
     if (id === 'slice') {
       buildTerrain(S);
       if (k.slice !== 'none') { st.note = st.wig ? 'wiggle' : 'slope'; }
+      else if (st.show.steps) st.note = 'step';
       else if (!st.show.steps) { st.show.grad = true; st.show.ring = true; st.note = 'grad'; }
       compute(S); draw(S); return;
     }
@@ -1131,7 +1143,7 @@ run({
       },
       cam: CAM.wig,
       set: { inputs: 'raw', slice: 'w', opt: 'sgd', t: 1, eps: 0.1, x2: false },
-      enter(S) { scene(S, { note: 'wiggle', wig: true, flag: false, figure: 'lean', figOnTop: true, figAt: [1.18, 0, 0.62], face: -1.35, at: ballWorld }); } },
+      enter(S) { scene(S, { note: 'wiggle', wig: true, flag: false }); } },
 
     { tag: 'core',
       cap: {
@@ -1159,7 +1171,7 @@ run({
         2: 'Adam steps −lr·m̂/√v̂ per coordinate: m̂ averages g, v̂ averages g². At step 1, m̂ = g and √v̂ = |g|, so each coordinate moves exactly lr = 0.2 (up to ε): the box corner. Adam\'s lr is a distance; SGD\'s lr is an exchange rate, × slope.',
         3: 'θ ← θ − lr·m̂/(√v̂ + ε), m̂ = m/(1 − β₁ᵗ), v̂ = v/(1 − β₂ᵗ); t = 1 gives −lr·sign(g). A diagonal preconditioner: it rescales axes but cannot undo a tilt (even the ideal diagonal leaves κ = 18.7 of 87.6).',
       },
-      cam: CAM.ctop,
+      cam: CAM.gtop,
       set: { inputs: 'raw', slice: 'none', opt: 'adam', t: 1, x2: false },
       enter(S) { scene(S, { note: 'step', steps: true, grad: true, readAt: FRONT, readAnchor: 'top' }); } },
 

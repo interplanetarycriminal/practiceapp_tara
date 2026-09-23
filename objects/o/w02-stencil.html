@@ -39,9 +39,9 @@ function makeImage() {                                           // x[c][i][j], 
   return x;
 }
 const KERNELS = [
-  { id: 'vedge', name: { 1: 'vertical edges', 2: 'vertical edges', 3: 'vertical edge' } },
-  { id: 'hedge', name: { 1: 'horizontal edges', 2: 'horizontal edges', 3: 'horizontal edge' } },
-  { id: 'warm', name: { 1: 'warmth', 2: 'warmth (R − B)', 3: 'R − B' } },
+  { id: 'vedge', name: { 1: 'vertical', 2: 'vertical', 3: 'Ng vertical' } },
+  { id: 'hedge', name: { 1: 'horizontal', 2: 'horizontal', 3: 'horizontal' } },
+  { id: 'warm', name: { 1: 'warmth', 2: 'warmth', 3: 'R − B' } },
   { id: 'blur', name: { 1: 'blur', 2: 'blur', 3: 'box blur' } },
 ];
 /* hand-set stencils, weight[c][i][j] of shape (C_in, k, k). vedge is Andrew Ng's vertical edge
@@ -165,9 +165,9 @@ function makeAtlas(renderer, cols = 8, px = 128) {
     const x0 = (i % cols) * px, y0 = Math.floor(i / cols) * px;
     g.clearRect(x0, y0, px, px);
     if (!s) return;
-    let fs = Math.round(px * (s.length <= 2 ? 0.6 : s.length === 3 ? 0.46 : 0.36));
+    let fs = Math.round(px * (s.length <= 2 ? 0.8 : s.length === 3 ? 0.6 : s.length === 4 ? 0.5 : 0.42));
     g.font = font(fs);
-    while (g.measureText(s).width > px * 0.86 && fs > 8) { fs -= 2; g.font = font(fs); }
+    while (g.measureText(s).width > px * 0.92 && fs > 8) { fs -= 2; g.font = font(fs); }
     g.fillStyle = '#ffffff';
     g.textAlign = 'center';
     g.textBaseline = 'middle';
@@ -296,7 +296,7 @@ function frameGeometry(bar = 0.11) {                      // a unit square frame
 /* ============================================================ display constants */
 
 const CELL = 0.25, TILE = 0.215, TH = 0.05, TRAY = 0.03;
-const GIN = 0.9, DROP = 1.15;
+const GIN = 0.8, DROP = 1.45;
 const Y_B = TRAY + DROP;                          // top of the lowest glass sheet (B)
 const yFloor = (c) => Y_B + (2 - c) * GIN;        // c = 0 red (top), 1 green, 2 blue
 const TOP = yFloor(0);
@@ -341,10 +341,10 @@ function layoutFor(S) {
     maps.push({ o: 0, cell, scale: s, numbers: true, box: [a, b, a, b],
       pos: (r, q) => [px(centre(q)), TRAY, pz(centre(r))] });
   } else {                                                  // C_out small maps, 2 per row
-    const cell = Math.min(0.16, 0.95 / n), w = n * cell, gap = 0.22;
+    const cell = Math.min(0.13, 0.75 / n), w = n * cell, gap = 0.18;
     for (let o = 0; o < cout; o++) {
       const col = o % 2, row = Math.floor(o / 2);
-      const sx = (col - 0.5) * (w + gap), sz = cout <= 2 ? 0 : (row - 0.5) * (w + gap);
+      const sx = (col - 0.5) * (w + gap), sz = cout <= 2 ? 0.25 : 0.32 + (row - 0.5) * (w + gap);
       maps.push({ o, cell, scale: cell / CELL, numbers: false, box: [sx - w / 2, sx + w / 2, sz - w / 2, sz + w / 2],
         pos: (r, q) => [sx + (q - (n - 1) / 2) * cell, TRAY, sz + (r - (n - 1) / 2) * cell] });
     }
@@ -372,13 +372,13 @@ function compute(S, L) {
       if (d < dmin - 1e-9) { dmin = d; focus = r * L.n + q; }
     }
   }
-  // the pooling block to talk about: the one whose four values differ most (first in reading order)
-  let spread = -1, blk = [0, 0];
+  // the pooling block to talk about: among blocks whose four values differ, the one with the biggest max
+  let bestMax = -Infinity, blk = [0, 0];
   const P0 = pooled[0];
   for (let r = 0; r < P0.oh; r++) for (let q = 0; q < P0.ow; q++) {
     const v = [0, 1].flatMap((i) => [0, 1].map((j) => out[0][2 * r + i][2 * q + j]));
-    const sp = Math.max(...v) - Math.min(...v);
-    if (sp > spread + 1e-9) { spread = sp; blk = [r, q]; }
+    const mx = Math.max(...v), score = mx - Math.min(...v) > 1e-9 ? mx : mx - 1e6;
+    if (score > bestMax + 1e-9) { bestMax = score; blk = [r, q]; }
   }
   return { W, bias, out, pooled, vmax, focus, blk, init, bound: 1 / Math.sqrt(3 * L.k * L.k) };
 }
@@ -492,7 +492,7 @@ function sheetTexture(c, p) {                              // one glass sheet: t
 }
 
 function chimneyGeometry(k) {                              // the stencil: brass posts + a ring on every sheet
-  const h = (k * CELL) / 2 + 0.016, e = 0.022, y0 = Y_B - 0.17, y1 = TOP + 0.24;
+  const h = (k * CELL) / 2 + 0.016, e = 0.022, y0 = Y_B - 0.17, y1 = TOP + 0.15;
   const parts = [];
   const bar = (sx, sy, sz, x, y, z) => parts.push(new THREE.BoxGeometry(sx, sy, sz).translate(x, y, z));
   for (const ax of [-1, 1]) for (const az of [-1, 1]) bar(e, y1 - y0, e, ax * h, (y0 + y1) / 2, az * h);
@@ -512,6 +512,7 @@ function build(S) {
   const st = S.state, L = layoutFor(S);
   st.L = L;
   st.R = compute(S, L);
+  legendFor(S);
   st.vis = new Uint8Array(L.N).fill(1);
   st.poolShown = !!S.knobs.pool;
   st.stop = st.R.focus;
@@ -553,9 +554,25 @@ function build(S) {
   paint(S);
 }
 
+/* legend chips name the small maps (C_out > 1); tapping one shows that stencil's weights */
+function legendFor(S) {
+  const st = S.state, L = st.L, key = `${L.cout}|${S.knobs.w}`;
+  if (st.legendKey === key) return;
+  st.legendKey = key;
+  if (L.cout === 1) { K.legend([]); st.legend = null; st.showK = 0; return; }
+  st.showK = Math.min(st.showK || 0, L.cout - 1);
+  const items = [];
+  for (let o = 0; o < L.cout; o++) {
+    items.push({ id: String(o), color: KCOL[o],
+      label: st.R.init ? { 1: `random ${o + 1}`, 2: `random ${o}`, 3: `w[${o}]` } : KERNELS[o].name });
+  }
+  st.legend = K.legend(items, (id) => { st.showK = Number(id); st.legend.active(id); paintPlates(S); paint(S); });
+  st.legend.active(String(st.showK));
+}
+
 /* weight frames inside the stencil: gold = positive weight, slate = negative, none = 0 */
 function paintPlates(S) {
-  const st = S.state, L = st.L, W = st.R.W[st.showK || 0], k = L.k, m = L.m;
+  const st = S.state, L = st.L, W = st.R.W[Math.min(st.showK || 0, L.cout - 1)], k = L.k, m = L.m;
   const wmax = Math.max(1e-12, ...W.flat(2).map(Math.abs));
   let n = 0;
   for (let c = 0; c < 3; c++) for (let i = 0; i < k; i++) for (let j = 0; j < k; j++) {
@@ -570,12 +587,12 @@ function paintPlates(S) {
 /* the weight rack: weight (C_out, C_in, k, k) as C_out rows of three k x k plates */
 function buildRack(S) {
   const st = S.state, L = st.L, R = st.R, k = L.k, m = L.m;
-  const rt = Math.min(0.055, 0.21 / k), pitch = k * rt + 0.07;
-  const W = 3 * pitch + 0.1, H = L.cout * pitch + 0.1;
+  const pitch = 0.18, rt = Math.min(0.07, (pitch - 0.045) / k);
+  const W = 3 * pitch + 0.04, H = L.cout * pitch + 0.1;
   const g = st.rack.group;
-  const x0 = Math.max(1.02, L.mx1 + 0.22);
-  g.position.set(x0 + W / 2, 0, 0.35);
-  g.rotation.y = -0.32;
+  const x0 = Math.max(0.99, L.mx1 + 0.1);
+  g.position.set(x0 + W / 2, 0, 0.12);
+  g.rotation.y = 0.1;
   st.rack.panel.scale.set(W, H, 0.03);
   st.rack.panel.position.set(0, 0.06 + H / 2, -0.02);
   st.rack.base.scale.set(W + 0.06, 0.06, 0.16);
@@ -593,7 +610,7 @@ function buildRack(S) {
     }
     const b = st.rack.beads[o];
     b.visible = true;
-    b.position.set(-W / 2 + 0.035, yc, 0.02);
+    b.position.set(-W / 2 - 0.035, yc, 0.02);
   }
   for (let o = L.cout; o < 4; o++) st.rack.beads[o].visible = false;
   for (; n < NRACK; n++) st.rack.tiles.hide(n);
@@ -616,32 +633,28 @@ function threads(S, j = S.state.stop) {
   });
 }
 
-function setProxy(S) {
-  const st = S.state, L = st.L;
-  let x0 = Math.min(-L.half, L.mx0), x1 = Math.max(L.half, L.mx1), z0 = -L.half, z1 = L.half;
-  for (const M of L.maps) { z0 = Math.min(z0, M.box[2]); z1 = Math.max(z1, M.box[3]); }
-  if (st.rack.group.visible) x1 = Math.max(x1, st.rackRight);
-  const y1 = TOP + 0.3;
-  st.proxy.scale.set(x1 - x0 + 0.1, y1, z1 - z0 + 0.1);
-  st.proxy.position.set((x0 + x1) / 2, y1 / 2, (z0 + z1) / 2);
-}
+/* framing: the kit fits the plinth cylinder grown to the real meshes' boxes (glass sheets, stencil
+   frame, trays). The rack stands inside the plinth circle and opts out (userData.noFit), as do the
+   instanced unit boxes, so the framing doesn't jump when C_out or the rack changes. */
+function setProxy() {}
 function refit(S) { S.fly({ pos: S.camera.position.toArray(), target: S.controls.target.toArray() }, 650); }
 
 /* ============================================================ labels */
 
 function stopParts(S, j = S.state.stop) {
   const st = S.state, L = st.L, r = Math.floor(j / L.n), q = j % L.n;
-  return Object.assign(windowAt(IMAGE, st.R.W[0], r, q, L.s, L.p), { r, q });
+  const o = Math.min(st.showK || 0, L.cout - 1);
+  return Object.assign(windowAt(IMAGE, st.R.W[o], r, q, L.s, L.p), { r, q, o });
 }
 function readoutText(S) {
   const st = S.state, L = st.L, T = S.tier, pool = st.poolShown, n = L.n, n2 = L.n2, sh = pool ? n2 : n;
   if (T === 1) {
     return `**3 colour sheets → ${L.cout} map${L.cout > 1 ? 's' : ''}**\n8 × 8 in, ${sh} × ${sh} out${pool ? ' (pooled)' : ''} · ${L.k} × ${L.k} stencil`;
   }
-  const f = `⌊(8 + ${2 * L.p} − ${L.k}) / ${L.s}⌋ + 1 = ${n}`;
-  const shp = `(1, 3, 8, 8) → (1, ${L.cout}, ${n}, ${n})` + (pool ? ` → pool (${n2}, ${n2})` : '');
-  if (T === 2) return `**nn.Conv2d(3, ${L.cout}, ${L.k}, stride=${L.s}, padding=${L.p})**\nout = ${f}\n${shp}`;
-  return `**F.conv2d(x, weight, stride=${L.s}, padding=${L.p})**\nweight (${L.cout}, 3, ${L.k}, ${L.k}) · ${f}\n${shp}`;
+  const f = `⌊(8 + ${2 * L.p} − ${L.k})/${L.s}⌋ + 1 = ${n}`;
+  const shp = pool ? `(1, ${L.cout}, ${n}, ${n}) → pool (1, ${L.cout}, ${n2}, ${n2})` : `→ (1, ${L.cout}, ${n}, ${n})`;
+  if (T === 2) return `**nn.Conv2d(3, ${L.cout}, ${L.k}, stride=${L.s}, padding=${L.p})**\n${pool ? shp : `${f} ${shp}`}`;
+  return `**F.conv2d(x, weight, stride=${L.s}, padding=${L.p})**\nweight (${L.cout}, 3, ${L.k}, ${L.k}) · ${pool ? `pooled (1, ${L.cout}, ${n2}, ${n2})` : `out (1, ${L.cout}, ${n}, ${n})`}`;
 }
 
 function paint(S) {
@@ -662,13 +675,9 @@ function paint(S) {
     if (!M || !st.outOn) { tg.show(false); return; }
     tg.show(true);
     if (L.cout === 1) {
-      tg.move([M.box[0] - 0.05, TRAY + 0.02, (M.box[2] + M.box[3]) / 2]).anchor('right');
-      tg.set(T === 1 ? 'the new map' : T === 2 ? 'output channel 0' : 'out[0, 0]');
-    } else {
-      tg.move([(M.box[0] + M.box[1]) / 2, TRAY + 0.02, M.box[3] + 0.03]).anchor('top');
-      const nm = R.init ? (T === 3 ? `out[0, ${o}]` : `random ${o}`) : T === 3 ? `out[0, ${o}]` : S.tr(KERNELS[o].name);
-      tg.set(nm);
-    }
+      tg.move([M.box[0] - 0.05, TRAY + 0.02, M.box[3] - 0.2]).anchor('right');
+      tg.set(T === 1 ? 'the map' : T === 2 ? 'output' : 'out[0, 0]');
+    } else tg.show(false);
   });
   if (st.rack.group.visible) {
     st.rackTag.show(true);
@@ -683,15 +692,16 @@ function paint(S) {
 const beside = () => new THREE.Vector3(0, -0.12, PR + 0.02);
 function paintNote(S, P) {
   const st = S.state, L = st.L, R = st.R, T = S.tier, N = st.note;
-  const mode = st.noteMode;
+  let mode = st.noteMode;
+  if (mode === 'init' && !R.init) mode = 'sum';
+  if (mode === 'pool' && !st.poolShown) mode = 'sum';
   if (!mode || !L) { N.show(false); return; }
   if (mode === 'sum') {
     if (!P || !st.chim.visible) { N.show(false); return; }
     N.show(true);
     const s = sumStr(P.parts), tot = fmtV(P.total);
-    N.move(beside()).set(T === 1 ? `this stop: ${s} = ${tot}` : T === 2 ? `stop (${P.r}, ${P.q}): ${s} + bias 0 = ${tot}` : `out[0, 0, ${P.r}, ${P.q}] = ${s} + 0 = ${tot}`);
+    N.move(beside()).set(T === 1 ? `this stop: ${s} = ${tot}` : T === 2 ? `stop (${P.r}, ${P.q}): ${s} + bias 0 = ${tot}` : `out[0, ${P.o}, ${P.r}, ${P.q}] = ${s} + 0 = ${tot}`);
   } else if (mode === 'pool') {
-    if (!st.poolShown) { N.show(false); return; }
     const [r2, q2] = R.blk, M0 = R.out[0];
     const v = [0, 1].flatMap((i) => [0, 1].map((j) => M0[2 * r2 + i][2 * q2 + j]));
     N.show(true);
@@ -753,12 +763,26 @@ function play(S) {
   }, (v) => v);
   return run_.then(() => {
     if (my !== st.tid) return null;
-    st.stop = N - 1;
     snapTiles(S, F);
-    paint(S);
-    return S.knobs.pool ? wait(S, 250).then(() => (my === st.tid ? poolTo(S, true) : null)) : null;
+    return glideTo(S, st.R.focus).then(() => (S.knobs.pool && my === st.tid ? poolTo(S, true) : null));
   });
 }
+
+/* move the stencil back to a stop (after a pass it returns to the headline stop) */
+function glideTo(S, j, ms = 520) {
+  const st = S.state, L = st.L, my = st.tid;
+  const a = [st.chim.position.x, st.chim.position.z], b = stopXZ(L, j);
+  st.stop = j;
+  paint(S);
+  return S.tween(ms, (k) => {
+    if (my !== st.tid) return;
+    const e = easeIO(k);
+    st.chim.position.set(a[0] + (b[0] - a[0]) * e, 0, a[1] + (b[1] - a[1]) * e);
+    threads(S, j);
+    S.invalidate();
+  }, (v) => v);
+}
+function argMin(S) { let v = Infinity, j = 0; S.state.R.out[0].flat().forEach((x, i) => { if (x < v - 1e-9) { v = x; j = i; } }); return j; }
 
 /* one stop at a time; after the last stop the map is complete (and pooled if the toggle is on) */
 function step(S) {
@@ -766,9 +790,7 @@ function step(S) {
   st.chim.visible = true;
   st.outOn = true;
   if (st.poolShown) { st.poolShown = false; st.vis.fill(0); snapTiles(S, tilesTarget(S, false)); st.next = 0; }
-  if (st.next == null || st.next >= L.N || st.vis.every((v) => v === 1)) {
-    if (st.vis.every((v) => v === 1) || st.next >= L.N || st.next == null) { st.vis.fill(0); snapTiles(S, tilesTarget(S, false)); st.next = 0; }
-  }
+  if (st.next == null || st.next >= L.N || st.vis.every((v) => v === 1)) { st.vis.fill(0); snapTiles(S, tilesTarget(S, false)); st.next = 0; }
   const j = st.next, my = ++st.tid;
   st.next = j + 1;
   st.vis[j] = 1;
@@ -886,6 +908,7 @@ run({
   back2d: '#week-02',
   film: 'w2-cnns',
   plinth: { r: PR, h: 0.12 },
+  fit: 1.05,
 
   knobs: [
     { id: 'k', type: 'select', label: { 1: 'Stencil size', 2: 'Kernel size k', 3: 'kernel_size' }, value: 3,
@@ -905,7 +928,7 @@ run({
   setup(S) {
     const st = S.state;
     st.tid = 0;
-    st.atlas = makeAtlas(S.renderer, 16, 64);
+    st.atlas = makeAtlas(S.renderer, 16, 96);
     // glass sheets (texture set in build)
     st.sheets = [0, 1, 2].map((c) => {
       const mat = new THREE.MeshStandardMaterial({ color: '#ffffff', transparent: true, roughness: 0.25, metalness: 0, depthWrite: false });
@@ -916,7 +939,7 @@ run({
       return m;
     });
     // the picture's non-zero pixels: 3 sheets x 16 numbered tiles (fixed toy data)
-    st.inp = makeCubes(48, st.atlas, { w: TILE, h: TH, d: TILE, top: true, r: 0.018 });
+    st.inp = makeCubes(48, st.atlas, { w: TILE, h: TH, d: TILE, top: true, r: 0.018, face: 0.92, shadow: false });
     let n = 0;
     for (let c = 0; c < 3; c++) for (let i = IMG.lo; i <= IMG.hi; i++) for (let j = IMG.lo; j <= IMG.hi; j++) {
       st.inp.pos.set([px(j), yFloor(c) + TH / 2, pz(i)], 3 * n);
@@ -928,12 +951,11 @@ run({
     }
     st.inp.apply();
     // output tiles
-    st.out = makeCubes(NOUT, st.atlas, { w: TILE, h: TH, d: TILE, top: true, r: 0.018 });
+    st.out = makeCubes(NOUT, st.atlas, { w: TILE, h: TH, d: TILE, top: true, r: 0.018, face: 0.92 });
     S.root.add(st.inp.bodies, st.inp.decals, st.out.bodies, st.out.decals);
     // the stencil: brass frame + weight frames on each sheet
     st.chim = new THREE.Group();
     st.frame = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01), K.mat.brass());
-    st.frame.castShadow = true;
     st.plates = makeBoxes(NPLATE, frameGeometry(0.12), new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.45, metalness: 0.25 }));
     st.chim.add(st.frame, st.plates.mesh);
     S.root.add(st.chim);
@@ -961,8 +983,7 @@ run({
     st.fig = K.figure();
     st.fig.group.visible = false;
     S.root.add(st.fig.group);
-    st.proxy = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
-    S.root.add(st.proxy);
+    for (const ob of [st.plates.mesh, panel, base, tiles.mesh, ...beads]) ob.userData.noFit = true;
     st.noteMode = 'sum'; st.parts = true; st.outOn = true;
   },
 
@@ -972,7 +993,9 @@ run({
     ++st.tid;
     build(S);
     if (id !== '*') {                                    // a knob moved: keep the dressing, re-frame
-      st.chim.visible = true; st.outOn = true;
+      st.chim.visible = true; st.outOn = true; st.parts = true;
+      if (!st.noteMode) st.noteMode = 'sum';
+      if (S.knobs.cout > 1 || S.knobs.w === 'init') st.rack.group.visible = true;
       threads(S); setProxy(S); paint(S);
       refit(S);
     }
@@ -989,10 +1012,10 @@ run({
         2: '**A picture is a stack of channels.** PyTorch stores images as (batch, channels, height, width): this toy one is (1, 3, 8, 8), dark with a 4 × 4 square of (R, G, B) = (3, 2, 1); empty glass is 0. A conv layer\'s job is to read all three sheets at once.',
         3: '`x: Float[Tensor, "batch channels height width"]` = (1, 3, 8, 8), NCHW, the layout `nn.Conv2d` expects (NHWC arrays need a permute first). Toy data: zeros with a centred 4 × 4 square (3, 2, 1). ARENA [0.2] feeds MNIST (1, 28, 28) and ImageNet (3, 224, 224) the same way.',
       },
-      cam: CAM.high,
+      cam: CAM.front,
       set: { k: 3, s: 1, p: 0, cout: 1, w: 'hand', pool: false },
       enter(S) {
-        scene(S, { note: null, parts: false, chimney: false, outputs: false, rack: false, figure: 'point', figAt: [-1.2, 0, 1.05], face: [0, 0.8, 0],
+        scene(S, { note: null, parts: false, chimney: false, outputs: false, rack: false, figure: 'point', figAt: [-0.95, 0, 1.2], face: [0, 0.8, 0],
           at: (S2) => S2.root.localToWorld(new THREE.Vector3(0, yFloor(0) + 0.05, 0)) });
       } },
 
@@ -1045,7 +1068,7 @@ run({
       cam: CAM.wide,
       set: { k: 3, s: 1, p: 0, cout: 4, w: 'init', pool: false },
       enter(S) {
-        scene(S, { note: 'init', figure: 'think', figAt: [0.55, 0, 1.25], face: [1.4, 0.5, 0.3] });
+        scene(S, { note: 'init', figure: 'think', figAt: [-1.32, 0, 0.55], face: [0, 0.8, 0] });
       } },
 
     { tag: 'library',
@@ -1069,7 +1092,7 @@ run({
       },
       cam: CAM.wide,
       set: { k: 3, s: 1, p: 1, cout: 4, w: 'hand', pool: false },
-      enter(S) { scene(S, { note: null, parts: false, figure: 'cheer', figAt: [-1.25, 0, 1.1], face: [0, 0.8, 0] }); } },
+      enter(S) { scene(S, { note: null, parts: false }); } },
   ],
 
   predict: [
@@ -1145,7 +1168,7 @@ run({
       show(S) {
         S.setKnobs({ k: 3, s: 1, p: 0, cout: 1, w: 'hand', pool: false });
         scene(S, { note: 'sum', rack: false }); S.fly(CAM.front);
-        return play(S);
+        return play(S).then(() => glideTo(S, argMin(S)));
       } },
   ],
 
