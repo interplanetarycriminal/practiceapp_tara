@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The polytope · Object Lessons</title>
+<meta name="description" content="Anthropic's toy model of superposition, trained live: more features than neurons fold into antipodal pairs, pentagons and antiprisms.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+  /* kit note: .k-tag (the beat pill) sets min-width 52px and centring, which leaks into K.label tags */
+  .k-label.k-tag{min-width:0; text-align:left; padding:1px 3px; border-radius:4px}
+  .k-label.k-tag.k-feat{font-size:11px; letter-spacing:0; text-transform:none; color:var(--ink); background:var(--wash)}
+  .k-label.k-tag.k-dim{color:var(--k-dir)}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   16 · d08-polytope: "The polytope" (W8 deep, ARENA [1.5.4] Toy Models of
+   Superposition & SAEs, section 1 "TMS: superposition in a nonprivileged basis"
+   and section 3 "Feature geometry").
+   Elhage et al. 2022's toy model, as ARENA writes it, trained live in the page:
+   h = W x, out = ReLU(W.T @ h + b_final), loss = mean of importance * (x - out)^2.
+   Gradients are written by hand and checked against finite differences in node
+   (see LEDGER.md); the MATH and RUN blocks below are what the node checks load.
+   ========================================================================= */
+
+// MATH-BEGIN
+/* Seeded randomness: mulberry32 (the same generator as K.rng) + Box-Muller normals. */
+function rng(seed = 1) {
+  let a = (seed >>> 0) || 1;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function randn(rand) {                       // standard normal (Box-Muller)
+  let u = 0;
+  while (u <= 1e-12) u = rand();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
+}
+
+/* torch.optim.Adam (betas (0.9, 0.999), eps 1e-8, bias correction), elementwise over
+   a list of Float64Array parameters. step(grads) takes one gradient array per parameter. */
+class Adam {
+  constructor(params, { lr = 1e-3, betas = [0.9, 0.999], eps = 1e-8 } = {}) {
+    this.params = params;
+    this.lr = lr;
+    [this.beta1, this.beta2] = betas;
+    this.eps = eps;
+    this.t = 0;
+    this.m = params.map((p) => new Float64Array(p.length));
+    this.v = params.map((p) => new Float64Array(p.length));
+  }
+  step(grads) {
+    this.t += 1;
+    const b1 = this.beta1, b2 = this.beta2, c1 = 1 - b1 ** this.t, c2 = 1 - b2 ** this.t;
+    this.params.forEach((p, pi) => {
+      const g = grads[pi], m = this.m[pi], v = this.v[pi];
+      for (let i = 0; i < p.length; i++) {
+        m[i] = b1 * m[i] + (1 - b1) * g[i];
+        v[i] = b2 * v[i] + (1 - b2) * g[i] * g[i];
+        p[i] -= this.lr * (m[i] / c1) / (Math.sqrt(v[i] / c2) + this.eps);
+      }
+    });
+  }
+}
+
+/* ARENA's learning-rate schedules (optimize multiplies lr by lr_scale(step, steps)). */
+const constant_lr = () => 1.0;
+const linear_lr = (step, steps) => 1 - step / steps;
+const cosine_decay_lr = (step, steps) => Math.cos(0.5 * Math.PI * step / (steps - 1));
+
+/* ARENA [1.5.4] ToyModel, one instance (n_inst = 1).
+   W: (d_hidden, n_features), stored W[k * n + i]; b_final: (n_features,).
+   forward: h = W x,  out = ReLU(W.T @ h + b_final).
+   calculate_loss: mean over batch and features of importance * (batch - out)**2. */
+class ToyModel {
+  constructor(cfg, { feature_probability = 0.01, importance = 1.0, seed = 1 } = {}) {
+    const n = cfg.n_features, m = cfg.d_hidden;
+    this.cfg = { n_features: n, d_hidden: m };
+    this.rand = rng(seed);
+    const bc = (v) => Float64Array.from({ length: n }, (_, i) => (typeof v === 'number' ? v : v[i]));
+    this.feature_probability = bc(feature_probability);
+    this.importance = bc(importance);
+    // nn.init.xavier_normal_ on a (n_inst=1, d_hidden, n_features) tensor:
+    // fan_in = d_hidden * n_features, fan_out = n_inst * n_features, std = sqrt(2 / (fan_in + fan_out))
+    const std = Math.sqrt(2 / (m * n + 1 * n));
+    this.W = Float64Array.from({ length: m * n }, () => std * randn(this.rand));
+    this.b_final = new Float64Array(n);
+    this.gW = new Float64Array(m * n);
+    this.gb = new Float64Array(n);
+    this.h = new Float64Array(m);
+    this.step_count = 0;
+  }
+  forward(x, out = new Float64Array(this.cfg.n_features)) {       // one example
+    const { n_features: n, d_hidden: m } = this.cfg, W = this.W, h = this.h;
+    for (let k = 0; k < m; k++) { let s = 0; for (let i = 0; i < n; i++) s += W[k * n + i] * x[i]; h[k] = s; }
+    for (let i = 0; i < n; i++) {
+      let s = this.b_final[i];
+      for (let k = 0; k < m; k++) s += W[k * n + i] * h[k];
+      out[i] = s > 0 ? s : 0;
+    }
+    return out;
+  }
+  generate_batch(batch_size) {
+    // Each feature is present with probability feature_probability, magnitude ~ U[0, 1]: the same
+    // distribution as ARENA's where(feat_seeds <= p, feat_mag, 0). With one p for all features, the
+    // gaps between present entries are drawn directly (geometric), so a sparse batch costs a few
+    // dozen random numbers instead of thousands.
+    const n = this.cfg.n_features, N = batch_size * n, r = this.rand, P = this.feature_probability;
+    const x = new Float64Array(N), p = P[0];
+    if (P.some((q) => q !== p)) { for (let j = 0; j < N; j++) if (r() <= P[j % n]) x[j] = r(); return x; }
+    if (p >= 1) { for (let j = 0; j < N; j++) x[j] = r(); return x; }
+    if (p <= 0) return x;
+    const lq = Math.log(1 - p);
+    for (let j = Math.floor(Math.log(1 - r()) / lq); j < N; j += 1 + Math.floor(Math.log(1 - r()) / lq)) x[j] = r();
+    return x;
+  }
+  calculate_loss(out, batch) {
+    const n = this.cfg.n_features, N = batch.length;
+    let s = 0;
+    for (let j = 0; j < N; j++) { const e = batch[j] - out[j]; s += this.importance[j % n] * e * e; }
+    return s / N;                                                   // einops.reduce(..., 'mean')
+  }
+  /* loss and hand-derived gradients (what loss.backward() leaves in W.grad, b_final.grad).
+     Sparse batches are mostly all-zero rows, which are identical: their share is computed once
+     and counted z times (exact; it only saves time on a phone). */
+  loss_and_grad(batch) {
+    const { n_features: n, d_hidden: m } = this.cfg, W = this.W, gW = this.gW, gb = this.gb;
+    const B = batch.length / n, scale = 2 / (B * n);
+    const h = new Float64Array(m), dh = new Float64Array(m);
+    gW.fill(0); gb.fill(0);
+    let L = 0, z = 0;
+    for (let b = 0; b < B; b++) {
+      const o = b * n;
+      let nz = false;
+      for (let i = 0; i < n; i++) if (batch[o + i] !== 0) { nz = true; break; }
+      if (!nz) { z++; continue; }
+      for (let k = 0; k < m; k++) { let s = 0; for (let i = 0; i < n; i++) s += W[k * n + i] * batch[o + i]; h[k] = s; }
+      dh.fill(0);
+      for (let i = 0; i < n; i++) {
+        let pre = this.b_final[i];
+        for (let k = 0; k < m; k++) pre += W[k * n + i] * h[k];
+        const out = pre > 0 ? pre : 0, err = out - batch[o + i];
+        L += this.importance[i] * err * err;
+        if (pre > 0) {                                             // ReLU passes the gradient
+          const g = scale * this.importance[i] * err;              // dL/dpre_i
+          gb[i] += g;
+          for (let k = 0; k < m; k++) { gW[k * n + i] += g * h[k]; dh[k] += W[k * n + i] * g; }
+        }
+      }
+      for (let i = 0; i < n; i++) {                                  // h = W x: dL/dW[k, i] += dh_k x_i
+        const xi = batch[o + i];
+        if (xi !== 0) for (let k = 0; k < m; k++) gW[k * n + i] += dh[k] * xi;
+      }
+    }
+    if (z) for (let i = 0; i < n; i++) {                             // x = 0: h = 0, out = ReLU(b_final)
+      const bi = this.b_final[i];
+      if (bi > 0) { L += z * this.importance[i] * bi * bi; gb[i] += z * scale * this.importance[i] * bi; }
+    }
+    return L / (B * n);
+  }
+  /* ToyModel.optimize, resumable: one call = one Adam step. */
+  train_step(o) {
+    if (!this.opt) this.opt = new Adam([this.W, this.b_final], { lr: o.lr });
+    const lr_scale = o.lr_scale || constant_lr;
+    this.opt.lr = o.lr * lr_scale(this.step_count, o.steps);
+    const batch = this.generate_batch(o.batch_size);
+    const loss = this.loss_and_grad(batch);
+    this.opt.step([this.gW, this.gb]);
+    this.step_count += 1;
+    return loss;
+  }
+  optimize(o) {
+    const log = [];
+    for (let s = 0; s < o.steps; s++) {
+      const loss = this.train_step(o);
+      if (o.log_freq && (s % o.log_freq === 0 || s + 1 === o.steps)) log.push({ step: s, loss });
+    }
+    return log;
+  }
+  /* column i of W: feature i's direction in hidden space */
+  col(i) { const { n_features: n, d_hidden: m } = this.cfg; return Array.from({ length: m }, (_, k) => this.W[k * n + i]); }
+}
+
+/* W^T W (n x n): diagonal = squared length ||W_i||^2, off-diagonal = interference W_i . W_j */
+function gram(W, n, m) {
+  const G = new Float64Array(n * n);
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    let s = 0; for (let k = 0; k < m; k++) s += W[k * n + i] * W[k * n + j];
+    G[i * n + j] = s;
+  }
+  return G;
+}
+/* ARENA compute_dimensionality: D_i = ||W_i||^2 / sum_j (W_i_hat . W_j)^2 */
+function compute_dimensionality(W, n, m) {
+  const G = gram(W, n, m), D = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const norm = Math.sqrt(G[i * n + i]), num = norm * norm;
+    let den = 0;
+    for (let j = 0; j < n; j++) { const d = G[i * n + j] / (norm + 1e-8); den += d * d; }
+    D[i] = num / den;
+  }
+  return D;
+}
+// MATH-END
+
+// RUN-BEGIN
+/* One training run per setting, as ToyModel.optimize would do it, but light enough for a phone:
+   Adam, lr 0.01 with ARENA's cosine_decay_lr, 1,500 steps of batch 256 (ARENA: lr 1e-3, 5,000
+   steps of 1,024; the node check shows both budgets land on the same shapes). Snapshots of W and
+   b_final are kept so the page can replay the run; the loss shown is calculate_loss on a fixed
+   evaluation batch of 1,024. */
+const BUDGET = { batch_size: 256, steps: 1500, lr: 1e-2, lr_scale: cosine_decay_lr };
+const importanceOf = (n, r) => Array.from({ length: n }, (_, i) => r ** i);   // importance = r ** arange(n)
+const runKey = (c) => `${c.n}|${c.m}|${c.p}|${c.r}|${c.seed}`;
+function makeRun(c) {
+  const model = new ToyModel({ n_features: c.n, d_hidden: c.m }, { feature_probability: c.p, importance: importanceOf(c.n, c.r), seed: c.seed });
+  const probe = new ToyModel({ n_features: c.n, d_hidden: c.m }, { feature_probability: c.p, seed: 90000 + c.seed });
+  const R = { c, model, evalBatch: probe.generate_batch(1024), snaps: [], done: false };
+  snapRun(R);
+  return R;
+}
+function evalLoss(R) {
+  const n = R.c.n, X = R.evalBatch, out = new Float64Array(X.length), o = new Float64Array(n);
+  for (let b = 0; b < X.length / n; b++) { R.model.forward(X.subarray(b * n, b * n + n), o); out.set(o, b * n); }
+  return R.model.calculate_loss(out, X);
+}
+function snapRun(R) {
+  R.snaps.push({ step: R.model.step_count, W: Float64Array.from(R.model.W), b: Float64Array.from(R.model.b_final), loss: evalLoss(R) });
+}
+function advanceRun(R, ms = Infinity) {                  // train until done or out of time
+  const t0 = performance.now();
+  while (!R.done) {
+    R.model.train_step(BUDGET);
+    const s = R.model.step_count;
+    if (s % 25 === 0 || (s < 100 && s % 5 === 0) || s === BUDGET.steps) snapRun(R);
+    if (s >= BUDGET.steps) R.done = true;
+    else if (performance.now() - t0 > ms) break;
+  }
+  return R.done;
+}
+/* What the page reads off a trained (or replayed) W, b_final */
+function analyse(W, b, n, m) {
+  const G = gram(W, n, m), D = compute_dimensionality(W, n, m);
+  const len2 = Array.from({ length: n }, (_, i) => G[i * n + i]);
+  const kept = [], dropped = [], pairs = [];
+  for (let i = 0; i < n; i++) (len2[i] > 0.25 ? kept : dropped).push(i);
+  for (const i of kept) for (const j of kept) if (j > i && G[i * n + j] / Math.sqrt(len2[i] * len2[j]) < -0.9) pairs.push([i, j]);
+  let frob = 0; for (const v of len2) frob += v;           // ||W||_F^2 = sum of squared column lengths
+  return { G, D, len2, kept, dropped, pairs, frob, b: Array.from(b) };
+}
+/* A feature switched on alone at size x: what every output reads (ReLU(W_j . h + b_j)) */
+function probe1(W, b, n, m, i, x) {
+  const h = Array.from({ length: m }, (_, k) => W[k * n + i] * x), rows = [];
+  for (let j = 0; j < n; j++) {
+    let dot = 0; for (let k = 0; k < m; k++) dot += W[k * n + j] * h[k];
+    rows.push({ j, dot, pre: dot + b[j], out: Math.max(0, dot + b[j]) });
+  }
+  return { h, rows };
+}
+// RUN-END
+
+/* ================================================================ display */
+
+const SPH = { c: new THREE.Vector3(0, 1.62, -0.5), r: 1.2 };   // glass sphere = hidden space
+const SW = 0.88;                                              // world length of one unit of W
+const TRAY = { c: new THREE.Vector3(0, 0.42, 1.52), L: 1.3, H: 0.27 };   // W^T W pillars: height = H * value
+const PLAY_S = 1.9;                                           // replay length (s)
+const MAXN = 10;
+const PALE = new THREE.Color('#d6ccf3'), VIO = new THREE.Color(C.dir);
+const featColor = (I) => '#' + PALE.clone().lerp(VIO, Math.max(0, Math.min(1, I))).getHexString();
+const sub = (k) => String(k).split('').map((d) => '₀₁₂₃₄₅₆₇₈₉'[+d]).join('');
+const f2 = (v) => K.fmt(v, 2), f3 = (v) => K.fmt(v, 3);
+const fx = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+
+const CAM = {
+  front: { pos: [2.6, 4.1, 9.6], target: [0, 1.2, 0.35] },
+  sphere: { pos: [3.2, 3.6, 8.6], target: [0.05, 1.65, -0.45], fit: 1.55 },
+  high: { pos: [1.8, 7.8, 7.2], target: [0, 1.0, 0.5] },
+  tray: { pos: [0.9, 5.6, 5.9], target: [0, 0.45, 1.45], fit: 1.9 },
+  flat: { pos: [0.4, 2.6, 9.4], target: [0, 1.55, -0.5], fit: 1.55 },
+  side: { pos: [-5.4, 4.4, 7.6], target: [0, 1.25, 0.2] },
+};
+
+function cfgOf(S) {
+  const k = S.knobs;
+  return { n: Math.round(k.n_features), m: +k.d_hidden, p: +k.feature_probability, r: +k.importance, seed: Math.round(k.seed) };
+}
+
+/* hidden space -> world: a rigid rotation fixed by the finished run (the loss only depends on
+   W^T W, so any rotation of hidden space is the same model). Feature 1 (or the most important
+   kept one) points up; the next direction leans 30 degrees toward the viewer. */
+function orient(R) {
+  const { n, m } = R.c, last = R.snaps[R.snaps.length - 1], W = last.W;
+  const col = (i) => Array.from({ length: m }, (_, k) => W[k * n + i]);
+  const nrm = (v) => Math.hypot(...v);
+  const kept = [];
+  for (let i = 0; i < n; i++) if (nrm(col(i)) > 0.5) kept.push(i);
+  if (m === 2) {
+    const a = kept.length ? col(kept[0]) : [1, 0];
+    const th = Math.PI / 2 - Math.atan2(a[1], a[0]);
+    const cs = Math.cos(th), sn = Math.sin(th);
+    return [[cs, -sn], [sn, cs], [0, 0]];                    // world x, y, z rows (plane faces the viewer)
+  }
+  let a = kept.length ? col(kept[0]) : [0, 0, 1];
+  a = a.map((v) => v / nrm(a));
+  let best = null, bl = 0;
+  for (const i of kept) {
+    const v = col(i), d = v.reduce((s, x, k) => s + x * a[k], 0), w = v.map((x, k) => x - d * a[k]), l = nrm(w);
+    if (l > bl + 1e-6) { bl = l; best = w; }
+  }
+  if (!best || bl < 1e-3) best = Math.abs(a[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  let bb = best.map((x, k) => x - a.reduce((s, y, q) => s + y * best[q], 0) * a[k]);
+  bb = bb.map((v) => v / nrm(bb));
+  const c3 = [a[1] * bb[2] - a[2] * bb[1], a[2] * bb[0] - a[0] * bb[2], a[0] * bb[1] - a[1] * bb[0]];
+  const phi = 0.52;
+  const D1 = [0, 1, 0], D2 = [Math.cos(phi), 0, Math.sin(phi)], D3 = [Math.sin(phi), 0, -Math.cos(phi)];   // D3 = D1 x D2
+  // world = D1 (a.v) + D2 (b.v) + D3 (c.v)
+  return [0, 1, 2].map((r) => [0, 1, 2].map((k) => D1[r] * a[k] + D2[r] * bb[k] + D3[r] * c3[k]));
+}
+
+/* the run the page shows, its replay and the promise a prediction waits on */
+const RUNS = new Map();
+function startRun(S) {
+  const st = S.state, c = cfgOf(S), key = runKey(c);
+  let R = RUNS.get(key);
+  if (!R) { R = makeRun(c); RUNS.set(key, R); if (RUNS.size > 24) RUNS.delete(RUNS.keys().next().value); }
+  st.run = R;
+  st.playing = false;
+  st.tau = 0;
+  if (S.shot) {                                                   // screenshots: finish at once
+    advanceRun(R);
+    R.frame = R.frame || orient(R);
+    st.u = BUDGET.steps;
+    finishPlay(S);
+  } else if (R.done) {
+    R.frame = R.frame || orient(R);
+    beginPlay(S);
+  } else {
+    st.computing = true;
+  }
+  draw(S);
+  S.invalidate();
+}
+function beginPlay(S) { const st = S.state; st.computing = false; st.playing = true; st.tau = 0; st.u = 0; }
+function finishPlay(S) {
+  const st = S.state;
+  st.playing = false; st.computing = false; st.u = BUDGET.steps;
+  const w = st.waiters; st.waiters = [];
+  w.forEach((f) => f());
+}
+function whenPlayed(S) {
+  const st = S.state;
+  if (!st.playing && !st.computing) return Promise.resolve();
+  return new Promise((res) => st.waiters.push(res));
+}
+
+/* W and b at replay position u (steps), linearly between snapshots */
+function stateAt(R, u) {
+  const sn = R.snaps;
+  if (u >= sn[sn.length - 1].step) return sn[sn.length - 1];
+  let lo = 0, hi = sn.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (sn[mid].step <= u) lo = mid; else hi = mid; }
+  const A = sn[lo], B = sn[hi], f = (u - A.step) / Math.max(1, B.step - A.step);
+  const W = A.W.map((v, i) => v + (B.W[i] - v) * f), b = A.b.map((v, i) => v + (B.b[i] - v) * f);
+  return { step: u, W, b, loss: A.loss + (B.loss - A.loss) * f };
+}
+const toWorld = (F, v, out = new THREE.Vector3()) => {
+  const m = v.length;
+  let x = 0, y = 0, z = 0;
+  for (let k = 0; k < m; k++) { x += F[0][k] * v[k]; y += F[1][k] * v[k]; z += F[2][k] * v[k]; }
+  return out.set(x, y, z).multiplyScalar(SW).add(SPH.c);
+};
+
+function buildScene(S) {
+  const st = S.state;
+  // stand: plaster column, brass cradle
+  const col = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.26, 0.44, 32).translate(0, 0.22, 0), K.mat.plaster());
+  col.position.set(SPH.c.x, 0, SPH.c.z); col.castShadow = col.receiveShadow = true;
+  const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.2, 0.16, 40, 1, true).translate(0, 0.08, 0), K.mat.brass());
+  cup.material.side = THREE.DoubleSide;
+  cup.position.set(SPH.c.x, 0.43, SPH.c.z); cup.castShadow = true;
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.022, 10, 64), K.mat.brass());
+  ring.rotation.x = Math.PI / 2; ring.position.set(SPH.c.x, 0.59, SPH.c.z); ring.castShadow = true;
+  S.root.add(col, cup, ring);
+  // the glass sphere + a brass equator + a hub at the origin of hidden space
+  const glass = new THREE.Mesh(new THREE.SphereGeometry(SPH.r, 56, 36), K.mat.glass('#ffffff', 0.14));
+  glass.position.copy(SPH.c); glass.renderOrder = 2;
+  const eq = new THREE.Mesh(new THREE.TorusGeometry(SPH.r, 0.009, 8, 96), K.mat.brass());
+  eq.rotation.x = Math.PI / 2; eq.position.copy(SPH.c);
+  const hub = K.bead(SPH.c.toArray(), C.brass, 0.045);
+  hub.material = K.mat.brass();
+  S.root.add(glass, eq, hub);
+  st.glass = glass; st.eq = eq;
+  // the flat hidden plane for d_hidden = 2 (faces the viewer)
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(SPH.r * 0.98, 72), K.mat.glass('#b9a8ee', 0.16));
+  disc.material.side = THREE.DoubleSide;
+  disc.position.copy(SPH.c); disc.renderOrder = 1;
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(SPH.r * 0.98, 0.012, 8, 96), K.mat.brass());
+  rim.position.copy(SPH.c);
+  S.root.add(disc, rim);
+  st.disc = disc; st.rim = rim;
+  // feature arrows W[:, i] with painted beads at the tips
+  st.arrows = []; st.beads = []; st.tags = []; st.dtags = [];
+  for (let i = 0; i < MAXN; i++) {
+    const a = K.arrow(SPH.c, SPH.c.clone().add(new THREE.Vector3(0, 0.5, 0)), C.dir, { r: 0.026 });
+    const bead = K.bead(SPH.c.toArray(), C.dir, 0.055);
+    const hit = new THREE.Mesh(new THREE.SphereGeometry(2.6, 8, 6), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+    bead.add(hit);
+    K.pick(bead, () => { st.pick = st.pick === i ? null : i; draw(S); S.invalidate(); });
+    S.root.add(a.group, bead);
+    st.arrows.push(a); st.beads.push(bead);
+    st.tags.push(K.label(bead, `${i + 1}`, { cls: 'tag feat', anchor: 'left', dx: 7, dy: 0 }));
+    st.dtags.push(K.label(bead, '', { cls: 'tag dim', anchor: 'right', dx: -8, dy: 0 }));
+  }
+  // the tray: W^T W as pillars on a glass top (positive up, negative hanging below)
+  const T = TRAY;
+  const top = new THREE.Mesh(new THREE.BoxGeometry(T.L + 0.1, 0.018, T.L + 0.1), K.mat.glass('#ffffff', 0.32));
+  top.position.copy(T.c); top.renderOrder = 1; top.receiveShadow = true;
+  const frame = new THREE.Group();
+  const bar = (w, d, x, z) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, 0.03, d), K.mat.brass()); b.position.set(T.c.x + x, T.c.y, T.c.z + z); b.castShadow = true; frame.add(b); };
+  const e = (T.L + 0.1) / 2;
+  bar(T.L + 0.14, 0.03, 0, -e); bar(T.L + 0.14, 0.03, 0, e); bar(0.03, T.L + 0.14, -e, 0); bar(0.03, T.L + 0.14, e, 0);
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, T.c.y, 10).translate(0, T.c.y / 2, 0), K.mat.brass());
+    leg.position.set(T.c.x + sx * e, 0, T.c.z + sz * e); leg.castShadow = true; frame.add(leg);
+  }
+  S.root.add(top, frame);
+  const pg = new THREE.BoxGeometry(1, 1, 1);
+  const pm = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.5, metalness: 0.02 });
+  st.pillars = new THREE.InstancedMesh(pg, pm, MAXN * MAXN);
+  st.pillars.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAXN * MAXN * 3), 3);
+  st.pillars.castShadow = true; st.pillars.receiveShadow = true;
+  st.pillars.frustumCulled = false; st.pillars.userData.noFit = true;
+  S.root.add(st.pillars);
+  st.trayTag = K.label([T.c.x - e, T.c.y + 0.02, T.c.z + e + 0.04], { 1: 'overlap table', 2: 'WᵀW: overlaps', 3: 'W.T @ W' }, { cls: 'tag', anchor: 'top', dx: 0, dy: 4 });
+  // the probe input h (blue), its projection string, and the bias collars
+  st.h = K.arrow(SPH.c, SPH.c, C.data, { r: 0.034 });
+  st.proj = K.tube([SPH.c, SPH.c], C.ink, 0.007, { shadow: false });
+  st.proj.mesh.material.transparent = true; st.proj.mesh.material.opacity = 0.55;
+  S.root.add(st.h.group, st.proj.mesh);
+  st.collars = [];
+  for (let i = 0; i < MAXN; i++) {
+    const cl = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.013, 8, 24), K.mat.brass());
+    cl.visible = false; S.root.add(cl); st.collars.push(cl);
+  }
+  // labels: readout above the sphere, note for the probe
+  st.readout = K.label([SPH.c.x, SPH.c.y + SPH.r + 0.1, SPH.c.z], '', { cls: 'readout', anchor: 'bottom', dy: -4 });
+  st.note = K.label(SPH.c, '', { cls: 'note', anchor: 'left', dx: 14, dy: 0 });
+  st.note.show(false);
+  st.sphTag = K.label([SPH.c.x - SPH.r * 0.72, SPH.c.y - SPH.r * 0.72, SPH.c.z + 0.2], '', { cls: 'tag', anchor: 'right', dx: -4 });
+  // the figure
+  st.fig = K.figure();
+  st.fig.group.visible = false;
+  S.root.add(st.fig.group);
+  st.waiters = [];
+}
+
+const _v = new THREE.Vector3(), _o = new THREE.Object3D(), _c = new THREE.Color();
+function draw(S) {
+  const st = S.state, R = st.run;
+  if (!R) return;
+  const { n, m } = R.c;
+  const F = R.frame || orient(R);
+  const shown = R.done && R.frame ? stateAt(R, st.u) : (st.lastShown && st.lastShown.n === n && st.lastShown.m === m ? st.lastShown.s : R.snaps[0]);
+  if (R.done && R.frame) st.lastShown = { n, m, s: shown };
+  const Fs = R.done && R.frame ? F : (st.lastFrame && st.lastShown && st.lastShown.n === n ? st.lastFrame : F);
+  if (R.done && R.frame) st.lastFrame = F;
+  const A = analyse(shown.W, shown.b, n, m);
+  st.A = A; st.shownState = shown;
+  const imp = importanceOf(n, R.c.r);
+  st.disc.visible = st.rim.visible = m === 2;
+  // arrows + beads
+  for (let i = 0; i < MAXN; i++) {
+    const on = i < n;
+    const a = st.arrows[i], bead = st.beads[i];
+    if (!on) { a.show(false); bead.visible = false; st.tags[i].show(false); st.dtags[i].show(false); continue; }
+    const v = Array.from({ length: m }, (_, k) => shown.W[k * n + i]);
+    const tip = toWorld(Fs, v, _v).clone();
+    const len = Math.sqrt(A.len2[i]);
+    const colr = featColor(imp[i]);
+    a.group.children.forEach((c) => c.material.color.set(colr));
+    bead.material.color.set(colr);
+    a.show(len * SW > 0.06);
+    if (len * SW > 0.06) a.set(SPH.c, tip);
+    bead.position.copy(tip);
+    bead.visible = true;
+    bead.scale.setScalar(0.05 * (0.55 + 0.45 * Math.min(1, len)));
+    const showTag = len > 0.3 && st.mode !== 'bare';
+    st.tags[i].show(showTag);
+    if (st.pick === i) st.tags[i].set(pickText(S, i)); else st.tags[i].set(`${i + 1}`);
+    st.dtags[i].show(st.mode === 'dims' && len > 0.3);
+    if (st.mode === 'dims') st.dtags[i].set(`D ${fx(A.D[i])}`);
+  }
+  // tray pillars
+  const T = TRAY, cell = T.L / n, w = cell * 0.66;
+  let k = 0;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    const v = A.G[i * n + j];
+    const hgt = Math.max(0.002, Math.abs(v) * T.H);
+    const x = T.c.x - T.L / 2 + (j + 0.5) * cell, z = T.c.z - T.L / 2 + (i + 0.5) * cell;
+    const small = Math.abs(v) < 0.03 && i !== j;
+    _o.position.set(x, T.c.y + 0.009 + (v >= 0 ? hgt / 2 : -hgt / 2 - 0.018), z);
+    _o.scale.set(w, small ? 0.0001 : hgt, w);
+    _o.updateMatrix();
+    st.pillars.setMatrixAt(k, _o.matrix);
+    _c.set(i === j ? featColor(imp[i]) : v > 0 ? C.grad : C.aux);
+    st.pillars.setColorAt(k, _c);
+    k++;
+  }
+  st.pillars.count = n * n;
+  st.pillars.instanceMatrix.needsUpdate = true;
+  st.pillars.instanceColor.needsUpdate = true;
+  // the probe (mop-up beat): one feature on alone, its h, the collars, the worst leak
+  probeDraw(S, shown, A, Fs);
+  // readout
+  const step = Math.round(R.done && R.frame ? st.u : 0);
+  const pct = R.done ? 100 : Math.round(100 * R.model.step_count / BUDGET.steps);
+  const t = S.tier;
+  const head = st.computing
+    ? (t === 1 ? `training… ${pct}%` : `training ${R.model.step_count.toLocaleString('en')} / ${BUDGET.steps.toLocaleString('en')} steps…`)
+    : (t === 1 ? `error ${f2(shown.loss)} · ${A.kept.length} of ${n} kept` : t === 2 ? `step ${step.toLocaleString('en')} · loss ${f3(shown.loss)} · kept ${A.kept.length}/${n}` : `step ${step} · loss ${f3(shown.loss)} · ‖W‖²_F ${f2(A.frob)}`);
+  st.readout.set(head + modeLine(S, A, n));
+  st.sphTag.set(m === 2 ? { 1: '2 neurons', 2: 'hidden plane (2 dims)', 3: 'h ∈ ℝ², d_hidden = 2' } : { 1: '3 neurons', 2: 'hidden space (3 dims)', 3: 'h ∈ ℝ³, d_hidden = 3' });
+  S.invalidate();
+}
+function pickText(S, i) {
+  const A = S.state.A, t = S.tier;
+  const partner = A.pairs.find((p) => p.includes(i));
+  const pr = partner ? ` · pair ${partner[0] === i ? partner[1] + 1 : partner[0] + 1}` : '';
+  return t === 1 ? `${i + 1}: length² ${f2(A.len2[i])}${pr}` : `${i + 1}: ‖W${sub(i + 1)}‖² ${f2(A.len2[i])} · b ${fx(A.b[i])} · D ${fx(A.D[i])}${pr}`;
+}
+function modeLine(S, A, n) {
+  const st = S.state, t = S.tier, mode = st.mode;
+  if (st.computing) return '';
+  const L = (arr) => arr.map((i) => i + 1).join(', ');
+  if (mode === 'dense') {
+    const bd = A.dropped.map((i) => fx(A.b[i])).join(', ');
+    return A.dropped.length ? (t === 1 ? `\nkept ${L(A.kept)} · dropped ${L(A.dropped)} (guess ≈ ${bd})` : `\nkept ${L(A.kept)} at 90° · dropped ${L(A.dropped)}: b = ${bd}`) : '';
+  }
+  if (mode === 'pairs') {
+    if (!A.pairs.length) return '\nno opposite pairs in this run';
+    const G = A.G;
+    return '\n' + (t === 1 ? 'opposite pairs ' : 'pairs ') + A.pairs.map(([i, j]) => (t === 1 ? `${i + 1}↔${j + 1}` : `W${sub(i + 1)}·W${sub(j + 1)} = ${fx(G[i * n + j])}`)).join(t === 1 ? ' · ' : ', ');
+  }
+  if (mode === 'dims') {
+    const ds = A.kept.map((i) => A.D[i]);
+    if (!ds.length) return '';
+    const lo = Math.min(...ds), hi = Math.max(...ds), s = ds.reduce((a, b) => a + b, 0);
+    return t === 1 ? `\neach gets ${fx(lo)}–${fx(hi)} of a dimension` : `\nD ${fx(lo)}–${fx(hi)} · ΣD = ${fx(s)} (d_hidden ${S.state.run.c.m})`;
+  }
+  return '';
+}
+
+/* the mop-up probe: feature st.probe.i on alone at size x */
+function probeDraw(S, shown, A, F) {
+  const st = S.state, R = st.run, { n, m } = R.c;
+  const on = st.mode === 'mop' && !st.computing && st.probe && st.probe.i < n;
+  st.h.show(on); st.proj.mesh.visible = on; st.note.show(on);
+  for (const cl of st.collars) cl.visible = false;
+  if (!on) return;
+  const { i, x } = st.probe;
+  const P = probe1(shown.W, shown.b, n, m, i, x);
+  const hw = toWorld(F, P.h, new THREE.Vector3());
+  st.h.set(SPH.c, hw);
+  // collars at each kept feature's threshold: W_j . h must exceed -b_j, i.e. |proj| > -b_j / |W_j|
+  for (const j of A.kept) {
+    if (shown.b[j] > -0.02) continue;
+    const len = Math.sqrt(A.len2[j]), d = -shown.b[j] / len;
+    const dir = toWorld(F, Array.from({ length: m }, (_, k) => shown.W[k * n + j]), new THREE.Vector3()).sub(SPH.c).normalize();
+    const cl = st.collars[j];
+    cl.position.copy(SPH.c).addScaledVector(dir, d * SW);
+    cl.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+    cl.visible = true;
+  }
+  // the biggest leak: neighbour with the largest positive reading
+  const others = P.rows.filter((r) => r.j !== i && A.kept.includes(r.j));
+  const worst = others.slice().sort((a, b) => b.dot - a.dot)[0];
+  const opp = others.slice().sort((a, b) => a.dot - b.dot)[0];
+  if (worst) {
+    const j = worst.j, len2 = A.len2[j];
+    const wj = Array.from({ length: m }, (_, k) => shown.W[k * n + j]);
+    const foot = toWorld(F, wj.map((v) => v * worst.dot / len2), new THREE.Vector3());
+    st.proj.set([hw, foot]);
+  }
+  const self = P.rows[i], t = S.tier;
+  const lines = [];
+  lines.push(t === 1 ? `feature ${i + 1} on alone, size ${x}` : `x${sub(i + 1)} = ${x}, all others 0 → h (blue)`);
+  if (worst) lines.push(t === 1
+    ? `neighbour ${worst.j + 1} picks up ${fx(worst.dot)}, its bar is ${fx(-shown.b[worst.j])} → outputs ${fx(worst.out)}`
+    : `${worst.j + 1} reads ${fx(worst.dot)} + b ${fx(shown.b[worst.j])} → ReLU → ${fx(worst.out)}`);
+  if (opp && opp.dot < -0.05) lines.push(t === 1 ? `opposite ${opp.j + 1} reads ${fx(opp.dot)} → 0` : `${opp.j + 1} reads ${fx(opp.dot)} → ReLU → 0`);
+  lines.push(t === 1 ? `feature ${i + 1} itself comes back as ${fx(self.out)}` : `x̂${sub(i + 1)} = ReLU(${fx(self.dot)} ${shown.b[i] < 0 ? '−' : '+'} ${fx(Math.abs(shown.b[i]))}) = ${fx(self.out)}`);
+  st.note.move(hw).set(lines.join('\n'));
+}
+
+/* per-beat staging */
+function stage(S, o = {}) {
+  const st = S.state;
+  st.mode = o.mode || null;
+  st.probe = o.probe || null;
+  st.pick = null;
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.at || [1.75, 0, 0.55], o.face || [0, 1.2, -0.5]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.look ? SPH.c.clone().add(new THREE.Vector3(...o.look)) : undefined });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  draw(S);
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'd08-polytope', num: '16', week: 8, kind: 'deep',
+  title: 'The polytope',
+  subtitle: 'Train a toy model live: more features than dimensions fold into geometric shapes.',
+  back2d: '#week-08',
+  film: 'deep-w08-superposition',
+  plinth: { r: 2.55, h: 0.14 },
+
+  knobs: [
+    { id: 'n_features', type: 'range', label: { 1: 'Features to store', 2: 'Features n', 3: 'n_features' }, min: 3, max: 10, step: 1, value: 6, fmt: (v) => String(Math.round(v)) },
+    { id: 'feature_probability', type: 'range', label: { 1: 'How often each feature is on', 2: 'Feature probability (1 − S)', 3: 'feature_probability' },
+      min: 0.001, max: 1, log: true, value: 0.01, fmt: (v) => K.fmt(v, 2) },
+    { id: 'importance', type: 'range', label: { 1: 'How fast importance drops', 2: 'Importance decay r (Iᵢ = rⁱ)', 3: 'importance = r ** arange(n)' },
+      min: 0.5, max: 1, step: 0.05, value: 0.9, fmt: (v) => v.toFixed(2) },
+    { id: 'd_hidden', type: 'select', label: { 1: 'Neurons', 2: 'Hidden dims', 3: 'd_hidden' }, value: 3,
+      options: [[3, { 1: '3 (a ball)', 2: '3 (sphere)', 3: '3' }], [2, { 1: '2 (a disc)', 2: '2 (ARENA\'s plots)', 3: '2' }]] },
+    { id: 'seed', type: 'range', label: { 1: 'Random start', 2: 'Seed', 3: 'seed (init + batches)' }, min: 1, max: 20, step: 1, value: 2, fmt: (v) => String(Math.round(v)) },
+    { id: 'replay', type: 'button', label: { 1: 'Replay training', 2: 'Replay training', 3: 'Replay the run' }, onClick: (S) => { if (S.state.run && S.state.run.done && !S.shot) { beginPlay(S); draw(S); } } },
+  ],
+
+  setup(S) { buildScene(S); },
+
+  rebuild(S) { startRun(S); },
+
+  frame(S, t, dt) {
+    const st = S.state, R = st.run;
+    if (!R) return false;
+    if (st.computing) {
+      if (advanceRun(R, 10)) { R.frame = orient(R); beginPlay(S); }
+      draw(S);
+      return true;
+    }
+    if (st.playing) {
+      st.tau += dt;
+      const f = Math.min(1, st.tau / PLAY_S);
+      st.u = BUDGET.steps * f * f;                    // early steps (where the shape forms) play slower
+      if (f >= 1) finishPlay(S);
+      draw(S);
+      return st.playing;
+    }
+    return false;
+  },
+
+  onTier(S) { draw(S); },
+
+  solids(S) {
+    // "print your polytope": the kept arrows as rods with beads, a hub and a round foot
+    const st = S.state, R = st.run, { n, m } = R.c, F = R.frame || orient(R), last = R.snaps[R.snaps.length - 1];
+    const out = [];
+    const up = (p) => [p.x, -p.z, p.y];                              // three (x, y, z) -> JSCAD (x, -z, y)
+    const c = SPH.c.clone();
+    for (let i = 0; i < n; i++) {
+      const v = Array.from({ length: m }, (_, k) => last.W[k * n + i]);
+      if (Math.hypot(...v) < 0.3) continue;
+      const tip = toWorld(F, v);
+      const tube = K.tubeSolid([up(c), up(tip)], 0.035, 10);
+      if (tube) out.push(tube);
+      out.push(J.primitives.sphere({ radius: 0.075, center: up(tip), segments: 16 }));
+    }
+    out.push(J.primitives.sphere({ radius: 0.09, center: up(c), segments: 20 }));
+    out.push(J.primitives.cylinder({ radius: 0.05, height: c.y - 0.06, center: [c.x, -c.z, (c.y - 0.06) / 2 + 0.06 / 2], segments: 16 }));
+    out.push(J.primitives.cylinder({ radius: 0.45, height: 0.06, center: [c.x, -c.z, 0.03], segments: 40 }));
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**Six features, three neurons.** The model must squeeze 6 numbers through 3 and rebuild them. Each violet arrow is where one feature gets written. It trains live, right here.',
+        2: 'Anthropic\'s toy model (Elhage et al. 2022): h = Wx squeezes 6 features into 3 neurons; x̂ = ReLU(Wᵀh + b) rebuilds them. Column Wᵢ (an arrow) is where feature i is written. Trained live on rare features, all 6 fit, as 3 opposite pairs.',
+        3: 'ARENA [1.5.4] `ToyModel`, n_inst = 1: h = W x with W of shape (d_hidden=3, n_features=6), out = ReLU(W.T @ h + b_final), Xavier-normal init, Adam. Arrows = columns W[:, i]; the tray = W.T @ W. At feature_probability 0.01 it is an octahedron.',
+      },
+      cam: CAM.front,
+      set: { n_features: 6, d_hidden: 3, feature_probability: 0.01, importance: 0.9, seed: 2 },
+      enter(S) { stage(S, { figure: 'think', at: [1.72, 0, 0.62], face: [0, 1.3, -0.5] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**When every feature is always on**, 3 neurons hold 3. Training keeps the 3 most important at right angles and drops the rest: for those it just outputs their average.',
+        2: 'feature_probability = 1: all 6 are on in every input, so any overlap costs every time. The model keeps the 3 most important (Iᵢ = 0.9ⁱ) at right angles, like PCA, and shrinks the rest to nothing; their bias learns their mean, ≈ 0.5.',
+        3: 'Dense regime: interference is paid on every sample and the ReLU cannot cancel an always-present overlap, so the optimum is PCA-like: W orthonormal on the top-3 features, W[:, 3:] → 0, b_final[3:] → E[xᵢ] = 0.5. The tray: three ≈ 1 pillars on the diagonal.',
+      },
+      cam: CAM.front,
+      set: { n_features: 6, d_hidden: 3, feature_probability: 1, importance: 0.9, seed: 2 },
+      enter(S) { stage(S, { mode: 'dense', figure: 'point', at: [1.72, 0, 0.62], face: [0, 1.3, -0.5], look: [0, 0.9, 0] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Make features rare and all six fit.** Pairs share a line, pointing opposite ways. When one is on, its partner reads negative and outputs 0. They collide only if both are on at once.',
+        2: 'feature_probability 0.01: each feature is on 1% of the time. The 6 arrows share 3 dims as 3 opposite pairs (an octahedron). Partner j reads Wⱼ·h = −xᵢ, and the ReLU turns that into 0. Only both-on (1 in 10,000) collides. This is superposition.',
+        3: 'Superposition: n > d_hidden with Wᵢ·Wⱼ ≠ 0. Antipodal Wⱼ = −Wᵢ gives Wⱼ·Wᵢ = −1, and ReLU(−xᵢ + bⱼ) = 0 for bⱼ ≤ 0: free unless both fire (p² = 10⁻⁴). On the tray, −1 pillars hang under the glass (teal). Benefit ∝ p, cost ∝ p²: packing wins as p → 0.',
+      },
+      cam: CAM.front,
+      set: { n_features: 6, d_hidden: 3, feature_probability: 0.01, importance: 0.9, seed: 2 },
+      enter(S) { stage(S, { mode: 'pairs' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Near neighbours need a filter.** 7 features: five in a flat pentagon, two in a pair. Switch one on: its neighbours pick up a little. A negative bias (brass collar) sets a bar they must clear.',
+        2: '7 features at feature_probability 0.1: a pentagon (arrows 72° apart) plus a pair. Feature 2 alone (blue h) leaks cos 72° of itself into its neighbours; their bias ≈ −0.2 (collars) sets the bar and the ReLU zeroes what falls short. Numbers live beside h.',
+        3: 'Pentagon: Wᵢ·Wⱼ = ‖W‖²cos 72° ≈ 0.35 for neighbours, b ≈ −0.21, so x̂ⱼ = ReLU(0.35xᵢ − 0.21) = 0 until xᵢ ≈ 0.6: bias + ReLU filter small interference. The pair needs no bias (its overlap is −1). Arrows grow to ‖W‖² ≈ 1.2 to pay back the bias.',
+      },
+      cam: CAM.sphere,
+      set: { n_features: 7, d_hidden: 3, feature_probability: 0.1, importance: 0.9, seed: 2 },
+      enter(S) { stage(S, { mode: 'mop', probe: { i: 1, x: 0.5 } }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Shapes fall out of the maths.** Eight equally important rare features in 3 neurons settle into a square antiprism: each gets about 3/8 of a dimension. Nobody asked for it.',
+        2: 'Equal importance, rare features: 6 → octahedron (3 pairs), 7 → pentagon + pair, 8 → this square antiprism. Tags show dimensionality D, the share of a dimension each feature gets: 1/2, 2/5, now 3/8. Slide n in Knobs to see the others.',
+        3: 'D_i = ‖Wᵢ‖² / Σⱼ (Ŵᵢ·Wⱼ)² (ARENA `compute_dimensionality`): 1 = own dimension, 1/2 antipodal, 2/5 pentagon, 3/8 square antiprism; Σ D_i ≤ d_hidden. Elhage et al. find the same "sticky" fractions in a 400-feature model.',
+      },
+      cam: CAM.sphere,
+      set: { n_features: 8, d_hidden: 3, feature_probability: 0.01, importance: 1, seed: 2 },
+      enter(S) { stage(S, { mode: 'dims' }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Your exercise, in miniature.** ARENA\'s first run: 5 features, 2 neurons, rare features. The answer is this pentagon; you will draw it with `plot_features_in_2d`.',
+        2: 'ARENA [1.5.4]: write `forward` (two einsums and a ReLU), `generate_batch` (t.where(seeds ≤ p, magnitudes, 0)) and `calculate_loss`, then train 8 instances from dense to sparse. At feature probability 0.02 you get this pentagon.',
+        3: '`error = self.importance * ((batch - out) ** 2)`; `einops.reduce(error, "batch inst feats -> inst", "mean").sum()`. Config: `ToyModelConfig(n_inst=8, n_features=5, d_hidden=2)`, importance 0.9 ** arange(5), feature_probability 50 ** -linspace(0, 1, 8).',
+      },
+      cam: CAM.flat,
+      set: { n_features: 5, d_hidden: 2, feature_probability: 0.02, importance: 0.9, seed: 2 },
+      enter(S) { stage(S, { mode: 'dims' }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Real models are messier.** Same setting as the antiprism, another random start: one feature gets dropped and the rest sit unevenly. That models pack features is accepted; neat shapes are not.',
+        2: 'Current view: models store more features than neurons as nearly-orthogonal directions (superposition), widely accepted. Open: whether real features form tidy shapes, and where the linear representation idea breaks (some features are circles). Safe to build on.',
+        3: 'Seed 1 lands in a local optimum (7 of 8 kept). Current: superposition + linear features (Elhage et al. 2022; SAEs build on it). Emerging: multi-dimensional, circular features (Engels et al. 2024); the toy geometry depends on setup (ARENA: W.T @ W is PSD). Irrelevant to the exercise.',
+      },
+      cam: CAM.sphere,
+      set: { n_features: 8, d_hidden: 3, feature_probability: 0.01, importance: 1, seed: 1 },
+      enter(S) { stage(S, { mode: 'dims', figure: 'shrug', at: [1.72, 0, 0.62], face: [0, 1.3, 3] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Phones share one radio band with nearly-orthogonal codes because few talk at once. MRI rebuilds a scan from few measurements. Sparse things can share a small space.',
+        2: 'The same bargain wherever sparse signals share a small space: compressed sensing (MRI from few measurements), CDMA phones on one band, hash tables that tolerate rare collisions, word embeddings. Next object: an SAE that unmixes these arrows.',
+        3: 'Johnson-Lindenstrauss: exponentially many nearly-orthogonal directions fit in d dims. Compressed sensing recovers k-sparse x from O(k log n) measurements; CDMA; Bloom filters. The inverse problem, reading features back out of h, is the SAE (d08-dictionary).',
+      },
+      cam: CAM.high,
+      set: { n_features: 6, d_hidden: 3, feature_probability: 0.01, importance: 0.9, seed: 2 },
+      enter(S) { stage(S, { mode: 'pairs', figure: 'cheer', at: [1.72, 0, 0.62], face: [0, 1.3, -0.5] }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'Every feature always on. Six features, three neurons: how many survive training?',
+        2: 'feature_probability = 1 (dense), 6 features, d_hidden = 3, importance 0.9ⁱ. How many features does the trained model keep?',
+        3: 'Dense inputs, n_features = 6, d_hidden = 3, I = 0.9ⁱ: the support of W after training?' },
+      options: [{ t: '3: the three most important, at right angles', ok: true }, { t: 'All 6, squeezed together' },
+        { t: '6, in three opposite pairs' }, { t: 'Only the single most important one' }],
+      why: { 1: 'Three neurons carry three always-on numbers cleanly. Squeezing more in would make every answer noisy, so it keeps the three that matter most.',
+        2: 'When features are always on, any overlap costs on every input. Best: 3 orthogonal arrows for features 1-3 (the loss weighs them most) and nothing for 4-6, whose bias learns their mean, 0.5. See the tray\'s diagonal.',
+        3: 'Interference is paid on every sample and ReLU cannot remove always-present overlap, so the optimum is PCA-like: W orthonormal on the top-3 by importance, W[:, 3:] ≈ 0, b_final[3:] ≈ 0.5 (live readout).' },
+      show(S) { S.setKnobs({ n_features: 6, d_hidden: 3, feature_probability: 1, importance: 0.9, seed: 2 }); stage(S, { mode: 'dense' }); S.fly(CAM.front); return whenPlayed(S); } },
+
+    { q: { 1: 'Now each feature is rare (on 1% of the time). Can three neurons hold all six?',
+        2: 'feature_probability 0.01, 6 features, d_hidden = 3. Can the model represent all six?',
+        3: 'p = 0.01, n = 6, d_hidden = 3: what does W converge to?' },
+      options: [{ t: 'Yes, as three pairs pointing opposite ways', ok: true }, { t: 'No, still only three' },
+        { t: 'Yes, all six at right angles' }, { t: 'Only four of them' }],
+      why: { 1: 'Yes. Each pair shares a line, pointing opposite ways. The partner reads negative, which the model turns into 0. Both on at once is rare: 1 in 10,000.',
+        2: 'With p = 0.01, representing a feature (benefit ∝ p) beats its interference (∝ p² for a pair). So all 6 fit as 3 antipodal pairs: an octahedron. Each pair\'s overlap is −1, and the ReLU hides it.',
+        3: 'Three antipodal pairs, D_i = 1/2 each, Σ D = 3 = d_hidden, b_final ≈ 0. Feature benefit is linear in p and pair interference quadratic, so packing wins as p → 0.' },
+      show(S) { S.setKnobs({ n_features: 6, d_hidden: 3, feature_probability: 0.01, importance: 0.9, seed: 2 }); stage(S, { mode: 'pairs' }); S.fly(CAM.front); return whenPlayed(S); } },
+
+    { q: { 1: 'Two features share one line, pointing opposite ways. When is that cheap?',
+        2: 'An antipodal pair: W_b = −W_a. When does this cost the model little?',
+        3: 'W_b = −W_a. The pair\'s expected loss scales with…?' },
+      options: [{ t: 'When the two are rarely on together', ok: true }, { t: 'When they are equally important' },
+        { t: 'When their values are small' }, { t: 'Always: opposite means independent' }],
+      why: { 1: 'If only one is on, the other reads negative and gets zeroed. If both are on, they cancel out, and both answers come out wrong.',
+        2: 'h = xₐWₐ + x_bW_b = (xₐ − x_b)Wₐ: with both on, the model only sees the difference. Independent features collide with probability p², here 10⁻⁴. Tap an arrow tip to see its partner.',
+        3: 'Loss from the pair ∝ P(both on) = p² for independent features; anticorrelated features are cheaper still (ARENA\'s `generate_anticorrelated_features` exercise gets more superposition).' },
+      show(S) { S.setKnobs({ n_features: 6, d_hidden: 3, feature_probability: 0.01, importance: 0.9, seed: 2 }); stage(S, { mode: 'pairs' }); S.fly(CAM.sphere); return whenPlayed(S); } },
+
+    { q: { 1: 'In the table under the ball, what does a pillar on the diagonal measure?',
+        2: 'In the tray WᵀW, what does diagonal pillar i measure?',
+        3: '(W.T @ W)[i, i] = ?' },
+      options: [{ t: 'How strongly that feature is kept: its arrow\'s length squared', ok: true }, { t: 'How often that feature is on' },
+        { t: 'How much it overlaps with the others' }, { t: 'Its importance' }],
+      why: { 1: 'Pillar i is arrow i times itself: its length squared. About 1: kept. About 0: dropped. The other pillars are overlaps between two arrows.',
+        2: '(WᵀW)ᵢᵢ = Wᵢ·Wᵢ = ‖Wᵢ‖²: ≈ 1 represented, ≈ 0 not. Off-diagonals Wᵢ·Wⱼ are interference. The diagonal sums to ‖W‖²_F ≈ features represented, ARENA\'s count.',
+        3: 'diag(WᵀW) = squared column norms; tr(WᵀW) = ‖W‖_F² counts represented features; rank ≤ d_hidden. ARENA\'s `plot_features_in_Nd` draws this matrix (and the norms) for 100 features.' },
+      show(S) { S.setKnobs({ n_features: 6, d_hidden: 3, feature_probability: 1, importance: 0.9, seed: 2 }); stage(S, { mode: 'dense' }); S.fly(CAM.tray); return whenPlayed(S); } },
+
+    { q: { 1: 'Eight equally important, rare features, three neurons. What share of a dimension does each get?',
+        2: '8 features, importance 1, feature_probability 0.01, d_hidden = 3. Dimensionality D of each?',
+        3: 'n = 8, I = 1, p = 0.01, d_hidden = 3: D_i ≈ ?' },
+      options: [{ t: 'About 3/8 each (a square antiprism)', ok: true }, { t: '1/2 each, in pairs' },
+        { t: '3 get a whole one, 5 get none' }, { t: '1/8 each' }],
+      why: { 1: 'They share the three dimensions evenly: 3 ÷ 8. The arrows sit at the corners of a twisted square box.',
+        2: 'D = ‖Wᵢ‖²/Σⱼ(Ŵᵢ·Wⱼ)² reads about 0.37 for every arrow: 3/8 = 0.375. The shape is a square antiprism, one of the paper\'s named configurations.',
+        3: 'D_i ≈ 0.37 for all i (Σ D ≈ 2.95 ≤ 3). Elhage et al. list 3/8 (square antiprism) among the sticky dimensionalities, with 1, 3/4, 2/3, 1/2 and 2/5.' },
+      show(S) { S.setKnobs({ n_features: 8, d_hidden: 3, feature_probability: 0.01, importance: 1, seed: 2 }); stage(S, { mode: 'dims' }); S.fly(CAM.sphere); return whenPlayed(S); } },
+
+    { q: { 1: 'In the always-on run, features 4-6 get no arrow. What does the model answer for them?',
+        2: 'Dense run: W[:, 3:] ≈ 0. What does the model output for features 4-6?',
+        3: 'W[:, i] = 0 at p = 1, xᵢ ~ U[0, 1]. The trained x̂ᵢ?' },
+      options: [{ t: 'Always about 0.5, their average', ok: true }, { t: 'Always 0' },
+        { t: 'Whatever the input was' }, { t: 'Random noise' }],
+      why: { 1: 'With no room to carry them, the best single guess is their average value, 0.5. The bias learns exactly that.',
+        2: 'For a dropped feature, x̂ᵢ = ReLU(0 + bᵢ) = bᵢ whatever the input, and E[(xᵢ − bᵢ)²] is smallest at bᵢ = E[xᵢ] = 0.5. The readout shows the learned b.',
+        3: 'x̂ᵢ = ReLU(bᵢ), a constant; the MSE-optimal constant is E[xᵢ] = 0.5·p, so 0.5 at p = 1 (0.15 at p = 0.3: try the knob).' },
+      show(S) { S.setKnobs({ n_features: 6, d_hidden: 3, feature_probability: 1, importance: 0.9, seed: 2 }); stage(S, { mode: 'dense' }); S.fly(CAM.front); return whenPlayed(S); } },
+  ],
+
+  where: { 1: 'Anywhere sparse things share a small space: phones on one radio band, MRI scans rebuilt from few measurements, hash tables, and the activations of every language model.',
+    2: 'Sparse signals sharing a small space: compressed sensing, CDMA, Bloom filters and hash tables, word embeddings. In LLMs it is why single neurons look polysemantic, and why SAEs (next object) exist.',
+    3: 'Johnson-Lindenstrauss packing; compressed sensing (k-sparse recovery from O(k log n) measurements); CDMA codes; Bloom filters. In LLMs: polysemantic neurons, SAEs, transcoders.' },
+  links: [
+    { label: 'Film · superposition, deep', href: '../../intuition/films/deep-w08-superposition.html' },
+    { label: 'Week 8 pack', href: '../../index.html#week-08' },
+    { label: 'Demo · superposition & SAEs', href: '../../index.html#demo/superposition-sae' },
+    { label: 'Case · superposition', href: '../../index.html#cases/superposition' },
+    { label: 'Case · sparse autoencoders', href: '../../index.html#cases/sparse-autoencoders' },
+    { label: 'Map · superposition', href: '../../index.html#map/node=superposition' },
+    { label: 'Map · polysemanticity', href: '../../index.html#map/node=polysemanticity' },
+    { label: 'Map · sparsity', href: '../../index.html#map/node=sparsity' },
+    { label: 'Map · interference', href: '../../index.html#map/node=interference' },
+    { label: 'Map · feature dimensionality', href: '../../index.html#map/node=feature-dimensionality' },
+    { label: 'Next object · The dictionary', href: 'd08-dictionary.html' },
+  ],
+  remix: 'Build a single-file three.js page that trains Anthropic\'s toy model of superposition live in plain JavaScript: n features (3-10) into d_hidden = 3, h = W x, x̂ = ReLU(Wᵀh + b); each feature is on with probability p (else 0), magnitude uniform in [0, 1]; importance Iᵢ = rⁱ; loss = mean over batch and features of Iᵢ (xᵢ − x̂ᵢ)²; hand-written gradients checked by finite differences; Adam, lr 0.01 with cosine decay, 1,500 steps of batch 256, seeded. Draw the columns of W as violet arrows in a glass sphere on a brass stand, and WᵀW as pillars on a glass tray (diagonal violet, positive red, negative hanging teal). Sliders for n, p (log), r and d_hidden (2 or 3); replay the run from its snapshots. Show dimensionality D = ‖Wᵢ‖²/Σⱼ(Ŵᵢ·Wⱼ)² at the tips.',
+  credit: 'Model, loss and training loop: ARENA [1.5.4] Toy Models of Superposition & SAEs (ToyModel, generate_batch, calculate_loss, compute_dimensionality), after Elhage et al. 2022, "Toy Models of Superposition" (Anthropic). Trained live in your browser with hand-written gradients, checked against finite differences. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

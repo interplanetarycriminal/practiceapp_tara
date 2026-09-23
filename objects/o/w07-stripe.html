@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The stripe · Object Lessons</title>
+<meta name="description" content="Repeat a random sentence and one head lights a diagonal stripe: an induction head, computed live in a hand-built two-layer attention-only transformer.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+/* .k-tag (the beat pill) sets min-width:52px, which leaks into K.label({cls:'tag'}) labels */
+.k-label.k-tag{min-width:0}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   13 · w07-stripe: "The stripe" (W7, ARENA [1.2] Intro to mech interp)
+   Every pillar, arc and loss bar is computed below by a real forward pass of a
+   tiny hand-built 2-layer attention-only transformer (explicit weight
+   matrices, softmax attention, causal mask, unembedding). Head 0.0 is a
+   previous-token head, head 1.0 an induction head that works ONLY through
+   K-composition with 0.0, head 0.1 has random weights. The detectors and the
+   induction score are ARENA's formulas. The MATH block is extracted and checked
+   in node against an independent feature-level computation (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+const V = 26, BOS = 26, NTOK = 27;          // output vocab: 26 letters; BOS is an input-only token
+const NMAX = 12, NP = 2 * NMAX + 1;         // up to 12 random letters, repeated, after BOS
+// residual stream d_model = 106 in named blocks. POS never enters the stream: as in ARENA's
+// attn-only-2l ("shortformer" positions) it is added to the query and key inputs only.
+const O = { TOK: 0, PREV: 27, OUT: 54, POS: 81 }, D = 106, DH = 32;
+const HP = { beta0: 5, beta1: 8, sink1: 4, gamma: 5, sigma: 0.8 };
+
+const zeros = (r, c) => Array.from({ length: r }, () => new Float64Array(c));
+function gaussM(r, c, s, rnd) {
+  const M = zeros(r, c);
+  for (let i = 0; i < r; i++) for (let j = 0; j < c; j++) {
+    const u = rnd() || 1e-12, v = rnd();
+    M[i][j] = s * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  }
+  return M;
+}
+/* The weights. attn_scale = sqrt(d_head), so a weight a gives a score a^2 / sqrt(d_head). */
+function buildModel(hp = HP) {
+  const sc = Math.sqrt(DH);
+  const W_E = zeros(NTOK, D); for (let t = 0; t < NTOK; t++) W_E[t][O.TOK + t] = 1;
+  const W_pos = zeros(NP, D); for (let p = 0; p < NP; p++) W_pos[p][O.POS + p] = 1;
+  const a0 = Math.sqrt(hp.beta0 * sc), a1 = Math.sqrt(hp.beta1 * sc), c1 = Math.sqrt(hp.sink1 * sc);
+  const head = () => ({ W_Q: zeros(D, DH), W_K: zeros(D, DH), W_V: zeros(D, DH), W_O: zeros(DH, D) });
+  // 0.0 previous-token head. QK: query at position p and key at position p-1 share head-dim p.
+  const prev = head();
+  for (let p = 0; p < NP; p++) { prev.W_Q[O.POS + p][p] = a0; if (p + 1 < DH) prev.W_K[O.POS + p][p + 1] = a0; }
+  // OV: copy the attended token into the PREV block ("the token before me was ...")
+  for (let t = 0; t < NTOK; t++) { prev.W_V[O.TOK + t][t] = 1; prev.W_O[t][O.PREV + t] = 1; }
+  // 0.1 random head (initialisation-like Gaussian weights, fixed seed); nothing reads its output
+  const rnd = mulberry32(20220308);
+  const rand = { W_Q: gaussM(D, DH, hp.sigma, rnd), W_K: gaussM(D, DH, hp.sigma, rnd), W_V: gaussM(D, DH, hp.sigma, rnd), W_O: zeros(DH, D) };
+  // 1.0 induction head. Query reads TOK (my token); key reads PREV (K-composition with 0.0).
+  // Head-dim 31 is a BOS sink: every letter's query meets BOS's key with score sink1.
+  const ind = head();
+  for (let t = 0; t < V; t++) { ind.W_Q[O.TOK + t][t] = a1; ind.W_K[O.PREV + t][t] = a1; ind.W_Q[O.TOK + t][DH - 1] = c1; }
+  ind.W_K[O.TOK + BOS][DH - 1] = c1;
+  // OV: copy the attended key's own token (from TOK, not PREV) into OUT; W_U reads OUT
+  for (let t = 0; t < NTOK; t++) { ind.W_V[O.TOK + t][t] = 1; ind.W_O[t][O.OUT + t] = 1; }
+  const W_U = zeros(D, V); for (let t = 0; t < V; t++) W_U[O.OUT + t][t] = hp.gamma;
+  return { W_E, W_pos, blocks: [[prev, rand], [ind]], W_U, names: [['0.0', '0.1'], ['1.0']] };
+}
+
+const vecmat = (x, M) => {
+  const out = new Float64Array(M[0].length);
+  for (let k = 0; k < x.length; k++) { const a = x[k]; if (a) { const row = M[k]; for (let l = 0; l < out.length; l++) out[l] += a * row[l]; } }
+  return out;
+};
+const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+function softmax(s) {
+  let m = -Infinity; for (const v of s) m = Math.max(m, v);
+  const e = s.map((v) => Math.exp(v - m)); const z = e.reduce((a, b) => a + b, 0);
+  return e.map((v) => v / z);
+}
+
+/* model.run_with_cache(tokens): attention-only forward pass with a causal mask.
+   o.ablate = [layer, head]: ARENA's head_zero_ablation_hook (z[:, :, head] = 0). */
+function run_with_cache(model, tokens, o = {}) {
+  const L = tokens.length, sc = Math.sqrt(DH);
+  let resid = tokens.map((t) => Float64Array.from(model.W_E[t]));      // hook_embed (no pos: shortformer)
+  const cache = { pattern: [], z: [], resid: [] };
+  model.blocks.forEach((heads, l) => {
+    cache.resid.push(resid);
+    const qk_in = resid.map((x, i) => x.map((v, d) => v + model.W_pos[i][d]));
+    const out = resid.map(() => new Float64Array(D));
+    const pats = [], zs = [];
+    heads.forEach((H, h) => {
+      const q = qk_in.map((x) => vecmat(x, H.W_Q)), k = qk_in.map((x) => vecmat(x, H.W_K)), v = resid.map((x) => vecmat(x, H.W_V));
+      const pat = [];
+      for (let i = 0; i < L; i++) {
+        const s = new Array(L).fill(-Infinity);                           // IGNORE above the diagonal
+        for (let j = 0; j <= i; j++) s[j] = dot(q[i], k[j]) / sc;
+        pat.push(softmax(s));
+      }
+      let z = pat.map((row) => { const zi = new Float64Array(DH); row.forEach((w, j) => { if (w) for (let d = 0; d < DH; d++) zi[d] += w * v[j][d]; }); return zi; });
+      if (o.ablate && o.ablate[0] === l && o.ablate[1] === h) z = z.map((zi) => zi.fill(0));
+      z.forEach((zi, i) => { const w = vecmat(zi, H.W_O); for (let d = 0; d < D; d++) out[i][d] += w[d]; });
+      pats.push(pat); zs.push(z);
+    });
+    resid = resid.map((x, i) => x.map((v, d) => v + out[i][d]));
+    cache.pattern.push(pats); cache.z.push(zs);
+  });
+  cache.resid.push(resid);
+  const logits = resid.map((x) => vecmat(x, model.W_U));
+  return { logits, cache };
+}
+
+/* ARENA: get_log_probs(logits, tokens)[s] = log p(tokens[s+1] | tokens[:s+1]) */
+function get_log_probs(logits, tokens) {
+  const out = [];
+  for (let s = 0; s < tokens.length - 1; s++) {
+    const lg = logits[s]; let m = -Infinity; for (const v of lg) m = Math.max(m, v);
+    let z = 0; for (const v of lg) z += Math.exp(v - m);
+    out.push(lg[tokens[s + 1]] - m - Math.log(z));
+  }
+  return out;
+}
+/* torch.diagonal(M, offset): the entries M[i][i + offset], in row order */
+const diagonal = (M, off) => { const out = []; for (let i = 0; i < M.length; i++) { const j = i + off; if (j >= 0 && j < M[i].length) out.push(M[i][j]); } return out; };
+const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+/* ARENA's detector scores (current / prev / first / induction), before the > 0.4 threshold */
+function detector_scores(pattern, seq_len) {
+  return {
+    current: mean(diagonal(pattern, 0)),                   // current_attn_detector: diagonal().mean()
+    prev: mean(diagonal(pattern, -1)),                     // prev_attn_detector: diagonal(-1).mean()
+    first: mean(pattern.map((r) => r[0])),                 // first_attn_detector: [:, 0].mean()
+    induction: mean(diagonal(pattern, -(seq_len - 1))),    // induction_attn_detector: diagonal(-seq_len + 1).mean()
+  };
+}
+/* ARENA: generate_repeated_tokens -> [BOS, *half, *half]. Letters stand in for tokens; drawn without
+   repeats inside a half (with 50,278 tokens, ARENA's randint almost never repeats either).
+   fresh = true: the second half is seq_len NEW letters (no repeat). */
+function generate_repeated_tokens(seq_len, seed, fresh = false) {
+  const r = mulberry32(seed), pool = [...Array(V).keys()];
+  for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  const half = pool.slice(0, seq_len);
+  return [BOS, ...half, ...(fresh ? pool.slice(seq_len, 2 * seq_len) : half)];
+}
+/* one full analysis of a sequence: patterns, detectors, losses (ARENA's halves) */
+function analyse(model, seq_len, seed, fresh, ablate) {
+  const tokens = generate_repeated_tokens(seq_len, seed, fresh);
+  const { logits, cache } = run_with_cache(model, tokens, ablate ? { ablate: [0, 0] } : {});
+  const log_probs = get_log_probs(logits, tokens);
+  const heads = { prev: cache.pattern[0][0], rand: cache.pattern[0][1], ind: cache.pattern[1][0] };
+  const scores = {}; for (const h in heads) scores[h] = detector_scores(heads[h], seq_len);
+  const probs = logits.map((lg) => softmax(Array.from(lg)));
+  return {
+    tokens, logits, probs, log_probs, heads, scores, cache,
+    loss: log_probs.map((v) => -v),
+    first_half: -mean(log_probs.slice(0, seq_len)),        // -log_probs[:seq_len].mean()
+    second_half: -mean(log_probs.slice(seq_len)),          // -log_probs[seq_len:].mean()
+    last: -mean(log_probs.slice(-(seq_len - 1))),          // get_ablation_scores' [:, -(seq_len-1):]
+  };
+}
+const MATH = { mulberry32, V, BOS, NTOK, NP, O, D, DH, HP, buildModel, run_with_cache, get_log_probs, diagonal, mean, detector_scores, generate_repeated_tokens, analyse, softmax };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const MODEL = buildModel();
+const G = 3.1;                      // side of the pattern grid (world units)
+const GX = -0.14, GZ = -0.12;       // grid centre
+const HMAX = 0.95;                  // pillar height for weight 1
+const RW = 0.22;                    // rail width
+const LOSS_K = 0.24;                // loss bar height per nat
+const tokName = (t) => (t === BOS ? 'BOS' : LETTERS[t]);
+const f2 = (v) => v.toFixed(2), f3 = (v) => v.toFixed(3);
+const pct = (v) => `${Math.round(v * 100)}%`;
+const HEADS = {
+  prev: { name: '0.0', layer: 0, role: { 1: 'look-back head', 2: 'previous-token head', 3: 'prev-token head' }, arc: C.aux },
+  ind: { name: '1.0', layer: 1, role: { 1: 'copy-ahead head', 2: 'induction head', 3: 'induction head' }, arc: C.prob },
+  rand: { name: '0.1', layer: 0, role: { 1: 'untrained head', 2: 'random head', 3: 'random (init) head' }, arc: '#8f877a' },
+};
+const PAL = { plaster: new THREE.Color('#efe8dc'), amber: new THREE.Color(C.prob), mute: new THREE.Color('#e6ddcd'),
+  floorOk: new THREE.Color('#f5efe6'), floorMask: new THREE.Color('#d6cdbd'), floorHalf: new THREE.Color('#e9eef8'),
+  ring: new THREE.Color('#d8b04e') };
+/* Views. On a phone the grid (a square inside a round plinth) would fill only ~60% of the width,
+   so phones get close-ups (fit: k); desktops keep the kit's auto-fit, which has room to spare. */
+const PHONE = (() => { try { return Math.min(innerWidth, innerHeight) < 700; } catch (e) { return false; } })();
+const view = (pos, target, phoneFit, deskFit) => {
+  const f = PHONE ? phoneFit : deskFit;
+  return f ? { pos, target, fit: f } : { pos, target };
+};
+const CAM = {
+  over: view([0.9, 8.4, 6.6], [-0.1, 0.3, -0.05], 1.3),
+  top: view([0.05, 11.5, 1.6], [-0.1, 0.1, -0.02], 1.45),
+  stripe: view([-5.6, 6.6, 5.2], [-0.3, 0.3, 0.05], 1.22),
+  rail: view([0.3, 3.9, 7.4], [-0.35, 0.45, 1.2], 1.16, 1.05),
+  loss: view([7.2, 5.0, 3.4], [0.3, 0.4, -0.1], 1.12),
+  wide: view([4.6, 7.4, 7.6], [-0.2, 0.35, 0.1], 1.22),
+};
+
+/* ======================================================== object behaviour */
+
+function geomFor(L) {
+  const c = G / L;
+  return { L, c, x: (j) => GX - G / 2 + (j + 0.5) * c, z: (i) => GZ - G / 2 + (i + 0.5) * c,
+    railZ: GZ + G / 2 + 0.06 + RW / 2, railX: GX - G / 2 - 0.06 - RW / 2, lossX: GX + G / 2 + 0.2 };
+}
+
+function compute(S) {
+  const st = S.state, k = S.knobs;
+  st.A = analyse(MODEL, k.n, st.seed, k.fresh, k.ablate);
+  // the same sequence with the other ablation setting, for the K-composition readout
+  st.B = analyse(MODEL, k.n, st.seed, k.fresh, !k.ablate);
+  st.gm = geomFor(st.A.tokens.length);
+}
+
+/* the letter strips: one canvas texture per rail */
+function drawStrip(S, which) {
+  const st = S.state, A = st.A, L = A.tokens.length, n = S.knobs.n;
+  const cell = 64, across = Math.max(40, Math.round(cell * RW / st.gm.c));
+  const cv = which === 'front' ? st.cvFront : st.cvLeft;
+  const W = which === 'front' ? L * cell : across, H = which === 'front' ? across : L * cell;
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  g.clearRect(0, 0, W, H);
+  const hi = st.hi || {};
+  for (let p = 0; p < L; p++) {
+    const x = which === 'front' ? p * cell : 0, y = which === 'front' ? 0 : p * cell;
+    const w = which === 'front' ? cell : across, h = which === 'front' ? across : cell;
+    let bg = '#f7f2e9';
+    if (A.tokens[p] === BOS) bg = '#e8d9b8';
+    else if (p > n && !S.knobs.fresh) bg = '#e3ebf9';
+    if (which === 'left' && p === hi.q) bg = '#f2c574';
+    if (which === 'front' && p === hi.key) bg = '#f2c574';
+    if (which === 'front' && p === hi.stamp) bg = '#a9dcdc';
+    g.fillStyle = bg;
+    const m = 5;
+    g.beginPath(); g.roundRect(x + m, y + m, w - 2 * m, h - 2 * m, 10); g.fill();
+    if (which === 'front' && p === hi.q && hi.key != null) {        // the asking letter, on the sequence
+      g.lineWidth = 6; g.strokeStyle = '#d88a1c';
+      g.beginPath(); g.roundRect(x + m + 3, y + m + 3, w - 2 * m - 6, h - 2 * m - 6, 8); g.stroke();
+    }
+    const t = A.tokens[p];
+    g.fillStyle = t === BOS ? '#7a5c22' : '#1f4fae';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    const fs = t === BOS ? Math.min(w, h) * 0.34 : Math.min(w, h) * 0.62;
+    g.font = `700 ${fs}px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`;
+    g.fillText(tokName(t), x + w / 2, y + h / 2 + fs * 0.04);
+  }
+  const tex = which === 'front' ? st.texFront : st.texLeft;
+  tex.needsUpdate = true;
+}
+
+function placeRails(S) {
+  const st = S.state, gm = st.gm;
+  st.front.position.set(GX, 0.035, gm.railZ);
+  st.front.scale.set(G, 1, RW);
+  st.left.position.set(gm.railX, 0.035, GZ);
+  st.left.scale.set(RW, 1, G);
+  st.frontTop.position.set(GX, 0.072, gm.railZ);
+  st.frontTop.scale.set(G, RW, 1);
+  st.leftTop.position.set(gm.railX, 0.072, GZ);
+  st.leftTop.scale.set(RW, G, 1);
+  st.slab.position.set(GX, 0.02, GZ);
+  st.slab.scale.set(G + 0.04, 0.04, G + 0.04);
+  st.tagKeys.move([GX + G / 2 - 0.1, 0.1, gm.railZ + RW / 2 + 0.02]);
+  st.tagQ.move([gm.railX + 0.1, HMAX + 0.12, GZ - G / 2 + 0.05]);
+  st.tagGuess.move([gm.lossX, LOSS_K * Math.log(V) + 0.02, GZ + G / 2 - 0.05]);
+  st.tagLoss.move([gm.lossX, LOSS_K * Math.log(V) + 0.12, GZ - G / 2 + 0.1]);
+  st.guess.position.set(gm.lossX, LOSS_K * Math.log(V), GZ);
+  st.guess.scale.set(1, G, 1);
+}
+
+/* pillar heights / colours / floor tiles from the current pattern */
+const m4 = new THREE.Matrix4(), q0 = new THREE.Quaternion(), vS = new THREE.Vector3(), vP = new THREE.Vector3();
+const col = new THREE.Color();
+function targetHeights(S) {
+  const st = S.state, P = st.A.heads[S.knobs.head], L = P.length;
+  const hT = new Float32Array(NP * NP);
+  for (let i = 0; i < L; i++) for (let j = 0; j <= i; j++) hT[i * NP + j] = P[i][j];
+  return hT;
+}
+function paintGrid(S) {
+  const st = S.state, gm = st.gm, L = gm.L, n = S.knobs.n, q = st.q;
+  const w = st.hNow;
+  for (let i = 0; i < NP; i++) for (let j = 0; j < NP; j++) {
+    const id = i * NP + j;
+    if (i >= L || j >= L) {
+      m4.makeScale(1e-5, 1e-5, 1e-5); st.pillars.setMatrixAt(id, m4); st.floor.setMatrixAt(id, m4);
+      st.pillars.setColorAt(id, PAL.plaster); st.floor.setColorAt(id, PAL.floorOk);
+      continue;
+    }
+    // floor tile
+    vP.set(gm.x(j), 0.043, gm.z(i)); vS.set(gm.c * 0.94, 0.006, gm.c * 0.94);
+    m4.compose(vP, q0, vS); st.floor.setMatrixAt(id, m4);
+    const onRing = (st.rings === 'ind' && j === i - (n - 1)) || (st.rings === 'prev' && j === i - 1);
+    st.floor.setColorAt(id, onRing ? PAL.ring : j > i ? PAL.floorMask : (i > n && !S.knobs.fresh ? PAL.floorHalf : PAL.floorOk));
+    // pillar
+    const h = j <= i ? w[id] * HMAX : 0;
+    if (h < 0.004) { m4.makeScale(1e-5, 1e-5, 1e-5); st.pillars.setMatrixAt(id, m4); st.pillars.setColorAt(id, PAL.plaster); continue; }
+    vP.set(gm.x(j), 0.046, gm.z(i)); vS.set(gm.c * 0.72, h, gm.c * 0.72);
+    m4.compose(vP, q0, vS); st.pillars.setMatrixAt(id, m4);
+    const t = Math.min(1, 0.16 + 0.84 * Math.pow(Math.max(0, w[id]), 0.6));
+    col.copy(PAL.plaster).lerp(PAL.amber, t);
+    if (st.rings) { if (!((st.rings === 'ind' && j === i - (n - 1)) || (st.rings === 'prev' && j === i - 1))) col.lerp(PAL.mute, 0.72); }
+    else if (st.showArcs && q != null && i !== q) col.lerp(PAL.mute, 0.45);    // focus on the chosen row
+    st.pillars.setColorAt(id, col);
+  }
+  for (const m of [st.pillars, st.floor]) {
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    m.computeBoundingSphere(); m.computeBoundingBox && m.computeBoundingBox();
+  }
+  // the chosen row: brass frame
+  if (q != null && q < L) {
+    st.rowFrame.visible = true;
+    st.rowFrame.position.set(GX, 0.05, gm.z(q));
+    st.rowFrame.scale.set(G + 0.02, 1, gm.c * 1.0);
+  } else st.rowFrame.visible = false;
+}
+
+function paintLoss(S) {
+  const st = S.state, gm = st.gm, L = gm.L, loss = st.A.loss;
+  for (let s = 0; s < NP; s++) {
+    if (s >= L - 1) { m4.makeScale(1e-5, 1e-5, 1e-5); st.lossBars.setMatrixAt(s, m4); continue; }
+    const h = Math.max(0.01, loss[s] * LOSS_K);
+    vP.set(gm.lossX, 0.0, gm.z(s)); vS.set(0.13, h, gm.c * 0.7);
+    m4.compose(vP, q0, vS); st.lossBars.setMatrixAt(s, m4);
+    col.set(C.grad); if (st.lossHi != null && s !== st.lossHi) col.lerp(PAL.mute, 0.45);
+    st.lossBars.setColorAt(s, col);
+  }
+  st.lossBars.instanceMatrix.needsUpdate = true;
+  if (st.lossBars.instanceColor) st.lossBars.instanceColor.needsUpdate = true;
+  st.lossBars.computeBoundingSphere();
+}
+
+/* the detector rings: brass squares round the cells a detector averages */
+function paintRings(S) {
+  const st = S.state, gm = st.gm, L = gm.L, n = S.knobs.n;
+  let cells = [];
+  if (st.rings === 'ind') { for (let i = 0; i < L; i++) { const j = i - (n - 1); if (j >= 0) cells.push([i, j]); } }
+  else if (st.rings === 'prev') { for (let i = 1; i < L; i++) cells.push([i, i - 1]); }
+  for (let r = 0; r < NP; r++) {
+    if (r < cells.length) {
+      const [i, j] = cells[r];
+      vP.set(gm.x(j), 0.046, gm.z(i)); vS.set(gm.c * 1.02, 1, gm.c * 1.02);
+      m4.compose(vP, q0, vS);
+    } else m4.makeScale(1e-5, 1e-5, 1e-5);
+    st.ringMesh.setMatrixAt(r, m4);
+  }
+  st.ringMesh.instanceMatrix.needsUpdate = true;
+  st.ringMesh.computeBoundingSphere();
+  st.ringMesh.visible = cells.length > 0;
+  st.nRing = cells.length;
+}
+
+/* arcs over the front rail: attention moving information from a key to a query.
+   A quadratic Bezier tube (radius grows with the weight) and a cone at the receiving end. */
+const DOWN = new THREE.Vector3(0, -1, 0);
+function makeArc(hex) {
+  const mat = K.mat.string(hex);
+  const tube = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 14, 1).translate(0, -0.5, 0), mat);
+  tube.castShadow = head.castShadow = true;
+  const g = new THREE.Group(); g.add(tube, head);
+  function set(xa, xb, z, y0, wgt, lift = 1) {
+    const r = 0.007 + 0.02 * Math.sqrt(Math.max(0, wgt));
+    const span = Math.abs(xb - xa), h = (0.1 + 0.4 * span) * lift;
+    const A = new THREE.Vector3(xa, y0, z), B = new THREE.Vector3(xb, y0, z);
+    const Cc = new THREE.Vector3((xa + xb) / 2, y0 + 2 * h, z);          // apex height = h
+    const curve = new THREE.QuadraticBezierCurve3(A, Cc, B);
+    const hl = Math.min(0.09, 0.35 * span) + r * 2;                        // arrowhead length
+    const tEnd = 1 - Math.min(0.45, hl / Math.max(1e-3, curve.getLength()));
+    const body = new THREE.QuadraticBezierCurve3(A, Cc, B);
+    const pts = []; for (let s = 0; s <= 30; s++) pts.push(body.getPoint(tEnd * s / 30));
+    tube.geometry.dispose();
+    tube.geometry = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 36, r, 8, false);
+    const tip = curve.getPoint(1), tang = curve.getTangent(1).normalize();
+    head.position.copy(tip);
+    head.scale.set(r * 2.5, hl, r * 2.5);
+    // cone tip at local y = 0, body along local -y: map -y to -tangent so the body trails the tip
+    head.quaternion.setFromUnitVectors(DOWN, tang.clone().negate());
+    g.visible = true;
+  }
+  return { group: g, set, show(b) { g.visible = !!b; } };
+}
+
+function paintArcs(S) {
+  const st = S.state, gm = st.gm, k = S.knobs, q = st.q, A = st.A;
+  for (const set of Object.values(st.arcs)) set.forEach((a) => a.show(false));
+  st.hi = { q };
+  if (!st.showArcs || q == null || q >= gm.L) { drawStrip(S, 'front'); drawStrip(S, 'left'); return; }
+  const P = A.heads[k.head][q];
+  const y0 = 0.085, z = gm.railZ;
+  // the selected head's strongest keys for this query (weight >= 0.08)
+  const order = P.map((w, j) => [w, j]).filter(([w]) => w >= 0.08).sort((a, b) => b[0] - a[0]).slice(0, 2);
+  order.forEach(([w, j], idx) => {
+    if (j === q) return;                                   // attending to itself: no arc
+    const arc = st.arcs[k.head][idx];
+    arc.set(gm.x(j), gm.x(q), z, y0, w);
+    arc.show(true);
+  });
+  const top = order.length ? order[0][1] : null;
+  st.hi.key = top;
+  // the relay: for the induction head, also draw the stamp 0.0 wrote at the key it found
+  if (st.relay && k.head === 'ind' && top != null && top > 1 && !k.ablate) {
+    const w0 = A.heads.prev[top][top - 1];
+    st.arcs.stamp[0].set(gm.x(top - 1), gm.x(top), z, y0, w0, 1.6);
+    st.arcs.stamp[0].show(true);
+    st.hi.stamp = top - 1;
+  }
+  drawStrip(S, 'front'); drawStrip(S, 'left');
+}
+
+/* readouts */
+function readouts(S) {
+  const st = S.state, k = S.knobs, A = st.A, q = st.q, gm = st.gm, tier = S.tier;
+  if (q == null || q >= gm.L) { st.read.show(false); }
+  else {
+    const P = A.heads[k.head][q];
+    let top = 0; for (let j = 1; j <= q; j++) if (P[j] > P[top]) top = j;
+    const tq = tokName(A.tokens[q]), tk = tokName(A.tokens[top]);
+    let s;
+    if (tier === 1) s = `**${tq}** looks at **${tk}**: ${pct(P[top])}`;
+    else if (tier === 2) s = `row ${q} · **${tq}** → key ${top} **${tk}** · ${f2(P[top])}`;
+    else s = `A[${q}, ${top}] = ${f3(P[top])} (${tq} → ${tk})`;
+    if (k.head === 'ind' && q < gm.L - 1) {
+      const pr = A.probs[q]; let b = 0; for (let v = 1; v < V; v++) if (pr[v] > pr[b]) b = v;
+      const nextTok = A.tokens[q + 1];
+      const guess = pr[b] < 0.1;
+      s += tier === 1 ? (guess ? '\nnext letter: a blind guess' : `\nguesses next: **${LETTERS[b]}** (${pct(pr[b])})`)
+        : tier === 2 ? (guess ? `\nnext: no idea (max p ${f2(pr[b])})` : `\npredicts **${LETTERS[b]}** · p ${f2(pr[b])}`)
+          : `\np(${LETTERS[nextTok]}) = ${f3(pr[nextTok])} · loss ${f2(-Math.log(pr[nextTok]))}`;
+    }
+    st.read.move(new THREE.Vector3(gm.x(top), 0.05 + HMAX * P[top] + 0.02, gm.z(q))).set(s).show(true);
+  }
+  note(S);
+  S.invalidate();
+}
+
+function note(S) {
+  const st = S.state, k = S.knobs, A = st.A, B = st.B, tier = S.tier, n = k.n, mode = st.noteMode;
+  const N = st.note;
+  if (!mode) { N.show(false); return; }
+  N.show(true);
+  const sc = A.scores[k.head];
+  const L = A.tokens.length;
+  N.move(st.noteAt || [GX + 0.6, 1.25, GZ - 0.6]);
+  if (mode === 'rows') {
+    const P = A.heads[k.head]; let worst = 0; P.forEach((r) => { worst = Math.max(worst, Math.abs(r.reduce((a, b) => a + b, 0) - 1)); });
+    N.set(tier === 1 ? `${L} rows · each adds up to 1\ndark squares: the future` :
+      tier === 2 ? `${L} × ${L} · every row sums to 1\nabove the diagonal: masked` :
+        `max |Σⱼ A[i, j] − 1| = ${worst.toExponential(0)}\nmasked: score −∞ → weight 0`);
+  } else if (mode === 'prev') {
+    const s = A.scores.prev.prev;
+    N.set(tier === 1 ? `one step back: ${pct(s)} of each\nrow's attention, on average` :
+      tier === 2 ? `sub-diagonal mean ${f3(s)}\n> 0.4: previous-token head` :
+        `diagonal(-1).mean() = ${f3(s)}\n> 0.4 ✓ (ARENA's is 0.7)`);
+  } else if (mode === 'stripe') {
+    const P = A.heads.ind; let bos = 0; for (let i = 1; i <= n; i++) bos += P[i][0]; bos /= n;
+    const s = A.scores.ind.induction;
+    N.set(tier === 1 ? (k.fresh ? `no earlier copies: rests on BOS\nstripe average only ${pct(s)}` : `stripe ${n - 1} back: ${pct(s)} on average\nfirst half on BOS: ${pct(bos)}`) :
+      tier === 2 ? `stripe offset seq_len − 1 = ${n - 1}\nmean on it ${f3(s)}\nfirst half on BOS ${f3(bos)}` :
+        `diagonal(−${n - 1}).mean() = ${f3(s)}\nA[1..${n}, 0] mean ${f3(bos)} (sink)`);
+  } else if (mode === 'relay') {
+    const on = k.ablate ? B : A, off = k.ablate ? A : B, q = st.q;
+    const Pi = on.heads.ind[q]; let top = 0; for (let j = 1; j <= q; j++) if (Pi[j] > Pi[top]) top = j;
+    const qL = tokName(A.tokens[q]), kL = tokName(A.tokens[top]), w0 = top ? on.heads.prev[top][top - 1] : 0;
+    if (k.ablate) {
+      N.set(tier === 1 ? `0.0 knocked out: no stamps\nstripe ${pct(A.scores.ind.induction)} (was ${pct(B.scores.ind.induction)})` :
+        tier === 2 ? `0.0 zero-ablated: PREV is empty\nscore ${f3(A.scores.ind.induction)} (was ${f3(B.scores.ind.induction)})` :
+          `z[0.0] = 0 ⇒ PREV ≡ 0\nscore(1.0) ${f3(B.scores.ind.induction)} → ${f3(A.scores.ind.induction)}`);
+    } else if (!top || A.tokens[top - 1] !== A.tokens[q]) {
+      N.set(tier === 1 ? `row ${q}: no earlier copy\nof **${qL}**, so no stamp to find` : `row ${q}: **${qL}** has no earlier copy\ninduction score ${f3(on.scores.ind.induction)}`);
+    } else {
+      N.set(tier === 1 ? `teal: **${kL}**'s spot stores "before\nme: **${qL}**"; amber: row ${q}'s **${qL}**\nfinds it, copies **${kL}**` :
+        tier === 2 ? `0.0 stamps PREV = **${qL}** at **${kL}** (${f2(w0)})\n1.0: row ${q}'s **${qL}** matches it (${f2(Pi[top])})\nscore ${f3(on.scores.ind.induction)} · 0.0 off: ${f3(off.scores.ind.induction)}` :
+          `A⁰[${top}, ${top - 1}] = ${f3(w0)} · A¹[${q}, ${top}] = ${f3(Pi[top])}\nscore ${f3(on.scores.ind.induction)}; z[0.0] = 0: ${f3(off.scores.ind.induction)}`);
+    }
+  } else if (mode === 'detect') {
+    const nm = HEADS[k.head].name, mark = (v) => (v > 0.4 ? ' ✓' : '');
+    N.set(tier === 1 ? `head ${nm}: stripe score ${f2(sc.induction)}\n${sc.induction > 0.4 ? 'above 0.4: an induction head' : 'below 0.4: not induction'}` :
+      `head ${nm} · threshold 0.4\ncurrent ${f2(sc.current)}${mark(sc.current)} · prev ${f2(sc.prev)}${mark(sc.prev)}\nfirst ${f2(sc.first)}${mark(sc.first)} · induction ${f2(sc.induction)}${mark(sc.induction)}` +
+      (tier === 3 && k.head === 'ind' ? '\n(ARENA\'s 1.4, 1.10: first ✓ too)' : ''));
+  } else if (mode === 'loss') {
+    N.set(tier === 1 ? `first time: surprise ${f2(A.first_half)}\non the repeat: ${f2(A.second_half)}\nblind guess: ln 26 = 3.26` :
+      tier === 2 ? `loss 1st half ${f2(A.first_half)} nats\n2nd half ${f2(A.second_half)} · last ${n - 1}: ${f2(A.last)}\nblind guess: ln 26 = 3.26` :
+        `−log_probs[:${n}].mean() ${f3(A.first_half)}\n−log_probs[${n}:].mean() ${f3(A.second_half)}\n[−${n - 1}:] ${f3(A.last)} · ln 26 = ${f3(Math.log(V))}`);
+  } else if (mode === 'offset') {
+    N.set(tier === 1 ? `the stripe sits ${n - 1} back\n(the copy is ${n} back, +1)` :
+      `key = query − (seq_len − 1)\n= query − ${n - 1} · score ${f3(A.scores.ind.induction)}`);
+  } else if (mode === 'guess') {
+    N.set(tier === 1 ? `first repeated letter:\nsurprise ${f2(A.loss[n])}, a blind guess` :
+      tier === 2 ? `position ${n} → token ${n + 1}: loss ${f2(A.loss[n])}\nits letter has no earlier copy` :
+        `−log_probs[${n}] = ${f3(A.loss[n])} ≈ ln 26\nget_ablation_scores keeps only\n[−(seq_len−1):]: the predictable`);
+  } else if (mode === 'layers') {
+    N.set(tier === 1 ? 'layer 0 stamps (teal)\nlayer 1 reads stamps (amber)' :
+      tier === 2 ? 'teal: 0.0 (layer 0) writes PREV\namber: 1.0 (layer 1) keys on it' :
+        'W_K of 1.0 reads what W_OV of\n0.0 writes: K-comp, L0 < L1');
+  }
+}
+
+/* one call per beat / prediction */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.noteMode = o.note || null;
+  st.noteAt = o.noteAt || null;
+  st.showArcs = o.arcs !== false;
+  st.relay = !!o.relay;
+  st.rings = o.rings || null;
+  st.lossHi = o.lossHi ?? null;
+  st.q = S.knobs.q;
+  const tags = !!o.tags;
+  st.tagKeys.show(tags); st.tagQ.show(tags); st.tagLoss.show(tags || !!o.lossTag); st.tagGuess.show(!!o.lossTag);
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || [-2.08, 0, 0.95], o.face || [0, 0.5, 0.4]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.at });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  refresh(S, true);
+}
+
+function refresh(S, instant) {
+  const st = S.state;
+  const hT = targetHeights(S);
+  if (instant || S.shot || !st.hNow) { st.hNow = hT; st.anim = null; }
+  else { st.anim = { from: st.hNow.slice(), to: hT, t0: null }; }
+  paintGrid(S); paintLoss(S); paintRings(S); paintArcs(S); readouts(S);
+  S.invalidate();
+}
+
+function setQ(S, q) {
+  const st = S.state, L = st.gm.L;
+  q = Math.max(0, Math.min(L - 1, Math.round(q)));
+  st.q = q;
+  if (S.knobs.q !== q) S.setKnob('q', q, { silent: true });
+  paintGrid(S); paintArcs(S); readouts(S);
+}
+
+function syncQKnob(S) {
+  const el = document.getElementById('k-q');
+  if (el) { el.max = String(S.state.gm.L - 1); }
+  if (S.knobs.q > S.state.gm.L - 1) S.setKnob('q', S.state.gm.L - 1, { silent: true });
+  S.state.q = S.knobs.q;
+  if (el) el.value = String(S.knobs.q);
+}
+
+function dimKnobs(S) {        // the kit cannot dim knobs; grey the ones that do nothing right now
+  const dim = (id, on) => { const el = document.getElementById('k-' + id); const row = el && el.closest('.k-knob'); if (row) row.style.opacity = on ? '0.42' : ''; };
+  dim('ablate', S.knobs.head === 'prev' || S.knobs.head === 'rand');
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'w07-stripe', num: '13', week: 7, kind: 'weekly',
+  title: 'The stripe',
+  subtitle: 'Repeat a random sentence and one head lights a diagonal stripe: an induction head.',
+  back2d: '#week-07',
+  film: 'w7-induction',
+  plinth: { r: 2.62, h: 0.14 },
+
+  knobs: [
+    { id: 'n', type: 'range', label: { 1: 'Letters before the repeat', 2: 'seq_len (random letters)', 3: 'seq_len' },
+      min: 4, max: NMAX, step: 1, value: 8, fmt: (v) => String(Math.round(v)) },
+    { id: 'head', type: 'select', label: { 1: 'Which head', 2: 'Head', 3: 'layer.head' }, value: 'ind',
+      options: [['ind', { 1: '1.0 · copy-ahead (induction)', 2: '1.0 · induction', 3: '1.0 · induction' }],
+        ['prev', { 1: '0.0 · look-back (previous token)', 2: '0.0 · previous-token', 3: '0.0 · prev-token' }],
+        ['rand', { 1: '0.1 · untrained (random)', 2: '0.1 · random weights', 3: '0.1 · random init' }]] },
+    { id: 'q', type: 'range', label: { 1: 'Asking row', 2: 'Query row (tap a row)', 3: 'dest position' },
+      min: 0, max: NP - 1, step: 1, value: 12, fmt: (v) => String(Math.round(v)) },
+    { id: 'fresh', type: 'toggle', label: { 1: 'No repeat: fresh letters', 2: 'No repeat (fresh 2nd half)', 3: 'second half ≠ first' }, value: false },
+    { id: 'ablate', type: 'toggle', label: { 1: 'Knock out head 0.0', 2: 'Zero-ablate 0.0', 3: 'z[0.0] = 0' }, value: false },
+    { id: 'reseed', type: 'button', label: { 1: 'New random letters', 2: 'New random letters', 3: 'New seed' },
+      onClick: (S) => { S.state.seed = (S.state.seed * 7 + 11) % 997; compute(S); refresh(S, true); K.toast(`letters: ${S.state.A.tokens.slice(1, S.knobs.n + 1).map(tokName).join(' ')}`); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.seed = 3;
+    st.hNow = null;
+    // floor tiles + pillars: one instanced mesh each (NP x NP)
+    const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+    st.floor = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.95 }), NP * NP);
+    st.floor.receiveShadow = true; st.floor.frustumCulled = false;
+    st.pillars = new THREE.InstancedMesh(box, new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.55, metalness: 0.02 }), NP * NP);
+    st.pillars.castShadow = true; st.pillars.receiveShadow = true; st.pillars.frustumCulled = false;
+    for (let i = 0; i < NP * NP; i++) { st.floor.setColorAt(i, PAL.floorOk); st.pillars.setColorAt(i, PAL.plaster); }
+    st.slab = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), K.mat.plaster('#ece5d8'));
+    st.slab.castShadow = true; st.slab.receiveShadow = true;
+    S.root.add(st.slab, st.floor, st.pillars);
+    // rails with letters
+    st.cvFront = document.createElement('canvas'); st.cvLeft = document.createElement('canvas');
+    const aniso = S.renderer ? S.renderer.capabilities.getMaxAnisotropy() : 1;
+    const mkTex = (cv) => { const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = Math.min(8, aniso); return t; };
+    st.texFront = mkTex(st.cvFront); st.texLeft = mkTex(st.cvLeft);
+    const railMat = K.mat.brass();
+    st.front = new THREE.Mesh(new THREE.BoxGeometry(1, 0.07, 1), railMat);
+    st.left = new THREE.Mesh(new THREE.BoxGeometry(1, 0.07, 1), railMat);
+    for (const m of [st.front, st.left]) { m.castShadow = true; m.receiveShadow = true; }
+    const topMat = (tex) => new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, transparent: true });
+    st.frontTop = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), topMat(st.texFront));
+    st.leftTop = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), topMat(st.texLeft));
+    st.frontTop.rotation.x = -Math.PI / 2; st.leftTop.rotation.x = -Math.PI / 2;
+    st.frontTop.receiveShadow = true; st.leftTop.receiveShadow = true;
+    S.root.add(st.front, st.left, st.frontTop, st.leftTop);
+    // tap a row (pillars, floor or the left rail) to choose the query
+    const onTap = (hit) => {
+      const p = S.root.worldToLocal(hit.point.clone());
+      const gm = st.gm; const i = Math.floor((p.z - (GZ - G / 2)) / gm.c);
+      if (i >= 0 && i < gm.L) { st.showArcs = true; S.setKnob('q', i, { silent: true }); setQ(S, i); }
+    };
+    K.pick(st.pillars, onTap); K.pick(st.floor, onTap); K.pick(st.leftTop, onTap); K.pick(st.slab, onTap);
+    // chosen-row frame
+    const fr = new THREE.Group();
+    const bar = (w, d, x, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.014, d), K.mat.brass()); m.position.set(x, 0, z); fr.add(m); };
+    bar(1, 0.03, 0, -0.5); bar(1, 0.03, 0, 0.5); bar(0.012, 1, -0.5, 0); bar(0.012, 1, 0.5, 0);
+    st.rowFrame = fr; S.root.add(fr);
+    // loss wall + the "blind guess" line
+    st.lossBars = new THREE.InstancedMesh(box, new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.5 }), NP);
+    st.lossBars.castShadow = true; st.lossBars.receiveShadow = true; st.lossBars.frustumCulled = false;
+    for (let i = 0; i < NP; i++) st.lossBars.setColorAt(i, new THREE.Color(C.grad));
+    st.guess = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 1, 8), K.mat.brass());
+    st.guess.rotation.x = Math.PI / 2;
+    S.root.add(st.lossBars, st.guess);
+    // detector rings (square brass frames round a cell)
+    const ringShape = new THREE.Shape(); ringShape.moveTo(-0.5, -0.5); ringShape.lineTo(0.5, -0.5); ringShape.lineTo(0.5, 0.5); ringShape.lineTo(-0.5, 0.5); ringShape.closePath();
+    const hole = new THREE.Path(); hole.moveTo(-0.39, -0.39); hole.lineTo(-0.39, 0.39); hole.lineTo(0.39, 0.39); hole.lineTo(0.39, -0.39); hole.closePath();
+    ringShape.holes.push(hole);
+    const ringGeo = new THREE.ExtrudeGeometry(ringShape, { depth: 0.035, bevelEnabled: false }).rotateX(-Math.PI / 2);
+    st.ringMesh = new THREE.InstancedMesh(ringGeo, K.mat.brass(), NP);
+    st.ringMesh.frustumCulled = false; st.ringMesh.castShadow = true;
+    S.root.add(st.ringMesh);
+    // arcs: amber (induction head), teal (previous-token head and its stamp), grey (random head)
+    const mk = (h) => { const a = makeArc(h); S.root.add(a.group); a.show(false); return a; };
+    st.arcs = { ind: [mk(C.prob), mk(C.prob)], prev: [mk(C.aux), mk(C.aux)], rand: [mk('#8f877a'), mk('#8f877a')], stamp: [mk(C.aux)] };
+    // labels
+    st.read = K.label([0, 0, 0], '', { cls: 'readout', anchor: 'bottom', dy: -8 });
+    st.note = K.label([0, 0, 0], '', { cls: 'note', anchor: 'bottom', dy: -6 });
+    st.tagKeys = K.label([0, 0, 0], { 1: 'looked at →', 2: 'keys →', 3: 'src (key) →' }, { cls: 'tag', anchor: 'right', dx: -4, dy: 12 });
+    st.tagQ = K.label([0, 0, 0], { 1: 'asking ↓', 2: 'queries ↓', 3: 'dest (query) ↓' }, { cls: 'tag', anchor: 'bottom', dx: 0, dy: -4 });
+    st.tagLoss = K.label([0, 0, 0], { 1: 'surprise', 2: 'loss per token', 3: '−log p(next)' }, { cls: 'tag', anchor: 'bottom', dy: -4 });
+    st.tagGuess = K.label([0, 0, 0], { 1: 'blind-guess line', 2: 'guessing: ln 26', 3: 'ln 26 = 3.258' }, { cls: 'tag', anchor: 'left', dx: 8, dy: 0 });
+    st.fig = K.figure();
+    st.fig.group.visible = false;
+    S.root.add(st.fig.group);
+  },
+
+  rebuild(S, id) {
+    const st = S.state, ch = new Set(S.changed || []);
+    if (id === 'q') { setQ(S, S.knobs.q); return; }
+    const needCompute = id === '*' || ch.has('n') || ch.has('fresh') || ch.has('ablate') || !st.A;
+    if (needCompute) compute(S);
+    syncQKnob(S);
+    placeRails(S);
+    dimKnobs(S);
+    if (id === '*') { st.q = S.knobs.q; refresh(S, true); return; }
+    if (id === 'head' || id === 'ablate' || id === 'fresh') { refresh(S, false); return; }
+    refresh(S, true);
+  },
+
+  frame(S, t, dt) {
+    const st = S.state, a = st.anim;
+    if (!a) return false;
+    if (a.t0 == null) a.t0 = t;
+    const u = Math.min(1, (t - a.t0) / 0.5), e = 1 - Math.pow(1 - u, 3);
+    const h = new Float32Array(a.to.length);
+    for (let i = 0; i < h.length; i++) h[i] = a.from[i] + (a.to[i] - a.from[i]) * e;
+    st.hNow = h;
+    paintGrid(S);
+    if (u >= 1) { st.anim = null; st.hNow = a.to; paintGrid(S); readouts(S); return false; }
+    return true;
+  },
+
+  onTier(S) { readouts(S); },
+
+  solids(S) {
+    const st = S.state, gm = st.gm, L = gm.L, P = st.A.heads[S.knobs.head];
+    const s = 1;   // world units; JSCAD is z-up: (x, y, z)_three = (x, z, -y)_jscad
+    const out = [J.primitives.cuboid({ size: [G + 0.04, G + 0.04, 0.05], center: [GX, -GZ, 0.025] })];
+    for (let i = 0; i < L; i++) for (let j = 0; j <= i; j++) {
+      const h = P[i][j] * HMAX;
+      if (h < 0.02) continue;
+      out.push(J.primitives.cuboid({ size: [gm.c * 0.72 * s, gm.c * 0.72 * s, h], center: [gm.x(j), -gm.z(i), 0.05 + h / 2] }));
+    }
+    for (let q = 0; q < L - 1; q++) {
+      const h = Math.max(0.02, st.A.loss[q] * LOSS_K);
+      out.push(J.primitives.cuboid({ size: [0.13, gm.c * 0.7, h], center: [gm.lossX, -gm.z(q), h / 2] }));
+    }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**Rows ask, columns answer.** Each row is one letter asking "who should I look at?"; pillar height is how much. A row\'s pillars add up to 1. The future (dark squares) is walled off.',
+        2: '**An attention pattern is a grid.** Row = query (the token asking), column = key (the token looked at), pillar = softmax weight, so every row sums to 1; above the diagonal is masked. Input: BOS, 8 random letters, then the same 8 again.',
+        3: '`cache["pattern", layer][head]` is `[dest, src]`; rows sum to 1 over src ≤ dest. Input: ARENA\'s `generate_repeated_tokens` (BOS + seq_len random tokens, twice), letters as tokens. A hand-built 2-layer attention-only toy: weights hand-set, maths real.',
+      },
+      cam: CAM.over,
+      set: { n: 8, head: 'ind', q: 12, fresh: false, ablate: false },
+      enter(S) { scene(S, { note: 'rows', tags: true, arcs: false, noteAt: [GX + 0.9, 1.2, GZ - 1.0] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**This head always looks one step back.** Every letter looks at the letter just before it: a wall of pillars hugging the diagonal. Now each spot knows "who came right before me".',
+        2: '**Head 0.0 is a previous-token head.** Its query and key read only positions, and its QK is a shift: score 5 when key = query − 1, else 0. Softmax turns that into 0.90 to 0.99, less on later rows (more keys share the rest). Its OV copies the letter it looks at.',
+        3: 'QK reads positions only (added to Q and K, not the stream: ARENA\'s attn-only-2l uses "shortformer" embeddings): score(i, j) = 5·[j = i − 1], so A[i, i−1] = e⁵/(e⁵ + i). OV writes the attended token into a PREV block. ARENA\'s `prev_attn_detector` flags their 0.7.',
+      },
+      cam: CAM.top,
+      set: { n: 8, head: 'prev', q: 12, fresh: false, ablate: false },
+      enter(S) { scene(S, { note: 'prev', noteAt: [GX + 0.7, 0.9, GZ - 1.05] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**"Last time I saw this letter, that one came next."** On the repeat, each letter looks at the letter just after its earlier copy: a stripe 7 back. First half: no copy yet, so it rests on BOS.',
+        2: '**Head 1.0 is an induction head.** Its query is the current letter; its key is the letter **before** each position. So on the repeat it lands just after the earlier copy, seq_len − 1 = 7 back, and copies that letter forward as its guess. No copy: it parks on BOS.',
+        3: 'score(i, j) = 8·PREV_j[tok_i] + 4·[j = BOS], PREV_j being 0.0\'s output at j. Stripe at src = dest − (seq_len − 1); OV copies the key\'s own token to the logits (×5), so the loss falls on the repeat. In ARENA\'s attn-only-2l: heads 1.4 and 1.10.',
+      },
+      cam: CAM.stripe,
+      set: { n: 8, head: 'ind', q: 12, fresh: false, ablate: false },
+      enter(S) { scene(S, { note: 'stripe', figure: 'point', figAt: [-2.05, 0, 1.05], face: [0, 0.5, 1.2], at: [-0.6, 0.6, 0.5], noteAt: [GX + 0.8, 1.1, GZ - 0.9] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Two heads, relay style.** Teal: head 0.0 stamps each spot with the letter before it. Amber: head 1.0 finds the stamp matching its own letter and reads the letter sitting there. Knock out 0.0: no stripe.',
+        2: '**K-composition.** Teal: layer 0 writes "the letter before me was X" into each spot. Amber: a later X asks "whose previous letter was X?", finds that spot and copies its letter. One layer can\'t: a key only knows its own letter. Knock out 0.0 and the stripe dies.',
+        3: '1.0\'s W_K reads the subspace 0.0\'s W_OV writes: K-composition. The score needs tok(j − 1), which only an earlier head can place at j (ARENA: "why couldn\'t an induction head form in a 1L model?"). Zero-ablating 0.7 kills 1.4\'s score in ARENA; here see the note.',
+      },
+      cam: CAM.rail,
+      set: { n: 8, head: 'ind', q: 12, fresh: false, ablate: false },
+      enter(S) { scene(S, { note: 'relay', relay: true, noteAt: [GX - 0.9, 1.05, GZ + 0.7] }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Your exercise: turn a picture into a number.** Average the pillars inside the brass squares and you get the induction score. Above 0.4, call it an induction head. The same trick finds the other kinds.',
+        2: '**Detectors.** `prev_attn_detector` averages the sub-diagonal; `induction_attn_detector` averages the stripe 7 back (brass squares); both flag a head above 0.4. Then `induction_score_hook` scores every head at once with a hook. Pick other heads in Knobs.',
+        3: '`pattern.diagonal(dim1=-2, dim2=-1, offset=1-seq_len)`, then a mean over batch and position (`einops.reduce`) into `induction_score_store[hook.layer(), :]`. The diagonal also holds 2 first-half cells: (n−1, BOS) and (n, 1).',
+      },
+      cam: CAM.top,
+      set: { n: 8, head: 'ind', q: 12, fresh: false, ablate: false },
+      enter(S) { scene(S, { note: 'detect', rings: 'ind', arcs: false, noteAt: [GX + 0.75, 0.9, GZ - 1.05] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Why it matters: it predicts what it has never seen.** Red bars are its surprise per letter. First time through: pure guessing. On the repeat the surprise collapses. That is learning inside the prompt.',
+        2: '**In-context learning.** Red = per-token loss (−`get_log_probs`). First half ≈ ln 26 = 3.26 nats, a blind guess; on the repeat it drops, though no weights changed. Olsson et al. 2022 saw induction heads appear suddenly in training, with a bump in the loss curve.',
+        3: 'ARENA prints `log_probs[:seq_len].mean()` vs `log_probs[seq_len:].mean()` (note). Olsson et al. 2022: induction heads form in a phase change (ARENA: "from about 2B to 4B tokens") that coincides with a jump in the in-context learning score.',
+      },
+      cam: CAM.loss,
+      set: { n: 8, head: 'ind', q: 12, fresh: false, ablate: false },
+      enter(S) { scene(S, { note: 'loss', lossTag: true, arcs: false, figure: 'cheer', figAt: [1.95, 0, 1.55], face: [0, 0.5, 0], noteAt: [GX + G / 2 + 0.2, 1.35, GZ - 0.5] }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Still argued: how much is this trick?** In small models induction heads clearly do the copying; in big ones many mechanisms mix, and the share is open. It changes nothing in this week\'s code.',
+        2: 'Current method: find heads by the stripe, confirm by ablation (Olsson et al. 2022: causal in small attention-only models, correlational in big ones). Emerging: Yin & Steinhardt 2025 find few-shot learning leans more on "function vector" heads. Your exercise is unaffected.',
+        3: 'Olsson et al. 2022: induction heads drive most in-context learning (causal in small attn-only models, correlational at scale). Yin & Steinhardt 2025: function-vector heads matter more for few-shot ICL; many begin as induction heads. Your tools don\'t change.',
+      },
+      cam: CAM.wide,
+      set: { n: 8, head: 'ind', q: 12, fresh: false, ablate: false },
+      enter(S) { scene(S, { figure: 'shrug', figAt: [1.05, 0, 2.02], face: [4.6, 0.5, 7.6], arcs: false }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Your phone finishing a name you typed earlier. A detective: "last time the dog barked, the thief came next." Any "seen this before, here\'s what followed".',
+        2: 'Copy-what-followed-last-time is everywhere: autocomplete, compression (LZ77 points back to an earlier copy), few-shot prompts. It returns in week 8: IOI\'s induction heads help spot the repeated name (ARENA [1.4.1]).',
+        3: 'Induction is a learned lookup: match on the previous token (K-composition), copy the value (OV). Relatives: LZ77 back-references, n-gram copying, fuzzy induction in translation; in GPT-2 small\'s IOI circuit, ARENA lists induction heads 5.5, 5.8, 5.9, 6.9.',
+      },
+      cam: CAM.over,
+      set: { n: 8, head: 'ind', q: 12, fresh: false, ablate: false },
+      enter(S) { scene(S, { relay: true }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'Make the random part 10 letters long. How far back from the diagonal does the stripe sit?',
+        2: 'seq_len = 10. The induction stripe sits how many keys left of the diagonal?',
+        3: 'seq_len = 10: which offset does `induction_attn_detector` read?' },
+      options: [{ t: '9 back', ok: true }, { t: '10 back' }, { t: '1 back' }, { t: '11 back' }],
+      why: { 1: 'The earlier copy is 10 back, but the head looks at the letter AFTER that copy: one step forward, so 9 back.',
+        2: 'Same letter 10 back; the head wants the one after it, so key = query − 9. In general the offset is seq_len − 1.',
+        3: '`diagonal(-seq_len + 1)` = `diagonal(-9)`: src = dest − 9, the token after the previous occurrence of dest\'s token.' },
+      show(S) { S.setKnobs({ n: 10, head: 'ind', q: 15, fresh: false, ablate: false }); scene(S, { note: 'offset', rings: 'ind', arcs: true, noteAt: [GX + 0.75, 0.9, GZ - 1.05] }); return S.fly(CAM.top); } },
+    { q: { 1: 'The second half is 8 brand-new letters (no repeat). Does the copy-ahead head still light a stripe?',
+        2: 'No repeat: the second half is fresh random tokens. What does the induction head do there?',
+        3: '`fresh` second half (no repeated tokens): induction score of 1.0?' },
+      options: [{ t: 'No stripe: it rests on BOS', ok: true }, { t: 'Same stripe' }, { t: 'A stripe 1 back' }, { t: 'It spreads evenly' }],
+      why: { 1: 'It hunts for an earlier copy of its letter. There is none, so it rests on the start token, like the first half.',
+        2: 'Its key asks "was the letter before you the same as mine?" Nothing matches, so the BOS sink (score 4) wins every row. The loss stays at guessing.',
+        3: 'No key has PREV_j[tok_i] > 0, so scores are 4 at BOS vs ~0: A[i, 0] = e⁴/(e⁴ + i). Score ≈ 0.10, mostly the one BOS cell, A[n−1, 0], lying on that diagonal.' },
+      show(S) { S.setKnobs({ n: 8, head: 'ind', q: 12, fresh: true, ablate: false }); scene(S, { note: 'stripe', arcs: true, noteAt: [GX + 0.8, 1.1, GZ - 0.9] }); return S.fly(CAM.over); } },
+    { q: { 1: 'The look-back head, row 5. Which letter gets the tallest pillar?',
+        2: 'Previous-token head 0.0, query row 5. Where is its biggest weight?',
+        3: '0.0, dest = 5: argmax over src?' },
+      options: [{ t: 'Key 4, the letter just before', ok: true }, { t: 'Key 5, itself' }, { t: 'Key 0, BOS' }, { t: 'Spread evenly over 0 to 5' }],
+      why: { 1: 'It always looks one step back: row 5 looks at key 4, nearly all of its attention.',
+        2: 'Its QK scores key = query − 1 at 5 and everything else at 0, so key 4 gets e⁵/(e⁵ + 5) ≈ 0.97.',
+        3: 'A[5, 4] = e⁵/(e⁵ + 5) = 0.967: one score of 5 against five zeros, exactly what the readout computes.' },
+      show(S) { S.setKnobs({ n: 8, head: 'prev', q: 5, fresh: false, ablate: false }); scene(S, { note: 'prev', arcs: true, noteAt: [GX + 0.7, 0.9, GZ - 1.05] }); return S.fly(CAM.top); } },
+    { q: { 1: 'Which layer has to hold the look-back head?',
+        2: 'For the induction circuit to work, where must the previous-token head be?',
+        3: 'Why can\'t a 1-layer attention-only model form an induction head?' },
+      options: [{ t: 'An earlier layer than the induction head', ok: true }, { t: 'The same layer' }, { t: 'A later layer' }, { t: 'Any layer works' }],
+      why: { 1: 'The stamp has to be written before anyone can read it: the look-back head works first, the copy-ahead head reads its stamps after.',
+        2: 'The induction head\'s keys read what 0.0 wrote. Heads in one layer run in parallel on the same input, so the writer must sit in an earlier layer.',
+        3: 'In one layer a score sees only the query\'s and key\'s own tokens (and positions). Keying on the token BEFORE the key needs it moved into the key\'s spot first: K-composition, across layers.' },
+      show(S) { S.setKnobs({ n: 8, head: 'ind', q: 12, fresh: false, ablate: false }); scene(S, { note: 'layers', relay: true, noteAt: [GX - 0.9, 1.05, GZ + 0.7] }); return S.fly(CAM.rail); } },
+    { q: { 1: 'Knock out the look-back head (set its output to zero). What happens to the stripe?',
+        2: 'Zero-ablate head 0.0. What happens to 1.0\'s induction score?',
+        3: '`head_zero_ablation_hook` on 0.0: effect on 1.0\'s `induction_attn_detector` score?' },
+      options: [{ t: 'The stripe vanishes', ok: true }, { t: 'Nothing: 1.0 is in another layer' }, { t: 'The stripe gets sharper' }, { t: 'The stripe moves 1 step' }],
+      why: { 1: 'The copy-ahead head was reading the look-back head\'s stamps. No stamps, nothing to match, so it rests on BOS.',
+        2: 'Its keys read 0.0\'s output; with that zeroed every match score is 0 and the BOS sink wins. ARENA finds the same: ablating 0.7 drops 1.4\'s score from ~0.68 to near 0.',
+        3: 'PREV ≡ 0 ⇒ score(i, j) = 4·[j = 0]: the stripe is gone and loss returns to ≈ ln 26. ARENA\'s `ablation_induction_score` shows 0.7 as the one L0 head 1.4 depends on.' },
+      show(S) { S.setKnobs({ n: 8, head: 'ind', q: 12, fresh: false, ablate: true }); scene(S, { note: 'relay', relay: true, noteAt: [GX + 0.8, 1.1, GZ - 0.9] }); return S.fly(CAM.over); } },
+    { q: { 1: 'On the repeat, one letter is still a blind guess. Which?',
+        2: 'Which second-half prediction does the induction head still get wrong?',
+        3: 'Which element of `log_probs[seq_len:]` stays ≈ ln 26?' },
+      options: [{ t: 'The first letter of the repeat', ok: true }, { t: 'The last letter' }, { t: 'None of them' }, { t: 'Every other letter' }],
+      why: { 1: 'At the end of the first half nothing says the letters will start over, so the first repeated letter is a pure guess.',
+        2: 'Predicting the repeat\'s first letter happens at the last first-half letter, which has no earlier copy of itself. Only from then on can the stripe work.',
+        3: '`log_probs[seq_len]` is predicted at position seq_len, whose token is new, hence ≈ −ln 26. `get_ablation_scores` averages only the last seq_len − 1: exactly the predictable ones.' },
+      show(S) { S.setKnobs({ n: 8, head: 'ind', q: 8, fresh: false, ablate: false }); scene(S, { note: 'guess', lossTag: true, lossHi: 8, arcs: true, noteAt: [GX + G / 2 + 0.2, 1.35, GZ - 0.5] }); return S.fly(CAM.loss); } },
+  ],
+
+  where: { 1: 'Anything that goes "seen this before, and here is what came next": phone autocomplete, a detective\'s hunch, finishing a friend\'s catchphrase.',
+    2: 'Copy-what-followed-last-time shows up in autocomplete, LZ77 compression, few-shot prompting, and in week 8\'s IOI circuit, where induction heads help spot the repeated name.',
+    3: 'A learned lookup: key on the previous token (K-composition), copy the value (OV). Cousins: LZ77 back-references, n-gram copying, fuzzy/translation induction, IOI\'s induction heads 5.5, 5.8, 5.9, 6.9.' },
+  links: [
+    { label: 'Film · W7 induction heads', href: '../../intuition/films/w7-induction.html' },
+    { label: 'Film · induction, deep', href: '../../intuition/films/deep-w07-induction.html' },
+    { label: 'Week 7 pack', href: '../../index.html#week-07' },
+    { label: 'Demo · induction heads & patching', href: '../../index.html#demo/induction-heads-patching' },
+    { label: 'Case · induction heads', href: '../../index.html#cases/induction-heads' },
+    { label: 'Case · QK and OV circuits', href: '../../index.html#cases/qk-ov-circuits' },
+    { label: 'Map · induction head', href: '../../index.html#map/node=induction-heads' },
+    { label: 'Map · previous-token head', href: '../../index.html#map/node=previous-token-head' },
+    { label: 'Map · induction score', href: '../../index.html#map/node=induction-score' },
+    { label: 'Map · attention pattern', href: '../../index.html#map/node=attention-pattern' },
+    { label: 'Map · K-composition', href: '../../index.html#map/node=k-composition' },
+  ],
+  remix: 'Build a single-file three.js scene of an attention pattern as a field of amber pillars (rows = queries, columns = keys, height = softmax weight) on a plaster slab, for BOS + 8 random letters repeated twice. Compute it with a real 2-layer attention-only transformer with hand-set weights: layer 0 head 0.0 scores key = query − 1 at 5 using positions only and copies the attended token into a PREV subspace; layer 1 head 1.0 has query = current token, key = PREV (K-composition), a BOS sink at score 4, and copies the key\'s token to the logits. Show the diagonal stripe at offset seq_len − 1, ARENA\'s detector scores (diagonal means), red per-token loss bars that drop on the repeat, arcs over the letter rail for one query, and toggles for "no repeat" and "zero-ablate 0.0".',
+  credit: 'Setup, detectors and metrics from ARENA [1.2] (generate_repeated_tokens, prev/induction_attn_detector, induction_score_hook, head_zero_ablation_hook, get_log_probs); the toy model is hand-built (weights set by hand, forward pass real). Induction heads: Elhage et al. 2021 (A Mathematical Framework) and Olsson et al. 2022 (In-context Learning and Induction Heads); Yin & Steinhardt 2025 for the contested beat. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

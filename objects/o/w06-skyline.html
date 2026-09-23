@@ -1,0 +1,1079 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The skyline · Object Lessons</title>
+<meta name="description" content="The next word is a skyline of probabilities: temperature reshapes it, top-k and top-p fence it, a marble samples it. ARENA's TransformerSampler, live, on a toy model trained in the page.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+  /* word labels read like signs on skyscrapers (book-spine direction); punctuation and counts stay flat */
+  .k-label.k-word{writing-mode:vertical-rl; padding:4px 0 4px 1px; font:600 10.5px/1.1 var(--font); letter-spacing:.01em}
+  .k-label.k-word.k-flat{writing-mode:horizontal-tb; padding:2px 5px}
+  .k-label.k-word b{color:var(--k-data)}
+  .k-label.k-tag{min-width:0}           /* the kit's beat chip .k-tag sets min-width:52px; not for 3D tags */
+  .k-label.k-tag.k-brass{color:color-mix(in srgb, var(--k-brass) 80%, var(--ink))}
+  .k-label.k-tag.k-fn,.k-label.k-tag.k-row{text-transform:none; letter-spacing:0}   /* Python names keep their case */
+  .k-label.k-tag.k-fn code{font-size:11.5px}
+  .k-label.k-tag.k-row{font:700 11px/1.1 var(--font); color:var(--k-data)}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   11 · w06-skyline: "The skyline" (W6, ARENA [1.1] sampling)
+   Every probability on screen comes from the functions in the MATH block:
+   ARENA's TransformerSampler methods mirrored line for line, applied to the
+   logits of a toy word-pair model trained in this page. The block is
+   extracted and checked in node against an independent pure-Python
+   implementation (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* The toy model. Eight Aesop fables, retold in plain words (Aesop is public domain; the wording is ours).
+   Tokens are lower-case words plus "," and ".". */
+const FABLES = [
+  'A hungry fox saw ripe grapes hanging from a high vine. The fox jumped and jumped, but he could not reach them. At last he walked away and said, the grapes are sour.',
+  'The hare laughed at the slow tortoise. The tortoise said, let us run a race. The hare ran far ahead and lay down to sleep. The tortoise walked on and on, and when the hare woke up, the tortoise had won the race.',
+  'A thirsty crow found a pitcher with a little water in it. The water was too low for the crow to reach. So the crow dropped stones into the pitcher, one by one, until the water rose up and the crow could drink.',
+  'A lion caught a little mouse. The mouse said, let me go, and one day I will help you. The lion laughed and let the mouse go. Later the lion was caught in a net. The little mouse ran up and bit the net until the lion was free.',
+  'In the summer the grasshopper sang all day, while the ant carried corn to the nest. When the winter came, the grasshopper had no food, and the ant had plenty. Work today, said the ant, and eat tomorrow.',
+  'A boy kept the sheep near the village. For fun he cried wolf, and the men ran up to help. There was no wolf, and the boy laughed. One day a wolf came, and the boy cried wolf, but no one came, and the wolf ate the sheep.',
+  'A dog with a bone in his mouth crossed a river. He saw his own face in the water and thought it was another dog with a bigger bone. He snapped at it, and his bone fell into the river.',
+  'The wind and the sun argued about who was stronger. The wind blew hard at a man, but the man held his cloak tight. Then the sun shone warm, and the man took off his cloak. The sun had won.',
+];
+function tokenize(s) { return s.toLowerCase().replace(/([.,])/g, ' $1 ').split(/\s+/).filter(Boolean); }
+function buildCorpus(fables) {
+  const toks = fables.flatMap(tokenize);
+  const vocab = [...new Set(toks)];
+  const id = new Map(vocab.map((w, i) => [w, i]));
+  return { toks, vocab, id, ids: toks.map((w) => id.get(w)), V: vocab.length };
+}
+
+/* A word-pair (bigram) network: logits(prev) = W[prev] + b. Karpathy's makemore, part 1, with words.
+   Trained here, in the browser, by full-batch Adam on mean cross-entropy + lam * sum(W^2).
+   W starts at zero, so training is deterministic (no random init needed). */
+function trainBigram(corpus, { steps = 120, lr = 0.15, lam = 1e-5, beta1 = 0.9, beta2 = 0.999, eps = 1e-8 } = {}) {
+  const { V, ids } = corpus;
+  const cnt = new Float64Array(V * V), rowN = new Float64Array(V);
+  for (let i = 0; i + 1 < ids.length; i++) { cnt[ids[i] * V + ids[i + 1]] += 1; rowN[ids[i]] += 1; }
+  const N = ids.length - 1;
+  const W = new Float64Array(V * V), mW = new Float64Array(V * V), vW = new Float64Array(V * V);
+  const b = new Float64Array(V), mb = new Float64Array(V), vb = new Float64Array(V), gb = new Float64Array(V);
+  const e = new Float64Array(V);
+  const losses = [];
+  for (let t = 1; t <= steps; t++) {
+    let loss = 0;
+    gb.fill(0);
+    const c1 = 1 / (1 - beta1 ** t), c2 = 1 / (1 - beta2 ** t);
+    for (let a = 0; a < V; a++) {
+      const na = rowN[a];
+      if (!na) continue;
+      const o = a * V;
+      let mx = -Infinity;
+      for (let j = 0; j < V; j++) { const l = W[o + j] + b[j]; if (l > mx) mx = l; }
+      let z = 0;
+      for (let j = 0; j < V; j++) { const x = Math.exp(W[o + j] + b[j] - mx); e[j] = x; z += x; }
+      const lz = Math.log(z) + mx;
+      for (let j = 0; j < V; j++) {
+        const c = cnt[o + j], k = o + j;
+        if (c) loss -= c * (W[k] + b[j] - lz);
+        const g0 = (na * e[j] / z - c) / N;                  // d(mean CE)/d logit
+        gb[j] += g0;
+        const g = g0 + 2 * lam * W[k];
+        mW[k] = beta1 * mW[k] + (1 - beta1) * g;
+        vW[k] = beta2 * vW[k] + (1 - beta2) * g * g;
+        W[k] -= lr * (mW[k] * c1) / (Math.sqrt(vW[k] * c2) + eps);
+      }
+    }
+    for (let j = 0; j < V; j++) {
+      const g = gb[j];
+      mb[j] = beta1 * mb[j] + (1 - beta1) * g;
+      vb[j] = beta2 * vb[j] + (1 - beta2) * g * g;
+      b[j] -= lr * (mb[j] * c1) / (Math.sqrt(vb[j] * c2) + eps);
+    }
+    losses.push(loss / N);                                   // loss at the weights BEFORE step t
+  }
+  return { W, b, V, steps, losses, nParams: V * V + V, N };
+}
+function modelLogits(M, prev) {                              // model(input_ids)[0, -1]: depends on the last token only
+  const l = new Float64Array(M.V), o = prev * M.V;
+  for (let j = 0; j < M.V; j++) l[j] = M.W[o + j] + M.b[j];
+  return l;
+}
+
+/* ---- tensor helpers with torch semantics ---- */
+function softmax(l) {
+  let mx = -Infinity;
+  for (const x of l) if (x > mx) mx = x;
+  const p = new Float64Array(l.length);
+  let z = 0;
+  for (let i = 0; i < l.length; i++) { p[i] = Math.exp(l[i] - mx); z += p[i]; }
+  for (let i = 0; i < l.length; i++) p[i] /= z;
+  return p;
+}
+function log_softmax(l) {
+  let mx = -Infinity;
+  for (const x of l) if (x > mx) mx = x;
+  let z = 0;
+  for (const x of l) z += Math.exp(x - mx);
+  const lz = mx + Math.log(z);
+  return Float64Array.from(l, (x) => x - lz);
+}
+function argsortDesc(l) {                                     // logits.sort(descending=True, stable=True).indices
+  return Array.from(l, (_, i) => i).sort((i, j) => (l[j] - l[i]) || (i - j));
+}
+function cumsum(a) { const c = new Float64Array(a.length); let s = 0; for (let i = 0; i < a.length; i++) { s += a[i]; c[i] = s; } return c; }
+function searchsortedLeft(sorted, v) {                        // t.searchsorted(cumul_probs, v, side="left")
+  let lo = 0, hi = sorted.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < v) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+/* Categorical(logits=...).sample() with the uniform draw u made explicit: walk the cumulative
+   probabilities (inverse CDF). Same distribution as torch; the walk order is the display order. */
+function categorical(logitsKept, u) {
+  const p = softmax(logitsKept);
+  let s = 0;
+  for (let i = 0; i < p.length; i++) { s += p[i]; if (u < s) return i; }
+  return p.length - 1;                                        // u within rounding of 1
+}
+
+/* ---- ARENA [1.1] TransformerSampler, static methods, line for line ---- */
+function greedy_search(logits) {                              // logits.argmax().item(): first index of the max
+  let bi = 0;
+  for (let i = 1; i < logits.length; i++) if (logits[i] > logits[bi]) bi = i;
+  return bi;
+}
+function apply_temperature(logits, temperature) { return logits.map((x) => x / temperature); }
+function apply_frequency_penalty(input_ids, logits, freq_penalty) {
+  const d_vocab = logits.length;
+  const id_freqs = new Float64Array(d_vocab);                 // t.bincount(input_ids, minlength=d_vocab)
+  for (const t of input_ids) id_freqs[t] += 1;
+  return logits.map((x, i) => x - freq_penalty * id_freqs[i]);
+}
+function sample_basic(logits, u) {
+  const order = argsortDesc(logits);                          // walk tallest first (display order)
+  return order[categorical(Float64Array.from(order, (i) => logits[i]), u)];
+}
+function sample_top_k(logits, k, u) {
+  const top_k_token_ids = argsortDesc(logits).slice(0, k);    // logits.topk(k)
+  const top_k_logits = Float64Array.from(top_k_token_ids, (i) => logits[i]);
+  return top_k_token_ids[categorical(top_k_logits, u)];
+}
+function sample_top_p(logits, top_p, u, min_tokens_to_keep = 1) {
+  const indices = argsortDesc(logits);
+  const logits_sorted = Float64Array.from(indices, (i) => logits[i]);
+  const cumul_probs = cumsum(softmax(logits_sorted));
+  let n_keep = searchsortedLeft(cumul_probs, top_p) + 1;
+  n_keep = Math.max(n_keep, min_tokens_to_keep);
+  const keep_idx = indices.slice(0, n_keep);
+  const keep_logits = Float64Array.from(keep_idx, (i) => logits[i]);
+  return keep_idx[categorical(keep_logits, u)];
+}
+function sample_next_token(input_ids, logits, { temperature = 1.0, top_k = 0, top_p = 0.0, frequency_penalty = 0.0 } = {}, u = 0.5) {
+  if (!(temperature >= 0)) throw new Error('Temperature should be non-negative');
+  if (!(top_p >= 0 && top_p <= 1)) throw new Error('Top-p must be a probability');
+  if (!(top_k >= 0)) throw new Error('Top-k must be non-negative');
+  if (top_p !== 0 && top_k !== 0) throw new Error('At most one of top-p and top-k supported');
+  if (temperature === 0) return greedy_search(logits);
+  else if (temperature !== 1.0) logits = apply_temperature(logits, temperature);
+  if (frequency_penalty !== 0.0) logits = apply_frequency_penalty(input_ids, logits, frequency_penalty);
+  if (top_k > 0) return sample_top_k(logits, top_k, u);
+  if (top_p > 0.0) return sample_top_p(logits, top_p, u);
+  return sample_basic(logits, u);
+}
+
+/* ---- everything the skyline draws, from the same functions ----
+   order: ranks -> token ids, tallest first; pre: softmax of the final logits (before any fence);
+   nKeep: survivors (a prefix of order); fin: the renormalised probabilities actually sampled from. */
+function skyline(input_ids, raw, { temperature = 1.0, top_k = 0, top_p = 0.0, frequency_penalty = 0.0 } = {}) {
+  const V = raw.length;
+  if (temperature === 0) {                                    // greedy_search: argmax of the raw logits
+    const g = greedy_search(raw);
+    const order = argsortDesc(raw);
+    const pre = new Float64Array(V); pre[g] = 1;              // the T -> 0 limit of softmax(l / T)
+    return { mode: 'greedy', raw, logits: raw, order, pre, cumul: cumsum(Float64Array.from(order, (i) => pre[i])),
+      nKeep: 1, fin: Float64Array.of(1), choice: g };
+  }
+  let logits = raw;
+  if (temperature !== 1.0) logits = apply_temperature(logits, temperature);
+  if (frequency_penalty !== 0.0) logits = apply_frequency_penalty(input_ids, logits, frequency_penalty);
+  const order = argsortDesc(logits);
+  const pre = softmax(logits);
+  const cumul = cumsum(Float64Array.from(order, (i) => pre[i]));
+  let nKeep = V, mode = 'basic';
+  if (top_k > 0) { nKeep = Math.min(top_k, V); mode = 'topk'; }
+  else if (top_p > 0) { nKeep = Math.min(V, Math.max(1, searchsortedLeft(cumul, top_p) + 1)); mode = 'topp'; }
+  const fin = softmax(Float64Array.from(order.slice(0, nKeep), (i) => logits[i]));
+  return { mode, raw, logits, order, pre, cumul, nKeep, fin };
+}
+function pick(sk, u) {                                        // the marble: rank it lands on
+  if (sk.mode === 'greedy') return 0;
+  let s = 0;
+  for (let r = 0; r < sk.nKeep; r++) { s += sk.fin[r]; if (u < s) return r; }
+  return sk.nKeep - 1;
+}
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+/* TransformerSampler.sample: n new tokens, one uniform draw per token from the seed */
+function generate(M, prompt_ids, n, opts, seed) {
+  const rng = mulberry32(seed);
+  const ids = prompt_ids.slice();
+  const steps = [];
+  for (let i = 0; i < n; i++) {
+    const u = rng();
+    const sk = skyline(ids, modelLogits(M, ids[ids.length - 1]), opts);
+    const r = pick(sk, u);
+    const tok = sk.order[r];
+    steps.push({ sk, u, rank: r, tok, ctx: ids.slice() });
+    ids.push(tok);
+  }
+  return { ids, steps };
+}
+/* ARENA's beam_search with Beams.generate / Beams.filter (no end-of-text token in this toy,
+   so no beam terminates early). Candidates keep ARENA's order: beam-major, k per beam. */
+function beam_search(M, prompt_ids, num_return_sequences, num_beams, max_new_tokens) {
+  let beams = [{ lp: 0, toks: prompt_ids.slice() }];
+  const rows = [];
+  for (let s = 0; s < max_new_tokens; s++) {
+    const cand = [];
+    beams.forEach((B, bi) => {
+      const logprobs = log_softmax(modelLogits(M, B.toks[B.toks.length - 1]));
+      for (const j of argsortDesc(logprobs).slice(0, num_beams)) cand.push({ lp: B.lp + logprobs[j], toks: [...B.toks, j], parent: bi, tok: j, step: logprobs[j] });
+    });
+    const top = argsortDesc(Float64Array.from(cand, (c) => c.lp)).slice(0, num_beams);   // logprob_sums.topk(k)
+    rows.push({ cand, order: argsortDesc(Float64Array.from(cand, (c) => c.lp)), keep: top });
+    beams = top.map((i) => cand[i]);
+  }
+  return { best: beams.slice(0, num_return_sequences), rows };
+}
+const MATH = { FABLES, tokenize, buildCorpus, trainBigram, modelLogits, softmax, log_softmax, argsortDesc, cumsum,
+  searchsortedLeft, categorical, greedy_search, apply_temperature, apply_frequency_penalty, sample_basic, sample_top_k,
+  sample_top_p, sample_next_token, skyline, pick, mulberry32, generate, beam_search };
+// MATH-END
+
+/* ============================================================ the toy, trained right now */
+const CORPUS = buildCorpus(FABLES);
+const MODEL = trainBigram(CORPUS);                 // ~0.1-0.3 s: 120 full-batch Adam steps, deterministic
+const VOC = CORPUS.vocab, V = CORPUS.V;
+const enc = (s) => tokenize(s).map((w) => CORPUS.id.get(w));
+const PROMPTS = {                                  // every prompt is a phrase from the fables
+  said: 'at last he walked away and said ,',
+  day: 'one day the',
+  cried: 'the boy cried',
+  lion: 'the lion',
+  he: 'he',
+};
+
+/* ============================================================ display constants */
+const H = 3.6;                 // world height of probability 1 (heights are linear in p)
+const BH = 1.5;                // beam rows: height of the row's best candidate (exp(lp - lp_max) = 1)
+const NV = 12;                 // towers per row; slot 12 lumps the rest of the vocabulary
+const SLOT = 0.25, TW = 0.17, BENCH = 0.03;
+const ZF = 0.45, GAP = 0.22;   // front row; each earlier step one row further back
+const ZT = 0.98, XT0 = -1.52, LT = 3.04;           // the marble track
+const RS = 0.2;                // logit posts: world units per logit unit
+const MINH = 0.006;            // display floor so a p ~ 0 tower still reads as a tile
+const GEN_N = 10, BEAMS = 3, BEAM_STEPS = 4;
+const xOf = (r) => (r - NV / 2) * SLOT;
+const xBeam = (r, n) => (r - (n - 1) / 2) * SLOT;
+const COL = { amber: C.prob, rest: '#f3d49d', chosen: C.data, drop: '#e2dbcd', segA: '#e8a33d', segB: '#f4cb86',
+  segRest: '#f8e2bb', fan: '#c9a567', bead: '#c27d1c', cut: '#8a5a12', beadDrop: '#d9d1c3', rod: C.data, rodTip: C.brass };
+const CAM = {
+  front: { pos: [1.2, 3.5, 8.2], target: [0, 0.9, 0.3] },
+  low: { pos: [0.6, 2.2, 8.4], target: [0, 1.0, 0.3] },
+  marble: { pos: [2.6, 4.4, 6.8], target: [0, 0.5, 0.7] },
+  land: { pos: [2.2, 8.3, 6.5], target: [0, 1.3, -0.5], fit: 0.9 },
+  beam: { pos: [2.2, 4.4, 7.4], target: [0, 0.55, 0.1], fit: 1.35 },       // a close-up: the auto-fit frames the whole plinth
+};
+const f2 = (v) => v.toFixed(2).replace('-', '−');
+const f3 = (v) => v.toFixed(3).replace('-', '−');
+const pct = (v) => (v >= 0.995 ? '100%' : v >= 0.095 ? Math.round(v * 100) + '%' : v >= 0.001 ? (v * 100).toFixed(1) + '%' : '<0.1%');
+const qw = (w) => `‘${w}’`;
+const optsOf = (k) => ({ temperature: k.T, top_k: k.topk, top_p: k.topp, frequency_penalty: k.pen });
+const entropy = (p) => { let h = 0; for (const x of p) if (x > 0) h -= x * Math.log(x); return h; };
+const words = (ids) => ids.map((i) => VOC[i]).join(' ');
+function wrap(text, n = 34) {                     // hard-wrap long label lines on phones
+  const out = []; let line = '';
+  for (const w of text.split(' ')) { if (line && (line + ' ' + w).length > n) { out.push(line); line = w; } else line = line ? line + ' ' + w : w; }
+  if (line) out.push(line);
+  return out.join('\n');
+}
+const STATIC = () => ({ e: 0, lvl: null, d: 1, g: 1, f: 1, slide: 1 });
+const wait = (S, ms) => (S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)));
+
+/* ============================================================ rows (what gets drawn) */
+function sampleRow(sk, chosenRank) {
+  const items = [];
+  for (let r = 0; r < NV; r++) {
+    const tok = sk.order[r], kept = r < sk.nKeep;
+    items.push({ r, tok, word: VOC[tok], pre: sk.pre[tok], fin: kept ? sk.fin[r] : 0, kept, cum: sk.cumul[r], logit: sk.logits[tok] });
+  }
+  let pre = 0, fin = 0;
+  for (let r = NV; r < sk.order.length; r++) { pre += sk.pre[sk.order[r]]; if (r < sk.nKeep) fin += sk.fin[r]; }
+  items.push({ r: NV, rest: true, count: sk.order.length - NV, pre, fin, kept: sk.nKeep > NV, keptCount: Math.max(0, sk.nKeep - NV), cum: 1 });
+  return { kind: 'sample', sk, items, chosen: chosenRank == null ? -1 : Math.min(chosenRank, NV), chosenRank, ent: entropy(sk.pre) };
+}
+function beamRows(B) {                              // one row per step: the k*k candidates, best first
+  return B.rows.map((R) => {
+    const lpMax = R.cand[R.order[0]].lp;
+    const items = R.order.map((ci, r) => {
+      const c = R.cand[ci];
+      return { r, tok: c.tok, word: VOC[c.tok], pre: Math.exp(c.lp - lpMax), fin: Math.exp(c.lp - lpMax), kept: r < BEAMS, lp: c.lp, cand: c };
+    });
+    return { kind: 'beam', items, chosen: -1 };
+  });
+}
+function compute(S) {
+  const st = S.state, k = S.knobs;
+  st.prompt = enc(PROMPTS[k.ctx]);
+  if (st.mode === 'beam') {
+    st.beam = beam_search(MODEL, st.prompt, BEAMS, BEAMS, BEAM_STEPS);
+    st.rows = beamRows(st.beam).reverse();          // front row = the last step
+    st.front = null; st.gen = null;
+  } else {
+    const opts = optsOf(k);
+    st.gen = generate(MODEL, st.prompt, st.nGen, opts, k.seed);
+    const ids = st.gen.ids;
+    st.front = skyline(ids, modelLogits(MODEL, ids[ids.length - 1]), opts);
+    const rng = mulberry32(k.seed);                 // the next uniform draw of the same seed
+    for (let i = 0; i < st.nGen; i++) rng();
+    st.uNext = rng();
+    st.rows = [sampleRow(st.front, null)];
+    for (let i = st.gen.steps.length - 1; i >= 0; i--) st.rows.push(sampleRow(st.gen.steps[i].sk, st.gen.steps[i].rank));
+  }
+  st.landed = null;
+  st.marbleX = XT0 - 0.14;
+  fitProxy(S);
+}
+const rodsOn = (S) => S.knobs.rods && S.state.mode === 'sample' && S.state.nGen === 0;
+function rodHeights(S) {
+  const it = S.state.rows[0].items.slice(0, NV);
+  const lmin = Math.min(...it.map((x) => x.logit));
+  return it.map((x) => RS * (x.logit - lmin) + 0.06);
+}
+/* An invisible box that tells the kit's framing how big the object is right now (instanced
+   towers don't report their extent). Grows on knob changes; beats reframe from scratch. */
+function fitProxy(S, reframe = false) {
+  const st = S.state;
+  let top = 0;
+  const hs = st.mode === 'beam' ? BH : H;
+  for (const row of st.rows) for (const it of row.items) top = Math.max(top, hs * Math.max(it.pre, it.fin));
+  if (rodsOn(S)) top = Math.max(top, Math.min(H + 0.2, Math.max(...rodHeights(S))));
+  if (st.mode === 'sample' && st.front.mode === 'topp') top = Math.max(top, H);     // the running-total beads reach 1
+  top = Math.max(1.35, top + 0.3);
+  const back = ZF - (st.rows.length - 1) * GAP - 0.2, front = st.mode === 'sample' ? ZT + 0.06 : ZF + 0.25;
+  st.proxy.scale.set(3.4, top, front - back);
+  st.proxy.position.set(0, 0, (front + back) / 2);
+  st.proxy.updateMatrixWorld();
+  if (reframe || S.first) { st.fitTop = top; st.fitBack = back; return; }
+  if (top > st.fitTop + 0.05 || back < st.fitBack - 0.05) {
+    st.fitTop = Math.max(st.fitTop, top); st.fitBack = Math.min(st.fitBack, back);
+    S.stage.refit();
+  }
+}
+
+/* ============================================================ drawing */
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _c = new THREE.Color();
+const UP = new THREE.Vector3(0, 1, 0), _d = new THREE.Vector3();
+function put(mesh, i, x, y, z, sx, sy, sz, hex) {
+  mesh.setMatrixAt(i, _m.compose(_p.set(x, y, z), _q.identity(), _s.set(sx, sy, sz)));
+  if (hex != null) mesh.setColorAt(i, _c.set(hex));
+}
+function rodBetween(mesh, i, a, b, r, hex) {       // a thin cylinder from a to b
+  _d.subVectors(b, a); const len = _d.length();
+  _q.setFromUnitVectors(UP, _d.normalize());
+  mesh.setMatrixAt(i, _m.compose(_p.addVectors(a, b).multiplyScalar(0.5), _q, _s.set(r, len, r)));
+  if (hex != null) mesh.setColorAt(i, _c.set(hex));
+}
+function done(...meshes) { for (const m of meshes) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; } }
+
+function frontValue(it, A) {                      // animated probability shown by a front-row column
+  if (A.lvl != null) {                            // top-p: water poured tallest-first
+    const wet = Math.min(Math.max(A.lvl - (it.cum - it.pre), 0), it.pre);
+    return it.kept ? wet + (it.fin - wet) * A.g : wet * (1 - A.g);
+  }
+  const v = it.kept ? it.pre + (it.fin - it.pre) * A.g : it.pre * (1 - A.d);
+  return v * (1 - A.e);
+}
+
+function draw(S) {
+  const st = S.state, A = st.A, k = S.knobs;
+  if (!st.rows) return;
+  const beam = st.mode === 'beam';
+  let na = 0, nk = 0, nd = 0, nb = 0, nc = 0;
+  const front = st.rows[0];
+  const filt = !beam && (front.sk.mode === 'topk' || front.sk.mode === 'topp');
+  st.tops = [];
+  st.rows.forEach((row, j) => {
+    const z = j === 0 ? ZF : ZF - (j - 1 + A.slide) * GAP;
+    const grow = j === 0 ? A.slide : 1;
+    const n = row.items.length;
+    const w = beam ? n * SLOT + 0.08 : (NV + 1) * SLOT + 0.08;
+    put(st.bench, nb++, 0, 0, z, w, BENCH, 0.3);
+    row.items.forEach((it, r) => {
+      const x = beam ? xBeam(r, n) : xOf(r);
+      const v = j === 0 && !beam ? frontValue(it, A) : (it.kept ? it.fin : 0);
+      const h = Math.max(MINH, (beam ? BH : H) * v * grow);
+      let hex = it.rest ? COL.rest : COL.amber;
+      if (beam && !it.kept) hex = COL.drop;
+      if (!beam && (j > 0 ? row.chosen === r : st.landed != null && Math.min(st.landed, NV) === r)) hex = COL.chosen;
+      put(st.amber, na++, x, BENCH, z, TW, h, TW, hex);
+      if (j === 0) put(st.caps, nc++, x, BENCH + h, z, TW + 0.02, 0.012, TW + 0.02);
+      let top = h + (j === 0 ? 0.012 : 0);
+      if (j === 0 && filt) {                        // the glass tank: probability before the fence
+        const hg = Math.max(MINH, H * it.pre * grow);
+        if (it.kept) put(st.glassK, nk++, x, BENCH, z, TW + 0.04, hg + 0.004, TW + 0.04);
+        else put(st.glassD, nd++, x, BENCH, z, TW + 0.04, hg + 0.004, TW + 0.04);
+        top = Math.max(top, hg);
+      }
+      if (j === 0) st.tops[r] = { x, y: BENCH + top, z };
+    });
+  });
+  st.amber.count = na; st.glassK.count = nk; st.glassD.count = nd; st.bench.count = nb; st.caps.count = nc;
+  st.glassD.material.opacity = 0.2 - 0.12 * A.d;
+  done(st.amber, st.glassK, st.glassD, st.bench, st.caps);
+
+  // logit posts (blue), behind the front row: height = (logit - lowest drawn logit) * RS
+  const showRods = rodsOn(S);
+  st.rods.visible = showRods;
+  if (showRods) {
+    const hs = rodHeights(S);
+    hs.forEach((h, r) => put(st.rods, r, xOf(r), BENCH, ZF - 0.22, 0.02, Math.min(h, H + 0.2) * A.slide, 0.028, h > H + 0.2 ? COL.rodTip : COL.rod));
+    st.rods.count = NV; done(st.rods);
+  }
+
+  // top-k fence (or beam search's keep-k fence)
+  const nFence = beam ? BEAMS : front.sk && front.sk.mode === 'topk' ? front.sk.nKeep : 0;
+  st.fence.visible = nFence > 0 && A.f > 0.001;
+  if (st.fence.visible) {
+    const n = front.items.length;
+    const xa = (beam ? xBeam(0, n) : xOf(0)) - 0.16, xb = (beam ? xBeam(nFence - 1, n) : xOf(Math.min(nFence, NV) - 1)) + 0.16;
+    const hh = 0.3 * A.f, zz = [ZF - 0.17, ZF + 0.17];
+    const [p0, p1, p2, p3, rf, rb, rl, rr, lf, lb] = st.fence.children;
+    [[p0, xa, zz[0]], [p1, xb, zz[0]], [p2, xa, zz[1]], [p3, xb, zz[1]]].forEach(([m, x, z]) => { m.position.set(x, 0, z); m.scale.set(1, hh, 1); });
+    for (const [m, y] of [[rf, hh - 0.02], [lf, hh * 0.5]]) { m.position.set((xa + xb) / 2, y, zz[1]); m.scale.set(xb - xa, 1, 1); }
+    for (const [m, y] of [[rb, hh - 0.02], [lb, hh * 0.5]]) { m.position.set((xa + xb) / 2, y, zz[0]); m.scale.set(xb - xa, 1, 1); }
+    rl.position.set(xa, hh - 0.02, ZF); rr.position.set(xb, hh - 0.02, ZF);
+  }
+
+  // top-p: the running total (beads) and the water line at p
+  const topp = !beam && front.sk.mode === 'topp';
+  st.beads.visible = st.neck.mesh.visible = st.water.visible = topp;
+  st.pTag.show(topp && !st.tagsOn);
+  if (topp) {
+    const p = A.lvl ?? k.topp, nK = front.sk.nKeep, pts = [];
+    front.items.forEach((it, r) => {
+      const y = BENCH + H * it.cum;
+      const reached = it.cum - it.pre < p;
+      const hex = r === Math.min(nK - 1, NV) ? COL.cut : reached ? COL.bead : COL.beadDrop;
+      put(st.beads, r, xOf(r), y, ZF, 0.036, 0.036, 0.036, hex);
+      pts.push(new THREE.Vector3(xOf(r), y, ZF));
+    });
+    st.beads.count = front.items.length; done(st.beads);
+    st.neck.set(pts);
+    st.water.position.set(0, BENCH + H * p, ZF);
+    st.water.scale.set((NV + 1) * SLOT + 0.16, 0.02, 0.44);
+    st.pTag.move([xOf(NV) + 0.2, BENCH + H * p, ZF]).set(S.tier === 1 ? `water: ${Math.round(p * 100)}%` : `top_p ${f2(p)}`);
+  }
+
+  // the marble track: each kept word owns a stretch as wide as its final probability
+  const trackOn = !beam;
+  st.track.visible = st.segs.visible = st.fan.visible = st.marble.visible = trackOn;
+  if (trackOn) {
+    const sk = front.sk, nSeg = Math.min(sk.nKeep, NV);
+    let x = XT0, ns = 0;
+    const segOf = [];
+    for (let r = 0; r < nSeg; r++) segOf.push([r, sk.fin[r]]);
+    if (sk.nKeep > NV) segOf.push([NV, front.items[NV].fin]);
+    const landed = st.landed != null ? Math.min(st.landed, NV) : -1;
+    st.segX = [];
+    for (const [r, pr] of segOf) {
+      const w = pr * LT;
+      const hex = r === landed ? COL.chosen : r === NV ? COL.segRest : r % 2 ? COL.segB : COL.segA;
+      put(st.segs, ns, x + w / 2, 0.032, ZT, Math.max(0.002, w - 0.008), 0.02, 0.13, hex);
+      const top = st.tops[r];
+      rodBetween(st.fan, ns, _v1.set(x + w / 2, 0.05, ZT - 0.075), _v2.set(top.x, BENCH + 0.004, ZF + TW / 2 + 0.03), 0.0045, r === landed ? COL.chosen : COL.fan);
+      st.segX.push([r, x, x + w]);
+      x += w; ns++;
+    }
+    st.segs.count = ns; st.fan.count = ns; done(st.segs, st.fan);
+    st.marble.position.set(st.marbleX, 0.042 + 0.07, ZT);
+    st.marble.rotation.z = -(st.marbleX - XT0) / 0.07;
+  }
+  labels(S);
+  S.invalidate();
+}
+const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3();
+
+/* ============================================================ labels */
+function labels(S) {
+  const st = S.state, T = S.tier, k = S.knobs, beam = st.mode === 'beam';
+  const front = st.rows[0];
+  const n = front.items.length;
+  for (let r = 0; r <= NV; r++) {
+    const L = st.words[r], it = front.items[r], top = st.tops[r];
+    if (!it || !top) { L.show(false); continue; }
+    L.show(st.wordsOn);
+    st.anch[r].position.set(top.x, top.y + 0.02, top.z);
+    const punct = it.word === ',' || it.word === '.';
+    const filt = !beam && (front.sk.mode === 'topk' || front.sk.mode === 'topp');
+    let t = it.rest ? (filt ? (it.keptCount ? `+${it.count}, ${it.keptCount} kept` : `+${it.count}, all dropped`) : `+${it.count} others`) : it.word;
+    const chosen = !beam && st.landed != null && Math.min(st.landed, NV) === r;
+    if (chosen) t = `**${t}**`;
+    L.el.classList.toggle('k-flat', punct);
+    L.set(t);
+  }
+  // earlier steps: the chosen word at the left end of each row
+  st.rowTags.forEach((L, j) => {
+    const row = st.rows[j + 1];
+    if (!row || beam || !st.rowTagsOn || innerWidth < 600) { L.show(false); return; }   // phones: rows sit ~8 px apart; the readout carries the words
+    L.show(true);
+    L.move([xOf(NV) + 0.16, 0.02, ZF - j * GAP - GAP]);    // right end: the peaks stand at the left
+    const it = row.items[row.chosen];
+    L.set(it.rest ? VOC[row.sk.order[row.chosenRank]] : it.word);
+  });
+  // readout: the text so far and the sampler settings
+  if (st.readoutOn) {
+    st.readout.show(true);
+    if (beam) {
+      const b = st.beam.best[0];
+      st.readout.set(`**${wrap(words(b.toks))}**\n` + (T === 1 ? 'the most likely of 3 half-sentences' : `best beam · Σ log p = ${f2(b.lp)}`));
+    } else {
+      const ids = st.gen.ids, np = st.prompt.length;
+      const said = words(ids.slice(0, np)), gen = words(ids.slice(np));
+      const text = wrap(said + (gen ? ' ' + gen : ''));
+      const sk = front.sk;
+      let set;
+      if (sk.mode === 'greedy') set = T === 1 ? 'temperature 0: always the tallest' : 'T = 0 → greedy_search (argmax)';
+      else {
+        set = T === 1 ? `temperature ${k.T.toFixed(2)}` : `T ${k.T.toFixed(2)}`;
+        if (sk.mode === 'topk') set += T === 1 ? ` · keep ${k.topk} tallest` : ` · top_k ${k.topk}`;
+        if (sk.mode === 'topp') set += T === 1 ? ` · keep top ${Math.round(k.topp * 100)}% (${sk.nKeep} words)` : ` · top_p ${f2(k.topp)} → ${sk.nKeep} kept`;
+        if (k.pen) set += T === 1 ? ` · repeat penalty ${k.pen}` : ` · penalty ${k.pen}`;
+      }
+      st.readout.set(`**${text}**\n${set}`);
+    }
+  } else st.readout.show(false);
+  note(S);
+  // ARENA method tags (beat 6)
+  const tg = st.arenaTags;
+  const on = !!st.tagsOn && !beam;
+  tg.temp.show(on && rodsOn(S)); tg.topp.show(on && front.sk && front.sk.mode === 'topp'); tg.basic.show(on); tg.greedy.show(on);
+  if (on) {
+    tg.temp.move([xOf(0) - 0.05, BENCH + Math.min(H + 0.2, rodHeights(S)[0]) + 0.06, ZF - 0.22]);
+    tg.topp.move([xOf(7), BENCH + H * (k.topp || 0.9) - 0.03, ZF]);
+    tg.basic.move([0, 0.06, ZT]);
+    tg.greedy.move([st.tops[0].x, st.tops[0].y + 0.05, ZF]);
+  }
+}
+
+function note(S) {
+  const st = S.state, T = S.tier, k = S.knobs, mode = st.noteMode;
+  const N = st.note;
+  if (!mode) { N.show(false); return; }
+  N.show(true);
+  N.move(st.noteAt || [1.35, BENCH + H * 0.72, ZF]);
+  const front = st.rows[0], sk = front.sk;
+  const it = front.items;
+  let t = '';
+  if (mode === 'logits') {
+    t = T === 1 ? `blue posts: scores · amber: chances\n${qw(it[0].word)} ${pct(it[0].pre)} · ${qw(it[1].word)} ${pct(it[1].pre)} · all ${V} add to 100%`
+      : T === 2 ? `logits (blue) → softmax → p (amber)\n${qw(it[0].word)} ${f2(it[0].pre)} · ${qw(it[1].word)} ${f2(it[1].pre)} · Σp over ${V} words = 1`
+      : `p = softmax(W[prev] + b) over ${V} words\ntoy bigram, ${MODEL.nParams.toLocaleString('en')} weights, ${MODEL.steps} Adam steps here:\nloss ${f2(MODEL.losses[0])} → ${f2(MODEL.losses[MODEL.steps - 1])} nats`;
+  } else if (mode === 'ratio') {
+    if (sk.mode === 'greedy') t = T === 1 ? 'temperature 0: the tallest takes it all' : 'T = 0: greedy_search, the argmax takes all';
+    else {
+      const a = it[0];
+      let b = it[1];                              // ties are common in a toy: skip to the first real gap
+      for (let r = 1; r < NV; r++) if (Math.abs(sk.raw[a.tok] - sk.raw[it[r].tok]) >= 0.1) { b = it[r]; break; }
+      const gap = sk.raw[a.tok] - sk.raw[b.tok], r = a.pre / b.pre;
+      if (k.pen) t = `${qw(a.word)} is ${r.toFixed(2)}× as likely as ${qw(b.word)}\n(the repeat penalty shifts scores too)`;
+      else t = T === 1 ? `${qw(a.word)} is ${r.toFixed(1)}× as likely as ${qw(b.word)}\nat temperature ${k.T.toFixed(2)} (at 1: ${Math.exp(gap).toFixed(1)}×)`
+        : T === 2 ? `logit gap ${qw(a.word)} − ${qw(b.word)} = ${f2(gap)}\nodds e^(${f2(gap)} / ${k.T.toFixed(2)}) = ${r.toFixed(2)}×`
+        : `p_a/p_b = e^((l_a − l_b)/T) = e^(${f2(gap)}/${k.T.toFixed(2)}) = ${r.toFixed(3)}\nentropy H = ${f2(front.ent)} nats (T up → H up)`;
+    }
+  } else if (mode === 'greedy') {
+    const g = generate(MODEL, st.prompt, 12, { temperature: 0 }, 1);
+    const said = words(g.ids.slice(0, st.prompt.length)), gen = words(g.ids.slice(st.prompt.length));
+    t = (T === 1 ? 'greedy (always the tallest):\n' : 'greedy_search, 12 tokens:\n') + wrap(`${said} ${gen}`, 30);
+  } else if (mode === 'marble') {
+    if (st.landed == null) t = T === 1 ? 'roll the marble (Knobs)' : 'the marble waits: Sample one word';
+    else {
+      const r = st.landed, tok = sk.order[r], p = r < sk.nKeep ? sk.fin[r] : 0;
+      t = T === 1 ? `stopped ${Math.round(st.uLand * 100)}% along the track\n→ ${qw(VOC[tok])}, a ${pct(p)} chance`
+        : T === 2 ? `u = ${f3(st.uLand)} → ${qw(VOC[tok])} (p = ${f3(p)})`
+        : `u = ${f3(st.uLand)}: first rank i with u < Σ p≤i\n→ rank ${r + 1}, ${qw(VOC[tok])}, p = ${f3(p)}`;
+    }
+  } else if (mode === 'renorm') {
+    if (sk.mode !== 'topk') t = 'set top-k in Knobs';
+    else {
+      let s = 0; for (let r = 0; r < sk.nKeep; r++) s += sk.pre[sk.order[r]];
+      t = T === 1 ? `kept ${sk.nKeep} of ${V} words, ${pct(s)} of the chances\neach grows ×${(1 / s).toFixed(2)}: ${qw(it[0].word)} ${pct(it[0].pre)} → ${pct(it[0].fin)}`
+        : T === 2 ? `top_k ${sk.nKeep}: kept mass Σp = ${f2(s)}\neach survivor × 1/${f2(s)} = ${(1 / s).toFixed(2)}\n${qw(it[0].word)} ${f3(it[0].pre)} → ${f3(it[0].fin)}`
+        : `softmax(topk logits) = p_i / Σ_kept p\nΣ_kept = ${f3(s)} → ${qw(it[0].word)} ${f3(it[0].pre)} → ${f3(it[0].fin)}`;
+    }
+  } else if (mode === 'nucleus') {
+    const p = k.topp || 0.9;
+    const cnt = (w) => skyline([CORPUS.id.get(w)], modelLogits(MODEL, CORPUS.id.get(w)), { ...optsOf(k), top_k: 0, top_p: p, frequency_penalty: 0 });
+    const lastW = VOC[st.gen.ids[st.gen.ids.length - 1]], last = qw(lastW);
+    const here = sk.mode === 'topp' ? sk.nKeep : cnt(lastW).nKeep;
+    const lead = (s2, tier) => `${qw(VOC[s2.order[0]])} ${tier === 1 ? pct(s2.pre[s2.order[0]]) : 'p = ' + f2(s2.pre[s2.order[0]])}`;
+    const cmp = ['the', 'cried'].filter((w) => w !== lastW).map((w) => [w, cnt(w)]);
+    const extra = (tier) => cmp.map(([w, s2]) => `${tier === 1 ? 'after ' : ''}${qw(w)}: ${s2.nKeep}${s2.nKeep === 1 ? ` (${lead(s2, tier)})` : ''}`).join(' · ');
+    const hereLead = here === 1 && sk.mode === 'topp' ? ` (${lead(sk, T)})` : '';
+    t = T === 1 ? `keep the top ${Math.round(p * 100)}%: ${here} word${here === 1 ? '' : 's'} after ${last}${hereLead}\n${extra(1)}`
+      : T === 2 ? `top_p ${f2(p)}: ${here} kept after ${last}${hereLead}\n${extra(2)}`
+      : `n_keep = searchsorted(cumsum, ${f2(p)}) + 1\n${last}: ${here} · ${extra(3)} (T ${k.T.toFixed(2)})`;
+  } else if (mode === 'story') {
+    const ents = st.rows.slice(1).map((r) => r.ent).reverse();
+    const sure = ents.filter((h) => h < 0.7).length;
+    t = T === 1 ? `blue = the word the marble chose\n${sure} of ${ents.length} steps were near-certain peaks`
+      : T === 2 ? `each row: one step's skyline, chosen in blue\npeaks (entropy < 0.7 nats): ${sure} of ${ents.length}`
+      : `entropy per step, oldest first (nats):\n${ents.map((h) => h.toFixed(1)).join(' · ')}`;
+  } else if (mode === 'beam') {
+    const g = generate(MODEL, st.prompt, BEAM_STEPS, { temperature: 0 }, 1);
+    let lpg = 0; g.steps.forEach((s) => { lpg += log_softmax(modelLogits(MODEL, s.ctx[s.ctx.length - 1]))[s.tok]; });
+    const lines = st.beam.best.map((b) => `${f2(b.lp)}  ${words(b.toks.slice(st.prompt.length))}`);
+    t = (T === 1 ? `3 beams (higher = likelier):\n` : `beams, Σ log p:\n`) + lines.join('\n') + `\ngreedy: ${f2(lpg)}  ${words(g.ids.slice(st.prompt.length))}`;
+  } else if (mode === 'penalty') {
+    const g = generate(MODEL, st.prompt, 12, optsOf(k), 1);
+    t = (T === 1 ? `repeat penalty ${k.pen} at temperature 0:\n` : `T = 0 returns before apply_frequency_penalty:\n`) + wrap(words(g.ids), 30);
+  } else if (mode === 'arena') {
+    t = T === 1 ? 'one function per part, run in order\nfor every new word' : 'sample_next_token runs them in order';
+  }
+  N.set(t);
+}
+
+/* ============================================================ animations */
+function tw(S, my, ms, fn, ez) { return S.tween(ms, (x) => { if (S.state.animId === my) { fn(x); draw(S); } }, ez); }
+const alive = (S, my) => S.state.animId === my;
+function newAnim(S) { const st = S.state; st.animId++; st.A = STATIC(); return st.animId; }
+function toSample(S) {
+  const st = S.state;
+  if (st.mode !== 'sample') { st.mode = 'sample'; st.nGen = 0; compute(S); }
+}
+async function rollStep(S, my, { ms = 1300, pause = 420, commit = true } = {}) {
+  const st = S.state;
+  const u = st.uNext, r = pick(st.front, u), xEnd = XT0 + u * LT;
+  st.landed = null;
+  if (!S.shot) await tw(S, my, ms, (x) => { st.marbleX = XT0 - 0.14 + (xEnd - XT0 + 0.14) * x; }, K.ease.out);
+  if (!alive(S, my)) return false;
+  st.marbleX = xEnd; st.landed = r; st.uLand = u; draw(S);
+  if (st.fig.group.visible) st.fig.pose('point', { at: st.marble.getWorldPosition(new THREE.Vector3()) });
+  if (!commit) return true;
+  await wait(S, pause);
+  if (!alive(S, my)) return false;
+  st.nGen += 1; compute(S); st.A.slide = 0; draw(S);
+  await tw(S, my, S.shot ? 0 : 480, (x) => { st.A.slide = x; });
+  return alive(S, my);
+}
+async function rollOne(S, commit = true) {
+  const st = S.state;
+  toSample(S);
+  if (st.nGen >= GEN_N && commit) { st.nGen = 0; compute(S); }
+  const my = newAnim(S); draw(S);
+  return rollStep(S, my, { commit });
+}
+async function genTen(S) {
+  const st = S.state;
+  toSample(S);
+  if (st.nGen >= GEN_N) { st.nGen = 0; compute(S); }
+  const my = newAnim(S);
+  if (S.shot) { st.nGen = GEN_N; compute(S); draw(S); return; }
+  draw(S);
+  while (st.nGen < GEN_N && alive(S, my)) if (!(await rollStep(S, my, { ms: 560, pause: 120 }))) return;
+}
+async function fenceIn(S) {
+  const st = S.state, my = newAnim(S);
+  if (S.shot) { draw(S); return; }
+  Object.assign(st.A, { f: 0, d: 0, g: 0 }); draw(S);
+  await tw(S, my, 650, (x) => { st.A.f = x; }, K.ease.back);
+  await tw(S, my, 450, (x) => { st.A.d = x; });
+  await tw(S, my, 700, (x) => { st.A.g = x; }, K.ease.out);
+}
+async function pour(S) {
+  const st = S.state, my = newAnim(S), p = S.knobs.topp;
+  if (S.shot || !st.front || st.front.mode !== 'topp') { draw(S); return; }
+  Object.assign(st.A, { d: 0, g: 0 });
+  await tw(S, my, 380, (x) => { st.A.e = x; });
+  if (!alive(S, my)) return;
+  Object.assign(st.A, { e: 0, lvl: 0 });
+  await tw(S, my, 1600, (x) => { st.A.lvl = p * x; }, K.ease.inOut);
+  await tw(S, my, 700, (x) => { st.A.d = x; st.A.g = x; }, K.ease.out);
+  if (alive(S, my)) { st.A = STATIC(); draw(S); }
+}
+async function sweepT(S, a, b, ms = 1500) {
+  const st = S.state, my = newAnim(S);
+  if (S.shot) { S.setKnob('T', b); return; }
+  st.sweeping = true;
+  S.setKnob('T', a);
+  await S.tween(ms, (x) => {
+    if (!alive(S, my)) return;
+    const v = Math.round((a + (b - a) * x) * 20) / 20;
+    if (v !== S.knobs.T) S.setKnob('T', v);
+  });
+  st.sweeping = false;
+  if (alive(S, my) && S.knobs.T !== b) S.setKnob('T', b);
+}
+function beamMode(S) {
+  const st = S.state;
+  st.mode = 'beam'; compute(S);
+  const my = newAnim(S);
+  if (S.shot) { draw(S); return Promise.resolve(); }
+  st.A.f = 0; draw(S);
+  return tw(S, my, 650, (x) => { st.A.f = x; }, K.ease.back);
+}
+
+/* scene configuration shared by beats and predictions */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.noteMode = o.note || null;
+  st.noteAt = o.noteAt || null;
+  st.tagsOn = !!o.tags;
+  st.wordsOn = o.words !== false;
+  st.rowTagsOn = o.rowTags !== false;
+  st.readoutOn = o.readout !== false;
+  if (o.fig) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || [1.92, 0, 0.92], o.face || [0, 0.6, 0.7]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.fig, { at: o.at });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+}
+function setMode(S, mode, nGen = 0) {
+  const st = S.state;
+  st.mode = mode; st.nGen = nGen;
+  compute(S); fitProxy(S, true);
+  newAnim(S); draw(S);
+}
+
+/* ============================================================ run() */
+run({
+  id: 'w06-skyline', num: '11', week: 6, kind: 'weekly',
+  title: 'The skyline',
+  subtitle: 'The next word is a skyline of probabilities; temperature reshapes it, top-k and top-p fence it.',
+  back2d: '#week-06',
+  film: 'w6-sampling',
+  plinth: { r: 1.9, h: 0.14 },
+
+  knobs: [
+    { id: 'ctx', type: 'select', wide: true, label: { 1: 'The story so far', 2: 'Prompt', 3: 'prompt (input_ids)' }, value: 'said',
+      options: [['said', '“…walked away and said ,”'], ['day', '“one day the”'], ['cried', '“the boy cried”'], ['lion', '“the lion”'], ['he', '“he”']] },
+    { id: 'T', type: 'range', label: { 1: 'Temperature', 2: 'Temperature T', 3: 'temperature' }, min: 0, max: 3, step: 0.05, value: 1,
+      fmt: (v) => (v === 0 ? '0 · greedy' : v.toFixed(2)) },
+    { id: 'topk', type: 'range', label: { 1: 'Keep the k tallest', 2: 'Top-k (0 = off)', 3: 'top_k' }, min: 0, max: 12, step: 1, value: 0,
+      fmt: (v) => (v ? String(v) : 'off') },
+    { id: 'topp', type: 'range', label: { 1: 'Keep the top share', 2: 'Top-p (0 = off)', 3: 'top_p' }, min: 0, max: 1, step: 0.05, value: 0,
+      fmt: (v) => (v ? v.toFixed(2) : 'off') },
+    { id: 'pen', type: 'range', label: { 1: 'Repeat penalty', 2: 'Frequency penalty', 3: 'frequency_penalty' }, min: 0, max: 2, step: 0.1, value: 0,
+      fmt: (v) => (v ? v.toFixed(1) : 'off') },
+    { id: 'seed', type: 'range', label: { 1: 'Luck (seed)', 2: 'Seed', 3: 'seed' }, min: 1, max: 99, step: 1, value: 7, fmt: (v) => String(v) },
+    { id: 'rods', type: 'toggle', label: { 1: 'Show the scores', 2: 'Show logits (blue)', 3: 'show logits / T' }, value: true },
+    { id: 'roll', type: 'button', label: { 1: 'Roll the marble', 2: 'Sample one word', 3: 'sample_next_token' }, onClick: (S) => { scene(S, { note: 'marble', fig: false }); rollOne(S); } },
+    { id: 'gen', type: 'button', label: { 1: 'Write 10 words', 2: 'Generate 10', 3: 'sample(…, 10)' }, onClick: (S) => { scene(S, { note: 'story' }); genTen(S); } },
+    { id: 'beam', type: 'button', label: { 1: 'Beam search', 2: 'Beam search, 3 beams', 3: 'beam_search(num_beams=3)' }, onClick: (S) => { scene(S, { note: 'beam' }); beamMode(S); } },
+    { id: 'clear', type: 'button', label: { 1: 'Start over', 2: 'Start over', 3: 'reset' }, onClick: (S) => { scene(S, { note: 'logits' }); setMode(S, 'sample', 0); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.mode = 'sample'; st.nGen = 0; st.animId = 0; st.A = STATIC(); st.fitTop = 0; st.fitBack = 0;
+    st.wordsOn = true; st.rowTagsOn = true; st.readoutOn = true;
+    const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+    const inst = (geo, mat, n, shadow = true) => {
+      const m = new THREE.InstancedMesh(geo, mat, n);
+      m.castShadow = shadow; m.receiveShadow = true; m.frustumCulled = false; m.userData.noFit = true;
+      for (let i = 0; i < n; i++) { m.setMatrixAt(i, _m.identity()); m.setColorAt(i, _c.set('#ffffff')); }
+      m.count = 0; S.root.add(m); return m;
+    };
+    st.amber = inst(box, K.mat.paint('#ffffff'), 13 * 12);
+    st.glassK = inst(box, K.mat.glass(C.prob, 0.2), 14, false);
+    st.glassD = inst(box, K.mat.glass('#9b8f7a', 0.2), 14, false);
+    st.bench = inst(box, K.mat.plaster('#efe8dc'), 12);
+    st.caps = inst(box, K.mat.brass(), 14);
+    st.rods = inst(new THREE.CylinderGeometry(1, 1, 1, 12).translate(0, 0.5, 0), K.mat.paint('#ffffff'), NV);
+    st.segs = inst(box, K.mat.paint('#ffffff'), 14);
+    st.fan = inst(new THREE.CylinderGeometry(1, 1, 1, 6), K.mat.paint('#ffffff'), 14, false);
+    st.beads = inst(new THREE.SphereGeometry(1, 16, 12), K.mat.paint('#ffffff'), 14, false);
+    st.neck = K.tube([], COL.bead, 0.006, { shadow: false });
+    st.neck.mesh.userData.noFit = true; S.root.add(st.neck.mesh);
+    st.water = new THREE.Mesh(box.clone().translate(0, -0.5, 0), K.mat.glass(C.prob, 0.38));
+    st.water.userData.noFit = true; st.water.renderOrder = 2; S.root.add(st.water);
+    st.track = new THREE.Mesh(new THREE.BoxGeometry(LT + 0.12, 0.024, 0.19).translate(XT0 + LT / 2, 0.012, ZT), K.mat.brass());
+    st.track.receiveShadow = true; st.track.castShadow = true; S.root.add(st.track);
+    st.marble = new THREE.Mesh(new THREE.SphereGeometry(0.07, 24, 16), K.mat.brass());
+    st.marble.castShadow = true; S.root.add(st.marble);
+    // fence: 4 posts, 4 top rails, 2 lower rails
+    st.fence = new THREE.Group();
+    const brass = K.mat.brass();
+    const post = new THREE.CylinderGeometry(0.018, 0.018, 1, 10).translate(0, 0.5, 0);
+    for (let i = 0; i < 4; i++) { const m = new THREE.Mesh(post, brass); m.castShadow = true; st.fence.add(m); }
+    const railX = new THREE.BoxGeometry(1, 0.02, 0.02), railZ = new THREE.BoxGeometry(0.02, 0.02, 0.34);
+    for (const g of [railX, railX, railZ, railZ, railX, railX]) { const m = new THREE.Mesh(g, brass); m.castShadow = true; st.fence.add(m); }
+    S.root.add(st.fence);
+    // framing proxy (never drawn)
+    st.proxy = new THREE.Mesh(box, new THREE.MeshBasicMaterial({ visible: false }));
+    S.root.add(st.proxy);
+    // labels
+    st.anch = []; st.words = [];
+    for (let r = 0; r <= NV; r++) {
+      const a = new THREE.Object3D(); S.root.add(a); st.anch.push(a);
+      st.words.push(K.label(a, '', { cls: 'word', anchor: 'bottom', dy: -3 }));
+    }
+    st.rowTags = [];
+    for (let j = 0; j < GEN_N; j++) st.rowTags.push(K.label([0, 0, 0], '', { cls: 'tag row', anchor: 'left', dx: 4, dy: 0 }));
+    st.readout = K.label([xOf(0) - 0.1, BENCH + H * 0.98, ZF], '', { cls: 'readout', anchor: 'bottom', dy: -4 });
+    st.note = K.label([0, 0, 0], '', { cls: 'note', anchor: 'bottom', dy: -4 });
+    st.pTag = K.label([0, 0, 0], '', { cls: 'tag brass', anchor: 'left', dx: 6, dy: 0 });
+    st.pTag.show(false);
+    st.arenaTags = {
+      temp: K.label([0, 0, 0], '`apply_temperature`', { cls: 'tag brass fn', anchor: 'bottom', dy: -4, prio: 2 }),
+      topp: K.label([0, 0, 0], '`sample_top_p` keeps the wet ones', { cls: 'tag brass fn', anchor: 'top', dy: 6, prio: 2 }),
+      basic: K.label([0, 0, 0], '`sample_basic`: the marble', { cls: 'tag brass fn', anchor: 'top', dy: 8, prio: 2 }),
+      greedy: K.label([0, 0, 0], 'T = 0 → `greedy_search`', { cls: 'tag brass fn', anchor: 'bottom', dy: -18, prio: 2 }),
+    };
+    for (const L of Object.values(st.arenaTags)) L.show(false);
+    st.fig = K.figure();
+    st.fig.group.visible = false;
+    S.root.add(st.fig.group);
+  },
+
+  rebuild(S, id) {
+    const st = S.state, k = S.knobs;
+    if (id === 'topk' && k.topk > 0 && k.topp > 0) { S.setKnob('topp', 0, { silent: true }); K.toast('ARENA\'s sample_next_token takes top_k or top_p, not both'); }
+    if (id === 'topp' && k.topp > 0 && k.topk > 0) { S.setKnob('topk', 0, { silent: true }); K.toast('ARENA\'s sample_next_token takes top_k or top_p, not both'); }
+    if (id === '*') {                              // a beat or a prediction: its enter()/show() sets the mode
+      st.animId++; st.A = STATIC();
+      if (S.knobs.topk > 0 && S.knobs.topp > 0) S.setKnob('topp', 0, { silent: true });
+      compute(S); fitProxy(S, true); draw(S);
+      return;
+    }
+    if (!st.sweeping) { st.animId++; st.A = STATIC(); }
+    if (id === 'rods') { if (k.rods && st.nGen > 0) K.toast('The scores stand behind the first skyline: Start over to see them'); fitProxy(S); draw(S); return; }
+    if (id === 'ctx') st.nGen = 0;
+    if (st.mode === 'beam' && id !== 'ctx') { st.mode = 'sample'; st.nGen = 0; if (st.noteMode === 'beam') st.noteMode = 'logits'; }
+    compute(S); draw(S);
+  },
+
+  frame() { return false; },
+  onTier(S) { labels(S); },
+
+  solids(S) {
+    const st = S.state, out = [];
+    const cube = (x, z, w, d, h) => J.primitives.cuboid({ size: [w, d, h], center: [x, -z, h / 2] });
+    const back = ZF - (st.rows.length - 1) * GAP - 0.2;
+    out.push(J.primitives.cuboid({ size: [4.4, ZT + 0.2 - back, 0.04], center: [0, -((ZT + 0.2 + back) / 2), -0.02] }));
+    st.rows.forEach((row, j) => {
+      const z = ZF - j * GAP, n = row.items.length;
+      row.items.forEach((it, r) => {
+        const h = Math.max(0.02, (st.mode === 'beam' ? BH : H) * (it.kept ? it.fin : 0));
+        const x = st.mode === 'beam' ? xBeam(r, n) : xOf(r);
+        out.push(cube(x, z, TW, TW, h));
+      });
+    });
+    if (st.mode === 'sample') out.push(J.primitives.cuboid({ size: [LT + 0.12, 0.19, 0.03], center: [XT0 + LT / 2, -ZT, 0.015] }));
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**Every possible next word is a tower.** The model gives each word a score (blue posts), then turns the scores into chances that add up to 1 (amber towers). Taller means likelier.',
+        2: '**Logits → softmax → skyline.** The model outputs one score per word (logits, blue). Softmax exponentiates and divides by the total, p = e^l / Σ e^l, so the amber towers sum to 1. The toy here is a word-pair model trained in your browser on 8 retold fables; GPT-2 does this over 50,257 tokens.',
+        3: '`logits = model(input_ids)[0, -1]`; here the toy `W[prev] + b`, trained in-page by full-batch Adam (live note). p = `logits.softmax(-1)` over the whole vocab; the 13th tower lumps the tail. Posts show l − min(l) over the 12 drawn: softmax ignores a shift. GPT-2 d_vocab = 50,257.',
+      },
+      cam: CAM.front,
+      set: { ctx: 'said', T: 1, topk: 0, topp: 0, pen: 0, rods: true },
+      enter(S) { scene(S, { note: 'logits' }); setMode(S, 'sample', 0); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Temperature stretches or squashes the scores.** Cool (below 1): gaps grow and the leader wins more often. Hot (above 1): gaps shrink and the towers level out. Same order, different confidence.',
+        2: '`apply_temperature` divides every logit by T. Two words\' odds are p_a/p_b = e^((l_a − l_b)/T): at T = 0.5 each gap counts double, at T = 2 half (live by the towers). Physics calls this the Boltzmann distribution; T is the heat that lets unlikely states happen.',
+        3: 'p_i ∝ exp(l_i/T): the Boltzmann (Gibbs) distribution with energy −l_i. T → 0 gives the argmax, T → ∞ the uniform; the order never changes, only the ratios, and the entropy rises with T. ARENA: `return logits / temperature`.',
+      },
+      cam: CAM.low,
+      set: { ctx: 'said', T: 1, topk: 0, topp: 0, pen: 0, rods: true },
+      enter(S) { scene(S, { note: 'ratio' }); setMode(S, 'sample', 0); sweepT(S, 1, 0.5); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Greedy always takes the tallest tower**, so it says the same thing forever (see its loop). **Sampling rolls a marble** down a track where each word owns a stretch as wide as its chance.',
+        2: 'Greedy (`temperature=0` → `greedy_search`, the argmax) is deterministic and loops, as this toy shows. Sampling draws u between 0 and 1 and takes the word whose stretch of track contains u, so each word is picked with exactly its probability. Same seed, same story.',
+        3: '`Categorical(logits=logits).sample()` draws from the same distribution as the inverse CDF: the first i with u < Σ_{j≤i} p_j (walked tallest-first here, so the track mirrors the skyline). `sample` appends each token to `input_ids` and runs the model again.',
+      },
+      cam: CAM.marble,
+      set: { ctx: 'day', T: 1, topk: 0, topp: 0, pen: 0, rods: false, seed: 7 },
+      enter(S) {
+        scene(S, { note: 'greedy', fig: 'point', at: [XT0 + 0.9, 0.1, ZT], noteAt: [0.9, BENCH + H * 0.62, ZF] });
+        setMode(S, 'sample', 0);
+        rollOne(S, false);
+      } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Top-k builds a fence around the k tallest.** Everything outside is dropped. The survivors grow so that they still add up to 1, each keeping its share of what is left.',
+        2: '`sample_top_k` keeps the k largest logits and samples among them. Survivors are renormalised, p_i / Σ_kept p (live). It cuts off the long tail of silly words, but k is fixed: too many when the model is sure, too few when it isn\'t.',
+        3: '`top_k_logits, top_k_token_ids = logits.topk(k)`, then `Categorical(logits=top_k_logits)`: staying in log space renormalises for free, since a softmax over the kept logits is p_i / Σ_kept p. GPT-2\'s unicorn sample used top_k = 40 (Fan et al. 2018).',
+      },
+      cam: CAM.front,
+      set: { ctx: 'said', T: 1, topk: 3, topp: 0, pen: 0, rods: false },
+      enter(S) { scene(S, { note: 'renorm' }); setMode(S, 'sample', 0); fenceIn(S); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Top-p pours a fixed amount of water into the towers, tallest first.** Every tower that gets wet is kept; dry ones drop out. A sure model keeps 1 word, an unsure one keeps many.',
+        2: '`sample_top_p` (nucleus sampling, Holtzman et al. 2019): sort, add up the probabilities (the rising beads), and keep words up to and including the first one that takes the total past p. After ‘the’ that is many words, after ‘cried’ one (live). It adapts; top-k can\'t.',
+        3: '`n_keep = t.searchsorted(cumul_probs, top_p, side="left").item() + 1` keeps the first cumulative sum ≥ p (inclusive), then `max(n_keep, min_tokens_to_keep)`; sample from `logits[keep_idx]`. The nucleus is the smallest prefix with mass ≥ p.',
+      },
+      cam: CAM.front,
+      set: { ctx: 'said', T: 1, topk: 0, topp: 0.9, pen: 0, rods: false },
+      enter(S) { scene(S, { note: 'nucleus', noteAt: [1.1, BENCH + H * 0.45, ZF] }); setMode(S, 'sample', 0); pour(S); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**This is ARENA\'s exercise.** You write each part as a small function: the score stretcher, the fence, the water, the marble. One function runs them, in order, for every new word.',
+        2: '`sample_next_token` runs, in order: T == 0 → `greedy_search`; `apply_temperature`; `apply_frequency_penalty`; then `sample_top_k` or `sample_top_p` (never both: it asserts); else `sample_basic`. `sample` calls it in a loop, appending each token.',
+        3: 'Order matters: the penalty `logits - freq_penalty * t.bincount(input_ids, minlength=d_vocab)` comes after `/ temperature`, so it isn\'t divided by T, and T == 0 returns before it, so greedy ignores it. top_k=0 and top_p=0.0 mean off.',
+      },
+      cam: CAM.front,
+      set: { ctx: 'said', T: 0.7, topk: 0, topp: 0.9, pen: 0, rods: true },
+      enter(S) { scene(S, { note: null, tags: true, words: false }); setMode(S, 'sample', 0); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Ten words, ten skylines.** Each chosen word (blue) pushes its skyline back a row. Tall lone peaks: the model was sure. Flat stretches: it was choosing among many.',
+        2: 'Generation is this loop: skyline, roll, append, repeat. Each row is one step\'s distribution with the chosen word in blue. Peaks (after ‘cried’) mean low entropy, so any sampler agrees; the flats (after ‘the’) are where temperature and top-p change the story.',
+        3: 'Per-step entropy H = −Σ p log p (live) says where decoding choices bite: at peaks every method agrees, on flats they diverge, and because generation is autoregressive one early flat choice reroutes everything after it (seed fixed).',
+      },
+      cam: CAM.land,
+      set: { ctx: 'cried', T: 1, topk: 0, topp: 0, pen: 0, rods: false, seed: 9 },
+      enter(S) { scene(S, { note: 'story', words: false, fig: 'think', figAt: [-1.95, 0, 0.95], face: [0, 0.5, -0.5], noteAt: [1.2, BENCH + H * 0.55, -1.2] }); setMode(S, 'sample', 0); genTen(S); } },
+
+    { tag: 'library',
+      cap: {
+        1: '**Beam search keeps the 3 best half-sentences, not just 1.** Each step it tries 3 next words for each, then keeps the 3 best overall. Good for translation, dull for chat.',
+        2: '`beam_search`: each step, every beam proposes its 3 best next words (9 candidates, one row) scored by the sum of log-probabilities, and the fence keeps the best 3. It finds likelier sentences than greedy, but likely isn\'t interesting, so chat models sample.',
+        3: '`Beams.generate`: `logprobs = model(tokens)[:, -1, :].log_softmax(-1)`, top-k per beam, sums add; `Beams.filter`: top-k over all k² candidates, EOS beams set aside (none in this toy). Heights: exp(lp − lp_max) per row. `no_repeat_ngram_size` curbs loops.',
+      },
+      cam: CAM.beam,
+      set: { ctx: 'day', T: 1, topk: 0, topp: 0, pen: 0, rods: false },
+      enter(S) { scene(S, { note: 'beam', noteAt: [1.0, BENCH + H * 0.5, -0.4] }); beamMode(S); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Anywhere a choice should be mostly-best but sometimes adventurous: a shuffle that favours your likes, a game character that explores, hot metal cooled slowly into a strong crystal.',
+        2: 'Softmax with a temperature is the Boltzmann distribution: simulated annealing (cool slowly to find good solutions), PPO\'s policy picking actions with the same `Categorical(logits=...)` in week 10, distillation\'s soft targets, and every chatbot\'s temperature setting.',
+        3: 'Gibbs/Boltzmann sampling: simulated annealing and MCMC; softmax policies in RL (ARENA\'s PPO samples `Categorical(logits=logits)`); distillation at T > 1 (Hinton et al. 2015); the learned τ in CLIP\'s contrastive loss. Newer truncations: min-p, typical sampling.',
+      },
+      cam: CAM.front,
+      set: { ctx: 'day', T: 2, topk: 0, topp: 0, pen: 0, rods: true },
+      enter(S) { scene(S, { note: 'ratio', fig: 'cheer' }); setMode(S, 'sample', 0); } },
+  ],
+
+  predict: [
+    { q: { 1: 'Turn the temperature right down to 0. What happens to the skyline?',
+        2: 'Temperature T → 0. What does the distribution become?',
+        3: 'softmax(l / T) as T → 0⁺ (and what ARENA does at T == 0)?' },
+      options: [{ t: 'The tallest tower takes everything: greedy', ok: true }, { t: 'All towers become equally tall' },
+        { t: 'Nothing changes: temperature only matters in training' }, { t: 'The smallest towers grow the most' }],
+      why: { 1: 'Dividing by a tiny number makes every gap huge, so the top word\'s share heads to 100%. At exactly 0 ARENA skips the maths and just takes the tallest.',
+        2: 'Gaps (l_a − l_b)/T blow up, so p → 1 on the argmax. ARENA special-cases `temperature == 0` as `greedy_search`: no division by zero, same limit.',
+        3: 'softmax(l/T) → one-hot(argmax l) as T → 0⁺ (ties split evenly). `sample_next_token` returns `greedy_search(logits)` before `apply_temperature` when T == 0.' },
+      show(S) {
+        S.setKnobs({ ctx: 'said', topk: 0, topp: 0, pen: 0, rods: true });
+        scene(S, { note: 'ratio' }); setMode(S, 'sample', 0); S.fly(CAM.low);
+        return sweepT(S, 1, 0, 1800);
+      } },
+    { q: { 1: 'Which temperature gives the most likely word a bigger share: 2 or 0.5?',
+        2: 'T = 2 versus T = 0.5: which puts more probability on the top word?',
+        3: 'p_top(T = 2) vs p_top(T = 0.5) for the same logits?' },
+      options: [{ t: 'T = 0.5', ok: true }, { t: 'T = 2' }, { t: 'The same: temperature keeps the order' }, { t: 'It depends on the seed' }],
+      why: { 1: 'Low temperature makes the leader lead by more. High temperature gives the other words more room. Watch the tallest tower as T slides from 2 to 0.5.',
+        2: 'Dividing by 0.5 doubles every gap, so the top word gains share; dividing by 2 halves them and flattens the skyline. The order stays the same either way; the ratios move (live by the towers).',
+        3: 'p_top = 1 / Σ_j e^((l_j − l_top)/T) and every exponent is ≤ 0, so p_top rises monotonically as T falls. Entropy does the opposite.' },
+      show(S) {
+        S.setKnobs({ ctx: 'said', topk: 0, topp: 0, pen: 0, rods: true });
+        scene(S, { note: 'ratio' }); setMode(S, 'sample', 0); S.fly(CAM.low);
+        return sweepT(S, 2, 0.5, 2000);
+      } },
+    { q: { 1: 'The top word already has 95% of the chances. Keep the top 90% (top-p 0.9). How many words survive?',
+        2: 'The top word has p = 0.95; top_p = 0.9. How many tokens stay in the nucleus?',
+        3: 'p_(1) = 0.95, top_p = 0.9, min_tokens_to_keep = 1: n_keep = ?' },
+      options: [{ t: 'Just 1', ok: true }, { t: '2' }, { t: 'About 90% of the vocabulary' }, { t: 'None: nothing lands exactly on 0.9' }],
+      why: { 1: 'The first tower alone holds more than 90%, so the water never reaches a second tower. After ‘cried’ this toy is that sure of ‘wolf’.',
+        2: 'The cumulative sum passes 0.9 at the very first word, and that word is kept (inclusive). So top-p collapses to greedy when the model is confident, while staying wide when it isn\'t.',
+        3: 'cumul = [0.95, …]; `searchsorted(cumul, 0.9, side="left")` = 0, so n_keep = 1. Top-p\'s kept set shrinks with confidence; top-k\'s never does.' },
+      show(S) {
+        S.setKnobs({ ctx: 'cried', T: 1, topk: 0, topp: 0.9, pen: 0, rods: false });
+        scene(S, { note: 'nucleus', noteAt: [1.25, BENCH + H * 0.5, ZF] }); setMode(S, 'sample', 0); S.fly(CAM.front);
+        return pour(S);
+      } },
+    { q: { 1: 'Keep only the 3 tallest (top-k 3). What happens to the tallest tower\'s share?',
+        2: 'After top_k = 3, how does the top word\'s probability compare to before?',
+        3: 'p\'_top after top-k = 3 renormalisation, vs p_top?' },
+      options: [{ t: 'It goes up', ok: true }, { t: 'It stays the same' }, { t: 'It goes down' }, { t: 'It becomes exactly 1/3' }],
+      why: { 1: 'The dropped words\' chances have to go somewhere: the 3 survivors share them in proportion, so each one, including the tallest, grows.',
+        2: 'Survivors are divided by their total, which is below 1, so every kept probability rises by the same factor (live: ×1/Σ). Their ratios to each other don\'t change.',
+        3: 'p\'_i = p_i / Σ_(j≤k) p_j > p_i whenever any mass is dropped; ratios are preserved. In logit space it is simply softmax over the kept logits.' },
+      show(S) {
+        S.setKnobs({ ctx: 'said', T: 1, topk: 3, topp: 0, pen: 0, rods: false });
+        scene(S, { note: 'renorm' }); setMode(S, 'sample', 0); S.fly(CAM.front);
+        return fenceIn(S);
+      } },
+    { q: { 1: 'Two words\' scores differ by 2 (temperature 1). How many times likelier is the higher one?',
+        2: 'Logit gap of 2 at T = 1: what is the probability ratio?',
+        3: 'l_a − l_b = 2, T = 1: p_a / p_b = ?' },
+      options: [{ t: 'About 7.4 times (e²)', ok: true }, { t: '2 times' }, { t: '4 times' }, { t: 'It depends on all the other words' }],
+      why: { 1: 'Scores become chances through powers of e ≈ 2.72, so a gap of 2 means 2.72 × 2.72 ≈ 7.4. The other words don\'t matter: they divide both.',
+        2: 'p_a / p_b = e^(l_a) / e^(l_b) = e^(l_a − l_b) = e² ≈ 7.39: the normaliser cancels. Adding the same number to every logit changes nothing (live gap by the towers).',
+        3: 'Softmax ratios depend only on logit differences: p_a/p_b = e^((l_a − l_b)/T) = e² ≈ 7.389, independent of Z. Hence logits are only defined up to a shift.' },
+      show(S) {
+        S.setKnobs({ ctx: 'said', T: 1, topk: 0, topp: 0, pen: 0, rods: true });
+        scene(S, { note: 'ratio' }); setMode(S, 'sample', 0);
+        return S.fly(CAM.low);
+      } },
+    { q: { 1: 'In ARENA\'s sampler, set temperature 0 and a big repeat penalty (2). Does the penalty break greedy\'s loop?',
+        2: '`sample_next_token(..., temperature=0, frequency_penalty=2.0)`: does the penalty change the output?',
+        3: 'ARENA `sample_next_token` with temperature=0.0, frequency_penalty=2.0: effect of the penalty?' },
+      options: [{ t: 'No: temperature 0 returns before the penalty runs', ok: true }, { t: 'Yes: repeated words get pushed down' },
+        { t: 'Yes: the output becomes random' }, { t: 'It crashes: you can\'t divide by 0' }],
+      why: { 1: 'The code checks for temperature 0 first and immediately takes the tallest word, so the penalty line is never reached. Same loop as before.',
+        2: 'The first branch is `if temperature == 0: return greedy_search(logits)`, before `apply_frequency_penalty`. To penalise repeats while greedy, apply the penalty first or use T > 0.',
+        3: 'Control flow: T == 0 short-circuits to `greedy_search(logits)`; the penalty (and top-k/top-p) only run for T > 0. HF\'s repetition_penalty is a logits processor applied before the argmax.' },
+      show(S) {
+        S.setKnobs({ ctx: 'day', T: 0, topk: 0, topp: 0, pen: 2, rods: false });
+        scene(S, { note: 'penalty', noteAt: [0.9, BENCH + H * 0.62, ZF] }); setMode(S, 'sample', 0);
+        return S.fly(CAM.front);
+      } },
+  ],
+
+  where: { 1: 'Anywhere a choice should be mostly-best but sometimes adventurous: shuffles that favour your likes, game characters that explore, metal annealed slowly into a strong crystal.',
+    2: 'Softmax with a temperature is the Boltzmann distribution: simulated annealing, RL policies (PPO in week 10 samples actions with Categorical(logits)), knowledge distillation\'s soft targets, and every chatbot\'s temperature and top_p settings.',
+    3: 'Gibbs/Boltzmann sampling (annealing, MCMC), softmax policies and exploration in RL, distillation at T > 1, contrastive temperatures (CLIP\'s τ), and decoding truncations (top-k, top-p, min-p, typical) in every LLM API.' },
+  links: [
+    { label: 'Film · W6 sampling', href: '../../intuition/films/w6-sampling.html' },
+    { label: 'Film · sampling, deep', href: '../../intuition/films/deep-w06-sampling.html' },
+    { label: 'Week 6 pack', href: '../../index.html#week-06' },
+    { label: 'Demo · sampling & decoding', href: '../../index.html#demo/sampling-decoding' },
+    { label: 'Case · top-k sampling', href: '../../index.html#cases/top-k-sampling' },
+    { label: 'Case · nucleus sampling', href: '../../index.html#cases/nucleus-sampling' },
+    { label: 'Case · beam search', href: '../../index.html#cases/beam-search' },
+    { label: 'Map · sampling', href: '../../index.html#map/node=sampling' },
+    { label: 'Map · temperature', href: '../../index.html#map/node=temperature' },
+    { label: 'Map · top-k sampling', href: '../../index.html#map/node=top-k-sampling' },
+    { label: 'Map · top-p sampling', href: '../../index.html#map/node=top-p-sampling' },
+    { label: 'Map · beam search', href: '../../index.html#map/node=beam-search' },
+  ],
+  remix: 'Build a single-file three.js scene: train a word-pair (bigram) softmax model in the browser on a few public-domain fables (logits = W[prev] + b, full-batch Adam, 120 steps), then show the next-word distribution as a sorted row of 12 amber towers (height = probability) plus one tower for the rest of the vocabulary, on a round plaster plinth with a brass rim. Blue posts behind show logits / T. A temperature slider divides the logits by T (T = 0 = argmax); a top-k slider raises a brass fence round the k tallest and renormalises the survivors; a top-p slider pours p of amber water into the towers tallest-first, keeping every tower that gets wet (searchsorted(cumsum, p, side="left") + 1); a marble rolls along a track whose segments are as wide as each kept word\'s probability and lands on the sampled word; "Generate 10" pushes each step\'s skyline back a row into a landscape.',
+  credit: 'Sampler: ARENA [1.1] `TransformerSampler` (`sample_next_token`, `greedy_search`, `apply_temperature`, `apply_frequency_penalty`, `sample_basic`, `sample_top_k`, `sample_top_p`, `beam_search`), mirrored line for line and checked against an independent Python implementation. Nucleus sampling: Holtzman et al. 2019. Toy model after Andrej Karpathy\'s makemore (bigram). Text: eight Aesop fables, retold. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>
