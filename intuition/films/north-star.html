@@ -145,15 +145,41 @@
     var e = eggPos(L, t), fp = figPos(L, t), walking = t > 12 && t < 43 && Math.abs(stopAt(t + .1) - s) > .002;
     if (h > .02 && !extra.noEgg) { ctx.save(); ctx.globalAlpha = h; F.paper(ctx, e.x, e.y + e.s * 1.02, e.s * 1.7, e.s * .32, P.pink, { seed: 'cushion', rot: .02 }); ctx.restore(); }
     if (!extra.noEgg) F.egg(ctx, e.x, e.y, e.s, t, { clear: extra.clear == null ? clearAt(t) : extra.clear, features: extra.features || feats(clearAt(t)), inner: extra.inner });
-    if (!extra.noFig) F.person(ctx, fp.x, fp.y, fp.s, t, { walk: walking, face: 1 });
+    if (extra.preFig) extra.preFig(ctx, L, e, fp);
+    if (!extra.noFig) walker(ctx, t, W, H, L, e, fp, walking);
     return { L: L, e: e, fp: fp };
+  }
+  /* ---------------- the walker: a Becker-spirited stick figure acting each beat ----------------
+     One timeline (global t) of poses; t0 = when the pose starts, so anticipation + overshoot play. */
+  function dialPos(fp) { var S = fp.s * 1.5; return { x: fp.x + S * .5, y: fp.y - S * .6, r: Math.max(16, fp.s * .2) }; }
+  function acting(t, W, H, L, e, fp, walking) {
+    var eggLook = { x: e.x, y: e.y - e.s * .2 }, heroish = heroAt(t) > .5;
+    if (t < 2.9) return { pose: { a: 'idle', b: 'recoil', k: .55 }, t0: .4, look: eggLook }; // gazing up at the egg
+    if (t < 6) return { pose: 'think', t0: 2.9, look: eggLook };
+    if (t < 7.6) return { pose: 'point', t0: 6.2, from: 'think', look: { x: L.map.x + L.map.w * .5, y: L.map.y + L.map.h * .4 } };
+    if (t < 10.5) return { pose: 'idle', look: eggLook };
+    if (t < 12) return { pose: 'wave', t0: 10.5 };
+    if (t < 33) return { pose: walking ? 'walk' : 'idle', look: t > 28 ? eggLook : null };
+    if (t < 33.5) return { pose: 'walk' };
+    if (t < 36.3) return { pose: 'cheer', t0: 33.5, from: 'walk', walk: walking };
+    if (t < 39) return { pose: 'think', t0: 36.4, from: 'cheer', walk: walking, look: { x: fp.x, y: fp.y - fp.s * 2.4 } };
+    if (t < 43) { var l = t - 39; return { pose: l < .3 ? 'walk' : 'point', t0: 39.3, from: 'walk', walk: walking, look: { x: lerp(fp.x, W + 30, ramp(l, .5, 3.5)), y: fp.y - 40 - l * 20 } }; }
+    if (t < 43.8) return { pose: 'idle', look: eggLook };
+    if (t < 45.4) return { pose: 'recoil', t0: 43.8, look: eggLook };
+    if (t < 48) return { pose: 'shrug', t0: 45.4, from: 'recoil', look: eggLook };
+    if (t < 53) { var ty = L.por ? H * .14 : H * .16; return { pose: t < 50.4 ? 'point' : 'lean-in', t0: t < 50.4 ? 48.5 : 50.4, from: t < 50.4 ? 'shrug' : 'point', look: { x: W / 2, y: ty + (t < 50.4 ? 0 : 40) } }; }
+    var d = dialPos(fp); return { pose: 'point', t0: 53.3, from: 'lean-in', look: { x: d.x, y: d.y } }; // hand on the dial
+  }
+  function walker(ctx, t, W, H, L, e, fp, walking) {
+    var a = acting(t, W, H, L, e, fp, walking);
+    return F.stick(ctx, fp.x, fp.y, fp.s * 1.5, t, { pose: a.pose, t0: a.t0, from: a.from, walk: !!a.walk, look: a.look, lantern: true, lit: 1, scarf: P.red });
   }
 
   var chapters = [
-    { name: 'the question', start: 0, dur: 6, cap: {
-        1: 'Someone hands you a sealed egg with a little mind inside. It talks, it answers, it helps. One question sticks: <b>can you see what it\'s thinking?</b>',
-        2: 'The egg is an AI model: it works, but it is <b>opaque</b>. This course, 14 Saturdays, is the path to being able to look inside it and steer it.',
-        3: 'Goal of the TARA/ARENA track: enough ML engineering and interpretability to inspect a transformer\'s internals and intervene on them causally.' },
+    { name: 'the question', start: 0, dur: 6, need: 'core', cap: {
+        1: 'Someone hands you a sealed egg with a little mind inside. The egg is an AI model; the walker with the lantern is you. It talks and helps, but one question sticks: <b>can you see what it\'s thinking?</b>',
+        2: 'The egg is an AI model: it works, but it is <b>opaque</b>. You see what goes in and what comes out, never the working in between. 14 Saturdays teach you to look inside, then steer.',
+        3: 'Goal of the TARA/ARENA track: enough ML engineering and interpretability to read a transformer\'s internal activations and intervene on them causally: change one, measure what moves.' },
       draw: function (ctx, t, l, W, H) {
         var S = scene(ctx, t, W, H), L = S.L;
         var pr = ramp(l, .5, 3.2), px = lerp(-40, L.hero.x, pr), py = lerp(H * .2, L.hero.y - L.hero.s * 1.9, pr) + Math.sin(l * 3) * 8 * (1 - pr);
@@ -161,48 +187,48 @@
         drawQuestion(ctx, L, t, ramp(l, 2.8, 3.6));
         F.cat(ctx, W - 40, H - 8, 22, t);
       } },
-    { name: 'the map', start: 6, dur: 6, cap: {
-        1: 'Here is the map: <b>14 Saturdays</b>, 12 Sep to 12 Dec. Each stop teaches one skill. The walker with the lantern is you.',
-        2: 'Six regions: <b>Fundamentals</b>, <b>Transformers</b>, <b>Mech interp</b>, <b>RL</b>, <b>Evals</b>, <b>Capstone</b>. Two stops ticked; W3 is this Saturday.',
-        3: 'ARENA chapters 0 → 1 → 2 → 3, then a 3-week capstone. Each week maps to one pack in the app (tap a stop at the end).' },
+    { name: 'the map', start: 6, dur: 6, need: 'core', cap: {
+        1: 'The map: <b>14 Saturdays</b>, 12 Sep to 12 Dec. Each stop is one skill. The lantern is what you already understand, and it gets brighter at every stop. W3 is this Saturday.',
+        2: 'Six regions: <b>Fundamentals</b>, <b>Transformers</b>, <b>Mech interp</b> (reading a model\'s insides), <b>RL</b>, <b>Evals</b>, <b>Capstone</b>. Each region stands on the one before it.',
+        3: 'ARENA chapters 0 → 1 → 2 → 3, then a 3-week capstone drawing on ch.4 (alignment science). Each stop maps to one week pack in the app: tap a stop at the end.' },
       draw: function (ctx, t, l, W, H) { var S = scene(ctx, t, W, H); drawQuestion(ctx, S.L, t, 1); } },
-    { name: 'build the machine', start: 12, dur: 8, cap: {
-        1: 'First you learn to <b>build the machine</b>: the number-grids it is made of, and how it learns by nudging them.',
-        2: 'Fundamentals: tensors, modules, optimisers, backprop. The egg is still opaque: you can build it before you can read it.',
-        3: 'einops, nn.Module, ResNets, SGD/Adam from scratch, a hand-written autograd engine: the tools every later probe is written in.' },
+    { name: 'build the machine', start: 12, dur: 8, need: 'core', cap: {
+        1: 'First you <b>build the machine</b>: a big stack of number-grids. Learning is rolling downhill: every number gets nudged whichever way makes the mistakes smaller, a little at a time.',
+        2: 'Fundamentals: <b>tensors</b> (number grids with named axes), <b>modules</b> (layers), <b>optimisers</b> (rules for the nudges), <b>backprop</b> (working out which way to nudge each number).',
+        3: 'einops/einsum, nn.Module, ResNets, SGD/Adam from scratch, a hand-written autograd engine: the tools every later probe and hook is written in.' },
       draw: function (ctx, t, l, W, H) { var S = scene(ctx, t, W, H); drawQuestion(ctx, S.L, t, 1); } },
-    { name: 'build the mind', start: 20, dur: 6, cap: {
-        1: 'Next you <b>build the mind</b> itself: the kind of model behind chatbots. The shell starts to thin.',
-        2: 'Transformers from scratch, then hooks: code that lets you read any value inside a running model.',
-        3: 'Attention heads, MLPs, the residual stream; TransformerLens run_with_cache gives you every activation by name.' },
+    { name: 'build the mind', start: 20, dur: 6, need: 'core', cap: {
+        1: 'Next you <b>build the mind</b> itself: the kind of model behind chatbots. It reads words and guesses the next one. The shell thins, because you know every part you put in.',
+        2: 'A <b>transformer</b>: in <b>attention</b>, words update each other\'s meaning ("bank" near "river"); <b>MLPs</b> then work on each word alone. <b>Hooks</b> read any value inside a running model.',
+        3: 'Attention heads, MLPs and the residual stream (the running sum every layer reads from and adds to); TransformerLens run_with_cache returns every activation by name.' },
       draw: function (ctx, t, l, W, H) { var S = scene(ctx, t, W, H); drawQuestion(ctx, S.L, t, 1); } },
-    { name: 'look inside', start: 26, dur: 7, cap: {
-        1: 'Now you <b>learn to look inside</b>. Little lights appear: ideas the mind is using, like "Paris" or "code".',
-        2: 'Mechanistic interpretability: find the circuits and features a model uses, then check them by editing the model.',
-        3: 'Induction heads, activation patching, superposition and sparse autoencoders: features as directions in activation space.' },
+    { name: 'look inside', start: 26, dur: 7, need: 'core', cap: {
+        1: 'Now you <b>learn to look inside</b>. Little lights appear: ideas the mind is using, like "Paris" or "code". Each light is a <b>feature</b>: a pattern in its numbers that means one thing.',
+        2: 'Mechanistic interpretability: find <b>features</b> (meaningful directions in the numbers) and <b>circuits</b> (chains of parts doing one job), then prove it: edit the model and watch.',
+        3: 'Induction heads, activation patching, superposition and sparse autoencoders: features as directions in activation space, circuits as causal paths you test by patching.' },
       draw: function (ctx, t, l, W, H) {
         var S = scene(ctx, t, W, H); drawQuestion(ctx, S.L, t, 1 - ramp(l, 0, 1));
         // name a few lanterns
         var e = S.e, a = ramp(l, 2, 3.5); if (a > 0) { ctx.save(); ctx.globalAlpha = a; [1, 3, 4].forEach(function (i) { var f = FEATS[i]; F.hand(ctx, f.name, e.x + f.x * e.s * .7 + (f.x > 0 ? 1 : -1) * e.s * 1.05, e.y + f.y * e.s * .8, Math.max(11, e.s * .28), P.chalk, { seed: f.name, outline: 3, outlineColor: 'rgba(20,20,50,.8)' }); }); ctx.restore(); }
       } },
-    { name: 'reward & tests', start: 33, dur: 6, cap: {
-        1: 'Then how minds <b>learn from rewards</b>, and how to <b>test</b> what they will really do when it matters.',
-        2: 'RL (DQN, PPO, RLHF) shapes behaviour; evals check it. Knowing both tells you where odd behaviour comes from.',
-        3: 'Reward hacking and sycophancy come out of the RL loop; Inspect evals and AI-control setups are how you catch them.' },
+    { name: 'reward & tests', start: 33, dur: 6, need: 'core', cap: {
+        1: 'Then how minds <b>learn from rewards</b>, like a dog trained with treats (the +1 ★), and how to <b>test</b> what they really do when it matters (the ✓ ✗ marks).',
+        2: '<b>RL</b>: the model is rewarded for some outputs and shifts toward them. <b>Evals</b> measure behaviour. Odd habits like flattery often trace back to what the reward paid for.',
+        3: 'DQN, PPO, RLHF; reward hacking and sycophancy come out of the RL loop. Inspect evals and AI-control setups (trusted monitors, audits) are how you catch them.' },
       draw: function (ctx, t, l, W, H) {
         var S = scene(ctx, t, W, H), fp = S.fp;
         var sr = ramp(l, .5, 1.2) * (1 - ramp(l, 3, 3.5)); if (sr > 0) { ctx.save(); ctx.globalAlpha = sr; F.hand(ctx, '+1 ★', fp.x, fp.y - fp.s * 1.9 - l * 6, 16, P.butter, { outline: 3, outlineColor: 'rgba(20,20,50,.8)', seed: 'rw' }); ctx.restore(); }
         var ck = ramp(l, 3.6, 4.4); if (ck > 0) { ctx.save(); ctx.globalAlpha = ck; F.hand(ctx, '✓ ✓ ✗ ✓', fp.x, fp.y - fp.s * 1.9, 16, P.mint, { outline: 3, outlineColor: 'rgba(20,20,50,.8)', seed: 'ck' }); ctx.restore(); }
       } },
-    { name: 'your experiment', start: 39, dur: 4, cap: {
-        1: 'Last: <b>your own experiment</b>. You pick a question about a real model and go and find out.',
-        2: 'Capstone, three Saturdays and a talk on 12 Dec. By then the egg is glass.',
-        3: 'A small, honest research project: e.g. find a feature, patch it, measure the behavioural effect, report the limits.' },
+    { name: 'your experiment', start: 39, dur: 4, need: 'core', cap: {
+        1: 'Last: <b>your own experiment</b>. You pick one question about a real model, test it, and report honestly what you found, like a scientist rather than a spectator.',
+        2: 'Capstone: three Saturdays and a talk on 12 Dec. A question, a prediction that could fail, controls, error bars. By then the egg is glass.',
+        3: 'A small, honest research project: e.g. find a feature, patch or steer it, measure the behavioural effect against controls, report where it stops being true.' },
       draw: function (ctx, t, l, W, H) { var S = scene(ctx, t, W, H); F.plane(ctx, lerp(S.fp.x, W + 30, ramp(l, .5, 3.5)), S.fp.y - 40 - l * 20, 12, -.3, P.butter); } },
-    { name: 'where it stops being true', start: 43, dur: 5, cap: {
-        1: 'Honest bit: a real AI is not one little creature. It is <b>millions of numbers</b>, and today we can only read some of them.',
-        2: 'The "mind" is billions of weights and activations. Interpretability is <b>partial</b>: we can explain some features and circuits, not the whole thing.',
-        3: 'Features are fuzzy directions in superposition; SAEs leave reconstruction error; many behaviours have no clean circuit yet. Claims need causal tests.' },
+    { name: 'where it stops being true', start: 43, dur: 5, need: 'contested', cap: {
+        1: 'Honest bit: a real AI is not one little creature. It is <b>millions of numbers</b>, and today nobody can read all of them. Reading some is already useful.',
+        2: 'Current method: sparse autoencoders find features. Emerging research: transcoders and attribution graphs trace circuits; how much SAEs explain is debated. You need: the basics.',
+        3: 'Features sit in superposition; SAEs leave reconstruction error and dead or split latents. Transcoders, crosscoders and attribution graphs are active research. W8 needs only the ToySAE.' },
       draw: function (ctx, t, l, W, H) {
         var L = layout(W, H), gA = ramp(l, .8, 2);
         var inner = function (c, s, clear) { c.save(); c.globalAlpha = gA; c.fillStyle = 'rgba(210,230,255,.85)'; c.font = Math.max(7, s * .11) + 'px ' + F.MONO; var r = F.rng('nums'), st = s * .19;
@@ -213,10 +239,10 @@
           F.hand(ctx, 'really: millions of numbers', W - m * .3, H - m * .26, sz, P.ink, { rot: -.62, seed: 'st1' });
           F.hand(ctx, 'we can read only some', W - m * .2, H - m * .15, sz, P.ink, { rot: -.62, seed: 'st2' }); ctx.restore(); }
       } },
-    { name: 'the symbols', start: 48, dur: 5, cap: {
-        1: 'The glowing lights become the real code you will write: read a thought out of the model, or nudge it.',
-        2: 'Reading: take the model\'s internal state and see which word it points to. Steering: add a "direction" to push a behaviour.',
-        3: '<code>resid[:, -1] @ W_U</code> = logit lens on the last position; <code>resid += alpha * v_honesty</code> = activation steering with a learned/contrastive direction.' },
+    { name: 'the symbols', start: 48, dur: 5, need: 'core', cap: {
+        1: 'The lights become the code you\'ll write. Line 1 <b>reads</b> a thought: which word is the mind leaning toward? Line 2 <b>nudges</b> it: add a little "honesty" arrow to its state.',
+        2: '<code>resid</code> is the model\'s working state at one word. <code>@ W_U</code> turns it into one score per vocabulary word: reading. Adding <code>alpha * v</code> pushes the state along direction v: steering.',
+        3: '<code>resid[:, -1] @ W_U</code>: (batch, d_model) @ (d_model, d_vocab), the logit lens at the last position. <code>resid += alpha * v</code>: activation steering with a contrastive direction.' },
       draw: function (ctx, t, l, W, H) {
         var S = scene(ctx, t, W, H, { features: feats(1, 1 - ramp(l, 0, 1.5)) }), e = S.e, L = S.L, sz = L.por ? 14 : 20;
         var lines = ['logits = resid[:, -1] @ W_U', 'resid += alpha * v_honesty'];
@@ -231,17 +257,20 @@
           F.hand(ctx, s, tx, ty, sz, P.ink, { font: F.MONO, bold: false, wobble: .3, reveal: ramp(l, 1 + i * 1.2, 2 + i * 1.2), seed: s }); ctx.restore();
         });
       } },
-    { name: 'steer', start: 53, dur: 5, cap: {
-        1: 'And the last step: once you can see inside, you can <b>turn a small dial</b> and help it stay honest and safe.',
-        2: 'Looking inside is half the job. <b>Steering</b> is the other half: changing what a model does by editing what it thinks.',
-        3: 'Steering is a causal test and a safety tool at once, but it has side-effects; you will measure both. Tap the map to start.' },
+    { name: 'steer', start: 53, dur: 5, need: 'contested', cap: {
+        1: 'Last step: once you can see inside, you can <b>turn a small dial</b> (alpha) to strengthen one idea, like "honesty". Turn it too far and the mind starts talking nonsense.',
+        2: 'Current method: add a steering vector, strength alpha. Emerging research: it works well for some traits, poorly for others, with side effects. You need: build it, sweep alpha, measure both.',
+        3: 'Steering is a causal test and a safety tool; reliability varies by trait and layer (active research). ARENA ch.4 sweeps steering_coef and scores misalignment and coherence. Tap the map.' },
       draw: function (ctx, t, l, W, H) {
         var alpha = 4 * ramp(l, .8, 3.2);
         var fts = feats(1).map(function (f, i) { if (i === 2) { f.on = .3 + alpha / 5; f.c = 'rgba(185,240,200,.95)'; } else f.on *= .7; return f; });
-        var S = scene(ctx, t, W, H, { features: fts }), L = S.L, fp = S.fp;
-        var dx = lerp(fp.x, S.e.x, .5), dy = fp.y - fp.s * .35, dr = Math.max(16, fp.s * .2);
-        F.blob(ctx, dx, dy, dr, '#cfcbd8', { seed: 'dial', jit: .4 }); var ang = -2.4 + alpha / 4 * 2.2;
-        ctx.save(); ctx.strokeStyle = P.ink; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(dx + Math.cos(ang) * dr * .8, dy + Math.sin(ang) * dr * .8); ctx.stroke(); ctx.restore();
+        var dx, dy, dr, ang = -2.4 + alpha / 4 * 2.2;
+        var S = scene(ctx, t, W, H, { features: fts, preFig: function (c, L, e, fp) {
+          var d = dialPos(fp); dx = d.x; dy = d.y; dr = d.r;
+          c.save(); c.strokeStyle = P.ink; c.lineWidth = 3; c.lineCap = 'round'; c.beginPath(); c.moveTo(dx, dy + dr); c.lineTo(dx, fp.y); c.stroke(); c.restore(); // the dial's post
+          F.blob(c, dx, dy, dr, '#cfcbd8', { seed: 'dial', jit: .4 });
+          c.save(); c.strokeStyle = P.ink; c.lineWidth = 3; c.lineCap = 'round'; c.beginPath(); c.moveTo(dx, dy); c.lineTo(dx + Math.cos(ang) * dr * .8, dy + Math.sin(ang) * dr * .8); c.stroke(); c.restore();
+        } }), L = S.L, fp = S.fp;
         var hf = FEATS[2]; F.hand(ctx, 'honesty', S.e.x + hf.x * S.e.s * .7, S.e.y + hf.y * S.e.s * .8 - S.e.s * .22, Math.max(12, S.e.s * .2), '#d9f7e2', { seed: 'hon', outline: 3, outlineColor: 'rgba(20,20,50,.8)' });
         F.hand(ctx, 'alpha = ' + alpha.toFixed(1), dx, dy + dr + 12, 13, P.chalk, { font: F.MONO, bold: false, seed: 'al' });
         var a = ramp(l, 1.5, 2.5); if (a > 0) { ctx.save(); ctx.globalAlpha = a; F.note(ctx, 'look inside. then steer.', W / 2, L.por ? H * .12 : H * .14, L.por ? 18 : 26, { color: P.pink, seed: 'steer', rot: -.02 }); ctx.restore(); }
@@ -249,7 +278,7 @@
   ];
 
   /* ---------------- coda: the map becomes tappable ---------------- */
-  var sel = NOW, panelEl = null;
+  var sel = NOW, panelEl = null, selT = null;
   function paintPanel() {
     if (!panelEl) return; var s = STOPS[sel], nn = ('0' + (sel + 1)).slice(-2), st = sel < DONE ? 'done ✓' : sel === NOW ? 'this Saturday' : s[0];
     panelEl.innerHTML = '<div style="font-size:14px;min-height:62px"><b style="color:#f7e3a0">W' + (sel + 1) + ' · ' + s[2] + '</b> <span style="opacity:.75">(' + st + ', ' + PH[s[1]].name + ')</span><br>' + s[3] +
@@ -260,12 +289,13 @@
     down: function (x, y, api) {
       var L = layout(api.W, api.H), best = -1, bd = 1e9;
       L.stops.forEach(function (p, i) { var d = Math.hypot(p.x - x, p.y - y); if (d < bd) { bd = d; best = i; } });
-      if (bd < L.sr * 2.4) { sel = best; paintPanel(); api.audio.blip(523 + best * 30); }
+      if (bd < L.sr * 2.4) { sel = best; selT = null; paintPanel(); api.audio.blip(523 + best * 30); }
     },
     draw: function (ctx, t, W, H) {
       var L = layout(W, H); bg(ctx, W, H, t + 60);
       drawMap(ctx, L, t, 1, 1, { sel: sel });
-      var p = L.stops[sel]; F.person(ctx, p.x - L.sr * 2.3, p.y + L.sr * 1.1, L.sr * 2, t, { walk: false });
+      var p = L.stops[sel]; if (selT == null) selT = t;
+      F.stick(ctx, p.x - L.sr * 2.3, p.y + L.sr * 1.1, L.sr * 3, t, { pose: 'point', t0: selT, look: { x: p.x, y: p.y }, lantern: true, scarf: P.red });
       F.egg(ctx, L.card.x, L.card.y, L.card.s, t, { clear: clamp(sel / 10, 0, 1), features: feats(clamp(sel / 10, 0, 1)) });
       F.note(ctx, 'tap a stop', L.noteP.x, L.noteP.y, L.por ? 15 : 18, { color: P.cream, seed: 'tap', rot: .03 });
       F.glow(ctx, p.x, p.y, L.sr * 2.4, 'rgba(255,230,150,.5)', .6 + .4 * Math.sin(t * 3));

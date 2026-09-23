@@ -116,7 +116,11 @@
     [-.35, .35].forEach(function (k) { var wx = x + k * w, wy = y - h * .15; ctx.save(); ctx.translate(wx, wy); ctx.rotate(moving ? t * 6 : 0); ctx.fillStyle = P.ink; ctx.beginPath(); ctx.arc(0, 0, s * .15, 0, 6.283); ctx.fill(); ctx.fillStyle = P.cream; ctx.fillRect(-1, -s * .13, 2, s * .1); ctx.restore(); });
     ctx.restore(); return { x: x, y: y - h * 1.5, w: w };
   }
-  function librarian(ctx, x, y, s, t, walk) { F.person(ctx, x, y, s, t, { walk: walk, coat: '#6b8fbf', scarf: P.butter, lantern: false, face: 1 }); }
+  // the shelf-stacker: a stick figure who pushes, shrugs, conducts and points (pass 2)
+  function librarian(ctx, x, y, s, t, walk, o) {
+    o = o || {};
+    return F.stick(ctx, x, y, s * 1.5, t, { pose: o.pose || (walk ? 'push' : 'idle'), t0: o.t0, from: o.from, walk: !!walk, look: o.look, scarf: P.butter });
+  }
   function heap(tx, ty, w, s) { // mound of tiles on the trolley
     var r = F.rng('heap'), out = [];
     for (var i = 0; i < N; i++) { var k = r(), layer = Math.floor(i / 8), span = w * (.9 - layer * .25); out.push({ x: tx + (r() - .5) * span, y: ty - s * .35 - layer * s * .5 - r() * s * .2, s: s, rot: (r() - .5) * 1.2 }); }
@@ -194,27 +198,28 @@
 
   /* ================= the chapters ================= */
   var chapters = [
-    { name: 'the wish', start: 0, dur: 6, cap: {
-        1: 'Night shift at the library of numbers. Our shelf-stacker has a trolley heaped with paper tiles and one wish: move them around <b>without losing track of which is which</b>.',
-        2: 'Every tile is one number. A heap of numbers is useless until you know how it is organised, and that organisation is exactly what a <b>tensor shape</b> records.',
+    { name: 'the wish', start: 0, dur: 6, need: 'core', cap: {
+        1: 'Night shift at the library of numbers. The shelf-stacker (you) has a trolley of paper tiles (numbers) and one wish: move them around <b>without losing track of which is which</b>.',
+        2: 'Every tile is one number. A heap of numbers means nothing until you know how it is organised, and that organisation is exactly what a tensor\'s <b>shape</b> records.',
         3: 'Week 1, ARENA [0.0] Prerequisites + [0.1] Ray Tracing. The whole week is one discipline: know every axis of every tensor, and name it.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var s = Math.min(W, H) * (POR(W, H) ? .1 : .085), tx = lerp(-s * 3, W * .5, ease.out(l / 3.2)), ty = H * .74;
-        librarian(ctx, tx - s * 2.1, ty, s * 1.6, t, l < 3.2);
+        var lp = l < 3.2 ? { pose: 'push', t0: .1 } : l < 3.5 ? { pose: 'idle', t0: 3.2, from: 'push' } : { pose: 'shrug', t0: 3.5, look: { x: tx, y: ty - s * 2 } };
+        librarian(ctx, tx - s * 2.1, ty, s * 1.6, t, l < 3.2, lp);
         var tb = trolley(ctx, tx, ty, s, t, l < 3.2), hp = heap(tb.x, tb.y, tb.w, s * .62); drawTiles(ctx, hp);
         F.plane(ctx, lerp(W + 30, -30, l / 6), H * .3 + Math.sin(l * 2) * 10, 12, Math.PI + .1, P.cream);
         question(ctx, W, H, ramp(l, .8, 1.6), ramp(l, .8, 2.6));
         if (l > 3.5) { ctx.save(); ctx.globalAlpha = ramp(l, 3.5, 4.3); lbl(ctx, '24 tiles. no labels. uh-oh.', W / 2, H * .44, W < 500 ? 15 : 19, P.butter); ctx.restore(); }
       } },
-    { name: 'a stack with a shape', start: 6, dur: 7, cap: {
-        1: 'She sorts them into <b>2 trays</b>, each <b>3 rows</b> of <b>4</b>. Now every tile has an address. Tile 21 lives in tray 1, row 2, column 1.',
-        2: 'That arrangement is the tensor\'s <b>shape</b>: <code>(2, 3, 4)</code>. Naming the axes (batch, height, width) is what turns 24 numbers into two little 3×4 images.',
-        3: '<code>x = torch.arange(24).reshape(2, 3, 4)</code>. Index <code>x[1, 2, 1]</code> = 1·12 + 2·4 + 1 = 21. Axes are counted from 0, last axis fastest (row-major).' },
+    { name: 'a stack with a shape', start: 6, dur: 7, need: 'core', cap: {
+        1: 'She sorts them into <b>2 trays</b>, each <b>3 rows</b> of <b>4</b>. Now every tile has an address: tray, row, column. Tile 21 lives in tray 1, row 2, column 1 (counting from 0).',
+        2: 'The <b>shape</b> <code>(2, 3, 4)</code> lists each axis\'s length: 2 trays (batch), 3 rows (height), 4 columns (width). Naming the axes turns 24 numbers into two little 3×4 images.',
+        3: '<code>x = torch.arange(24).reshape(2, 3, 4)</code>; <code>x[1, 2, 1]</code> = 1·12 + 2·4 + 1 = 21, because a tray holds 12 tiles and a row holds 4. Last axis varies fastest.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var s = Math.min(W, H) * (POR(W, H) ? .1 : .085), ty = H * .74, tx = W * .5;
         var reg = tileReg(W, H), LS = L('stack', R_STACK, reg, 58), hp = heap(tx, ty - s * .75, s * 2.4, s * .62);
         var p = ramp(l, .3, 3.2);
-        if (l < 2.55) { ctx.save(); ctx.globalAlpha = 1 - ramp(l, 1.5, 2.6); librarian(ctx, tx - s * 2.1, ty, s * 1.6, t, false); trolley(ctx, tx, ty, s, t, false); ctx.restore(); }
+        if (l < 2.55) { ctx.save(); ctx.globalAlpha = 1 - ramp(l, 1.5, 2.6); librarian(ctx, tx - s * 2.1, ty, s * 1.6, t, false, { pose: 'point', t0: .25, from: 'shrug', look: { x: W / 2, y: reg.y + reg.h * .4 } }); trolley(ctx, tx, ty, s, t, false); ctx.restore(); }
         drawTrays(ctx, LS, ramp(l, 1.8, 2.8), ['b']);
         var pts = fly(hp, LS.spots, p); drawTiles(ctx, pts, { hl: l > 4.2 ? HLI : null, hlA: ramp(l, 4.2, 4.8) });
         if (l > 2.8) {
@@ -229,10 +234,10 @@
         question(ctx, W, H, 1 - ramp(l, 3.6, 4.2));
         if (l > 4.2) { ctx.save(); ctx.globalAlpha = ramp(l, 4.2, 4.8); codeNote(ctx, 'x[1, 2, 1] = 21', W / 2, POR(W, H) ? 38 : 44, W, W < 500 ? 17 : 21, { color: P.butter }); ctx.restore(); }
       } },
-    { name: 'rearrange', start: 13, dur: 8, cap: {
-        1: 'Order: "flatten each tray into one long row". The tiles fly, but <b>watch the colours</b>: pink row, then peach, then yellow. Nothing gets shuffled.',
-        2: '<code>rearrange(x, \'b h w -> b (h w)\')</code> merges h and w into one axis of 12. The pattern is a sentence about meaning, so you can read what it does.',
-        3: 'Grouping (h w) is row-major: new index = h·4 + w. Tile x[1,2,1] lands at y[1, 9]. Shape (2,3,4) → (2,12). Same 24 numbers, no copy needed.' },
+    { name: 'rearrange', start: 13, dur: 8, need: 'core', cap: {
+        1: 'Order: "flatten each tray into one long row". Tiles fly, but <b>watch the colours</b>: pink row, then peach, then yellow. Like reading a page line by line: nothing shuffled.',
+        2: '<code>\'b h w -> b (h w)\'</code>: left of the arrow names the axes you have, right names what you want. Brackets glue h and w into one axis of 3×4 = 12. You read meaning, not index maths.',
+        3: '(h w) is row-major: new index = h·4 + w, so x[1,2,1] lands at y[1, 9]. (2,3,4) → (2,12), often a view (no copy). Why einops: it checks every size for you.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var reg = tileReg(W, H), LS = L('stack', R_STACK, reg, 58), LF = L('flat', R_FLAT, reg, 44);
         var p = ramp(l, 1.2, 4.6), pts = fly(LS.spots, LF.spots, p, .02);
@@ -247,10 +252,10 @@
           F.arrow(ctx, sp.x, sp.y - sp.s * 1.4, sp.x, sp.y - sp.s * .6, P.butter, 2.5, 'hl'); ctx.restore();
         }
       } },
-    { name: 'the VHS batch', start: 21, dur: 7, cap: {
-        1: 'Think of the batch like a <b>VHS tape</b>: two frames, one after another. To look at them side by side, unroll the tape. Each frame stays in one piece.',
-        2: '<code>\'b h w -> h (b w)\'</code> puts the batch images next to each other, the exact trick ARENA uses to tile a batch of images into one picture.',
-        3: 'Group (b w) gives column = b·4 + w, shape (3, 8). Swap it to (w b) and the two frames interleave column by column: legal, same shape, visually garbage.' },
+    { name: 'the VHS batch', start: 21, dur: 7, need: 'exercise', cap: {
+        1: 'The batch is a <b>VHS tape</b>: two frames stored one after another. To see them side by side, unroll the tape. Each frame stays in one piece because b sits <b>outside</b> w in (b w).',
+        2: '<code>\'b h w -> h (b w)\'</code>: rows stay rows; each new row is frame 0\'s row, then frame 1\'s. The ARENA [0.0] image exercises use exactly this to lay a batch out as one picture.',
+        3: '(b w) gives column = b·4 + w, shape (3, 8). Write (w b) and the frames interleave column by column: legal, same shape, visually garbage. Order inside brackets matters.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var reg = tileReg(W, H), LF = L('flat', R_FLAT, reg, 44), LV = L('vhs', R_VHS, reg, 52);
         var p = ramp(l, .8, 3.6), pts = fly(LF.spots, LV.spots, p, .015);
@@ -276,10 +281,10 @@
         if (l > 3.8) { ctx.save(); ctx.globalAlpha = ramp(l, 3.8, 4.4); lbl(ctx, 'frame 0', bx.x + bx.w * .25, bx.y - LV.s * .95, 13, P.pink); lbl(ctx, 'frame 1', bx.x + bx.w * .75, bx.y - LV.s * .95, 13, P.mint);
           tapeLabel(ctx, 'shape ' + shapeStr(LV.R.shape), W - Math.min(80, W * .2), bx.y + bx.h + LV.s * 1.1, 13, { rot: .04 }); ctx.restore(); }
       } },
-    { name: 'broadcasting', start: 28, dur: 8, cap: {
-        1: 'Now add a row of 4 <b>stamps</b> to every row of a tray. She doesn\'t cut 3 copies: the stamps just <b>stretch</b> down (the ghosts) and each tile adds the stamp above it.',
-        2: '<b>Broadcasting</b>: shapes (3, 4) and (4,) line up from the right; the missing axis gets stretched. The ghost copies are never actually made in memory.',
-        3: 'Rules: align trailing dims; each pair must be equal or 1 (missing counts as 1). (3,4)+(4,) → (3,4). (3,4)+(3,) fails: 4 vs 3. Fix with rearrange(s, \'h -> h 1\').' },
+    { name: 'broadcasting', start: 28, dur: 8, need: 'core', cap: {
+        1: 'Add a row of 4 <b>stamps</b> to every row of a tray. She doesn\'t cut 3 copies: the stamp row <b>slides down</b> (the ghosts) and each tile adds the stamp in its column.',
+        2: '<b>Broadcasting</b>: line shapes up from the <b>right</b>; a missing or size-1 axis repeats to fit. Why the right: the last axis is usually "which feature", so one per-feature row fits every row.',
+        3: '(3,4)+(4,) → (1,4) → (3,4). The danger is the silent case: square M (3,3) / M.sum(1) (shape (3,)) scales <i>columns</i>, not rows. keepdim=True keeps (3,1) and fixes it.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var por = POR(W, H), s = Math.min((W - 60) / 4.6, (H - 260) / 5.4, 76), gx = W / 2 - 2 * s, gy = por ? H * .38 : H * .34;
         var STAMP = [10, 20, 30, 40], sy = gy - s * 1.35;
@@ -301,15 +306,15 @@
           tile(ctx, gx + (w + .5) * s, gy + (h + .5) * s, s, val, colOf(SRC[i]), { seed: i, hl: add > 0 && add < 1 ? 1 : 0 });
         }
         if (l > 1) { ctx.save(); ctx.globalAlpha = ramp(l, 1, 1.6); var sz = W < 500 ? 13 : 16;
-          lbl(ctx, 'stamps (4,)', gx - 6, sy, sz, P.peach, { align: 'right' }); lbl(ctx, 'x[0] (3, 4)', gx - 6, gy + s * 1.5, sz, P.pink, { align: 'right' });
+          lbl(ctx, W < 500 ? '(4,)' : 'stamps (4,)', gx - 6, sy, sz, P.peach, { align: 'right' }); lbl(ctx, W < 500 ? '(3, 4)' : 'x[0] (3, 4)', gx - 6, gy + s * 1.5, sz, P.pink, { align: 'right' });
           ctx.restore(); }
         if (l > 4.6) { ctx.save(); ctx.globalAlpha = ramp(l, 4.6, 5.2);
           readout(ctx, 0, gy + 3 * s + 22, [['   (3, 4)', P.pink], ['+     (4,)   align right, stretch', P.peach], ['=  (3, 4)   row 2: ' + res.slice(8, 12).join(' '), P.butter]], W, { center: true }); ctx.restore(); }
       } },
-    { name: 'einsum dance', start: 36, dur: 10, cap: {
-        1: 'A matchmaking dance. Every tile in a row of A is paired with its partner down a column of B, they <b>multiply</b>, and the pairs\' results are <b>added up</b> into one tile of C.',
-        2: '<code>einsum(A, B, \'i j, j k -> i k\')</code>: j appears in both inputs but not the output, so j is the axis that gets <b>paired up and summed away</b>. That is matrix multiplication.',
-        3: 'C[i,k] = Σ_j A[i,j]·B[j,k]. Shapes (2,3)·(3,2) → (2,2). Any index missing from the output is summed; repeated indices align. Watch C[1,1] = 4·0 + 5·1 + 6·3 = 23.' },
+    { name: 'einsum dance', start: 36, dur: 10, need: 'core', cap: {
+        1: 'A matchmaking dance. Each number in a row of A pairs with its partner down a column of B; each pair <b>multiplies</b>, and the results are <b>added</b> into one tile of C.',
+        2: '<code>\'i j, j k -> i k\'</code>: j is in both inputs but not the output, so it is <b>paired up and summed away</b>. Each C tile scores one row of A against one column of B: matrix multiply.',
+        3: 'C[i,k] = Σ_j A[i,j]·B[j,k], (2,3)·(3,2) → (2,2). Letters missing from the output are summed. C[1,1] = 4·0 + 5·1 + 6·3 = 23. Deep dive: the einsum film.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var por = POR(W, H), A = [[1, 2, 3], [4, 5, 6]], B = [[1, 0], [2, 1], [0, 3]];
         var s = Math.min((W - 60) / 6.2, (H - 250) / 5.6, 72), ax = W / 2 - s * 3.3, ay = por ? H * .3 : H * .28, bx = W / 2 + s * 1.1, by = ay - s * .5, cx = W / 2 - s, cy = ay + s * 3.1;
@@ -340,10 +345,10 @@
         }
         if (l > 8.8) { ctx.save(); ctx.globalAlpha = ramp(l, 8.8, 9.3); readout(ctx, 0, cy + s * 2.9, [['(2, 3) · (3, 2) -> (2, 2)', P.butter], ['C = [[5, 11], [14, 23]]', P.mint]], W, { center: true }); ctx.restore(); }
       } },
-    { name: 'a batch of rays', start: 46, dur: 8, cap: {
-        1: 'Last job of the night: a paper torch fires <b>9 rays at once</b> at a wall. For each ray, one small sum answers "does it hit, and where?". The hits light up lanterns.',
-        2: 'ARENA [0.1]: a ray is O + u·D, the wall is L1 + v·(L2 − L1). Solve for u and v; it\'s a hit if u ≥ 0 (in front) and 0 ≤ v ≤ 1 (on the segment). All 9 are solved in <b>one batched op</b>.',
-        3: 'Stack the 2×2 systems [D | L1−L2]·[u,v]ᵀ = L1−O into shape (9, 2, 2) and call torch.linalg.solve once. Here: 4 hits, 5 misses. Parallel rays make the matrix singular: mask them.' },
+    { name: 'a batch of rays', start: 46, dur: 8, need: 'exercise', cap: {
+        1: 'A torch fires <b>9 rays at once</b> at a wall. For each ray: how far along the ray (u) and along the wall (v) do they meet? A hit needs the wall in front and between its two ends.',
+        2: 'Ray points: O + u·D (start O, direction D). Wall points: L1 + v·(L2 − L1). Set equal, solve for u, v. Hit if u ≥ 0 (not behind the torch) and 0 ≤ v ≤ 1 (between the ends).',
+        3: 'Stack the 2×2 systems [D | L1−L2]·[u,v]ᵀ = L1−O into (9, 2, 2); one torch.linalg.solve (a library call) beats 9 loops. 4 hits here. Parallel rays make it singular: mask them.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var por = POR(W, H), reg = region(W, H, por ? 90 : 80, por ? 120 : 96), V = rayView(reg), O = [0, 0];
         codeNote(ctx, 'O + u·D = L1 + v·(L2 − L1)', W / 2, por ? 36 : 44, W, W < 500 ? 16 : 21);
@@ -351,10 +356,10 @@
         var mask = res.map(function (h) { return h.hit ? 'T' : 'F'; }).join(' '), nh = res.filter(function (h) { return h.hit; }).length;
         if (l > 5.2) { ctx.save(); ctx.globalAlpha = ramp(l, 5.2, 5.8); readout(ctx, 0, H - (W < 500 ? 70 : 76), [['rays (9, 2, 2) -> solve -> u, v (9,)', P.chalk], ['hit = (u>=0) & (0<=v<=1)', P.mint], ['    = [' + mask + ']  ' + nh + '/9', P.butter]], W, { center: true }); ctx.restore(); }
       } },
-    { name: 'where the story stops', start: 54, dur: 6, cap: {
-        1: 'Honest bit: the computer has no trays. It keeps all 24 tiles in <b>one long line</b>. "Batch", "row", "column" are labels <b>you</b> keep in your head.',
-        2: 'A tensor is flat memory plus <b>strides</b>: how far to jump for +1 on each axis. Nothing in memory says which axis is batch; mix them up and you get wrong answers, not errors.',
-        3: 'x.stride() = (12, 4, 1), so x[1,2,1] sits at 12+8+1 = 21. rearrange to \'w h b\' can be a view with strides (1, 4, 12): zero copying, just new bookkeeping.' },
+    { name: 'where the story stops', start: 54, dur: 6, need: 'core', cap: {
+        1: 'Honest bit: the computer has no trays, just <b>one long line</b> of 24 tiles. Axis names live in <b>your</b> head. What breaks if you swap two axes? Nothing loudly: the answer is just wrong.',
+        2: 'Memory is flat. Nothing in it says which axis is batch, so mixing two axes up gives <b>wrong answers, not errors</b>. That is why you name every axis, every time.',
+        3: 'Strides (12, 4, 1) say how far to jump per axis: x[1,2,1] sits at 12+8+1 = 21. Internals are a library detail; [0.2]\'s as_strided exercises are optional.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var por = POR(W, H), perRow = por ? 8 : 12, s = Math.min((W - 40) / perRow, 48), rows = N / perRow, gx = (W - perRow * s) / 2, gy = por ? H * .22 : H * .24;
         // the ribbon of memory, snaking row to row
@@ -370,10 +375,10 @@
         if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 3.2, 3.9); var cxf = W - fs * .36, cyf = H - fs * .36;
           F.hand(ctx, 'the computer never', cxf - sz * .45, cyf - sz * .45, sz, P.ink, { seed: 'r1', rot: -.785 }); F.hand(ctx, 'knew which was batch', cxf + sz * .45, cyf + sz * .45, sz, P.ink, { seed: 'r2', rot: -.785 }); ctx.restore(); }
       } },
-    { name: 'the code', start: 60, dur: 6, cap: {
-        1: 'Everything you just watched fits in three lines. The tiles become the notation.',
-        2: 'This is Week 1 in code: a shape you can name, an einops pattern that says what happens to each axis, and einsum for pairing and summing.',
-        3: 'ARENA [0.0]: einops rearrange / reduce / repeat and einsum exercises; [0.1]: the same moves, batched over rays and triangles, to render a mesh.' },
+    { name: 'the code', start: 60, dur: 6, need: 'exercise', cap: {
+        1: 'Everything you watched fits in three lines: the shape is the trays, rearrange is the flying tiles, einsum is the dance. The tiles become the notation.',
+        2: 'Week 1 in code: a shape you can name, an einops pattern that says what happens to each axis, and einsum for pairing and summing. These are the moves in every [0.0] exercise.',
+        3: 'ARENA [0.0]: einops rearrange / reduce / repeat and the einsum exercises; [0.1]: the same moves, batched over rays and triangles, to render a mesh.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var reg = tileReg(W, H), LS = L('stack', R_STACK, reg, 58);
         var sz = W < 500 ? 13 : 18, lines = [['x.shape == (2, 3, 4)', P.pink], ["rearrange(x, 'b h w -> b (h w)')", P.mint], ["einsum(A, B, 'i j, j k -> i k')", P.lav]];
@@ -388,9 +393,9 @@
         drawTiles(ctx, pts, { alpha: function () { return 1 - ramp(l, 1.2, 2.4); } });
         ctx.save(); ctx.globalAlpha = ramp(l, 3.6, 4.2); lbl(ctx, 'each axis gets a name, every time', W / 2, top + cardH + 28, W < 500 ? 14 : 18, P.butter); ctx.restore();
       } },
-    { name: 'why it matters', start: 66, dur: 6, cap: {
-        1: 'Inside an AI, every thought is a stack of numbers like this. To read its mind, you first have to know <b>which axis is which</b>.',
-        2: 'Inside a transformer, every thought is a tensor with shape <b>(batch, position, d_model)</b>. Reading minds starts with never losing track of an axis.',
+    { name: 'why it matters', start: 66, dur: 6, need: 'core', cap: {
+        1: 'Inside an AI, every thought is a stack of numbers like these trays. To read its mind you first need to know <b>which axis is which</b>: which sentence, which word, which feature.',
+        2: 'In a transformer, the state has shape <b>(batch, position, d_model)</b>: which sentence, which word, which of d_model features. Losing track of an axis is the commonest silent bug.',
         3: 'The residual stream is (batch, seq, d_model); attention patterns are (batch, head, q_pos, k_pos). Probes, patching and steering vectors are all einsums over named axes.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var por = POR(W, H), es = Math.min(W, H) * (por ? .2 : .17), ex = W / 2, ey = H * (por ? .5 : .54);
@@ -399,7 +404,7 @@
           c.save(); c.globalAlpha = clear; var n = 5, q = s * .22;
           for (var b = 2; b >= 0; b--) for (var r = 0; r < 3; r++) for (var k = 0; k < 4; k++) { var hue = ROWCOL[b % 2][r]; c.fillStyle = hue; c.globalAlpha = clear * (b ? .45 : .95); c.fillRect(-q * 2 + k * q + b * q * .35, -q * 2.2 + r * q - b * q * .35, q * .86, q * .86); }
           c.restore(); } });
-        librarian(ctx, ex - es * 1.6, ey + es, es * .8, t, false);
+        librarian(ctx, ex - es * 1.6, ey + es, es * .8, t, false, l < 1.4 ? { pose: 'lean-in', t0: .2, look: { x: ex, y: ey } } : { pose: 'point', t0: 1.4, from: 'lean-in', look: { x: W / 2, y: ey + es * 1.45 } });
         ctx.save(); ctx.globalAlpha = ramp(l, 1.4, 2.1); tapeLabel(ctx, '(batch, position, d_model)', W / 2, ey + es * 1.45, W < 500 ? 13 : 17); ctx.restore();
         ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'reading minds starts with\nnever losing track of an axis', W / 2, por ? 50 : 60, W < 500 ? 16 : 22, { color: P.pink, seed: 'mind', rot: .02 }); ctx.restore();
         F.plane(ctx, lerp(-20, W + 20, l / 6), ey - es * 1.6, 11, .05, P.cream);

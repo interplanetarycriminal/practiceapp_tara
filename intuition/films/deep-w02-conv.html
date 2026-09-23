@@ -138,11 +138,19 @@
   function hideQ(api, resume) { if (!Q.el) return; Q.el.classList.remove('on'); if (resume && !isPlaying(api)) api.root.querySelector('.pp').click(); }
 
   /* ================= chapters ================= */
+  /* pass 2: a chalk stick narrator who acts a few key beats from the bottom-left corner */
+  function narr(ctx, W, H, t, o) { var ph = W < 500; o.scarf = o.scarf || P.mint; return F.stick(ctx, ph ? 34 : 80, H - 10, ph ? 78 : 120, t, o); }
   var chapters = [
-    { name: 'nine products', start: 0, dur: 18, cap: {
-        1: 'A paper art school has a 34-floor studio tower. Floor 1 gets a photo; the top floor must say "cat". Floor 1\'s tool is a <b>stencil</b>: a 3×3 grid of numbers laid on the photo. Multiply the 9 pairs, add them up, write one number. Slide, repeat.',
-        2: 'This stencil is a Sobel kernel: −1, −2, −1 on the left, +1, +2, +1 on the right. Where the photo goes dark → bright left-to-right (the edge of an ear), the sum is big. Flat sky gives 0.',
-        3: 'PyTorch\'s conv2d is really cross-correlation (no kernel flip). Output[i,j] = Σₐ Σ_b x[i+a, j+b]·w[a,b]. A 6×6 input and 3×3 kernel give 4×4: every output is one dot product of 9 numbers.' },
+    { name: 'nine products', start: 0, dur: 18, need: 'core', cap: {
+        1: 'A paper art school has a 34-floor studio tower. A photo goes in at floor 1; the top floor must say "cat". Floor 1\'s tool is a <b>stencil</b>: a 3×3 grid of numbers laid on the photo.',
+        2: 'The stencil is a <b>kernel</b>: a small grid of weights. At each spot, multiply the 9 overlapping pairs and add: one number scoring how much the patch looks like the stencil.',
+        3: 'Output[i,j] = Σₐ Σ_b x[i+a, j+b]·w[a,b]: a dot product of kernel and one 3×3 patch. A 6×6 input and 3×3 kernel give 4×4, since the kernel must fit inside.' },
+      beats: [
+        { at: 9, name: 'an edge stencil', need: 'core', cap: {
+            1: 'This stencil is negative on the left, positive on the right. Where the photo goes dark → bright (the edge of an ear) the sum is big; flat sky cancels to 0.',
+            2: 'It is a Sobel kernel: −1, −2, −1 left, +1, +2, +1 right. Sum = weighted right brightness − left: a vertical-edge detector. Training discovers tools like this by itself.',
+            3: 'PyTorch\'s conv2d is cross-correlation (no kernel flip); maths-book convolution flips it. For learned kernels the difference doesn\'t matter.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, 0); var L = lay(W), ph = L.ph;
         title(ctx, W, 'will the message survive the climb?', ph ? 24 : 32, P.butter);
@@ -172,10 +180,16 @@
         }
         if (!ph) mono(ctx, 'input 6×6', gx + 3 * cs, gy - 16, 13, P.chalk, 'center'), mono(ctx, 'output 4×4', ox + 2 * oc, oy - 16, 13, P.chalk, 'center');
       } },
-    { name: 'a stack of stencils', start: 18, dur: 20, cap: {
-        1: 'Real photos have 3 layers of paper: red, green, blue. So one "stencil" is really a <b>stack</b> of three 3×3 grids, one per colour. Each grid scores its own colour; the three scores are <b>added</b> into one number. A second stack makes a second feature map.',
-        2: 'Conv2d(3, 2, kernel_size=3): weight shape (out_channels=2, in_channels=3, 3, 3). Output channel o at (i,j) = Σ over c of (x[c] ⋆ w[o,c])[i,j] + bias[o]. Every output channel looks at every input channel.',
-        3: 'Parameters: 2·3·3·3 + 2 = 56. The in_channels sum is why ResNet34\'s 3×3 convs at 512 channels have 512·512·9 ≈ 2.4M weights each. A 1×1 conv is the pure "mix channels" case: a Linear applied at every pixel.' },
+    { name: 'a stack of stencils', start: 18, dur: 20, need: 'core', cap: {
+        1: 'Real photos have 3 sheets: red, green, blue. So one stencil is really a <b>stack</b> of three 3×3 grids. Each scores its own colour; the three scores are <b>added</b> into one number.',
+        2: 'Output channel o at (i,j) = Σ over input channels c of (patch of x[c]) · w[o,c]. Why add colours: a feature like "orange fur" needs red and green together.',
+        3: 'Conv2d(3, 2, kernel_size=3): weight (out_channels=2, in_channels=3, 3, 3). Every output channel reads every input channel. Shown: the R, G, B partial sums, then + bias.' },
+      beats: [
+        { at: 10, name: 'two stacks, two maps', need: 'exercise', cap: {
+            1: 'A second stack of stencils looks for a different thing and makes a second feature map. "2 output channels" just means "2 stacks of stencils".',
+            2: 'Weight shape (2, 3, 3, 3): 2 stacks × 3 colours × 3×3. In [0.2] your job is to create this weight with the right init; the sliding itself is <code>F.conv2d</code>.',
+            3: '2·3·3·3 = 54 weights (ARENA\'s Conv2d has bias=False). Kaiming bound ±1/√(3·3·3): each output sums 27 products. At 512 channels one 3×3 conv holds ≈2.4M weights.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, .1); var L = lay(W), ph = L.ph;
         var step = clamp(Math.floor((l - 2) / 2.2), 0, 7), o = step >= 4 ? 1 : 0, pos = step % 4, i = Math.floor(pos / 2), j = pos % 2;
@@ -212,10 +226,20 @@
         }
         var wa = ramp(l, 14, 15); if (wa > 0 && oy + 2 * oc + 50 < H - 10) { ctx.save(); ctx.globalAlpha = wa; hnote(ctx, 'weight: (2, 3, 3, 3)', W / 2, oy + 2 * oc + 44, ph ? 16 : 20, P.butter, 'wshape'); ctx.restore(); }
       } },
-    { name: 'stride & padding', start: 38, dur: 24, cap: {
-        1: 'Two dials on every stencil. <b>Padding</b> adds a ring of zeros so the edge pixels get a full look. <b>Stride</b> is how far the stencil hops: stride 2 skips every other spot, so the map comes out half the size. One formula tells you the size before you run anything.',
-        2: 'L_out = ⌊(L_in + 2·padding − kernel_size) / stride⌋ + 1. 7×7, k=3, p=1, s=1 → 7 (shape-preserving). Same with stride 2 → 4. MaxPool2d uses the same formula but keeps only the loudest number in each window.',
-        3: 'ResNet34\'s stem: Conv2d(3, 64, kernel_size=7, stride=2, padding=3) then MaxPool2d(kernel_size=3, stride=2, padding=1): 224 → 112 → 56. The floor means a stride that doesn\'t fit just drops the last partial window.' },
+    { name: 'stride & padding', start: 38, dur: 24, need: 'core', cap: {
+        1: 'Two dials. <b>Padding</b> adds a ring of zeros so edge pixels get a full look. <b>Stride</b> is how far the stencil hops: stride 2 skips every other spot, so the map comes out half the size.',
+        2: 'L_out = ⌊(L_in + 2·padding − kernel) / stride⌋ + 1: padded width, minus the room the kernel needs, divided by the hop, plus the first spot. 7, k=3, p=1: s=1 → 7, s=2 → 4.',
+        3: 'The floor ⌊⌋ drops a last partial window. padding = (k−1)/2 at stride 1 keeps the size ("same" padding). Next: predict ResNet34\'s stem.' },
+      beats: [
+        { at: 9.5, name: 'predict the stem', need: 'core', cap: {
+            1: 'Your turn: a 32×32 photo, a 7×7 stencil, hop 2, padding 3. Guess the size before looking. "About half" is the right hunch: stride 2 halves.',
+            2: '⌊(32 + 2·3 − 7) / 2⌋ + 1 = ⌊31/2⌋ + 1 = 16. So (1, 3, 32, 32) → (1, 64, 16, 16): 64 stacks of stencils, each making a 16×16 map.',
+            3: 'Conv2d(3, 64, kernel_size=7, stride=2, padding=3) is the ResNet34 stem; on ImageNet\'s 224×224 it gives 112.' } },
+        { at: 16, name: 'max-pool', need: 'library', cap: {
+            1: 'Then a <b>max-pool</b>: the same sliding window, but with no weights. It just keeps the loudest number in each window. Same size formula, nothing to learn.',
+            2: 'MaxPool2d(3, stride=2, padding=1) uses the same L_out formula: 16 → 8. Library call: know that it shrinks the map and keeps the strongest response.',
+            3: 'ResNet34 on 224: conv 224 → 112, maxpool 112 → 56. No parameters; the gradient goes only to each window\'s argmax.' } }
+      ],
       draw: function (ctx, t, l, W, H, api) {
         if (!Q.done && Q.prev >= 0 && Q.prev < QT && t >= QT && t - Q.prev < .4) { Q.done = true; showQ(api); }
         if (t < QT - 1) { Q.done = false; if (Q.el && Q.el.classList.contains('on')) hideQ(api, false); }
@@ -263,10 +287,16 @@
           }
         }
       } },
-    { name: 'BatchNorm: train', start: 62, dur: 22, cap: {
-        1: 'Between floors sit <b>caretakers</b>. In training, each caretaker looks at the whole batch passing through, finds its average and spread for this channel, and rescales everything to mean 0, spread 1. Then two learned knobs (weight, bias) set the level the next floor gets.',
-        2: 'mean and var over dims (0, 2, 3), var with unbiased=False. x̂ = (x − mean)/√(var + eps), y = weight·x̂ + bias. Each training batch also nudges the buffers: running_mean = 0.9·running_mean + 0.1·mean (momentum 0.1).',
-        3: 'running_mean starts at 0 and running_var at 1 (registered buffers, not Parameters: no gradients, but saved in state_dict). After k batches the start value still has weight 0.9ᵏ: after 10 batches that is 35%, after 40 about 1.5%.' },
+    { name: 'BatchNorm: train', start: 62, dur: 22, need: 'exercise', cap: {
+        1: 'Between floors sit <b>caretakers</b>. In training, a caretaker looks at the whole batch passing through, finds this channel\'s average and spread, and rescales to average 0, spread 1.',
+        2: 'Per channel: mean and var over batch, height, width (dims 0, 2, 3). x̂ = (x − mean)/√(var + eps). Why: the next floor always gets inputs on the same scale, which keeps training steady.',
+        3: 'var with unbiased=False (divide by N). eps = 1e-5 avoids dividing by 0. Stats have shape (C,); reshape to (1, C, 1, 1) to broadcast against (B, C, H, W).' },
+      beats: [
+        { at: 11, name: 'knobs and a diary', need: 'exercise', cap: {
+            1: 'Then two learned knobs (weight, bias) set the level the next floor gets. And each caretaker keeps a <b>diary</b>: a slowly updated average of what batches usually look like.',
+            2: 'y = weight·x̂ + bias. Each batch nudges the diary: running_mean = 0.9·running_mean + 0.1·batch mean (momentum 0.1). Why slowly: one odd batch shouldn\'t rewrite it.',
+            3: 'running_mean starts at 0, running_var at 1 (buffers: saved in state_dict, no gradients). The start value keeps weight 0.9ᵏ: 35% after 10 batches, about 1.5% after 40.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, .3); var L = lay(W), ph = L.ph, sz = ph ? 12 : 15;
         var bi = clamp(Math.floor((l - 1) / 2.6), 0, 5), B = BN.batches[bi], h = BN.hist[bi + 1];
@@ -294,12 +324,19 @@
         ctx.strokeStyle = '#b3443c'; ctx.lineWidth = 3; ctx.beginPath(); for (b = 0; b <= nb; b++) { var X = gx0 + (gx1 - gx0) * b / 40, Y = lerp(gy0, gy1, BN.hist[b].rm / vmax); if (b) ctx.lineTo(X, Y); else ctx.moveTo(X, Y); } ctx.stroke();
         mono(ctx, 'dots: batch mean   line: running_mean = ' + BN.hist[nb].rm.toFixed(2), px + 12, py + 12, ph ? 11 : 13, '#6b2f7a', 'left', '700');
       } },
-    { name: 'BatchNorm: eval', start: 84, dur: 16, cap: {
-        1: 'At exam time the caretakers stop looking at the crowd. In <b>eval mode</b> they use the averages they wrote down in training (the running buffers). Why it matters: in training mode, your photo\'s output depends on <b>who else is in the batch</b>.',
-        2: 'Same photo, pixels (4.1, 2.3). In a batch with dim photos it comes out bright; with bright photos, dark. model.eval() swaps in running_mean / running_var: one fixed answer. Forgetting model.eval() is a classic silent bug.',
-        3: 'Train mode with a batch of one 1×1 image: var = 0, so x̂ = 0 and y = bias whatever the input (PyTorch raises for that case). Eval-mode BN is just a fixed per-channel affine map, which is why it can be folded into the previous conv at deployment.' },
+    { name: 'BatchNorm: eval', start: 84, dur: 16, need: 'exercise', cap: {
+        1: 'Why the diary matters: in training mode your photo\'s output depends on <b>who else is in the batch</b>. Dim batch-mates make it look bright; bright batch-mates make it look dark.',
+        2: 'Same photo, pixels (4.1, 2.3): in training mode it comes out 3.59 or −0.93 depending on its batch, because the batch mean and var it is divided by change.',
+        3: 'Train-mode BN couples the examples in a batch; a batch of one 1×1 image has var 0 (PyTorch raises). That coupling is why eval mode exists.' },
+      beats: [
+        { at: 8, name: 'exam time', need: 'exercise', cap: {
+            1: 'At exam time the caretakers stop looking at the crowd. In <b>eval mode</b> they read their diaries instead, so your photo gets one fixed answer whoever it arrives with.',
+            2: '<code>model.eval()</code> swaps in running_mean / running_var: the same photo now gives 1.42 every time. Forgetting it is a classic silent bug: no error, just wobbly results.',
+            3: 'Eval-mode BN is a fixed per-channel affine map, so it can be folded into the previous conv when deploying. <code>model.train()</code> switches back.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, .35); var L = lay(W), ph = L.ph, sz = ph ? 12 : 15, cw = Math.min(W - 16, 600), x0 = W / 2 - cw / 2 + 12, y0 = ph ? 14 : 22, lh = sz * 1.5;
+        narr(ctx, W, H, t, l < 8 ? { pose: 'think', t0: .5 } : l < 12 ? { pose: 'point', t0: 8, from: 'think', look: { x: W / 2, y: H * .35 } } : { pose: 'recoil', t0: 12, from: 'point' });
         var blocks = [
           { a: .3, col: '#fbf6ea', rows: [['model.train(), batch A (dim mates)', '#6b5a9a', '700'], ['mates ' + MATES[0].join(' '), P.ink], ['mean ' + TRAIN_OUT[0].m.toFixed(2) + '  var ' + TRAIN_OUT[0].v.toFixed(2), P.ink], ['my y = (' + TRAIN_OUT[0].y.map(function (v) { return v.toFixed(2); }).join(', ') + ')', '#b3443c', '700']] },
           { a: 4, col: '#fbf6ea', rows: [['model.train(), batch B (bright mates)', '#6b5a9a', '700'], ['mates ' + MATES[1].join(' '), P.ink], ['mean ' + TRAIN_OUT[1].m.toFixed(2) + '  var ' + TRAIN_OUT[1].v.toFixed(2), P.ink], ['my y = (' + TRAIN_OUT[1].y.map(function (v) { return v.toFixed(2); }).join(', ') + ')', '#b3443c', '700']] },
@@ -314,12 +351,23 @@
         });
         var fa = ramp(l, 12, 12.8); if (fa > 0 && y + 30 < H) { ctx.save(); ctx.globalAlpha = fa; hnote(ctx, 'forgot model.eval()? results wobble', W / 2, y + (ph ? 18 : 24), ph ? 15 : 20, P.pink, 'forgot'); ctx.restore(); }
       } },
-    { name: '34 floors', start: 100, dur: 24, cap: {
-        1: 'Now the climb. Learning sends a message <b>down</b> the tower: "change like this". Each plain floor passes on about 0.9× of it, and 34 of those multiply. With a <b>shortcut</b> lift, each floor passes on 1 + (its small nudge), so the message keeps a direct route.',
-        2: 'Plain: dL/dx₀ = Π aᵢ, with aᵢ from 0.75 to 1.03 (real seeded draws). Residual: out = F(x) + x, so each factor is 1 + cᵢ with small cᵢ. Watch both products computed floor by floor.',
-        3: 'Expand Π(1 + cᵢ) = 1 + Σcᵢ + Σcᵢcⱼ + …: the "1" is a path that skips every branch. Remove it and the gradient must go through all 34 branches: Π|cᵢ| is astronomically small. Real Jacobians are matrices, but the same bookkeeping holds.' },
+    { name: '34 floors', start: 100, dur: 24, need: 'core', cap: {
+        1: 'Now the climb. Learning sends a message <b>down</b> the tower: "change like this". Each plain floor passes on only part of it (about 0.9×), and 34 of those shrink it to almost nothing.',
+        2: 'The message is the gradient: which way, and how much, to change. Backprop multiplies one factor per floor (the chain rule): dL/dx₀ = Π aᵢ. 34 factors below 1 → tiny.',
+        3: 'Plain: aᵢ from 0.75 to 1.03 (seeded draws) give Π ≈ 0.015 at floor 1. Real Jacobians are matrices, but the same bookkeeping holds.' },
+      beats: [
+        { at: 8, name: 'the shortcut lift', need: 'core', cap: {
+            1: 'With a <b>shortcut lift</b>, each floor passes on 1 + (its small nudge). The "1" is the lift: the message rides straight down without shrinking, so floor 1 still hears it.',
+            2: 'Residual: out = F(x) + x, so each factor is 1 + cᵢ (cᵢ small) and Π(1 + cᵢ) stays near 1 (here 1.084). Why +1: d(x)/dx = 1. And a block can easily learn "do nothing".',
+            3: 'Expand Π(1 + cᵢ) = 1 + Σcᵢ + Σcᵢcⱼ + …: the "1" is a path that skips every branch; every other term is a path through some branches.' } },
+        { at: 15, name: 'no lift', need: 'core', cap: {
+            1: 'Take the lift away and keep only the branches: the message must squeeze through all 34 small nudges, and it is gone. The shortcut is what keeps deep towers trainable.',
+            2: 'Without the +1 path, Π|cᵢ| ≈ 9.5e-48: effectively zero. Plain 0.015, residual 1.084. That is the vanishing gradient and its fix, in three numbers.',
+            3: 'The same bus returns in transformers: the residual stream is x + Σ(layer outputs), each layer reading it and adding to it. Interpretability decomposes it path by path.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, .45); var L = lay(W), ph = L.ph, sz = ph ? 12 : 15;
+        narr(ctx, W, H, t, l < 8 ? { pose: 'lean-in', t0: .5, look: { x: W * .3, y: H * .4 } } : l < 15 ? { pose: 'point', t0: 8, from: 'lean-in', look: { x: W * .7, y: H * .4 } } : { pose: 'recoil', t0: 15, from: 'point' });
         var k = clamp(Math.floor(lerp(0, 34, ramp(l, 2, 14))), 0, 34);
         var tw = ph ? (W - 40) / 2 : Math.min(260, (W - 120) / 2), top = ph ? 50 : 60, fh = ph ? Math.min(13, (H - 250) / 34) : Math.min(14, (H - 250) / 34), th = fh * 34;
         [['plain', CP, P.butter, PLAIN, false], ['with shortcut', CR, P.mint, BRANCH, true]].forEach(function (tw0, q) {
@@ -342,12 +390,19 @@
           ctx.restore();
         }
       } },
-    { name: 'ResNet34 floor plan', start: 124, dur: 14, cap: {
-        1: 'The real tower. Four groups of residual blocks: 3, 4, 6, 3. At the start of groups 2 to 4 the floor halves the picture and doubles the channels, so x no longer fits through the lift door: that lift gets its own little 1×1 stencil and caretaker. <b>Where the story stops being true:</b> the shortcut mostly makes deep nets <b>trainable</b>, it isn\'t just about brightness.',
-        2: 'ResidualBlock(in_feats, out_feats, first_stride): right = nn.Identity() if first_stride == 1 and in_feats == out_feats, else Conv2d(in, out, kernel_size=1, stride=first_stride) + BatchNorm2d(out). 1 stem conv + 2·(3+4+6+3) + 1 Linear = 34.',
-        3: 'He et al. 2015: a plain 56-layer net had higher <i>training</i> error than a 20-layer one: an optimisation failure, not overfitting. Residuals let a block start near the identity. And with big branches Π(1+cᵢ) can explode: BatchNorm keeps cᵢ tame.' },
+    { name: 'ResNet34 floor plan', start: 124, dur: 14, need: 'exercise', cap: {
+        1: 'The real tower: four groups of residual blocks, 3, 4, 6, 3. At the start of groups 2 to 4 a floor halves the picture and doubles the channels, so x no longer fits the lift door.',
+        2: 'So that lift gets its own 1×1 stencil (with stride) and caretaker to reshape x: right = Conv2d(in, out, 1, stride) + BatchNorm2d. Everywhere else, right is the identity.',
+        3: 'ResidualBlock(in_feats, out_feats, first_stride): right = nn.Identity() if first_stride == 1 and in_feats == out_feats. 1 stem + 2·(3+4+6+3) + 1 Linear = 34.' },
+      beats: [
+        { at: 8.5, name: 'why shortcuts work', need: 'contested', cap: {
+            1: 'Where the story stops: exactly <i>why</i> shortcuts work so well is still argued about. What is solid: with them, very deep towers train; without them they don\'t. That\'s all you need.',
+            2: 'Current method: residuals everywhere. Why they work is debated: easier optimisation (He 2015), ensembles of shallow paths (Veit 2016), smoother loss landscapes (Li 2018). You need: the +1 path.',
+            3: 'He et al.: a plain 56-layer net had higher <i>training</i> error than a 20-layer one: optimisation, not overfitting. Large branches can make Π(1+cᵢ) explode; BatchNorm keeps cᵢ tame.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, .6); var L = lay(W), ph = L.ph, sz = ph ? 11.5 : 15, cw = Math.min(W - 16, 620), x0 = W / 2 - cw / 2 + 12, y0 = ph ? 14 : 22, lh = sz * (ph ? 2.5 : 1.9);
+        narr(ctx, W, H, t, l < 8.5 ? { pose: 'point', t0: .5, look: { x: W / 2, y: H * .3 } } : { pose: 'shrug', t0: 8.5, from: 'point' });
         var rows = [['x: (3, 224, 224)', '3 × 224 × 224', 0]].concat(R34.rows);
         var ch = rows.length * lh + 16; card(ctx, W / 2, y0 + ch / 2, cw, ch, 'r34');
         rows.forEach(function (r, q) {
@@ -370,10 +425,16 @@
           ctx.restore();
         }
       } },
-    { name: 'your forward()', start: 138, dur: 12, cap: {
-        1: 'Everything you just watched is three lines. The left branch is two stencil floors with caretakers; the right branch is the lift; add them, then ReLU. And the lift is the thing we\'ll read inside transformers: the <b>residual stream</b> is the same highway, and it\'s where interpretability looks and steers.',
-        2: 'ARENA [0.2] ResidualBlock.forward: <code>x_left = self.left(x)</code>, <code>x_right = self.right(x)</code>, <code>return self.relu(x_left + x_right)</code>. Shapes shown for the first block of group 2: 64 → 128 channels, first_stride=2.',
-        3: 'self.left = Sequential(Conv2d(in, out, 3, stride=first_stride, padding=1), BatchNorm2d, ReLU, Conv2d(out, out, 3, 1, 1), BatchNorm2d). Test with <code>tests.test_residual_block(ResidualBlock)</code>; load pretrained weights by matching the declaration order.' },
+    { name: 'your forward()', start: 138, dur: 12, need: 'exercise', cap: {
+        1: 'Everything you watched is three lines. The left branch is two stencil floors with caretakers; the right branch is the lift. Add them, then ReLU.',
+        2: 'ARENA [0.2] ResidualBlock.forward: <code>x_left = self.left(x)</code>, <code>x_right = self.right(x)</code>, <code>return self.relu(x_left + x_right)</code>.',
+        3: 'left = Sequential(Conv2d(in, out, 3, first_stride, 1), BatchNorm2d, ReLU, Conv2d(out, out, 3, 1, 1), BatchNorm2d). Shown: first block of group 2, 64 → 128, stride 2.' },
+      beats: [
+        { at: 6, name: 'the same highway', need: 'core', cap: {
+            1: 'The lift is the thing we\'ll read inside transformers: the <b>residual stream</b> is the same highway, and it\'s where interpretability looks and steers.',
+            2: 'In a transformer every layer adds its output onto one shared stream, just like x + F(x). Reading that stream is the logit lens; adding to it is steering.',
+            3: 'Test with <code>tests.test_residual_block(ResidualBlock)</code>. Pretrained weights load by matching declaration order, so declare submodules in PyTorch\'s order.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, .8); var L = lay(W), ph = L.ph, sz = ph ? 11 : 15, lh = sz * 1.6, cw = Math.min(W - 12, 660), x0 = W / 2 - cw / 2 + 10;
         var ch = CODE.length * lh + 20, cy = (ph ? 10 : 18) + ch / 2; card(ctx, W / 2, cy, cw, ch, 'code');
@@ -457,10 +518,25 @@
 
   window.__deep = { OUT1: OUT1, out00: outCh(0, 0, 0), BN: BN, TRAIN_OUT: TRAIN_OUT, EVAL_OUT: EVAL_OUT, CP34: CP[34], CR34: CR[34], CB34: CB[34], R34: R34, q: outSize(32, 7, 2, 3) };
 
+
+  /* pass 2: a chapter may carry extra caption beats; each beat becomes its own chapter sharing the same drawing */
+  function expandBeats(list) {
+    var out = [];
+    list.forEach(function (c) {
+      var bs = [{ at: 0, cap: c.cap, need: c.need, name: c.name }].concat(c.beats || []);
+      bs.forEach(function (b, i) {
+        var off = b.at, end = i + 1 < bs.length ? bs[i + 1].at : c.dur;
+        out.push({ name: b.name || c.name, need: b.need || c.need, start: c.start + off, dur: end - off, cap: b.cap,
+          draw: off ? function (ctx, t, l, W, H, api) { return c.draw(ctx, t, l + off, W, H, api); } : c.draw });
+      });
+    });
+    return out;
+  }
+
   F.play({
     title: 'Deep dive · Stencils and shortcuts',
     back: '../index.html',
-    chapters: chapters,
+    chapters: expandBeats(chapters),
     coda: coda,
     links: [
       { label: 'Week 2 pack', href: '../../index.html#week-02' },

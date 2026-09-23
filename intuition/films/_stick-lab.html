@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Stick Lab</title>
+<meta name="theme-color" content="#1c2140">
+<style>
+  html, body { margin: 0; background: #1c2140; color: #fbf6ea; font: 14px/1.3 system-ui, sans-serif; }
+  header { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: #161a35; flex-wrap: wrap; }
+  header b { font-size: 15px; margin-right: auto; }
+  button { font: inherit; border: 0; border-radius: 8px; padding: 5px 10px; background: #f7f0e1; color: #1c2140; cursor: pointer; }
+  button[aria-pressed=true] { background: #f7e3a0; font-weight: 700; }
+  canvas { display: block; width: 100%; }
+</style>
+</head>
+<body>
+<header><b>Stick lab (QA only)</b>
+  <button id="bg" aria-pressed="false">paper bg</button>
+  <button id="sz" aria-pressed="false">small</button>
+  <button id="ant" aria-pressed="true">replay t0</button>
+</header>
+<canvas id="c"></canvas>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  var names = F.stickPoses, paperBg = false, small = false, replay = true, mouse = null, W = 0, H = 0, dpr = 1, cols = 1, cw = 0, chH = 0;
+  var accents = [null, P.orange, P.sky, null, P.pink, null];
+  function layout() {
+    W = window.innerWidth; dpr = Math.min(2, window.devicePixelRatio || 1);
+    cw = small ? 96 : 150; cols = Math.max(2, Math.floor(W / cw)); cw = W / cols; chH = small ? 118 : 178;
+    H = Math.ceil(names.length / cols) * chH + 10;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.height = H + 'px';
+  }
+  function tog(id, fn) { var b = document.getElementById(id); b.onclick = function () { var v = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', v); fn(v); layout(); }; }
+  tog('bg', function (v) { paperBg = v; }); tog('sz', function (v) { small = v; }); tog('ant', function (v) { replay = v; });
+  if (location.hash !== '#sheet') { window.addEventListener('resize', layout); layout(); }
+  cv.addEventListener('pointermove', function (e) { var r = cv.getBoundingClientRect(); mouse = { x: e.clientX - r.left, y: e.clientY - r.top }; });
+  cv.addEventListener('pointerleave', function () { mouse = null; });
+  var T0 = performance.now();
+  window.__lab = { t: null };
+  // #sheet: film-strip of every pose at fixed times after t0 (anticipation, overshoot, settle)
+  if (location.hash === '#sheet') (function sheet() {
+    var TS = [0, .08, .16, .24, .32, .42, .55, .7, .85, 1.0, 1.2, 1.5, 2.0], rowH = 92, colW = 70;
+    W = colW * (TS.length + 1.4); H = rowH * names.length + 10; cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = P.paper; ctx.fillRect(0, 0, W, H);
+    names.forEach(function (n, r) {
+      var gy = r * rowH + rowH - 12; F.hand(ctx, n, 45, gy - 30, 13, P.ink);
+      TS.forEach(function (lt, c) { ctx.fillStyle = 'rgba(0,0,0,.08)'; ctx.fillRect(98 + c * colW - 30, gy, 60, 1.5); F.stick(ctx, 98 + c * colW, gy, 66, 10 + lt, { pose: n, t0: 10, look: { x: 98 + c * colW + 60, y: gy - 60 } }); });
+    });
+    TS.forEach(function (lt, c) { F.hand(ctx, lt.toFixed(2), 98 + c * colW, 10, 11, P.ink); });
+    requestAnimationFrame(sheet);
+  })();
+  else {
+  function frame(now) {
+    var t = window.__lab.t != null ? window.__lab.t : (now - T0) / 1000;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = paperBg ? P.paper : P.night; ctx.fillRect(0, 0, W, H);
+    names.forEach(function (n, i) {
+      var cx = (i % cols + .5) * cw, top = Math.floor(i / cols) * chH, gy = top + chH - 26, s = small ? 56 : 96;
+      ctx.fillStyle = paperBg ? 'rgba(42,41,52,.12)' : 'rgba(255,255,255,.06)'; ctx.fillRect(cx - cw / 2 + 4, gy, cw - 8, 2);
+      var period = 3, t0 = replay ? Math.floor(t / period) * period + .3 : undefined;
+      var o = { pose: n, t0: t0, color: accents[i % accents.length] || undefined, scarf: i % 3 === 0 ? P.red : null };
+      if (n === 'point' || n === 'reach' || n === 'lean-in') o.look = mouse || { x: cx + s * .9, y: gy - s * .9 };
+      if (n === 'carry') o.hold = function (c, hx, hy, ss) { F.paper(c, hx + ss * .02, hy - ss * .08, ss * .26, ss * .2, P.peach, { seed: 'box' }); };
+      if (n === 'sit' || n === 'type') { ctx.fillStyle = '#8a6f5a'; ctx.fillRect(cx - s * .28, gy - s * .24, s * .3, s * .24); }
+      if (n === 'fall' || n === 'jump' || n === 'land') o.t0 = replay ? Math.floor(t / 3) * 3 + .3 : undefined;
+      F.stick(ctx, cx - s * .05, gy, s, t, o);
+      F.hand(ctx, n, cx, top + chH - 11, small ? 12 : 15, paperBg ? P.ink : P.butter);
+    });
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  }
+})();
+</script>
+</body>
+</html>

@@ -197,11 +197,13 @@
   function posAt(k) { var n = Math.min(35, Math.floor(k)); return [Math.floor(n / 6), n % 6]; }
 
   var lastStamp = -1;
+  /* pass 2: a chalk stick narrator who acts a few key beats from the bottom-left corner */
+  function narr(ctx, W, H, t, o) { var ph = W < 500; o.scarf = o.scarf || P.mint; return F.stick(ctx, ph ? 34 : 80, H - 10, ph ? 78 : 120, t, o); }
   var chapters = [
-    { name: 'the wish', start: 0, dur: 5, cap: {
-        1: 'Meet a little <b>window</b>, like the lens on an old View-Master. Its wish: find the cat in a picture while only ever looking at a tiny <b>3×3</b> patch.',
-        2: 'This is a <b>convolution</b>: a small window of weights (the <b>kernel</b>) that looks at one patch of an image at a time. Week 2, ARENA [0.2]: CNNs and ResNets.',
-        3: 'ARENA [0.2]: build <code>Conv2d</code>, <code>MaxPool2d</code>, <code>BatchNorm2d</code>, <code>ResidualBlock</code> from scratch, assemble <code>ResNet34</code>, load pretrained weights.' },
+    { name: 'the wish', start: 0, dur: 5, need: 'core', cap: {
+        1: 'Meet a little <b>window</b>, like the lens on an old View-Master. Its wish: find the cat in a picture while only ever looking at a tiny <b>3×3</b> patch at a time.',
+        2: 'A <b>convolution</b> is a small grid of learned weights (the <b>kernel</b>) that looks at one patch at a time. Why small: nearby pixels matter most, and few weights are quick to learn.',
+        3: 'ARENA [0.2]: <code>Conv2d</code> (weights only; forward uses <code>F.conv2d</code>), <code>BatchNorm2d</code>, <code>ResidualBlock</code>, <code>BlockGroup</code>, <code>ResNet34</code>, then load pretrained weights.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var L = mainLayout(W, H, false), P0 = L.por;
         var c = L.c, gx = W / 2 - 4 * c, gy = P0 ? H * .36 : (H - 8 * c) / 2 + 20;
@@ -222,10 +224,10 @@
         else fnote(ctx, 'what is this little window\nlooking for?', W * .24, H * .62, qs, W * .45, { seed: 'q', rot: .02, reveal: ramp(l, 2.2, 4) });
         ctx.restore();
       } },
-    { name: 'the picture', start: 5, dur: 4, cap: {
-        1: 'The picture is just <b>64 numbers</b>, like a Game Boy screen: 0 is blank paper, 3 is the darkest ink. The window can only see 9 of them at once.',
-        2: 'An image is a grid of numbers (here 1 channel, 8×8, values 0–3). A colour photo would be 3 such grids (RGB) stacked: shape <code>(3, H, W)</code>.',
-        3: 'Input tensor shape <code>(batch, in_channels, H, W)</code> = (1, 1, 8, 8). PyTorch convs are channels-first; ARENA\'s ImageNet ResNet eats (B, 3, 224, 224).' },
+    { name: 'the picture', start: 5, dur: 4, need: 'core', cap: {
+        1: 'The picture is just <b>64 numbers</b>, like a Game Boy screen: 0 is blank paper, 3 is the darkest ink. To the machine the picture <i>is</i> the grid. The window sees 9 at once.',
+        2: 'An image is a grid of numbers (here 1 channel, 8×8, values 0–3). A colour photo is 3 such grids stacked (red, green, blue): shape <code>(3, H, W)</code>, channels first.',
+        3: 'Input shape <code>(batch, in_channels, H, W)</code> = (1, 1, 8, 8). PyTorch convs are channels-first; ARENA\'s ImageNet ResNet eats (B, 3, 224, 224).' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var L = mainLayout(W, H, false), c = L.c;
         grid(ctx, CAT, L.ix, L.iy, c, 'img', { upto: Math.floor(ramp(l, 0, 1.6) * 64) + 1 }); inLabel(ctx, L, W);
@@ -233,12 +235,13 @@
         ctx.save(); ctx.globalAlpha = ramp(l, 2, 2.8); var sz = W < 500 ? 16 : 20;
         fnote(ctx, '64 numbers in the picture.\nthe window sees 9.', L.ox + 3 * L.oc, L.oy + 3 * L.oc, sz, W, { color: P.mint, seed: 'n64', rot: -.02 }); ctx.restore();
       } },
-    { name: 'one look', start: 9, dur: 8, cap: {
-        1: 'One look: the window lays its own 9 numbers over the 9 pixels, <b>multiplies</b> each pair and <b>adds</b> them up. Ink on the right, paper on the left: a big number. It found an <b>edge</b>.',
-        2: 'Kernel = [−1 0 1] in each row: a <b>vertical-edge detector</b>. The output is right-column minus left-column brightness. Here 9 real products sum to <b>6</b>.',
-        3: '<code>out[i, j] = (x[i:i+3, j:j+3] * k).sum()</code> at (i, j) = (1, 4). No bias, stride 1, no padding. Strictly this is cross-correlation; DL calls it convolution anyway.' },
+    { name: 'one look', start: 9, dur: 8, need: 'core', cap: {
+        1: 'One look: the window lays its 9 numbers over 9 pixels, <b>multiplies</b> each pair, <b>adds</b> them up. Left column −1, right +1: ink on the right, paper on the left scores big. An <b>edge</b>.',
+        2: 'Each kernel row is [−1 0 1], so the sum = right-column brightness − left-column brightness. Flat patches cancel to 0; a dark-on-the-right edge scores high. Here 9 products sum to <b>6</b>.',
+        3: '<code>out[i, j] = (x[i:i+3, j:j+3] * k).sum()</code> at (i, j) = (1, 4): a dot product of patch and kernel. Strictly cross-correlation (no flip); DL calls it convolution anyway.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var L = mainLayout(W, H, true), c = L.c;
+        narr(ctx, W, H, t, l < 2.5 ? { pose: 'lean-in', t0: .2, look: { x: W / 2, y: H * .3 } } : { pose: 'point', t0: 2.5, from: 'lean-in', look: { x: W / 2, y: H * .45 } });
         grid(ctx, CAT, L.ix, L.iy, c, 'img'); inLabel(ctx, L, W);
         grid(ctx, FEAT, L.ox, L.oy, L.oc, 'feat', { upto: 0 }); outLabel(ctx, L, W);
         var arrive = ramp(l, 0, .9), wx = lerp(L.ix, L.ix + DEMO[1] * c, arrive), wy = lerp(L.iy, L.iy + DEMO[0] * c, arrive);
@@ -253,10 +256,10 @@
           F.blob(ctx, x, y, L.oc * .42, P.orange, { seed: 'stamp', jit: .4 }); lbl(ctx, '' + s, x, y + 1, Math.round(L.oc * .45), P.ink, {});
         }
       } },
-    { name: 'click, click', start: 17, dur: 6, cap: {
-        1: 'Click. Slide one step. Look again. Click. Like a View-Master reel, each click is a new position, and each look stamps one number into a new picture: the <b>feature map</b>.',
-        2: '36 positions fit in an 8×8 picture (6×6). Orange = an edge going paper→ink left to right, blue = ink→paper. The map lights up exactly along the cat\'s sides and ears.',
-        3: 'Output size = (H − k + 2p)/s + 1 = (8 − 3)/1 + 1 = 6. With <code>padding=1</code> it would stay 8×8. Real layers run this for every channel pair at once.' },
+    { name: 'click, click', start: 17, dur: 6, need: 'core', cap: {
+        1: 'Click. Slide one step. Look again. Like a View-Master reel, each click is a new position, and each look stamps one number into a new picture: the <b>feature map</b>, a map of "edge here?".',
+        2: '6×6 = 36 positions fit in an 8×8 picture. Orange = paper→ink going right, blue = ink→paper. The map lights up exactly along the cat\'s sides and ears.',
+        3: 'Output size = (H − k + 2p)/s + 1 = (8 − 3)/1 + 1 = 6: the −k+1 is because the window must fit inside. <code>padding=1</code> keeps 8×8. Deep dive: the W2 deep film.' },
       draw: function (ctx, t, l, W, H, api) {
         bg(ctx, W, H, t); var L = mainLayout(W, H, false), c = L.c;
         var k = 36 * Math.pow(clamp((l - .3) / 4.8, 0, 1), 1.35), pp = posAt(k), fr = k - Math.floor(k);
@@ -268,10 +271,10 @@
         if (n !== lastStamp && k < 36 && api && l > .3) { lastStamp = n; api.audio.blip(520 + FEAT[pp[0]][pp[1]] * 30); }
         var v = FEAT[pp[0]][pp[1]]; readout(ctx, W / 2, L.por ? H - 34 : H - 40, [['click ' + (n + 1) + '/36   out[' + pp[0] + ',' + pp[1] + '] = ' + fmt(v), P.butter]], W, 'center');
       } },
-    { name: 'one stamp', start: 23, dur: 5, cap: {
-        1: 'The window never changes its 9 numbers as it moves. It\'s one <b>rubber stamp</b> pressed everywhere. An ear edge top-left looks the same as one bottom-right.',
-        2: '<b>Weight sharing</b>: 9 weights reused at 36 positions. A fully connected layer mapping 64 pixels to 36 outputs would need 64×36 = <b>2,304</b> weights.',
-        3: 'Translation equivariance: shift the input, the feature map shifts with it. <code>Conv2d(1, 1, 3, bias=False).weight.shape</code> = (1, 1, 3, 3): 9 parameters.' },
+    { name: 'one stamp', start: 23, dur: 5, need: 'core', cap: {
+        1: 'The window never changes its 9 numbers as it moves. It is one <b>rubber stamp</b> pressed everywhere, so an ear edge top-left is found the same way as one bottom-right.',
+        2: '<b>Weight sharing</b>: 9 weights reused at 36 positions. A fully connected layer from 64 pixels to 36 outputs needs 64×36 = <b>2,304</b>. Why it works: an edge means the same thing anywhere.',
+        3: 'Translation equivariance: shift the input and the map shifts with it. <code>Conv2d(1, 1, 3, bias=False).weight.shape</code> = (1, 1, 3, 3): 9 parameters.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var L = mainLayout(W, H, false), c = L.c;
         grid(ctx, CAT, L.ix, L.iy, c, 'img', { nums: false }); if (!L.por) inLabel(ctx, L, W);
@@ -285,10 +288,10 @@
         var nx = L.por ? W / 2 : L.ox + 3 * L.oc, ny = L.por ? Math.max(30, L.iy - 40) : L.oy + 6 * L.oc + 52;
         fnote(ctx, 'one stamp: 9 numbers, 36 prints\n(a dense layer would need 2,304)', nx, ny, sz, W, { color: P.pink, seed: 'share', rot: .01 }); ctx.restore();
       } },
-    { name: 'loudest voice', start: 28, dur: 5, cap: {
-        1: 'Now shrink the map. In every 2×2 block, keep only the <b>loudest</b> number. Where exactly the edge was matters less than <b>whether</b> it was there.',
-        2: '<b>Max-pooling</b> (2×2, stride 2): 6×6 → 3×3. It keeps the strongest response per block, so the map gets smaller and a bit shift-tolerant.',
-        3: '<code>MaxPool2d(kernel_size=2, stride=2)</code>: no parameters, gradient flows only to each block\'s argmax. ResNet34 max-pools once after its 7×7 stem.' },
+    { name: 'loudest voice', start: 28, dur: 5, need: 'library', cap: {
+        1: 'Now shrink the map. In every 2×2 block keep only the <b>loudest</b> number. Where exactly the edge was matters less than <b>whether</b> it was there.',
+        2: '<b>Max-pooling</b> (2×2, stride 2): 6×6 → 3×3, keeping each block\'s strongest response. It has no weights to learn; in practice it is <code>nn.MaxPool2d</code>, one line.',
+        3: '<code>MaxPool2d(kernel_size=2, stride=2)</code>: no parameters, gradient flows only to each block\'s argmax. ResNet34 max-pools once, after its stem. Library call.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var P0 = por(W, H), c = Math.floor(P0 ? Math.min(40, (W - 60) / 6, (H - 140) / 9.8) : Math.min(62, (H - 110) / 6));
         var ps = place(W, H, [{ w: 6 * c, h: 6 * c }, { w: 3 * c * 1.2, h: 3 * c * 1.2 }], P0 ? 44 : 90, P0 ? 30 : 20, 10);
@@ -305,10 +308,10 @@
           ctx.save(); ctx.strokeStyle = P.butter; ctx.lineWidth = 3; ctx.strokeRect(qx + bj * qc, qy + bi * qc, qc, qc); ctx.restore();
         }
       } },
-    { name: 'windows on windows', start: 33, dur: 7, cap: {
-        1: 'Stack windows on top of windows. The first finds <b>edges</b>. The next looks at edge-maps and finds <b>corners</b>. Then an <b>ear</b>. Then a <b>cat</b>. Each layer up sees a bigger patch of the original.',
-        2: 'The <b>receptive field</b> grows: one pixel after 1, 2, 3 stacked 3×3 convs depends on a 3×3, 5×5, 7×7 patch of the input. Pooling makes it grow even faster.',
-        3: 'RF of n stride-1 3×3 convs = 1 + 2n. Each 2× downsample doubles the RF gain of later layers; ResNet34\'s final features see ~the whole 224×224 image.' },
+    { name: 'windows on windows', start: 33, dur: 7, need: 'core', cap: {
+        1: 'Stack windows on windows. The first finds <b>edges</b>. The next looks at edge-maps and finds <b>corners</b>. Then an <b>ear</b>, then a <b>cat</b>. Each layer up sees a bigger patch.',
+        2: 'The <b>receptive field</b> (how much of the input one output depends on) grows: 3×3, 5×5, 7×7 after 1, 2, 3 stacked 3×3 layers. Why depth: big ideas are built out of small ones.',
+        3: 'RF of n stride-1 3×3 convs = 1 + 2n. Each 2× downsample doubles the RF growth of later layers; ResNet34\'s last features see roughly the whole 224×224 image.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var P0 = por(W, H), c = Math.floor(P0 ? Math.min(38, (W - 48) / 8, (H - 250) / 8) : Math.min(58, (H - 100) / 8));
         var ix = P0 ? (W - 8 * c) / 2 : W * .32 - 4 * c, iy = P0 ? 40 : (H - 8 * c) / 2 + 8;
@@ -330,12 +333,13 @@
         if (n >= 4) { var cx = P0 ? bx + 3 * (cw + 8) : bx, cy = P0 ? by - chh / 2 - 4 : by - 3 * (chh + 12) - chh / 2 - 4; F.glow(ctx, cx, cy + chh / 2, 50, 'rgba(255,220,140,.8)', .25 + .1 * Math.sin(t * 4)); }
         if (!P0 && n >= 1) for (var e = 1; e < n; e++) F.arrow(ctx, bx, by - (e - 1) * (chh + 12) - chh / 2 - 2, bx, by - e * (chh + 12) + chh / 2 + 2, P.chalk, 2, 'up' + e);
       } },
-    { name: 'the express lane', start: 40, dur: 7, cap: {
-        1: 'Deep stacks have a problem: a message passed through many layers gets <b>whispered away</b>. ResNet adds an <b>express lane</b>: each block\'s input skips around it and is added back on.',
-        2: 'Residual block: output = <b>x + f(x)</b>. A new block with f ≈ 0 just passes x through (identity), so signal, and gradient, survive 10 blocks here, and 100+ in real ResNets.',
-        3: 'Toy: f_k(x) = a_k·x, |a_k| ≤ 0.1. Plain: ∏a_k. Residual: ∏(1+a_k). Same products govern ∂out/∂x. ARENA\'s block: <code>relu(left(x) + right(x))</code>, right = identity or 1×1 conv+BN.' },
+    { name: 'the express lane', start: 40, dur: 7, need: 'core', cap: {
+        1: 'Messages passed through many layers get <b>whispered away</b>, like a long game of telephone. ResNet adds an <b>express lane</b>: each block\'s input skips around it and is added back.',
+        2: 'Residual block: output = <b>x + f(x)</b>. It is easy for a block to learn "do nothing" (f ≈ 0), so adding blocks rarely hurts, and the learning signal has a direct route back.',
+        3: 'Toy: f_k(x) = a_k·x, |a_k| ≤ 0.1. Plain: ∏a_k → tiny. Residual: ∏(1+a_k) ≈ 1. ARENA: <code>relu(left(x) + right(x))</code>. Where else? The transformer\'s residual stream.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var P0 = por(W, H), N = 10;
+        narr(ctx, W, H, t, l < 4.5 ? { pose: 'think', t0: .4 } : { pose: 'cheer', t0: 4.5, from: 'think' });
         // along-axis a runs left->right (landscape) or top->bottom (portrait); cross offset b < 0 is the express-lane side
         var a0 = P0 ? 70 : 34, a1 = P0 ? H - 150 : W - 34, cross = P0 ? W * .42 : H * .52;
         var span = a1 - a0, bl = Math.min(P0 ? 38 : 64, span / N - 8), gap = (span - N * bl) / (N - 1), bth = P0 ? 120 : 92, lane = bth / 2 + (P0 ? 34 : 40);
@@ -367,10 +371,10 @@
         var rows = [['after ' + blocks + ' block' + (blocks === 1 ? '' : 's') + ':', P.chalk], ['plain    x·∏a     = ' + (blocks ? S.plain.toExponential(1) : '1'), '#cfd3e6'], ['residual x·∏(1+a) = ' + S.res.toFixed(3), P.butter]];
         readout(ctx, W / 2, P0 ? H - 92 : H - 84, rows, W, 'center');
       } },
-    { name: 'the volume knob', start: 47, dur: 5, cap: {
-        1: 'Between layers, a <b>volume knob</b> keeps each channel at a sensible level: shift it so it averages zero, scale it so it isn\'t too loud or too quiet.',
-        2: '<b>BatchNorm</b>: for each channel, subtract the batch mean and divide by the batch std. Here a batch of 4: mean 5, std 2.24, so [2, 6, 4, 8] → [−1.34, 0.45, −0.45, 1.34].',
-        3: 'y = γ(x − μ_B)/√(σ²_B + ε) + β, biased var in training, running stats (momentum 0.1) at eval. γ, β learned; ARENA\'s <code>BatchNorm2d</code> registers buffers for running_mean/var.' },
+    { name: 'the volume knob', start: 47, dur: 5, need: 'exercise', cap: {
+        1: 'Between layers a <b>volume knob</b> keeps each channel at a sensible level: shift it so it averages zero, then scale it so it isn\'t too loud or too quiet.',
+        2: '<b>BatchNorm</b>: per channel, subtract the batch mean, divide by the batch std, so the next layer always gets a steady scale. Batch [2, 6, 4, 8] → [−1.34, 0.45, −0.45, 1.34].',
+        3: 'y = γ(x − μ_B)/√(σ²_B + ε) + β; biased var in training, running stats (momentum 0.1) at eval. You write it once in [0.2]; after that it is <code>nn.BatchNorm2d</code>.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var P0 = por(W, H), k = ramp(l, 1, 3.2), u = P0 ? 22 : 36, bw = P0 ? 46 : 88, gap = P0 ? 18 : 40;
         var cx = P0 ? W / 2 : W * .42, zy = P0 ? H * .5 : H * .56, tot = 4 * bw + 3 * gap;
@@ -393,12 +397,13 @@
         for (var d = 0; d < 9; d++) { var ang = -2.2 - Math.PI / 2 + d * 2.6 / 8; ctx.fillStyle = P.chalk; ctx.beginPath(); ctx.arc(kx + Math.cos(ang) * (kr + 8), ky + Math.sin(ang) * (kr + 8), 1.8, 0, 6.283); ctx.fill(); }
         readout(ctx, W / 2, P0 ? H - 84 : H - 90, [['\u03bc = ' + BN.mean.toFixed(2) + '   \u03c3 = ' + BN.std.toFixed(2), P.butter], ['(x \u2212 \u03bc) / \u03c3', P.chalk], ['[' + BATCH.join(', ') + '] \u2192 [' + BN.out.map(function (x) { return x.toFixed(2); }).join(', ') + ']', k > .99 ? P.mint : 'rgba(253,250,240,.5)']], W, 'center');
       } },
-    { name: 'where the story stops', start: 52, dur: 5, cap: {
+    { name: 'where the story stops', start: 52, dur: 5, need: 'contested', cap: {
         1: 'Honest bit: real learned windows are rarely this tidy. Past the first layer they look like <b>mush</b>, and there is usually no single "cat neuron": <b>many</b> share the job.',
-        2: 'First-layer kernels do learn edge and colour detectors. Deeper features are <b>distributed</b> and <b>polysemantic</b>: one unit fires for several unrelated things, one concept spreads over many units.',
-        3: 'Superposition: more features than neurons, stored as overlapping directions. Feature visualisation and circuits work (Olah et al.) found curve detectors, but also many uninterpretable units.' },
+        2: 'Current view: early layers learn edges and colours; deeper units are <b>polysemantic</b> (one unit, several unrelated things). Untangling that is open research. You need: expect no one-neuron-one-idea.',
+        3: 'Leading explanation: superposition, more features than neurons stored as overlapping directions. Circuits work found curve detectors, but many units stay unexplained. SAEs are the W8 tool.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var P0 = por(W, H), r = F.rng('mush'), c = P0 ? 13 : 18, cols = P0 ? 4 : 6, rows = P0 ? 3 : 2, sp = 3 * c + 16;
+        narr(ctx, W, H, t, l < 1.5 ? { pose: 'lean-in', t0: .1, look: { x: W / 2, y: H * .15 } } : { pose: 'shrug', t0: 1.5, from: 'lean-in' });
         var ox = (W - cols * sp + 16) / 2, oy = P0 ? 40 : 60;
         for (var a = 0; a < rows; a++) for (var b = 0; b < cols; b++) for (var i = 0; i < 3; i++) for (var j = 0; j < 3; j++) { var v = r() * 2 - 1; ctx.fillStyle = featCol(v, 1); ctx.fillRect(ox + b * sp + j * c, oy + a * sp + i * c, c - 1, c - 1); }
         lbl(ctx, 'learned kernels, layer 3 (ish)', W / 2, oy - 16, W < 500 ? 12 : 15);
@@ -413,10 +418,10 @@
           ctx.restore();
         }
       } },
-    { name: 'the code', start: 57, dur: 7, cap: {
+    { name: 'the code', start: 57, dur: 7, need: 'exercise', cap: {
         1: 'The window and the express lane are each about one line of code. That is all a CNN layer and a ResNet block really are.',
-        2: 'Top: the sliding window as a PyTorch layer and as the one-line maths you implemented in [0.2]. Bottom: a residual block\'s whole trick.',
-        3: 'ARENA builds <code>conv2d</code> via <code>as_strided</code> + einsum (no Python loops), then <code>Conv2d</code> with Kaiming-uniform init; <code>ResidualBlock</code> adds a projection when stride or channels change.' },
+        2: 'Top: the sliding window as a PyTorch layer and its one-line maths. Bottom: the residual block\'s whole trick. Those two lines are what [0.2] needs you to understand.',
+        3: 'Core [0.2]: <code>Conv2d</code> weights with Kaiming bound ±1/√(in·k·k), forward via <code>F.conv2d</code>. Optional bonus: your own conv via <code>as_strided</code> + einsum.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var sz = W < 500 ? 12.5 : 18, cards = [
           ['the little window', ['nn.Conv2d(in_channels=1,', '          out_channels=1,', '          kernel_size=3)'], P.butter, 0],
@@ -435,9 +440,9 @@
         });
         var vx = W / 2 - 1.5 * 16, vy = y + 10; if (vy + 60 < H) viewer(ctx, vx, vy, 16, t, { look: Math.sin(t) });
       } },
-    { name: 'why it matters', start: 64, dur: 5, cap: {
-        1: 'Interpretability began right here: people looked at what these little windows respond to. We\'ll ask the same question of a language model: what is this part looking for?',
-        2: 'Early interpretability = visualising CNN kernels and feature maps. The same move, asked of a transformer, is how we\'ll look inside a mind, and then steer it.',
+    { name: 'why it matters', start: 64, dur: 5, need: 'core', cap: {
+        1: 'Interpretability began right here: people looked at what these little windows respond to. We\'ll ask the same of a language model: what is this part looking for?',
+        2: 'Early interpretability visualised CNN kernels and feature maps. The same question, asked of a transformer, is how we\'ll look inside a mind and then steer it.',
         3: 'From feature visualisation and circuits in InceptionV1 to probes, SAEs and activation steering in transformers: same question, "what does this unit/direction detect?"' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var P0 = por(W, H), s = P0 ? 70 : 95, ex = W / 2, ey = P0 ? H * .56 : H * .6;

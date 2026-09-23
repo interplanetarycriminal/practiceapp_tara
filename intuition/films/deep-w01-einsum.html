@@ -141,7 +141,8 @@
     ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.strokeRect(-tw / 2 - 8, -sz * .8, tw + 16, sz * 1.6);
     ctx.fillStyle = col; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(s, 0, 1); ctx.restore();
   }
-  function clerk(ctx, x, y, s, t) { F.person(ctx, x, y, s, t, { sweater: P.teal }); }
+  // the notary clerk: a stick figure who writes, ponders, points, cheers, recoils (pass 2)
+  function clerk(ctx, x, y, s, t, o) { o = o || {}; return F.stick(ctx, x, y, s * 2, t, { pose: o.pose || 'idle', t0: o.t0, from: o.from, look: o.look, scarf: P.teal }); }
   function question(ctx, W, a, l) {
     if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
     F.note(ctx, 'which letters survive?', W / 2 + (ph(W) ? 20 : 150), ph(W) ? 196 : 210, ph(W) ? 16 : 20, { color: P.pink, rot: -.04, seed: 'q', reveal: ramp(l, 0, 1.5) });
@@ -178,10 +179,16 @@
 
   /* ================= chapters ================= */
   var chapters = [
-    { name: 'the contract', start: 0, dur: 16, cap: {
-        1: 'A paper notary\'s office. The clerk is tired of five lines of loops and transposes for every matrix job. She wants each job written as <b>one readable contract</b>: name every axis, and say which names come out the other side.',
-        2: 'An <b>einsum</b> pattern names the axes of each input, then after <b>-&gt;</b> names the axes of the output. <code>i j, j k -&gt; i k</code> is matrix multiplication. The whole meaning is in which letters survive the arrow.',
-        3: 'ARENA [0.0] uses <code>einops.einsum(A, B, "i j, j k -&gt; i k")</code>: tensors first, then the pattern, dims separated by spaces (unlike <code>torch.einsum("ij,jk-&gt;ik", A, B)</code>). Multi-letter names like <code>posq</code> are allowed.' },
+    { name: 'the contract', start: 0, dur: 16, need: 'core', cap: {
+        1: 'A paper notary\'s office. The clerk (you) is tired of loops and transposes. She wants every matrix job written as <b>one readable contract</b>: name each axis, say which come out.',
+        2: 'An <b>einsum</b> pattern names each input\'s axes with letters, then after <b>-&gt;</b> the output\'s. Why it helps: the shape of the answer is written down before you run anything.',
+        3: '<code>einops.einsum(A, B, "i j, j k -&gt; i k")</code>: tensors first, then the pattern, letters spaced (unlike <code>torch.einsum("ij,jk-&gt;ik", A, B)</code>). Long names are fine.' },
+      beats: [
+        { at: 8, name: 'which letters survive?', need: 'core', cap: {
+            1: 'Read any contract by asking one question: <b>which letters survive the arrow?</b> i and k cross over, so the answer has rows i and columns k. j does not: it gets used up inside.',
+            2: '<code>i j, j k -&gt; i k</code> is matrix multiplication: (2, 3) and (3, 2) give (2, 2). The whole meaning sits in which letters appear after the arrow.',
+            3: 'Result shape = the sizes of the output letters, in order: (|i|, |k|) = (2, 2). One letter used with two different sizes is an error: a free shape check.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var p = ph(W), cy = p ? 110 : 120;
         F.paper(ctx, W / 2, cy, p ? W - 30 : 560, p ? 120 : 140, P.cream, { seed: 'ct', rot: -.01 });
@@ -191,7 +198,8 @@
         contract(ctx, 'i j, j k -> i k', W / 2, cy + 6, p ? 20 : 26, { hi: l > 11 ? ['i', 'k'] : null });
         ctx.restore();
         question(ctx, W, ramp(l, 3.5, 4.5), l - 3.5);
-        clerk(ctx, p ? 46 : W / 2 - 330, p ? 590 : 400, p ? 44 : 64, t);
+        var gAim = { x: p ? W / 2 : W / 2 - 60, y: p ? 350 : 360 };
+        clerk(ctx, p ? 46 : W / 2 - 330, p ? 590 : 400, p ? 44 : 64, t, l < 3.5 ? { pose: 'write', t0: .2 } : l < 5.5 ? { pose: 'think', t0: 3.5, from: 'write' } : l < 11 ? { pose: 'point', t0: 5.6, from: 'think', look: gAim } : { pose: 'cheer', t0: 11, from: 'point' });
         var gy = p ? 310 : 320, gx = p ? 60 : W / 2 - 200, sz = p ? 13 : 16;
         if (l > 5.5) { ctx.save(); ctx.globalAlpha = ramp(l, 5.5, 6.5);
           var g1 = grid(ctx, gx, gy, A, { sz: sz, label: 'A (2, 3)', rl: 'i', cl: 'j' });
@@ -203,10 +211,20 @@
           txt(ctx, 'i and k cross the arrow. j does not.', W / 2, p ? 272 : 520, p ? 15 : 20, P.butter, { seed: 'cross' }); ctx.restore(); }
         if (l < 5) F.plane(ctx, lerp(-20, W + 20, l / 5), H * .5, 12, .05, P.cream);
       } },
-    { name: 'three rules', start: 16, dur: 22, cap: {
-        1: 'The contract has three clauses. A letter <b>in the output</b> is kept. A letter shared by <b>two inputs</b> but missing from the output: those numbers shake hands (multiply), then get added up. A letter in <b>one input</b> only, missing from the output: swept up and added.',
-        2: 'Rule 1: in the output = <b>kept</b> (loop over it, one answer per value). Rule 2: repeated across inputs, absent from output = <b>multiplied and summed</b>. Rule 3: in one input, absent from output = <b>summed</b>. Below, <code>i j -&gt; i</code> on A is rule 3: row sums.',
-        3: 'ARENA phrases it as: repeated letters across inputs are multiplied; an omitted letter is summed over; unsummed axes can come out in any order (so <code>"i j k -&gt; k j i"</code> is just a rearrange). Everything is one sum of products over all letters.' },
+    { name: 'three rules', start: 16, dur: 22, need: 'core', cap: {
+        1: 'Three clauses. A letter <b>in the output</b>: kept. In <b>two inputs</b> but not the output: partners multiply, then get added up. In <b>one input</b> only, not the output: just added up.',
+        2: 'Rule 1: in the output = <b>kept</b>. Rule 2: shared, not in output = <b>multiplied, then summed</b>. Rule 3: one input, not in output = <b>summed</b>. A vanishing letter must be squashed; einsum squashes by adding.',
+        3: 'One sentence covers all three: out[kept letters] = Σ over every missing letter of the product of the inputs. Kept letters can come out in any order: "i j k -&gt; k j i" is a rearrange.' },
+      beats: [
+        { at: 7.5, name: 'rules on a matmul', need: 'core', cap: {
+            1: 'Apply them to the matrix multiply: i kept (rows), k kept (columns), j shared and missing, so each row of A shakes hands with each column of B and the handshakes are added.',
+            2: 'On <code>i j, j k -&gt; i k</code>: i kept, k kept, j multiplied and summed. So out[i,k] = Σ_j A[i,j]·B[j,k], the textbook matrix product, derived from the rules.',
+            3: 'The verdicts (i: kept, j: multiply + sum, k: kept) come from the same JS einsum that runs the coda. Work done: |i|·|j|·|k| multiply-adds.' } },
+        { at: 12, name: 'rule 3 alone', need: 'core', cap: {
+            1: 'Rule 3 alone: <code>i j -&gt; i</code> on one grid. j is missing and has no partner, so a broom sweeps along each row adding it up: row sums.',
+            2: '<code>i j -&gt; i</code>: i kept, j in one input only, so summed: out[i] = Σ_j A[i,j], the row sums. Write <code>i j -&gt; j</code> and you get column sums instead.',
+            3: 'Same as <code>A.sum(dim=1)</code> or <code>einops.reduce(A, "i j -&gt; i", "sum")</code>. Einsum only ever sums; for mean or max, use reduce.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var p = ph(W), sz = p ? 15 : 19, x0 = p ? 16 : W / 2 - 300;
         var rules = [['1  in the output', 'KEPT', P.mint], ['2  in 2 inputs, not output', 'MULTIPLY + SUM', P.pink], ['3  in 1 input, not output', 'SUMMED', P.butter]];
@@ -234,10 +252,16 @@
           if (sw >= 1) mono(ctx, '= ' + JSON.stringify(ROWS), gx + g.w + 44 + (p ? 60 : 70), y3 + 22 + g.h / 2 + 10, p ? 13 : 16, P.butter);
           ctx.restore(); }
       } },
-    { name: 'trace', start: 38, dur: 16, cap: {
-        1: 'A trick clause: the <b>same letter twice in one input</b>. <code>i i</code> means "only where row number equals column number": walk down the diagonal. The output is empty, so every letter is summed. Diagonal, then sum: the <b>trace</b>.',
-        2: '<code>einops.einsum(mat, "i i -&gt;")</code>. Writing i twice ties the two axes together (they must be the same size), so we visit M[0,0], M[1,1], M[2,2]. Nothing after the arrow means the result is a scalar: 1 + 5 + 9 = 15.',
-        3: 'This is ARENA\'s <code>einsum_trace</code>. Same function, same rules: the sum is over every assignment of letters, and the tie means only diagonal assignments exist. <code>"i i -&gt; i"</code> would keep i: the diagonal itself, no sum.' },
+    { name: 'trace', start: 38, dur: 16, need: 'exercise', cap: {
+        1: 'A trick clause: the <b>same letter twice in one input</b>. <code>i i</code> means "only where row number equals column number": walk down the diagonal, M[0,0], M[1,1], M[2,2].',
+        2: 'Writing i twice ties two axes together (so they must be the same size). Only diagonal spots have equal row and column numbers, so only those are visited.',
+        3: 'The sum runs over every assignment of letters; the tie leaves only row = col. <code>"i i -&gt; i"</code> keeps i: the diagonal itself (torch.diagonal), no sum.' },
+      beats: [
+        { at: 8, name: 'trace: sum it', need: 'exercise', cap: {
+            1: 'The output side is empty, so nothing is kept: every diagonal number gets added up. Diagonal, then sum: that is the <b>trace</b>, 1 + 5 + 9 = 15.',
+            2: '<code>einops.einsum(mat, "i i -&gt;")</code>: nothing after the arrow means one single number (shape ()). This is ARENA\'s <code>einsum_trace</code> in one line.',
+            3: 'Same as <code>torch.trace(M)</code>. An empty output is how every "reduce to a scalar" einsum looks; <code>"i, i -&gt;"</code> is the dot product.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var p = ph(W), sz = p ? 20 : 26;
         F.paper(ctx, W / 2, p ? 50 : 60, p ? W - 60 : 360, p ? 50 : 60, '#262a52', { seed: 'trc', shadow: false });
@@ -250,10 +274,16 @@
         mono(ctx, 'sum = ' + (terms.length ? terms.join(' + ') : '0') + (n === 3 ? ' = ' + run : ''), W / 2, gy + g.h + 90, p ? 18 : 22, P.butter, 'center');
         if (l > 12) { ctx.save(); ctx.globalAlpha = ramp(l, 12, 13); mono(ctx, 'einsum says ' + TR + ' (a scalar, shape ())', W / 2, gy + g.h + 130, p ? 14 : 17, P.mint, 'center'); ctx.restore(); }
       } },
-    { name: 'batch matmul', start: 54, dur: 22, cap: {
-        1: 'Two stacks of trays, one per item in the batch. The letter <b>b</b> is in both inputs <i>and</i> in the output, so it is kept: tray 0 only ever meets tray 0. Inside each tray, j shakes hands and is summed, exactly like before.',
-        2: '<code>b i j, b j k -&gt; b i k</code>. b is rule 1 (kept), so it acts like a loop: no mixing across the batch. j is rule 2: out[b,i,k] = Σ_j X[b,i,j] · Y[b,j,k]. Watch one cell being summed from its products.',
-        3: 'This is <code>torch.bmm</code> / batched <code>@</code>. The same move is every Linear layer: <code>einops.einsum(x, self.weight, "... in_feats, out_feats in_feats -&gt; ... out_feats")</code> from ARENA [0.2], where <code>...</code> keeps any leading batch axes.' },
+    { name: 'batch matmul', start: 54, dur: 22, need: 'core', cap: {
+        1: 'Two stacks of trays, one per item in the batch. <b>b</b> is in both inputs <i>and</i> in the output, so it is kept: tray 0 only ever meets tray 0. Nothing mixes across the batch.',
+        2: '<code>b i j, b j k -&gt; b i k</code>: b is rule 1 (kept), so it acts like a for-loop over the batch. Why that matters: each example in a batch must be computed on its own.',
+        3: 'This is <code>torch.bmm</code> / batched <code>@</code>: (B, i, j) @ (B, j, k) → (B, i, k). A letter shared by both inputs <i>and</i> kept pairs them up, with no sum.' },
+      beats: [
+        { at: 8, name: 'inside each tray', need: 'core', cap: {
+            1: 'Inside each tray it is the matrix multiply from before: j shakes hands and is added up. Watch one cell being built from its products.',
+            2: 'j is rule 2: out[b,i,k] = Σ_j X[b,i,j]·Y[b,j,k]. Every Linear layer is this move: batch letters kept, the input-feature letter summed.',
+            3: 'ARENA [0.2] Linear: <code>einops.einsum(x, self.weight, "... in_feats, out_feats in_feats -&gt; ... out_feats")</code>; <code>...</code> keeps any leading batch axes.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var p = ph(W), sz = p ? 14 : 17;
         F.paper(ctx, W / 2, 40, p ? W - 30 : 480, 46, '#262a52', { seed: 'bm', shadow: false });
@@ -278,10 +308,16 @@
         }
         if (l > 3.5 && l < 8) { ctx.save(); ctx.globalAlpha = ramp(l, 3.5, 4.5) * (1 - ramp(l, 7, 8)); F.note(ctx, 'tray 0 never meets tray 1', W / 2, p ? 460 : 500, p ? 15 : 19, { color: P.lav, seed: 'tn' }); ctx.restore(); }
       } },
-    { name: 'outer product', start: 76, dur: 14, cap: {
+    { name: 'outer product', start: 76, dur: 14, need: 'exercise', cap: {
         1: 'Now a contract where <b>nothing is summed</b>. Two different letters, both kept. Every number in u meets every number in w exactly once, and each handshake gets its own seat in a grid.',
-        2: '<code>i, j -&gt; i j</code>: no shared letters, no missing letters, so rule 1 only: out[i,j] = u[i]·w[j]. Shape (3,) and (4,) make (3, 4). Compare: <code>i, i -&gt;</code> (shared, missing) is the dot product.',
-        3: 'ARENA\'s <code>einsum_outer</code> and <code>einsum_inner</code> differ by one letter. Outer products are how rank-1 updates look (a gradient of a Linear layer for one example is an outer product: <code>"b o, b i -&gt; o i"</code> sums them over the batch).' },
+        2: '<code>i, j -&gt; i j</code>: no shared letters, none missing, so only rule 1: out[i,j] = u[i]·w[j]. Shapes (3,) and (4,) make (3, 4): 12 products, 0 sums.',
+        3: 'ARENA\'s <code>einsum_outer</code>. It equals <code>u[:, None] * w[None, :]</code>: broadcasting in disguise. An outer product is a rank-1 matrix.' },
+      beats: [
+        { at: 7, name: 'outer vs inner', need: 'exercise', cap: {
+            1: 'Change one letter and the meaning flips: in <code>i, i -&gt;</code> the two vectors share a letter and drop it, so partners multiply and add. That is the dot product: one number.',
+            2: 'Outer <code>i, j -&gt; i j</code> keeps both letters; inner <code>i, i -&gt;</code> shares and sums. ARENA\'s <code>einsum_outer</code> and <code>einsum_inner</code> differ by one letter.',
+            3: 'A Linear layer\'s weight gradient is a sum of outer products over the batch: <code>"b o, b i -&gt; o i"</code> (grad of output, input). Optional now; it returns in W4.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var p = ph(W), sz = p ? 16 : 20, cs = p ? 46 : 56;
         F.paper(ctx, W / 2, 44, p ? W - 60 : 380, 50, '#262a52', { seed: 'op', shadow: false });
@@ -295,10 +331,20 @@
         if (l > 3) mono(ctx, 'out[' + r + ',' + c + '] = ' + u[r] + '·' + w[c] + ' = ' + OUT[r][c], W / 2, gy + 3 * cs + 50, p ? 16 : 20, P.butter, 'center');
         if (l > 10) { ctx.save(); ctx.globalAlpha = ramp(l, 10, 11); mono(ctx, 'shape (3,) , (4,) -> (3, 4)   0 sums', W / 2, gy + 3 * cs + 84, p ? 13 : 17, P.mint, 'center'); ctx.restore(); }
       } },
-    { name: 'attention scores', start: 90, dur: 30, cap: {
-        1: 'The contract you will sign most often. Every word has a question arrow (q) and a label arrow (k). For each head, every question meets every label: the dot product over <b>d</b> is how well they match. Pause and predict the shape.',
-        2: '<b>batch</b> and <b>head</b> are in both inputs and the output: kept, like the trays. <b>posq</b> and <b>posk</b> are each in one input and in the output: kept, one row per query, one column per key. <b>d</b> is shared and missing: multiplied and summed.',
-        3: '<code>attn_scores = einops.einsum(q, k, "batch posn_Q nheads d_head, batch posn_K nheads d_head -&gt; batch nheads posn_Q posn_K")</code> in ARENA [1.1]. Renaming pos to <i>two</i> letters is the whole trick: same axis, different roles, so it is not summed.' },
+    { name: 'attention scores', start: 90, dur: 30, need: 'core', cap: {
+        1: 'The contract you\'ll sign most often. Each word asks a question (q) and wears a label (k). For each head, every question is compared with every label. Pause and predict the shape.',
+        2: '<b>batch</b> and <b>head</b> are in both inputs and the output: kept, like the trays. <b>posq</b> and <b>posk</b> each appear once and are kept: one row per asking word, one column per label.',
+        3: 'ARENA [1.1]: <code>einops.einsum(q, k, "batch posn_Q nheads d_head, batch posn_K nheads d_head -&gt; batch nheads posn_Q posn_K")</code>.' },
+      beats: [
+        { at: 9, name: 'question meets label', need: 'core', cap: {
+            1: 'Each word sends a query ("what am I looking for?") and a key ("what do I contain?"). Multiply them number by number and add: a big score means "you\'re what I\'m after".',
+            2: '<b>d</b> is shared and missing: multiplied and summed. score[q,k] = Σ_d q[d]·k[d], a dot product: large when the two arrows point the same way. Attention is a lookup by content.',
+            3: 'Here batch 1, head 1, d = 2, 3 words: a 3×3 score grid. Real attention then divides by √d_head and softmaxes each row; that comes in [1.1].' } },
+        { at: 19, name: 'two names, one axis', need: 'core', cap: {
+            1: 'The trick is <b>two names</b> for the same position axis. Same words, different jobs (asker and asked), so neither name is summed: you get a full grid of every pair.',
+            2: 'Answer: (2, 4, 3, 8) with (2, 4, 3, 8) → <b>(2, 3, 4, 4)</b> = batch, head, posq, posk. With one name, pos would be tied like the trace.',
+            3: 'Write pos in both inputs and the output and einsum pairs each word only with itself (a diagonal). Two letters give every (q, k) pair, summed over d_head.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); maybeAsk(t, 97); var p = ph(W), sz = p ? 13 : 18;
         F.paper(ctx, W / 2, p ? 50 : 50, p ? W - 20 : 780, p ? 84 : 52, '#262a52', { seed: 'at', shadow: false });
@@ -331,29 +377,37 @@
           F.note(ctx, msg + '(2, 4, 3, 8) x (2, 4, 3, 8)\n-> batch head posq posk = ' + BIGSHAPE, W / 2, Math.min(H - 40, gy + 3 * cs + (p ? 150 : 160)), p ? 12 : 16, { color: P.mint, seed: 'ans', font: F.MONO, rot: -.01 });
           ctx.restore(); }
       } },
-    { name: 'what it hides', start: 120, dur: 12, cap: {
-        1: 'A contract says <i>what</i> you get, not <i>how hard</i> it is to get. The office quietly does every multiplication the letters allow. Name one letter too many and the paperwork explodes.',
-        2: 'Honest limit: einsum hides cost. The work is the <b>product of all letter sizes</b>. For attention that is batch·head·posq·posk·d; a three-input einsum can be far slower in one order than another. Readable is not the same as cheap.',
-        3: 'Libraries pick a contraction order (opt_einsum-style) for multi-input patterns, but a pattern that materialises a huge intermediate still costs memory. Counting multiply-adds here: our tiny scores took ' + ATT.mults + '; the predict example takes ' + (2 * 3 * 4 * 4 * 8) + '; GPT-2 small at 1024 tokens is ' + (12 * 1024 * 1024 * 64).toLocaleString('en-US') + ' per layer per sequence.' },
+    { name: 'what it hides', start: 120, dur: 12, need: 'library', cap: {
+        1: 'A contract says <i>what</i> you get, not <i>how hard</i> it is. The office quietly does every multiplication the letters allow. Name one big letter too many and the paperwork explodes.',
+        2: 'Cost = the <b>product of all letter sizes</b>. Attention is batch·head·posq·posk·d, so doubling the text quadruples the work. Which order a library contracts in: a library detail, skip it.',
+        3: 'Multiply-adds: our tiny scores ' + ATT.mults + '; the predict example ' + (2 * 3 * 4 * 4 * 8) + '; GPT-2 small at 1024 tokens ' + (12 * 1024 * 1024 * 64).toLocaleString('en-US') + ' per layer. Contraction order (opt_einsum): library call.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var p = ph(W), sz = p ? 15 : 19, y = p ? 70 : 80;
         var rows = [['our tiny scores', ATT.mults], ['the predict example', 2 * 3 * 4 * 4 * 8], ['GPT-2 small, 1024 tokens', 12 * 1024 * 1024 * 64]];
         mono(ctx, 'multiply-adds = product of every letter size', W / 2, y - 30, p ? 12 : 16, P.chalk, 'center');
         rows.forEach(function (R, n) {
           var a = ramp(l, .5 + n * 1.5, 1.5 + n * 1.5); if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
-          var yy = y + 30 + n * (p ? 60 : 64), bw = (p ? W - 40 : 520) * Math.log10(R[1]) / 8;
+          var yy = y + 30 + n * (p ? 60 : 64), bw = (p ? W - 40 : 520) * Math.log10(R[1]) / 9.2;
           ctx.fillStyle = [P.mint, P.butter, P.red][n]; ctx.fillRect(p ? 20 : W / 2 - 260, yy, bw, 18);
           mono(ctx, R[0] + ': ' + R[1].toLocaleString('en-US'), p ? 20 : W / 2 - 260, yy - 12, p ? 12 : 15, P.chalk, 'left'); ctx.restore();
         });
-        if (l > 5) { ctx.save(); ctx.globalAlpha = ramp(l, 5, 6); mono(ctx, '(bar length is log scale, like a dial-up progress bar lying to you)', W / 2, y + 230, p ? 10 : 13, '#9aa0c8', 'center'); ctx.restore(); }
+        if (l > 5) { ctx.save(); ctx.globalAlpha = ramp(l, 5, 6); mono(ctx, p ? '(bars are log scale)' : '(bar length is log scale, like a dial-up progress bar lying to you)', W / 2, y + 230, p ? 11 : 13, '#9aa0c8', 'center'); ctx.restore(); }
+        // the clerk reads the bill: leans in, recoils at the GPT-2 number, then shrugs
+        clerk(ctx, p ? 40 : W / 2 - 320, H - 14, p ? 40 : 60, t, l < 3.6 ? { pose: 'lean-in', t0: .5, look: { x: W / 2, y: y + 60 } } : l < 6.6 ? { pose: 'recoil', t0: 3.6, from: 'lean-in', look: { x: W / 2, y: y + 160 } } : { pose: 'shrug', t0: 6.6, from: 'recoil' });
         var cp = ramp(l, 6, 7.5); F.cornerFlip(ctx, W, H, cp, P.cream);
         if (cp > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 7.2, 8); var s2 = p ? 13 : 18, cx = W - Math.min(W, H) * .33, cy = H - Math.min(W, H) * .24;
           txt(ctx, 'readable is', cx, cy - s2 * 1.4, s2, P.ink, { seed: 'h1' }); txt(ctx, 'not the same as', cx + s2 * .6, cy, s2, P.ink, { seed: 'h2' }); txt(ctx, 'cheap', cx + s2 * 1.2, cy + s2 * 1.4, s2, P.red, { seed: 'h3' }); ctx.restore(); }
       } },
-    { name: 'your lines', start: 132, dur: 18, cap: {
-        1: 'These are the lines you write (or already wrote) in ARENA [0.0]. Each is one contract. Read each one aloud as "which letters survive?" and you know what it does before you run it.',
-        2: 'The five [0.0] einsum exercises, then the attention line you will meet in [1.1]. Steering, probes and attention scores are all this same move: <b>attention scores, probes and steering all start as one einsum.</b>',
-        3: 'A linear probe is <code>einsum(resid, w, "batch pos d_model, d_model -&gt; batch pos")</code>; a steering vector is an add along d_model; DLA is resid · W_U[:, token]. Named axes are how you look inside a model without losing track of which number is which.' },
+    { name: 'your lines', start: 132, dur: 18, need: 'exercise', cap: {
+        1: 'These are the lines you write in ARENA [0.0]. Each is one contract. Read each aloud as "which letters survive?" and you know what it does before you run it.',
+        2: 'The five [0.0] einsum exercises (trace, matrix-vector, matrix-matrix, inner, outer), then the attention line you\'ll meet in [1.1]. Each is the three rules applied to named axes.',
+        3: '<code>einsum_trace</code> "i i -&gt;"; <code>einsum_mv</code> "i j, j -&gt; i"; <code>einsum_mm</code> "i j, j k -&gt; i k"; <code>einsum_inner</code> "i, i -&gt;"; <code>einsum_outer</code> "i, j -&gt; i j".' },
+      beats: [
+        { at: 8, name: 'why it matters', need: 'core', cap: {
+            1: 'Why this matters later: reading a mind is mostly this move. A probe, an attention score and a direct readout all start as one einsum over named axes.',
+            2: 'A linear probe scores every position against one direction: sum over d_model. Attention scores sum over d_head. Once you can read which letters survive, interpretability code reads itself.',
+            3: 'Probe: <code>einsum(resid, w, "batch pos d_model, d_model -&gt; batch pos")</code>; direct logit attribution: resid · W_U[:, token]; steering is an add along d_model.' } }
+      ],
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var p = ph(W), sz = p ? 11.5 : 15;
         var lines = [['# ARENA [0.0] einsum exercises', '#9aa0c8'], ['einops.einsum(mat, "i i ->")', P.pink], ['einops.einsum(mat, vec, "i j, j -> i")', P.butter], ['einops.einsum(mat1, mat2, "i j, j k -> i k")', P.teal],
@@ -421,10 +475,25 @@
     }
   };
 
+
+  /* pass 2: a chapter may carry extra caption beats; each beat becomes its own chapter sharing the same drawing */
+  function expandBeats(list) {
+    var out = [];
+    list.forEach(function (c) {
+      var bs = [{ at: 0, cap: c.cap, need: c.need, name: c.name }].concat(c.beats || []);
+      bs.forEach(function (b, i) {
+        var off = b.at, end = i + 1 < bs.length ? bs[i + 1].at : c.dur;
+        out.push({ name: b.name || c.name, need: b.need || c.need, start: c.start + off, dur: end - off, cap: b.cap,
+          draw: off ? function (ctx, t, l, W, H, api) { return c.draw(ctx, t, l + off, W, H, api); } : c.draw });
+      });
+    });
+    return out;
+  }
+
   F.play({
     title: 'Deep dive W1 · Einsum: the one-line contract',
     back: '../index.html',
-    chapters: chapters,
+    chapters: expandBeats(chapters),
     coda: coda,
     links: [
       { label: 'Demo: tensors & einops', href: '../../index.html#demo/tensors-einops' },
