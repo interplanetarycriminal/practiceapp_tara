@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Adam, line by line</title>
+<meta name="theme-color" content="#1c2140">
+<style>
+#predict{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(18,20,44,.55);z-index:5;padding:14px;box-sizing:border-box}
+#predict.on{display:flex}
+#predict .card{background:#fbf6ea;color:#2a2934;border-radius:6px;max-width:360px;width:100%;padding:14px 14px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);font:15px/1.35 system-ui,-apple-system,'Segoe UI',sans-serif;transform:rotate(-.6deg)}
+#predict .q{font:700 18px 'Comic Neue','Segoe Print','Bradley Hand','Chalkboard SE','Comic Sans MS',cursive;margin:0 0 4px}
+#predict .sub{font-size:13px;color:#5a5566;margin:0 0 10px}
+#predict button.opt{display:block;width:100%;text-align:left;margin:0 0 7px;padding:9px 10px;border-radius:8px;border:1.5px solid #c8b8ea;background:#fff;color:#2a2934;font:inherit;font-size:14px;cursor:pointer;min-height:40px}
+#predict button.opt:hover,#predict button.opt:focus{background:#f7e3a0;outline:none}
+#predict button.skipq{background:none;border:0;color:#6b5a9a;text-decoration:underline;font:inherit;font-size:14px;cursor:pointer;padding:4px 0;min-height:32px}
+</style>
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /* ---------------- the real loss surface: a long, gently curved ravine ----------------
+     f(x,y) = 0.05 (x-3)^2 + 2 (y - 0.35 sin x)^2 ; floor at x = 3, y = 0.35 sin 3.
+     Curvature across the ravine is ~4, along the floor 0.1: a 40x mismatch.            */
+  var A = 0.35, XM = 4.5, YM = 2, MIN = [3, A * Math.sin(3)];
+  function f(x, y) { var c = y - A * Math.sin(x); return 0.05 * (x - 3) * (x - 3) + 2 * c * c; }
+  function grad(x, y) { var c = y - A * Math.sin(x); return [0.1 * (x - 3) - 4 * c * A * Math.cos(x), 4 * c]; }
+  var START = [-4, -1.2];
+
+  function gauss(r) { var u = Math.max(1e-9, r()), v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(6.2831853 * v); }
+
+  /* Real update rules (ARENA [0.3] conventions). o: {lr,b1,b2,eps,wd,scale,noise,seed,n} */
+  function run(opt, x0, y0, o) {
+    var lr = o.lr, b1 = o.b1 == null ? .9 : o.b1, b2 = o.b2 == null ? .999 : o.b2, eps = o.eps == null ? 1e-8 : o.eps, wd = o.wd || 0, k = o.scale || 1, n = o.n || 60;
+    var r = F.rng(o.seed || 'mb'), p = [x0, y0], m = [0, 0], v = [0, 0], out = [], dead = false;
+    out.push({ x: p[0], y: p[1], L: k * f(p[0], p[1]), g: [0, 0], mh: [0, 0], vh: [0, 0], st: [0, 0] });
+    for (var t = 1; t <= n; t++) {
+      if (dead) { out.push(out[out.length - 1]); continue; }
+      var g0 = grad(p[0], p[1]), g = [k * g0[0], k * g0[1]], mh = [0, 0], vh = [0, 0], st = [0, 0];
+      if (o.noise) { g[0] += o.noise * gauss(r); g[1] += o.noise * gauss(r); }
+      for (var i = 0; i < 2; i++) {
+        var gi = g[i], old = p[i];
+        if (opt === 'sgd') p[i] -= lr * gi;
+        else if (opt === 'mom') { m[i] = .9 * m[i] + gi; p[i] -= lr * m[i]; }
+        else if (opt === 'rms') { v[i] = .99 * v[i] + .01 * gi * gi; p[i] -= lr * gi / (Math.sqrt(v[i]) + eps); vh[i] = v[i]; }
+        else {
+          if (opt === 'adaml2') gi = gi + wd * p[i];            // Adam(weight_decay): L2 folded into the gradient
+          if (opt === 'adamw') p[i] *= 1 - lr * wd;             // AdamW: theta *= 1 - lr*lmda
+          m[i] = b1 * m[i] + (1 - b1) * gi; v[i] = b2 * v[i] + (1 - b2) * gi * gi;
+          mh[i] = m[i] / (1 - Math.pow(b1, t)); vh[i] = v[i] / (1 - Math.pow(b2, t));
+          if (opt === 'nobc') { mh[i] = m[i]; vh[i] = v[i]; }
+          p[i] -= lr * mh[i] / (Math.sqrt(vh[i]) + eps);
+        }
+        st[i] = p[i] - old;
+      }
+      if (Math.abs(p[0]) > XM * 1.5 || Math.abs(p[1]) > YM * 2.5 || !isFinite(p[0]) || !isFinite(p[1])) dead = true;
+      out.push({ x: p[0], y: p[1], L: k * f(p[0], p[1]), g: g, mh: mh, vh: vh, st: st, dead: dead });
+    }
+    return out;
+  }
+  var CACHE = {}; function R(key, opt, o) { if (!CACHE[key]) CACHE[key] = run(opt, START[0], START[1], o); return CACHE[key]; }
+
+  /* ---------------- world <-> screen (portrait stands the ravine upright) ---------------- */
+  var V = { s: 1, cx: 0, cy: 0, por: false, W: 0, H: 0, top: -1, bot: -1 };
+  function fit(W, H, top, bot) {
+    if (V.W === W && V.H === H && V.top === top && V.bot === bot) return;
+    V.W = W; V.H = H; V.top = top; V.bot = bot; V.por = H > W * 1.1;
+    var aw = W - 24, ah = H - top - bot - 16;
+    V.s = V.por ? Math.min(aw / (2 * YM), ah / (2 * XM)) : Math.min(aw / (2 * XM), ah / (2 * YM));
+    V.cx = W / 2; V.cy = top + 8 + ah / 2; buildLand();
+  }
+  function S(x, y) { return V.por ? [V.cx + y * V.s, V.cy + x * V.s] : [V.cx + x * V.s, V.cy - y * V.s]; }
+  function Winv(sx, sy) { return V.por ? [(sy - V.cy) / V.s, (sx - V.cx) / V.s] : [(sx - V.cx) / V.s, -(sy - V.cy) / V.s]; }
+  var TOP = function (W, H) { return H > W * 1.1 ? 70 : 12; }, BOT = function (W, H) { return H > W * 1.1 ? 62 : 12; };
+
+  var land = null, BANDS = ['#fdf3d8', '#f9e2b8', '#f6cfa6', '#f0b8a0', '#e7a0a4', '#d18aa6', '#b377a4', '#91679d', '#735a92', '#5a4c83', '#463f72', '#373461', '#2d2c52'];
+  function hex(h) { return [parseInt(h.substr(1, 2), 16), parseInt(h.substr(3, 2), 16), parseInt(h.substr(5, 2), 16)]; }
+  var BR = BANDS.map(hex);
+  function band(x, y) { return Math.min(BANDS.length - 1, Math.floor(Math.sqrt(f(x, y)) * 3.3)); }
+  function buildLand() {
+    var k = 2, w = Math.ceil(V.W / k), h = Math.ceil(V.H / k), c = document.createElement('canvas'); c.width = w; c.height = h;
+    var g = c.getContext('2d'), id = g.createImageData(w, h), B = new Int16Array(w * h), r = F.rng('crumple');
+    for (var j = 0; j < h; j++) for (var i = 0; i < w; i++) { var q = Winv(i * k + k / 2, j * k + k / 2); B[j * w + i] = band(q[0], q[1]); }
+    for (j = 0; j < h; j++) for (i = 0; i < w; i++) {
+      var b = B[j * w + i], col = BR[b], sh = 0;
+      if (i > 1 && j > 1 && B[(j - 2) * w + i - 1] > b) sh = -34; else if (i < w - 1 && j < h - 1 && B[(j + 1) * w + i + 1] > b) sh = 16;
+      var cr = Math.sin(i * .21 + Math.sin(j * .13) * 3) * Math.cos(j * .17 + Math.sin(i * .09) * 2) * 9; // crumpled-paper creases
+      var n = (r() - .5) * 12 + cr, o = (j * w + i) * 4;
+      id.data[o] = clamp(col[0] + sh + n, 0, 255); id.data[o + 1] = clamp(col[1] + sh + n, 0, 255); id.data[o + 2] = clamp(col[2] + sh + n, 0, 255); id.data[o + 3] = 255;
+    }
+    g.putImageData(id, 0, 0); land = c;
+  }
+  function drawLand(ctx, W, H, t, alpha) {
+    var a = S(-XM, -YM), b = S(XM, YM), x0 = Math.min(a[0], b[0]), y0 = Math.min(a[1], b[1]), w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
+    ctx.save(); if (alpha != null) ctx.globalAlpha = alpha;
+    F.paper(ctx, x0 + w / 2, y0 + h / 2, w + 10, h + 10, '#2d2c52', { seed: 'landpaper', blur: 14 });
+    ctx.save(); var pts = F.tornRect('landclip', w, h, 1.2); ctx.translate(x0 + w / 2, y0 + h / 2); ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]); for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]); ctx.closePath(); ctx.clip();
+    ctx.translate(-(x0 + w / 2), -(y0 + h / 2)); ctx.drawImage(land, 0, 0, W, H);
+    ctx.fillStyle = F.grain(ctx); ctx.globalAlpha *= .45; ctx.fillRect(0, 0, W, H); ctx.restore();
+    var m = S(MIN[0], MIN[1]); F.lantern(ctx, m[0], m[1] + 3, 8, 1, t);
+    ctx.restore();
+  }
+  // sky brightens toward sunrise as the film goes on
+  function bg(ctx, W, H, t, dawn) {
+    var d = clamp(dawn || 0, 0, 1), top = mix('#1c2140', '#3b3f7a', d), bot = mix('#2b2f5c', '#e9a48f', d);
+    F.sky(ctx, W, H, top, bot); F.stars(ctx, W, H, t, 'adam', Math.round(55 * (1 - d * .7)));
+    if (d > .05) F.glow(ctx, W * .82, H + 30, Math.max(W, H) * .5 * d, 'rgba(255,200,140,.45)', d);
+  }
+  function mix(a, b, t) { var A1 = hex(a), B1 = hex(b); return 'rgb(' + [0, 1, 2].map(function (i) { return Math.round(lerp(A1[i], B1[i], t)); }).join(',') + ')'; }
+
+  function pos(tr, k) { var i = Math.floor(k), fr = k - i; if (i >= tr.length - 1) return tr[tr.length - 1]; var a = tr[i], b = tr[i + 1]; return { x: lerp(a.x, b.x, F.ease.inOut(fr)), y: lerp(a.y, b.y, F.ease.inOut(fr)), i: i }; }
+  function trail(ctx, tr, k, color, wdt, dotted) {
+    var n = Math.min(tr.length - 1, Math.floor(k)); ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = wdt || 2.5; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    if (dotted) ctx.setLineDash([2, 5]);
+    ctx.beginPath(); var p = S(tr[0].x, tr[0].y); ctx.moveTo(p[0], p[1]);
+    for (var i = 1; i <= n; i++) { if (tr[i].dead) break; p = S(tr[i].x, tr[i].y); ctx.lineTo(p[0], p[1]); }
+    var q = pos(tr, k); if (!tr[Math.min(tr.length - 1, n + 1)].dead) { p = S(q.x, q.y); ctx.lineTo(p[0], p[1]); } ctx.stroke();
+    ctx.setLineDash([]); ctx.fillStyle = color; for (i = 0; i <= n; i++) { if (tr[i].dead) break; p = S(tr[i].x, tr[i].y); ctx.beginPath(); ctx.arc(p[0], p[1], 2, 0, 6.283); ctx.fill(); }
+    ctx.restore();
+  }
+  // the protagonist: a crumpled paper ball
+  function ball(ctx, q, r, color) {
+    var p = S(q.x, q.y); F.blob(ctx, p[0], p[1], r, color || P.cream, { seed: 'ball', jit: .9, blur: 6 });
+    ctx.save(); ctx.strokeStyle = 'rgba(80,70,90,.45)'; ctx.lineWidth = 1; ctx.beginPath();
+    ctx.moveTo(p[0] - r * .5, p[1] - r * .2); ctx.lineTo(p[0] + r * .1, p[1] + r * .1); ctx.lineTo(p[0] + r * .4, p[1] - r * .45);
+    ctx.moveTo(p[0] - r * .1, p[1] + r * .55); ctx.lineTo(p[0] + r * .05, p[1] + r * .1); ctx.stroke(); ctx.restore();
+  }
+  function readout(ctx, x, y, lines, W) {
+    var sz = W < 500 ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.9)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+  }
+  function botReadout(ctx, W, H, lines) { var sz = W < 500 ? 12 : 14; readout(ctx, 10, H - lines.length * sz * 1.3 - 22, lines, W); }
+  function mono(ctx, s, x, y, sz, color, align, weight) { ctx.save(); ctx.font = (weight || '600') + ' ' + sz + 'px ' + F.MONO; ctx.fillStyle = color || P.ink; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle'; ctx.fillText(s, x, y); ctx.restore(); }
+  function fx(v, d) { var s = v.toFixed(d == null ? 2 : d); return (v >= 0 ? '+' : '') + s; }
+  function sci(v) { if (v === 0) return '0'; var e = Math.floor(Math.log10(Math.abs(v))), m = v / Math.pow(10, e); return m.toFixed(1) + 'e' + e; }
+  function sign(ctx, W, H, a) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; var ph = W < 500;
+    F.note(ctx, 'how big a step,\nin which direction?', ph ? W / 2 : W * .5, ph ? 36 : 44, ph ? 16 : 20, { rot: -.03, seed: 'trail', color: P.butter });
+    ctx.restore();
+  }
+  function card(ctx, cx, cy, w, h, seed, color) { F.paper(ctx, cx, cy, w, h, color || P.cream, { seed: seed, rot: 0 }); }
+
+  /* ---------------- the step-1 numbers (computed, not typed) ---------------- */
+  var G1 = grad(START[0], START[1]);            // (-2.04, -5.86)
+  var M1 = G1.map(function (g) { return .1 * g; }), V1 = G1.map(function (g) { return .001 * g * g; });
+  var RAW = M1.map(function (m, i) { return m / (Math.sqrt(V1[i]) + 1e-8); });                       // uncorrected: ~ -3.16
+  var MONLY = M1.map(function (m, i) { return (m / .1) / (Math.sqrt(V1[i]) + 1e-8); });              // correct m only: ~ -31.6
+  var BOTH = M1.map(function (m, i) { return (m / .1) / (Math.sqrt(V1[i] / .001) + 1e-8); });        // both: ~ -1.00
+
+  /* ---------------- predict, then watch (never gated) ---------------- */
+  var QT = 58.2, Q = { done: false, prev: -1, choice: null, el: null };
+  var QOPTS = [
+    ['a', 'lr × gradient: big on the steep axis, small on the flat one'],
+    ['b', 'about lr on each axis, whatever the gradient size'],
+    ['c', 'nearly zero: m and v both start at 0']];
+  function buildQ(api) {
+    if (Q.el) return Q.el;
+    var d = document.createElement('div'); d.id = 'predict';
+    d.innerHTML = '<div class="card"><p class="q">Predict: on step 1, how big is Adam\'s step on each axis?</p><p class="sub">g = (' + G1[0].toFixed(2) + ', ' + G1[1].toFixed(2) + '), lr = 0.1, m and v start at 0.</p>' +
+      QOPTS.map(function (o) { return '<button class="opt" data-c="' + o[0] + '">' + o[1] + '</button>'; }).join('') +
+      '<button class="skipq">just show me &#9654;</button></div>';
+    api.root.querySelector('.stage').appendChild(d);
+    d.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    [].forEach.call(d.querySelectorAll('button'), function (b) {
+      b.onclick = function (e) { e.stopPropagation(); Q.choice = b.dataset.c || 'skip'; hideQ(api, true); if (b.dataset.c) api.audio.blip(b.dataset.c === 'b' ? 880 : 520); };
+    });
+    Q.el = d; return d;
+  }
+  function isPlaying(api) { return api.root.querySelector('.pp').getAttribute('aria-label') === 'Pause'; }
+  function showQ(api) { var d = buildQ(api); d.classList.add('on'); if (isPlaying(api)) api.root.querySelector('.pp').click(); }
+  function hideQ(api, resume) { if (!Q.el) return; Q.el.classList.remove('on'); if (resume && !isPlaying(api)) api.root.querySelector('.pp').click(); }
+
+  var LR = { sgd: .45, adam: .15 };
+  var RATE = 7;
+
+  var chapters = [
+    { name: 'one lr for all', start: 0, dur: 18, cap: {
+        1: 'A paper ball wants the <b>valley floor</b> (the lantern) before sunrise. It can only feel the slope under it. Plain gradient descent uses <b>one step size</b> for every direction, and this ravine is steep one way and nearly flat the other.',
+        2: 'SGD: <code>p -= lr * g</code>. The slope across the ravine is ~40× steeper than along it, so any lr small enough not to bounce off the walls crawls along the floor. One lr can\'t suit both axes.',
+        3: 'f = 0.05(x−3)² + 2(y − 0.35 sin x)². Curvature ≈4 across, 0.1 along. SGD needs lr < 2/4; at lr 0.45 the across factor is 1−0.45·4 = −0.8 (bounce) and along 1−0.045 = 0.955 (crawl).' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, 0); drawLand(ctx, W, H, t);
+        var T = R('sgd', 'sgd', { lr: LR.sgd, n: 90 }), k = Math.max(0, (l - 4) * RATE), q = pos(T, k), i = Math.min(T.length - 1, Math.floor(k) + 1);
+        trail(ctx, T, k, P.butter); ball(ctx, q, 9);
+        sign(ctx, W, H, ramp(l, .2, 1.2));
+        var g = grad(q.x, q.y);
+        botReadout(ctx, W, H, [['SGD  lr=0.45   step ' + Math.floor(k), P.butter], ['g = (' + fx(g[0]) + ', ' + fx(g[1]) + ')'], ['loss ' + f(q.x, q.y).toFixed(3)]]);
+      } },
+    { name: 'a ruler each', start: 18, dur: 20, cap: {
+        1: 'Adam gives every parameter its own <b>ruler</b>: √v, the typical size of that parameter\'s recent gradients. It divides each gradient by its ruler, so every step comes out about the same size. Watch: we multiply the whole loss by 100, then by 0.01.',
+        2: 'Multiply the loss by k: every gradient scales by k. SGD\'s steps scale too (×100 flies off, ×0.01 freezes). Adam\'s path stays put: m̂ and √v̂ both scale by k, so k cancels in m̂/√v̂.',
+        3: 'v is an EMA of g², so √v̂ is a per-coordinate RMS gradient. The update m̂/(√v̂+ε) is dimensionless and invariant to rescaling each coordinate\'s gradient (up to ε). Same reason one lr ≈ 1e-3 works across very different layers.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, .1); drawLand(ctx, W, H, t);
+        var e = l < 3 ? 0 : l < 8 ? 2 * ramp(l, 3, 8) : l < 14 ? lerp(2, -2, ramp(l, 8.5, 13.5)) : lerp(-2, 0, ramp(l, 15, 19)), k = Math.pow(10, e);
+        var Sg = run('sgd', START[0], START[1], { lr: .2, scale: k, n: 40 }), Ad = run('adam', START[0], START[1], { lr: LR.adam, scale: k, n: 40 });
+        trail(ctx, Sg, 40, P.orange, 2.5); trail(ctx, Ad, 40, P.lav, 3.5);
+        var sd = Sg.findIndex(function (s) { return s.dead; });
+        if (sd > 0) { var pd = S(clamp(Sg[sd - 1].x, -XM, XM), clamp(Sg[sd - 1].y, -YM, YM)); F.hand(ctx, 'SGD flew off', pd[0] + (V.por ? 0 : 60), pd[1] + (V.por ? 22 : 0), 16, P.orange, { outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: 'fly' }); }
+        ball(ctx, Ad[40], 8, P.lav); ball(ctx, Sg[sd > 0 ? 0 : 40], 7, P.orange);
+        var a = Ad[10], ph = W < 500, sz = ph ? 12 : 14, cw = ph ? W - 20 : 330, ch = sz * 7.4, cx = ph ? W / 2 : W - cw / 2 - 14, cy = ph ? 10 + ch / 2 : 16 + ch / 2;
+        card(ctx, cx, cy, cw, ch, 'ruler');
+        var x0 = cx - cw / 2 + 12, c1 = x0 + (ph ? 118 : 150), c2 = x0 + (ph ? 238 : 250);
+        mono(ctx, 'loss × ' + (k >= 1 ? k.toFixed(k < 10 ? 2 : 0) : k.toFixed(k < .1 ? 3 : 2)), x0, cy - ch / 2 + sz * 1.1, sz + 1, '#6b2f7a', 'left', '700');
+        mono(ctx, 'Adam, step 10', c1, cy - ch / 2 + sz * 1.1, sz - 1, '#6b5a9a');
+        mono(ctx, 'along x', c1, cy - ch / 2 + sz * 2.5, sz - 1, '#6b5a9a'); mono(ctx, 'across y', c2, cy - ch / 2 + sz * 2.5, sz - 1, '#6b5a9a');
+        [['m̂', a.mh, 3], ['√v̂', a.vh.map(Math.sqrt), 3], ['m̂/√v̂', a.mh.map(function (m, i) { return m / (Math.sqrt(a.vh[i]) + 1e-8); }), 2]].forEach(function (r, j) {
+          var y = cy - ch / 2 + sz * (3.8 + j * 1.25), fmt = function (v) { return Math.abs(v) >= 1000 || (Math.abs(v) < .001 && v !== 0) ? sci(v) : v.toFixed(r[2]); };
+          mono(ctx, r[0], x0, y, sz, P.ink, 'left', '700'); mono(ctx, fmt(r[1][0]), c1, y, sz, j === 2 ? '#2f7a52' : P.ink); mono(ctx, fmt(r[1][1]), c2, y, sz, j === 2 ? '#2f7a52' : P.ink);
+        });
+        botReadout(ctx, W, H, [['SGD  lr=0.2 ' + (sd > 0 ? 'diverged' : 'loss ' + Sg[40].L.toFixed(3)), P.orange], ['Adam lr=0.15 ends at (' + Ad[40].x.toFixed(2) + ', ' + Ad[40].y.toFixed(2) + ')', P.lav]]);
+      } },
+    { name: 'noisy batches', start: 38, dur: 16, cap: {
+        1: 'Real training never sees the true slope: each <b>minibatch</b> gives a noisy guess (thin pink arrows). Adam\'s m is a running average of those guesses (thick yellow arrow): the jitter mostly cancels, the real downhill adds up.',
+        2: 'm = average of g, β₁ = 0.9 (memory ≈ 10 steps). v = average of g², β₂ = 0.999 (≈ 1000 steps). Noise inflates v, so a noisy parameter gets a bigger ruler and steps more cautiously.',
+        3: 'E[g²] = (E g)² + Var g, so m̂/√v̂ ≈ signal / √(signal² + noise²): a per-coordinate signal-to-noise ratio. With pure noise, |m̂/√v̂| ≈ √((1−β₁)/(1+β₁)) ≈ 0.23. Here σ = 1.5 per axis.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, .2); drawLand(ctx, W, H, t);
+        var T = R('noisy', 'adam', { lr: LR.adam, noise: 1.5, seed: 'batch', n: 130 }), k = l * RATE, q = pos(T, k), i = Math.min(T.length - 1, Math.floor(k) + 1), s = T[i];
+        trail(ctx, T, k, P.lav, 2.5);
+        var p = S(q.x, q.y), sc = V.s * .55;
+        for (var j = Math.max(1, i - 5); j <= i; j++) { var gj = T[j].g, L = Math.hypot(gj[0], gj[1]) || 1, d = V.por ? [-gj[1] / L, -gj[0] / L] : [-gj[0] / L, gj[1] / L]; ctx.save(); ctx.globalAlpha = .35 + .13 * (j - i + 5); F.arrow(ctx, p[0], p[1], p[0] + d[0] * sc * 1.3, p[1] + d[1] * sc * 1.3, P.pink, 2, 'n' + j); ctx.restore(); }
+        var mm = s.mh, Lm = Math.hypot(mm[0], mm[1]) || 1, dm = V.por ? [-mm[1] / Lm, -mm[0] / Lm] : [-mm[0] / Lm, mm[1] / Lm];
+        F.arrow(ctx, p[0], p[1], p[0] + dm[0] * sc * 1.7, p[1] + dm[1] * sc * 1.7, P.butter, 4, 'mh');
+        ball(ctx, q, 9);
+        if (l < 4) { ctx.save(); ctx.globalAlpha = ramp(l, .3, 1) * (1 - ramp(l, 3.2, 4)); F.note(ctx, 'every batch lies a little', W / 2, W < 500 ? 30 : 40, W < 500 ? 15 : 19, { color: P.pink, seed: 'lies', rot: .02 }); ctx.restore(); }
+        botReadout(ctx, W, H, [['batch g  (' + fx(s.g[0], 1) + ', ' + fx(s.g[1], 1) + ')', P.pink], ['m̂       (' + fx(s.mh[0]) + ', ' + fx(s.mh[1]) + ')', P.butter], ['√v̂      (' + Math.sqrt(s.vh[0]).toFixed(2) + ', ' + Math.sqrt(s.vh[1]).toFixed(2) + ')   t=' + i, P.mint]]);
+      } },
+    { name: 'step one', start: 54, dur: 26, cap: {
+        1: 'The cold start. On step 1, m and v begin at <b>zero</b>, so the averages are far too small. Adam fixes that by dividing by (1 − β^t). Guess first: how big is the very first step?',
+        2: 'Bias correction: <code>m_hat = m / (1 - beta1**t)</code>, <code>v_hat = v / (1 - beta2**t)</code>. At t = 1 this gives m̂ = g and v̂ = g² exactly, so the first step is lr·sign(g) on every axis: size lr, whatever the gradient.',
+        3: 'Uncorrected: m/√v = 0.1/√0.001 = 3.16 → step 3.16·lr. Correct m but not v: 31.6·lr. Both: 1·lr. The m correction is gone by t ≈ 50 (0.9⁵⁰ ≈ 0.005); the v correction lasts thousands of steps (1 − 0.999¹⁰⁰⁰ = 0.63).' },
+      draw: function (ctx, t, l, W, H, api) {
+        if (!Q.done && Q.prev >= 0 && Q.prev < QT && t >= QT && t - Q.prev < .4) { Q.done = true; showQ(api); }
+        if (t < QT - 1) { Q.done = false; if (Q.el && Q.el.classList.contains('on')) hideQ(api, false); }
+        Q.prev = t;
+        fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, .35); drawLand(ctx, W, H, t, .3);
+        var ph = W < 500, sz = ph ? 12.5 : 15, cw = Math.min(W - 20, 560), x0 = W / 2 - cw / 2 + 14, c1 = x0 + cw * (ph ? .44 : .5), c2 = x0 + cw * (ph ? .72 : .75);
+        var rows = [
+          ['t = 1', 'x', 'y', 0, '#6b5a9a'],
+          ['g', G1[0].toFixed(2), G1[1].toFixed(2), 0, P.ink],
+          ['m = 0.1·g', M1[0].toFixed(3), M1[1].toFixed(3), 4.2, P.ink],
+          ['v = 0.001·g²', V1[0].toFixed(5), V1[1].toFixed(4), 5.2, P.ink],
+          ['m/√v  (raw)', RAW[0].toFixed(2), RAW[1].toFixed(2), 6.4, '#b3443c'],
+          ['m̂ = m/(1−0.9)', (M1[0] / .1).toFixed(2), (M1[1] / .1).toFixed(2), 8.4, P.ink],
+          ['v̂ = v/(1−0.999)', (V1[0] / .001).toFixed(2), (V1[1] / .001).toFixed(2), 9.4, P.ink],
+          ['m̂/(√v̂+ε)', BOTH[0].toFixed(2), BOTH[1].toFixed(2), 10.6, '#2f7a52'],
+          ['m̂ only fixed', MONLY[0].toFixed(1), MONLY[1].toFixed(1), 12.6, '#b3443c']];
+        var lh = sz * 1.45, ch = rows.length * lh + sz * 1.6, cy = (ph ? 10 : 16) + ch / 2;
+        card(ctx, W / 2, cy, cw, ch, 'stepone');
+        rows.forEach(function (r, j) {
+          var a = r[3] ? ramp(l, r[3], r[3] + .6) : 1; if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+          var y = cy - ch / 2 + sz * 1.2 + j * lh; mono(ctx, r[0], x0, y, sz, r[4], 'left', '700'); mono(ctx, r[1], c1, y, sz, r[4]); mono(ctx, r[2], c2, y, sz, r[4]); ctx.restore();
+        });
+        // verdict line and the learner's guess
+        var vy = cy + ch / 2 + sz * 1.4;
+        if (l < 4.2) { ctx.save(); ctx.globalAlpha = ramp(l, .5, 1.2); F.note(ctx, 'guess: how big is step 1?', W / 2, vy + 8, ph ? 15 : 18, { color: P.butter, seed: 'guess' }); ctx.restore(); }
+        else if (l > 10.8) {
+          var gtxt = Q.choice === 'b' ? 'you guessed it: lr on each axis' : Q.choice && Q.choice !== 'skip' ? 'real answer: lr on each axis' : 'step 1 = lr on each axis';
+          ctx.save(); ctx.globalAlpha = ramp(l, 10.8, 11.6); F.note(ctx, gtxt, W / 2, vy + 8, ph ? 15 : 18, { color: P.mint, seed: 'ans' }); ctx.restore();
+        }
+        // correction factors vs t, a small plot on the lower part
+        var pa = ramp(l, 15, 16); if (pa > 0) {
+          ctx.save(); ctx.globalAlpha = pa; var pw = Math.min(W - 20, 520), phh = ph ? 150 : 170, px = W / 2 - pw / 2, py = Math.min(H - phh - 12, vy + 34);
+          card(ctx, W / 2, py + phh / 2, pw, phh, 'bcplot', '#f3ecff');
+          var gx0 = px + 40, gx1 = px + pw - 16, gy0 = py + phh - 26, gy1 = py + 30, lt = Math.log10(5000);
+          ctx.strokeStyle = 'rgba(42,41,52,.4)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx0, gy1); ctx.lineTo(gx0, gy0); ctx.lineTo(gx1, gy0); ctx.stroke();
+          [1, 10, 100, 1000].forEach(function (tt) { var X = gx0 + (gx1 - gx0) * Math.log10(tt) / lt; mono(ctx, 't=' + tt, X, gy0 + 11, 11, '#5a5566', 'center'); });
+          mono(ctx, '1', gx0 - 8, gy1, 11, '#5a5566', 'right'); mono(ctx, '0', gx0 - 8, gy0, 11, '#5a5566', 'right');
+          var tNow = Math.pow(10, lt * ramp(l, 16, 25));
+          [[.9, P.orange, '1−0.9^t'], [.999, '#6b5a9a', '1−0.999^t']].forEach(function (b, j) {
+            ctx.strokeStyle = b[1]; ctx.lineWidth = 3; ctx.beginPath();
+            for (var s = 0; s <= 120; s++) { var tt = Math.pow(10, lt * s / 120); if (tt > tNow) break; var X = gx0 + (gx1 - gx0) * s / 120, Y = lerp(gy0, gy1, 1 - Math.pow(b[0], tt)); if (s) ctx.lineTo(X, Y); else ctx.moveTo(X, Y); }
+            ctx.stroke(); mono(ctx, b[2] + ' = ' + (1 - Math.pow(b[0], tNow)).toFixed(3), px + 14 + j * (pw / 2), py + 14, ph ? 11.5 : 13, b[1], 'left', '700');
+          });
+          ctx.restore();
+        }
+      } },
+    { name: 'epsilon', start: 80, dur: 14, cap: {
+        1: 'ε is a tiny number (10⁻⁸) added under the division. Its job: stop <b>0/0</b> when a gradient is exactly zero, and stop almost-zero gradients being blown up into full-size steps.',
+        2: 'For a steady gradient, step/lr = |g| / (|g| + ε). Normal gradients (≫10⁻⁸): ε is invisible, step = lr. Gradients near 10⁻⁸: the step fades out. g = 0 exactly: 0/(0 + ε) = 0, not NaN.',
+        3: 'ε sets a floor on the ruler: below |g| ~ ε Adam acts like momentum-SGD with lr/ε. It lives outside the sqrt in ARENA/PyTorch: <code>v_hat.sqrt() + eps</code>. In low precision (fp16) 1e-8 can underflow, which is why people raise it.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, .5); drawLand(ctx, W, H, t, .25);
+        var ph = W < 500, pw = Math.min(W - 20, 560), phh = ph ? 250 : 300, px = W / 2 - pw / 2, py = ph ? 12 : 20;
+        card(ctx, W / 2, py + phh / 2, pw, phh, 'epsplot');
+        var gx0 = px + 44, gx1 = px + pw - 18, gy0 = py + phh - 34, gy1 = py + 62, lo = -12, hi = -4, eps = 1e-8;
+        mono(ctx, 'step / lr  vs  |g|   (ε = 1e-8)', px + 14, py + 18, ph ? 13 : 15, '#6b5a9a', 'left', '700');
+        ctx.strokeStyle = 'rgba(42,41,52,.4)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx0, gy1); ctx.lineTo(gx0, gy0); ctx.lineTo(gx1, gy0); ctx.stroke();
+        for (var e = lo; e <= hi; e += 2) { var X = gx0 + (gx1 - gx0) * (e - lo) / (hi - lo); mono(ctx, '1e' + e, X, gy0 + 13, 11, '#5a5566', 'center'); }
+        mono(ctx, '1', gx0 - 8, gy1, 11, '#5a5566', 'right'); mono(ctx, '0', gx0 - 8, gy0, 11, '#5a5566', 'right');
+        var X8 = gx0 + (gx1 - gx0) * (-8 - lo) / (hi - lo); ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(X8, gy1); ctx.lineTo(X8, gy0); ctx.stroke(); ctx.setLineDash([]);
+        mono(ctx, 'ε', X8 + 5, gy1 + 8, 13, '#6b5a9a');
+        var rev = ramp(l, .5, 3); ctx.strokeStyle = P.teal; ctx.lineWidth = 3.5; ctx.beginPath();
+        for (var s = 0; s <= 160 * rev; s++) { var ex = lo + (hi - lo) * s / 160, g = Math.pow(10, ex), r = g / (Math.sqrt(g * g) + eps), X2 = gx0 + (gx1 - gx0) * s / 160, Y = lerp(gy0, gy1, r); if (s) ctx.lineTo(X2, Y); else ctx.moveTo(X2, Y); }
+        ctx.stroke();
+        var me = lerp(-11, -5, .5 - .5 * Math.cos(clamp((l - 3) / 9, 0, 1) * Math.PI)), mg = Math.pow(10, me), mr = mg / (Math.sqrt(mg * mg) + eps);
+        if (l > 3) { var MX = gx0 + (gx1 - gx0) * (me - lo) / (hi - lo), MY = lerp(gy0, gy1, mr); ctx.fillStyle = P.orange; ctx.beginPath(); ctx.arc(MX, MY, 6, 0, 6.283); ctx.fill();
+          mono(ctx, '|g| = ' + sci(mg) + '  →  step = ' + mr.toFixed(3) + '·lr', px + 14, py + 38, ph ? 12 : 13, P.ink); }
+        var ny = py + phh + (ph ? 30 : 38);
+        ctx.save(); ctx.globalAlpha = ramp(l, 8, 9); F.note(ctx, 'g = 0 exactly:  0/(0+ε) = 0,  not NaN', W / 2, ny, ph ? 13 : 17, { color: P.butter, seed: 'nan', font: F.MONO }); ctx.restore();
+      } },
+    { name: 'AdamW', start: 94, dur: 22, cap: {
+        1: 'Weight decay gently pulls every weight back toward zero. Adam\'s old way hid that pull <b>inside the gradient</b>, so it got divided by the ruler too: busy weights barely felt it, quiet weights got squeezed. AdamW pulls <b>outside</b>, the same for everyone.',
+        2: 'Adam + L2: <code>g = g + wd * theta</code> then normalise → pull ≈ lr·wd·θ/√v̂, different for each weight. AdamW: <code>theta *= 1 - lr * wd</code> → every weight shrinks by the same fraction lr·wd per step.',
+        3: 'Two weights, θ = 2, wd = 0.1, lr = 0.01, steady gradients 10 and 0.1. L2 pull = lr·wd·θ/|g+wd·θ|: 1.96e-4 vs 6.67e-3 (34× apart). AdamW: 2.0e-3 for both. Loshchilov & Hutter 2019: decoupling restores what weight decay means under adaptive scaling.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, .65); drawLand(ctx, W, H, t, .2);
+        var ph = W < 500, sz = ph ? 12.5 : 15, lr = .01, th = 2, wd = .1 * ramp(l, 2, 6), cw = Math.min(W - 20, 600), x0 = W / 2 - cw / 2 + 14;
+        var ws = [{ n: 'busy weight', g: 10, c: P.orange }, { n: 'quiet weight', g: .1, c: P.teal }];
+        var l2 = ws.map(function (w) { return lr * wd * th / (Math.abs(w.g + wd * th) + 1e-8); }), aw = lr * wd * th;
+        var ch = ph ? 212 : 214, cy = (ph ? 10 : 18) + ch / 2; card(ctx, W / 2, cy, cw, ch, 'decay');
+        mono(ctx, 'θ = 2   lr = 0.01   wd = ' + wd.toFixed(3), x0, cy - ch / 2 + 18, sz, '#6b5a9a', 'left', '700');
+        var maxP = .007, bx = x0 + (ph ? 104 : 150), bw = cw - (bx - (W / 2 - cw / 2)) - 18;
+        ws.forEach(function (w, j) {
+          var y = cy - ch / 2 + 50 + j * (ph ? 80 : 86);
+          mono(ctx, w.n, x0, y, sz, P.ink, 'left', '700'); mono(ctx, '|g| ≈ ' + w.g, x0, y + sz * 1.3, sz - 1.5, '#5a5566');
+          [['Adam+L2', l2[j], '#b3443c'], ['AdamW', aw, '#2f7a52']].forEach(function (b, i) {
+            var yy = y - 8 + i * (sz * 1.9), bl = bw * .62 * Math.min(1, b[1] / maxP);
+            ctx.fillStyle = 'rgba(0,0,0,.08)'; ctx.fillRect(bx, yy - 7, bw * .62, 14); ctx.fillStyle = b[2]; ctx.fillRect(bx, yy - 7, Math.max(1.5, bl), 14);
+            mono(ctx, b[0], bx + bw * .64, yy - 5, ph ? 11.5 : 13, b[2], 'left', '700'); mono(ctx, 'pull ' + sci(b[1]), bx + bw * .64, yy + 8, ph ? 11.5 : 13, P.ink);
+          });
+        });
+        // the two code lines, side by side as torn strips
+        var ca = ramp(l, 9, 10.5); if (ca > 0) {
+          ctx.save(); ctx.globalAlpha = ca; var cz = ph ? 12 : 15, y1 = cy + ch / 2 + (ph ? 30 : 40);
+          F.note(ctx, 'Adam:   g = g + wd * theta', W / 2, y1, cz, { color: '#f6d0cc', seed: 'l2', font: F.MONO, tape: false });
+          F.note(ctx, 'AdamW:  theta *= 1 - lr * wd', W / 2, y1 + cz * 2.8, cz, { color: P.mint, seed: 'aw', font: F.MONO, tape: false, rot: .01 });
+          ctx.restore();
+        }
+        var ra = ramp(l, 13, 14); if (ra > 0) { ctx.save(); ctx.globalAlpha = ra; F.hand(ctx, 'L2 squeezes the quiet weight ' + (l2[1] / l2[0]).toFixed(0) + '× harder', W / 2, Math.min(H - 24, cy + ch / 2 + (ph ? 118 : 150)), ph ? 15 : 20, P.butter, { outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: 'sq' }); ctx.restore(); }
+      } },
+    { name: 'the limit', start: 116, dur: 10, cap: {
+        1: 'Where this story stops being true: Adam\'s rulers point along the <b>axes</b>. Tilt the same ravine 45° and they can\'t see it: same valley, about 4× slower. Real networks have billions of axes, ravines everywhere, and no single floor.',
+        2: 'Adam is diagonal preconditioning: one scale per coordinate, no rotation. Left: axis-aligned ravine, loss < 0.01 in ~19 steps. Right: the identical ravine rotated 45°, ~73 steps. Both computed live, Adam lr = 0.15.',
+        3: 'Diagonal preconditioners fix axis-aligned ill-conditioning only. Full-matrix / Kronecker methods (Shampoo, Muon\'s orthogonalised updates) attack the off-diagonal part. And in 10⁹ dims there are many equally low floors, not one.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, .8); drawLand(ctx, W, H, t, .35);
+        var ph = W < 500, bw = ph ? (W - 36) / 2 : Math.min(300, (W - 80) / 2), bh = bw, gap = ph ? 12 : 30, y0 = ph ? 24 : 30;
+        [0, Math.PI / 4].forEach(function (thr, j) {
+          var T = rotRun(thr), cx = W / 2 + (j ? 1 : -1) * (bw / 2 + gap / 2), cy = y0 + bh / 2 + 16;
+          card(ctx, cx, cy, bw, bh + 36, 'rot' + j, j ? '#f6e7d8' : P.cream);
+          var sc = bw / 8.4, c = Math.cos(thr), s = Math.sin(thr);
+          for (var lev = 1; lev <= 5; lev++) { var L = .02 * Math.pow(3, lev); ctx.save(); ctx.translate(cx, cy + 10); ctx.rotate(-thr); ctx.strokeStyle = 'rgba(107,90,154,.35)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.ellipse(0, 0, Math.min(bw * .48, Math.sqrt(L / .05) * sc), Math.sqrt(L / 2) * sc, 0, 0, 6.283); ctx.stroke(); ctx.restore(); }
+          var k = Math.min(T.length - 1, l * 12), n = Math.floor(k); ctx.save(); ctx.strokeStyle = j ? P.orange : '#6b5a9a'; ctx.lineWidth = 2.2; ctx.beginPath();
+          for (var i = 0; i <= n; i++) { var X = cx + T[i][0] * sc, Y = cy + 10 - T[i][1] * sc; if (i) ctx.lineTo(X, Y); else ctx.moveTo(X, Y); } ctx.stroke(); ctx.restore();
+          var hit = T.hit; mono(ctx, (j ? 'tilted 45°' : 'axis-aligned'), cx, cy - bh / 2 - 4, ph ? 12 : 14, P.ink, 'center', '700');
+          mono(ctx, 'step ' + n + '  loss ' + T[n][2].toFixed(3), cx, cy + bh / 2 + 8, ph ? 11 : 13, n >= hit ? '#2f7a52' : P.ink, 'center');
+        });
+        var fa = ramp(l, 5.5, 6.5); if (fa > 0) { ctx.save(); ctx.globalAlpha = fa; F.note(ctx, 'really: 10⁹ axes,\nravines everywhere,\nno single floor', W / 2, Math.min(H - 60, y0 + bh + 110), ph ? 15 : 19, { color: P.pink, seed: 'real', rot: -.02 }); ctx.restore(); }
+      } },
+    { name: 'your step()', start: 126, dur: 20, cap: {
+        1: 'Everything you just watched is <b>nine lines</b>. Each line lights up with the real step-1 number for the steep axis. Optimisers decide <b>which solution</b> a model lands in, and so what you\'ll find when you look inside it.',
+        2: 'Your torch-style Adam(W) step, in ARENA [0.3] order: decay, then m, v, bias correction, update. Keep t starting at 1 (ARENA sets <code>self.t = 1</code>) and run it under <code>@t.inference_mode()</code>.',
+        3: 'ARENA\'s Adam folds decay in as <code>g = g + self.lmda * theta</code>; AdamW swaps that for <code>theta *= 1 - self.lr * self.lmda</code>. Same m/v/m_hat/v_hat lines. Test with <code>tests.test_adam</code> / <code>tests.test_adamw</code>.' },
+      draw: function (ctx, t, l, W, H) {
+        fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, 1); drawLand(ctx, W, H, t, .2);
+        var ph = W < 500, sz = ph ? 11.2 : 15, lh = sz * 1.55, lines = CODE, cw = Math.min(W - 16, ph ? 999 : 640), x0 = W / 2 - cw / 2 + 10;
+        var ch = lines.length * lh + 22, cy = (ph ? 8 : 16) + ch / 2; card(ctx, W / 2, cy, cw, ch, 'code');
+        var hl = Math.floor(clamp((l - 1.5) / 1.35, -1, lines.length - 1));
+        lines.forEach(function (s, j) {
+          var y = cy - ch / 2 + 13 + j * lh + lh / 2 - 2;
+          if (j === hl && VALS[j]) { ctx.fillStyle = 'rgba(247,227,160,.8)'; ctx.fillRect(x0 - 6, y - lh / 2 + 1, cw - 8, lh - 2); }
+          mono(ctx, s, x0, y, sz, s.indexOf('#') >= 0 ? '#6b5a9a' : P.ink, 'left', j === hl ? '700' : '500');
+        });
+        if (hl >= 0 && VALS[hl]) { var vy = cy + ch / 2 + (ph ? 28 : 36); F.note(ctx, VALS[hl], W / 2, vy, ph ? 13 : 17, { color: P.mint, seed: 'v' + hl, font: F.MONO, tape: false }); }
+        var sa = ramp(l, 15, 16.2); if (sa > 0) { ctx.save(); ctx.globalAlpha = sa; F.note(ctx, 'optimisers decide which\nsolution a model lands in', W / 2, Math.min(H - 44, cy + ch / 2 + (ph ? 90 : 110)), ph ? 16 : 21, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore(); }
+      } }
+  ];
+
+  /* rotated-ravine mini runs for 'the limit' (q = 0.05u² + 2w², u,w rotated by thr) */
+  var ROT = {};
+  function rotRun(thr) {
+    var key = thr.toFixed(3); if (ROT[key]) return ROT[key];
+    var c = Math.cos(thr), s = Math.sin(thr), q = function (x, y) { var u = c * x + s * y, w = -s * x + c * y; return [c * .1 * u - s * 4 * w, s * .1 * u + c * 4 * w, .05 * u * u + 2 * w * w]; };
+    var u0 = -3, w0 = .8, p = [c * u0 - s * w0, s * u0 + c * w0], m = [0, 0], v = [0, 0], out = [[p[0], p[1], q(p[0], p[1])[2]]], hit = 999;
+    for (var t = 1; t <= 110; t++) { var g = q(p[0], p[1]); for (var i = 0; i < 2; i++) { m[i] = .9 * m[i] + .1 * g[i]; v[i] = .999 * v[i] + .001 * g[i] * g[i]; p[i] -= .15 * (m[i] / (1 - Math.pow(.9, t))) / (Math.sqrt(v[i] / (1 - Math.pow(.999, t))) + 1e-8); }
+      var L = q(p[0], p[1])[2]; if (hit === 999 && L < .01) hit = t; out.push([p[0], p[1], L]); }
+    out.hit = hit; ROT[key] = out; return out;
+  }
+
+  var CODE = [
+    '@t.inference_mode()',
+    'def adam_step(p, m, v, t, lr, b1, b2, eps, wd):',
+    '    g = p.grad',
+    '    p *= 1 - lr * wd            # AdamW: decay outside',
+    '    m.copy_(b1 * m + (1 - b1) * g)',
+    '    v.copy_(b2 * v + (1 - b2) * g.pow(2))',
+    '    m_hat = m / (1 - b1**t)',
+    '    v_hat = v / (1 - b2**t)',
+    '    p -= lr * m_hat / (v_hat.sqrt() + eps)'];
+  var VALS = [null, 't = 1, lr = 0.1, wd = 0 (steep axis y)',
+    'g = ' + G1[1].toFixed(3),
+    'wd = 0 → p unchanged',
+    'm = ' + M1[1].toFixed(4),
+    'v = ' + V1[1].toFixed(5),
+    'm_hat = ' + (M1[1] / .1).toFixed(3),
+    'v_hat = ' + (V1[1] / .001).toFixed(3),
+    'step = ' + (-.1 * BOTH[1]).toFixed(3) + '  (= lr)'];
+  if (window.innerWidth < 500) { CODE[1] = 'def adam_step(p, m, v, t, lr, b1,'; CODE.splice(2, 0, '              b2, eps, wd):'); VALS.splice(2, 0, VALS[1]); CODE[4] = '    p *= 1 - lr * wd   # AdamW'; }
+
+  /* ---------------- coda: now you drive ---------------- */
+  var OPTS = { adam: ['Adam', P.lav], adamw: ['AdamW', P.mint], adaml2: ['Adam + L2', P.pink], nobc: ['Adam, no bias corr.', P.orange], rms: ['RMSprop', P.teal], mom: ['Momentum', P.sky], sgd: ['SGD', P.butter] };
+  var C = { start: null, opt: 'adam', lr: .15, b1: .9, b2: .999, wd: 0, noise: 0, tr: null, ghost: null, k: 0, drag: false };
+  function codaReset(keepK) {
+    var s = C.start || START, o = { lr: C.lr, b1: C.b1, b2: C.b2, wd: C.wd, noise: C.noise, seed: 'coda', n: 400 };
+    C.tr = run(C.opt, s[0], s[1], o); C.ghost = C.opt === 'adam' ? null : run('adam', s[0], s[1], { lr: C.lr, b1: C.b1, b2: C.b2, noise: C.noise, seed: 'coda', n: 400 });
+    if (!keepK) C.k = 0;
+  }
+  function slider(name, label, min, max, step, val) { return '<label style="display:flex;align-items:center;gap:6px;min-width:0">' + label + ' <input data-k="' + name + '" type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + val + '" style="flex:1;min-width:50px"> <b data-v="' + name + '" style="min-width:3.2em;font-variant-numeric:tabular-nums"></b></label>'; }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      hideQ(api, false);
+      panel.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:4px 12px;font-size:13px;align-items:center">' +
+        '<select aria-label="Optimiser" style="font:inherit;border-radius:8px;padding:4px;min-height:30px">' + Object.keys(OPTS).map(function (k) { return '<option value="' + k + '">' + OPTS[k][0] + '</option>'; }).join('') + '</select>' +
+        slider('lr', 'lr', -3, 0, .01, Math.log10(C.lr)) + slider('b1', 'β₁', 0, .99, .01, C.b1) + slider('b2', 'β₂', .9, .9999, .0001, C.b2) +
+        slider('wd', 'wd', 0, .5, .01, C.wd) + slider('noise', 'noise', 0, 3, .1, C.noise) + '</div>' +
+        '<div style="font-size:12px;opacity:.8;margin-top:2px">Tap or drag on the map to move the start.</div>';
+      var sel = panel.querySelector('select'); sel.value = C.opt; sel.onchange = function () { C.opt = sel.value; codaReset(); };
+      [].forEach.call(panel.querySelectorAll('input[type=range]'), function (inp) {
+        var k = inp.dataset.k, out = panel.querySelector('[data-v=' + k + ']');
+        var upd = function () { var v = +inp.value; C[k] = k === 'lr' ? Math.pow(10, v) : v; out.textContent = k === 'lr' ? C.lr.toFixed(C.lr < .1 ? 3 : 2) : k === 'b2' ? C.b2.toFixed(4) : C[k].toFixed(2); };
+        upd(); inp.oninput = function () { upd(); codaReset(); };
+      });
+      codaReset();
+    },
+    down: function (x, y, api) { var w = Winv(x, y); if (Math.abs(w[0]) <= XM && Math.abs(w[1]) <= YM) { C.start = w; C.drag = true; codaReset(); api.audio.blip(660); } },
+    move: function (x, y, api, pressed) { if (!C.drag || !pressed) return; var w = Winv(x, y); if (Math.abs(w[0]) <= XM && Math.abs(w[1]) <= YM) { C.start = w; codaReset(); } },
+    up: function () { C.drag = false; },
+    draw: function (ctx, t, W, H, api, dt) {
+      fit(W, H, 12, 12); bg(ctx, W, H, t, .9); drawLand(ctx, W, H, t);
+      C.k = Math.min(400, C.k + dt * 12);
+      if (C.ghost) trail(ctx, C.ghost, C.k, 'rgba(200,184,234,.55)', 1.5, true);
+      var col = OPTS[C.opt][1]; trail(ctx, C.tr, C.k, col, 2.8);
+      var q = pos(C.tr, C.k), i = Math.min(400, Math.floor(C.k)), s = C.tr[i]; ball(ctx, q, 8, col);
+      var lines = [[OPTS[C.opt][0] + '  step ' + i, col], ['loss ' + (s.dead ? 'diverged' : f(s.x, s.y).toExponential(2))]];
+      if (/adam|nobc/.test(C.opt) && !s.dead && i > 0) lines.push(['m̂/√v̂ (' + fx(s.mh[0] / (Math.sqrt(s.vh[0]) + 1e-8)) + ',' + fx(s.mh[1] / (Math.sqrt(s.vh[1]) + 1e-8)) + ')']);
+      if (C.ghost) lines.push(['dotted: plain Adam', P.lav]);
+      readout(ctx, 8, 8, lines, W);
+    }
+  };
+
+  F.play({
+    title: 'Deep dive · Adam, line by line',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Week 3 pack', href: '../../index.html#week-03' },
+      { label: 'Demo: backprop & training', href: '../../index.html#demo/backprop-training' },
+      { label: 'Map: Adam', href: '../../index.html#map/node=adam' },
+      { label: 'Map: AdamW vs Adam', href: '../../index.html#map/node=adamw-vs-adam' },
+      { label: 'Map: weight decay', href: '../../index.html#map/node=weight-decay' },
+      { label: 'Case: AdamW vs Adam', href: '../../index.html#cases/adamw-vs-adam' },
+      { label: 'Short film: Which way is down?', href: 'w3-optimisers.html' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
