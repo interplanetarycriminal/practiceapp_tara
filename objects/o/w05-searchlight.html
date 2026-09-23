@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Searchlight · Object Lessons</title>
+<meta name="description" content="One attention head you can hold: a query arrow searches six key arrows, dot products fall as shadows, softmax pours amber sand into cups that sum to 1, values mix tip to tail, and a causal mask frosts the future.">
+<link rel="stylesheet" href="../kit.css">
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   09 · w05-searchlight: "The searchlight" (W5, ARENA [1.1] Attention)
+   One toy attention head with d_head = 3, so queries, keys and values are
+   arrows you can see. The vectors are hand-picked toys; every score, weight
+   and sum on screen is computed live by the MATH block below, which follows
+   ARENA's Attention.forward and is checked in node (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+const D_HEAD = 3;                        // toy head size (GPT-2 small: d_head = 64)
+const TOKENS = ['the', 'cat', 'sat', 'and', 'it', 'purred'];
+/* toy vectors, hand-picked: KEYS = what each word contains, VALUES = what it passes on,
+   QUERY_DIRS = each word's own query (what it looks for) as turn / tilt / length */
+const KEYS = [[-1.4, 0.5, -1.0], [1.9, 0.3, -0.4], [-0.5, 1.8, 0.2], [-1.5, -0.6, -0.6], [1.2, -0.5, 0.9], [0.5, 1.7, -0.3]];
+const VALUES = [[-0.6, -0.8, 0.2], [1.7, 0.8, 0.1], [-0.4, 1.4, 0.3], [-1.0, 0.2, -0.3], [0.6, -0.9, 0.4], [0.3, 1.2, -0.6]];
+const QUERY_DIRS = [{ turn: -124, tilt: 16, len: 1.5 }, { turn: -123, tilt: 10, len: 1.7 }, { turn: 90, tilt: 3, len: 1.8 },
+  { turn: -56, tilt: 79, len: 1.8 }, { turn: 81, tilt: -6, len: 1.9 }, { turn: 62, tilt: -13, len: 1.7 }];
+const RAD = Math.PI / 180;
+function queryVec(turn, tilt, len) {       // turn: about the vertical, from +z (front) toward +x (right); tilt: up
+  return [len * Math.cos(tilt * RAD) * Math.sin(turn * RAD), len * Math.sin(tilt * RAD), len * Math.cos(tilt * RAD) * Math.cos(turn * RAD)];
+}
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const IGNORE = -Infinity;                  // ARENA: self.register_buffer("IGNORE", t.tensor(float("-inf")))
+/* "all keys equal": every key replaced by one shared arrow (the mean key's direction, length 1.8) */
+const MEAN_KEY = [0, 1, 2].map((c) => KEYS.reduce((a, k) => a + k[c], 0) / KEYS.length);
+const SAME_KEY = MEAN_KEY.map((c) => (c / Math.hypot(...MEAN_KEY)) * 1.8);
+
+/* One row of ARENA's Attention.forward (the query at position pos):
+   attn_scores = q·k_j;  apply_causal_mask(attn_scores / d_head**0.5);  softmax(-1);  z = Σ_j pattern_j v_j */
+function attendRow(q, keys, values, pos, { scale = true, mask = true } = {}) {
+  const raw = keys.map((k) => dot(q, k));
+  const scores = raw.map((s) => (scale ? s / Math.sqrt(D_HEAD) : s));
+  const masked = scores.map((s, j) => (mask && j > pos ? IGNORE : s));
+  const m = Math.max(...masked);
+  const ex = masked.map((s) => Math.exp(s - m));          // exp(−inf) = 0 exactly
+  const Z = ex.reduce((a, b) => a + b, 0);
+  const w = ex.map((e) => e / Z);
+  const z = [0, 0, 0];
+  values.forEach((v, j) => { for (let c = 0; c < 3; c++) z[c] += w[j] * v[c]; });
+  return { raw, scores, masked, w, z };
+}
+/* every word asks at once: attn_pattern[posn_Q][posn_K] */
+function fullPattern(queries, keys, values, opts) { return queries.map((q, i) => attendRow(q, keys, values, i, opts).w); }
+
+/* Why ÷√d_head: a toy experiment with seeded random unit-variance vectors. */
+function rng(seed) {                        // mulberry32 (same generator as K.rng)
+  let a = (seed >>> 0) || 1;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function gauss(r) { let u = 0; while (u === 0) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+function dotSpread(d, n, seed) {           // standard deviation of q·k over n random pairs
+  const r = rng(seed);
+  let s = 0, s2 = 0;
+  for (let i = 0; i < n; i++) {
+    let x = 0;
+    for (let c = 0; c < d; c++) x += gauss(r) * gauss(r);
+    s += x; s2 += x * x;
+  }
+  const m = s / n;
+  return Math.sqrt(s2 / n - m * m);
+}
+function randomHeadTop(d, nKeys, seed) {   // one random query vs nKeys random keys: top softmax weight
+  const r = rng(seed);
+  const q = Array.from({ length: d }, () => gauss(r));
+  const raw = Array.from({ length: nKeys }, () => { let x = 0; for (let c = 0; c < d; c++) x += gauss(r) * q[c]; return x; });
+  const soft = (a) => { const m = Math.max(...a); const e = a.map((x) => Math.exp(x - m)); const Z = e.reduce((p, c) => p + c, 0); return e.map((x) => x / Z); };
+  return { raw: Math.max(...soft(raw)), scaled: Math.max(...soft(raw.map((x) => x / Math.sqrt(d)))) };
+}
+const MATH = { D_HEAD, TOKENS, KEYS, VALUES, QUERY_DIRS, SAME_KEY, queryVec, dot, attendRow, fullPattern, dotSpread, randomHeadTop };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const NT = TOKENS.length;
+const PX = (j) => -1.4 + 0.56 * j, PZ = 1.05, PH = 0.36, PW = 0.3;      // pillars
+const CUP_R = 0.15, CUP_H = 0.42, SAND_R = 0.132, SAND_H = 0.4;
+const O = new THREE.Vector3(0, 2.0, -0.35), HALF = 0.9, VS = 0.4;       // the cage = the head's 3-D space
+const BOARD = { z: -0.55, y0: 1.08, rowH: 0.3, cellW: 0.47, depth: 0.42 };
+const TOP = PH + CUP_H;
+const COL = { key: new THREE.Color(C.data), q: new THREE.Color(C.dir), val: new THREE.Color(C.aux), sand: new THREE.Color(C.prob),
+  grey: new THREE.Color('#b9b3a9'), pale: new THREE.Color('#efe3cc'), ink: new THREE.Color(C.ink) };
+const CAM = {
+  main: { pos: [2.2, 3.4, 7.8], target: [0, 1.35, 0.2] },
+  vals: { pos: [0.45, 2.8, 5.6], target: [0.18, 2.0, -0.3], fit: 2.4 },
+  shadow: { pos: [0.5, 2.5, 5.6], target: [0, 1.95, -0.35], fit: 1.3 },
+  cups: { pos: [0.9, 2.4, 6.9], target: [0, 1.1, 1.0], fit: 0.95 },
+  board: { pos: [0.8, 2.6, 7.4], target: [0, 1.5, 0] },
+  side: { pos: [-3.2, 3.6, 6.6], target: [0, 1.4, 0.1] },
+};
+const NOTE_BELOW = [0.26, 1.5, -0.3];                                   // the values notes, under the chain
+const fx = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+const vec = (v, d = 2) => `(${v.map((x) => fx(x, d)).join(', ')})`;
+const q3 = (s) => `“${s}”`;
+
+/* instanced arrows: one shaft mesh + one head mesh for any number of arrows (2 draw calls) */
+const UP = new THREE.Vector3(0, 1, 0);
+function arrowSet(n, mat) {
+  const shaft = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 12, 1).translate(0, 0.5, 0), mat, n);
+  const head = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 16, 1).translate(0, 0.5, 0), mat, n);
+  for (const m of [shaft, head]) {
+    m.castShadow = true; m.userData.noFit = true; m.frustumCulled = false;
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < n; i++) { m.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); m.setColorAt(i, COL.ink); }
+  }
+  const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), P = new THREE.Vector3(), Sc = new THREE.Vector3(), d = new THREE.Vector3();
+  const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+  return {
+    shaft, head,
+    set(i, A, B, r, color, maxHead = 0.45) {   // maxHead: the head's largest share of the length
+      d.copy(B).sub(A);
+      const len = d.length();
+      if (len < 1e-5) { this.hide(i); return; }
+      d.divideScalar(len);
+      Q.setFromUnitVectors(UP, d);
+      const hl = Math.min(r * 6.5, len * maxHead);
+      shaft.setMatrixAt(i, M.compose(P.copy(A), Q, Sc.set(r, Math.max(1e-4, len - hl), r)));
+      head.setMatrixAt(i, M.compose(P.copy(A).addScaledVector(d, len - hl), Q, Sc.set(r * 2.6, hl, r * 2.6)));
+      shaft.setColorAt(i, color); head.setColorAt(i, color);
+    },
+    hide(i) { shaft.setMatrixAt(i, zero); head.setMatrixAt(i, zero); },
+    done() {
+      for (const m of [shaft, head]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+    },
+  };
+}
+/* instanced rods (thin strings between two points) */
+function rodSet(n, mat) {
+  const mesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 8, 1).translate(0, 0.5, 0), mat, n);
+  mesh.userData.noFit = true; mesh.frustumCulled = false;
+  const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), Sc = new THREE.Vector3(), d = new THREE.Vector3(), zero = new THREE.Matrix4().makeScale(0, 0, 0);
+  for (let i = 0; i < n; i++) mesh.setMatrixAt(i, zero);
+  return {
+    mesh,
+    set(i, A, B, r) {
+      d.copy(B).sub(A);
+      const len = d.length();
+      if (len < 1e-5) { mesh.setMatrixAt(i, zero); return; }
+      Q.setFromUnitVectors(UP, d.divideScalar(len));
+      mesh.setMatrixAt(i, M.compose(A, Q, Sc.set(r, len, r)));
+    },
+    hide(i) { mesh.setMatrixAt(i, zero); },
+    done() { mesh.instanceMatrix.needsUpdate = true; },
+  };
+}
+const toW = (v, out = new THREE.Vector3()) => out.set(O.x + v[0] * VS, O.y + v[1] * VS, O.z + v[2] * VS);
+
+/* ======================================================== object behaviour */
+
+function keysNow(S) { return S.knobs.same ? KEYS.map(() => SAME_KEY) : KEYS; }
+function queryNow(S) { const k = S.knobs; return queryVec(k.turn, k.tilt, k.qlen); }
+function queriesAll(S) {       // every word's own query (the asker's follows the knobs)
+  return QUERY_DIRS.map((d, i) => (i === S.knobs.asker ? queryNow(S) : queryVec(d.turn, d.tilt, d.len)));
+}
+
+function compute(S) {
+  const st = S.state, k = S.knobs, opts = { scale: k.scale, mask: k.mask };
+  st.q = queryNow(S);
+  st.keys = keysNow(S);
+  st.row = attendRow(st.q, st.keys, VALUES, k.asker, opts);
+  st.pattern = fullPattern(queriesAll(S), st.keys, VALUES, opts);
+}
+
+function paintSand(S) {
+  const st = S.state, w = st.row.w, k = S.knobs;
+  const m = new THREE.Matrix4();
+  for (let j = 0; j < NT; j++) {
+    const h = Math.max(0.002, SAND_H * w[j] * st.fill);
+    st.sand.setMatrixAt(j, m.compose(new THREE.Vector3(PX(j), PH + 0.012 + h / 2, PZ), new THREE.Quaternion(), new THREE.Vector3(SAND_R, h, SAND_R)));
+  }
+  st.sand.instanceMatrix.needsUpdate = true;
+  // asker ring + frosted glass over the future
+  st.ring.position.set(PX(k.asker), 0.012, PZ);
+  const masked = k.mask && k.asker < NT - 1;
+  st.frost.visible = masked;
+  if (masked) {
+    const x0 = PX(k.asker + 1) - 0.27, x1 = PX(NT - 1) + 0.27;
+    st.frost.scale.set(x1 - x0, 1, 1);
+    st.frost.position.set((x0 + x1) / 2, 0.51, PZ + 0.27);
+  }
+  st.words.forEach((L, j) => { L.el.style.opacity = masked && j > k.asker ? '0.4' : ''; });
+}
+
+function paintCage(S) {
+  const st = S.state, k = S.knobs, view = k.view;
+  const scoresView = view === 'scores', valuesView = view === 'values', cageOn = view !== 'pattern';
+  st.cage.visible = cageOn;
+  const A = new THREE.Vector3(), B = new THREE.Vector3();
+  const qhat = st.q.map((c) => c / Math.hypot(...st.q));
+  // keys (blue; greyed when masked), the query (violet)
+  for (let j = 0; j < NT; j++) {
+    const hidden = k.mask && j > k.asker;
+    if (scoresView) st.arrows.set(j, O, toW(st.keys[j], B), 0.019, hidden ? COL.grey : COL.key);
+    else st.arrows.hide(j);
+  }
+  if (cageOn && view !== 'values') st.arrows.set(NT, O, toW(st.q, B), 0.027, COL.q);
+  else st.arrows.hide(NT);
+  // values view: weighted values laid tip to tail, and the output z
+  const w = st.row.w;
+  let acc = [0, 0, 0];
+  for (let j = 0; j < NT; j++) {
+    const idx = NT + 1 + j;
+    if (!valuesView || w[j] < 1e-9) { st.arrows.hide(idx); st.ghosts.hide(j); continue; }
+    const next = acc.map((c, i) => c + w[j] * VALUES[j][i]);
+    st.arrows.set(idx, toW(acc, A), toW(next, B), 0.013 + 0.01 * Math.sqrt(w[j]), COL.val, 0.32);
+    st.ghosts.set(j, O, toW(VALUES[j], B), 0.008, COL.val);
+    acc = next;
+  }
+  if (valuesView) st.arrows.set(2 * NT + 1, O, toW(st.row.z, B), 0.017, COL.ink);
+  else st.arrows.hide(2 * NT + 1);
+  st.arrows.done(); st.ghosts.done();
+  st.ghosts.shaft.visible = st.ghosts.head.visible = valuesView;
+  // shadows: a string from each key tip to its foot on the query's line, a bead at the foot
+  for (let j = 0; j < NT; j++) {
+    const hidden = k.mask && j > k.asker;
+    if (!scoresView || hidden || !st.shadows) { st.strings.hide(j); st.feet.setMatrixAt(j, new THREE.Matrix4().makeScale(0, 0, 0)); continue; }
+    const s = dot(st.keys[j], qhat);
+    toW(st.keys[j], A); toW(qhat.map((c) => c * s), B);
+    st.strings.set(j, A, B, 0.006);
+    st.feet.setMatrixAt(j, new THREE.Matrix4().compose(B, new THREE.Quaternion(), new THREE.Vector3(0.036, 0.036, 0.036)));
+  }
+  st.strings.done(); st.feet.instanceMatrix.needsUpdate = true;
+  // the query's line through the origin, and the string from the asker's pillar
+  st.qline.mesh.visible = scoresView;
+  if (scoresView) st.qline.set([toW(qhat.map((c) => -c * 2.3)), toW(qhat.map((c) => c * 2.3))]);
+  st.cord.mesh.visible = cageOn && !valuesView;
+  if (st.cord.mesh.visible) st.cord.set([new THREE.Vector3(PX(k.asker), TOP + 0.02, PZ - 0.16), O.clone()]);
+}
+
+function paintBoard(S) {
+  const st = S.state, k = S.knobs, on = k.view === 'pattern';
+  st.board.visible = on;
+  if (!on) return;
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion();
+  let n = 0, f = 0;
+  for (let i = 0; i < NT; i++) {
+    for (let j = 0; j < NT; j++) {
+      const y = BOARD.y0 + (NT - 1 - i + 0.5) * BOARD.rowH, x = PX(j);
+      const wij = st.pattern[i][j];
+      if (k.mask && j > i) {
+        st.frostCells.setMatrixAt(f++, m.compose(new THREE.Vector3(x, y, BOARD.z + 0.02), q, new THREE.Vector3(BOARD.cellW, BOARD.rowH - 0.05, 0.012)));
+        continue;
+      }
+      const dz = 0.02 + BOARD.depth * wij;
+      st.cells.setMatrixAt(n, m.compose(new THREE.Vector3(x, y, BOARD.z + 0.012 + dz / 2), q, new THREE.Vector3(BOARD.cellW, BOARD.rowH - 0.05, dz)));
+      const c = COL.pale.clone().lerp(COL.sand, Math.min(1, Math.sqrt(wij)));
+      if (i === k.asker) c.lerp(COL.q, 0.18);
+      st.cells.setColorAt(n, c);
+      n++;
+    }
+  }
+  st.cells.count = n; st.frostCells.count = f;
+  st.cells.instanceMatrix.needsUpdate = true; st.frostCells.instanceMatrix.needsUpdate = true;
+  if (st.cells.instanceColor) st.cells.instanceColor.needsUpdate = true;
+  const yA = BOARD.y0 + (NT - 1 - k.asker + 0.5) * BOARD.rowH;
+  st.rowFrame.position.set(0, yA, BOARD.z + 0.02);
+}
+
+function paintLabels(S) {
+  const st = S.state, k = S.knobs, t = S.tier, view = k.view, row = st.row;
+  const asker = TOKENS[k.asker];
+  // numbers above the cups
+  st.nums.forEach((L, j) => {
+    const hidden = k.mask && j > k.asker;
+    if (st.num === 'raw') { L.show(false); return; }
+    let s;
+    if (st.num === 'raw') s = hidden ? '—' : fx(row.raw[j]);
+    else if (st.num === 'score') s = hidden ? (t === 1 ? '—' : '−∞') : fx(row.scores[j]);
+    else s = hidden ? '0' : fx(row.w[j], row.w[j] > 0.995 ? 2 : 3);
+    L.set(s);
+    L.show(st.num !== 'none');
+  });
+  // key tags (scores view)
+  st.keyTags.forEach((L, j) => {                   // key tips (scores view) or value tips (values view)
+    const vis = !(k.mask && j > k.asker);
+    const onK = view === 'scores' && st.keyWords && st.num !== 'raw' && vis, onV = view === 'values' && vis;
+    L.show(onK || onV);
+    if (onK) L.move(toW(st.keys[j].map((c) => c * 1.08)));
+    if (onV) L.move(toW(VALUES[j].map((c) => c * 1.08)));
+  });
+  st.keyScores.forEach((L, j) => {                  // beat 2: each key tip carries its q·k
+    const on = view === 'scores' && st.num === 'raw' && !(k.mask && j > k.asker);
+    L.show(on);
+    if (on) { L.move(toW(st.keys[j].map((c) => c * 1.06))); L.set(t === 3 ? `q·k = ${fx(row.raw[j])}` : `${TOKENS[j]} **${fx(row.raw[j])}**`); }
+  });
+  st.qTag.show(view !== 'pattern' && view !== 'values');
+  st.qTag.move(toW(st.q.map((c) => c * 1.1)));
+  st.qTag.set(t === 1 ? `${q3(asker)} asks` : t === 2 ? `q of ${q3(asker)}` : `q_${asker}`);
+  st.zTag.show(view === 'values');
+  st.zTag.move(toW(row.z));
+  st.zTag.set(t === 1 ? 'new meaning' : t === 2 ? 'output z' : 'z = Σ wⱼvⱼ');
+  st.diag.forEach((L, i) => {
+    const on = view === 'pattern';
+    L.show(on);
+    if (on) L.move([PX(i), BOARD.y0 + (NT - 1 - i + 0.5) * BOARD.rowH, BOARD.z + 0.05 + BOARD.depth * st.pattern[i][i]]);
+  });
+  st.boardTag.show(view === 'pattern');
+  st.boardTag.set(t === 1 ? 'each row: one word asking' : t === 2 ? 'rows: asking word · columns: looked-at word' : 'attn_pattern[posn_Q, posn_K]');
+  paintNote(S);
+}
+
+function paintNote(S) {
+  const st = S.state, k = S.knobs, t = S.tier, row = st.row, mode = st.note;
+  const N = st.note ? st.noteEl : null;
+  st.noteEl.show(!!mode);
+  if (!N) return;
+  const asker = TOKENS[k.asker];
+  const vis = row.w.map((x, j) => ({ x, j })).filter((o) => !(k.mask && o.j > k.asker));
+  if (mode === 'spread') {
+    const sp = st.spread;
+    N.set(t === 1
+      ? `toy test, random arrows\nscore spread, 3 numbers: **${fx(sp.d3)}**\n64 numbers: **${fx(sp.d64)}** (about √d)\nbiggest share in a 64-d head:\n${fx(sp.top.raw, 3)} unshrunk → **${fx(sp.top.scaled, 2)}** ÷8`
+      : `toy check, random vectors\nspread of q·k ≈ √d:\nd = 3 → **${fx(sp.d3)}** · d = 64 → **${fx(sp.d64)}**\n64-d head, top weight:\n${fx(sp.top.raw, 3)} raw → **${fx(sp.top.scaled, 2)}** ÷√64`);
+  } else if (mode === 'sum') {
+    const tot = row.w.reduce((a, b) => a + b, 0);
+    N.set(t === 1
+      ? `all the sand together: **${fx(tot, 3)}**`
+      : `${vis.map((o) => fx(o.x, 3)).join(' + ')}\n= **${fx(tot, 3)}**`);
+  } else if (mode === 'z') {
+    const big = vis.slice().sort((a, b) => b.x - a.x).slice(0, 2), more = vis.length > big.length;
+    N.set(t === 1
+      ? `${big.map((o) => `${fx(o.x)} of ${q3(TOKENS[o.j])}`).join(' + ')}${more ? ' + crumbs' : ''}`
+      : `z = ${big.map((o) => `${fx(o.x)}·v_${TOKENS[o.j]}`).join(' + ')}${more ? ' + …' : ''}\n= **${vec(row.z)}**`);
+  } else if (mode === 'push') {
+    const top = vis.slice().sort((a, b) => b.x - a.x).slice(0, 2).map((o) => ({ ...o, p: o.x * Math.hypot(...VALUES[o.j]) }));
+    const d = t === 1 ? 2 : 3;
+    N.set([t === 1 ? 'sand → how far it moves z' : t === 2 ? 'weight → push ‖w·v‖' : 'w_j → ‖w_j v_j‖',
+      ...top.map((o) => `${t === 3 ? TOKENS[o.j] : q3(TOKENS[o.j])} ${fx(o.x, d)} → **${fx(o.p, d)}**`)].join('\n'));
+  } else if (mode === 'rows') {
+    N.set(t === 1 ? 'every row of sand adds up to 1' : `row sums: ${st.pattern.map((r) => fx(r.reduce((a, b) => a + b, 0), 2)).join(', ')}`);
+  } else if (mode === 'raw') {
+    const s = row.raw.map((x, j) => ({ x, j })).filter((o) => !(k.mask && o.j > k.asker)).sort((a, b) => b.x - a.x);
+    N.set(t === 1 || s.length < 3
+      ? `best match for ${q3(asker)}: ${q3(TOKENS[s[0].j])}`
+      : `q·k: ${q3(TOKENS[s[0].j])} ${fx(s[0].x)} · ${q3(TOKENS[s[1].j])} ${fx(s[1].x)}\nworst: ${q3(TOKENS[s[s.length - 1].j])} ${fx(s[s.length - 1].x)}`);
+  }
+}
+
+function refresh(S) { paintSand(S); paintCage(S); paintBoard(S); paintLabels(S); S.invalidate(); }
+
+/* sand pours in over ~0.9 s (instant under ?shot=1) */
+function pourSand(S) {
+  const st = S.state;
+  if (st.done) { const d = st.done; st.done = null; d(); }
+  if (S.shot) { st.fill = 1; st.playing = false; refresh(S); return Promise.resolve(); }
+  st.fill = 0; st.t0 = null; st.playing = true;
+  refresh(S);
+  return new Promise((res) => { st.done = res; });
+}
+
+function loadQuery(S, i) {      // the asking word's own query into the direction knobs
+  const d = QUERY_DIRS[i];
+  S.setKnob('turn', d.turn, { silent: true });
+  S.setKnob('tilt', d.tilt, { silent: true });
+  S.setKnob('qlen', d.len, { silent: true });
+}
+
+function scene(S, o = {}) {
+  const st = S.state;
+  st.num = o.num || 'weight';
+  st.note = o.note || null;
+  st.shadows = o.shadows !== false;
+  st.keyWords = o.keyWords !== false;
+  st.noteEl.move(o.noteAt || [0, O.y + HALF + 0.12, O.z]);
+  st.noteEl.anchor(o.noteAnchor || 'bottom');
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.at || [-1.72, 0, 0.12], o.face || [0.3, 1.5, 3]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: typeof o.point === 'function' ? o.point(S) : o.point });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  refresh(S);
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'w05-searchlight', num: '09', week: 5, kind: 'weekly',
+  title: 'The searchlight',
+  subtitle: 'Point a question into a room of keys; the matches light up and pour in their values.',
+  back2d: '#week-05',
+  film: 'w5-transformer',
+  plinth: { r: 2.05, h: 0.14 },
+
+  knobs: [
+    { id: 'asker', type: 'select', label: { 1: 'Who asks', 2: 'Asking word (query)', 3: 'query position' }, value: 4,
+      options: TOKENS.map((w, i) => [i, `${i} · ${w}`]) },
+    { id: 'view', type: 'select', label: { 1: 'Show', 2: 'Show', 3: 'Show' }, value: 'scores',
+      options: [['scores', { 1: 'Match (shadows)', 2: 'Scores q·k', 3: 'q·k projections' }], ['values', { 1: 'Mix (values)', 2: 'Values mixed', 3: 'z = Σ wⱼvⱼ' }],
+        ['pattern', { 1: 'Everyone asks', 2: 'Whole pattern', 3: 'attn_pattern' }]] },
+    { id: 'turn', type: 'range', label: { 1: 'Question: turn', 2: 'Query turn', 3: 'q azimuth' }, min: -180, max: 180, step: 1, value: 81, fmt: (v) => `${Math.round(v)}°` },
+    { id: 'tilt', type: 'range', label: { 1: 'Question: tilt', 2: 'Query tilt', 3: 'q elevation' }, min: -85, max: 85, step: 1, value: -6, fmt: (v) => `${Math.round(v)}°` },
+    { id: 'qlen', type: 'range', wide: true, label: { 1: 'Question strength (arrow length)', 2: 'Query length |q|', 3: '‖q‖' }, min: 0.25, max: 4, step: 0.05, value: 1.9, fmt: (v) => v.toFixed(2) },
+    { id: 'scale', type: 'toggle', label: { 1: 'Shrink scores (÷√3)', 2: 'Scale ÷ √d_head', 3: '/ d_head**0.5' }, value: true },
+    { id: 'mask', type: 'toggle', label: { 1: 'Hide the future', 2: 'Causal mask', 3: 'apply_causal_mask' }, value: true },
+    { id: 'same', type: 'toggle', label: { 1: 'All keys the same', 2: 'All keys equal', 3: 'k_j = k̄ ∀ j' }, value: false },
+  ],
+
+  setup(S) {
+    const st = S.state, root = S.root;
+    // pillars (one merged mesh) with glass cups; sand is instanced
+    const pg = [];
+    for (let j = 0; j < NT; j++) pg.push(new THREE.BoxGeometry(PW, PH, PW).translate(PX(j), PH / 2, PZ).toNonIndexed());
+    const pillars = new THREE.Mesh(THREE.mergeGeometries(pg), K.mat.plaster());
+    pillars.castShadow = true; pillars.receiveShadow = true;
+    root.add(pillars);
+    const cg = [];
+    for (let j = 0; j < NT; j++) {
+      cg.push(new THREE.CylinderGeometry(CUP_R, CUP_R * 0.92, CUP_H, 28, 1, true).translate(PX(j), PH + CUP_H / 2, PZ).toNonIndexed());
+      cg.push(new THREE.CircleGeometry(CUP_R * 0.92, 28).rotateX(-Math.PI / 2).translate(PX(j), PH + 0.006, PZ).toNonIndexed());
+    }
+    const cupMat = K.mat.glass('#ffffff', 0.3); cupMat.side = THREE.DoubleSide;
+    const cups = new THREE.Mesh(THREE.mergeGeometries(cg), cupMat);
+    cups.renderOrder = 2;
+    root.add(cups);
+    const rims = [];
+    for (let j = 0; j < NT; j++) rims.push(new THREE.TorusGeometry(CUP_R, 0.008, 6, 32).rotateX(Math.PI / 2).translate(PX(j), TOP, PZ));
+    const rim = new THREE.Mesh(THREE.mergeGeometries(rims), K.mat.brass());
+    root.add(rim);
+    st.sand = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 24, 1), K.mat.paint(C.prob), NT);
+    st.sand.castShadow = true; st.sand.userData.noFit = true;
+    root.add(st.sand);
+    st.ring = new THREE.Mesh(new THREE.TorusGeometry(0.25, 0.016, 8, 40).rotateX(Math.PI / 2), K.mat.paint(C.dir));
+    root.add(st.ring);
+    const frostMat = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1, transparent: true, opacity: 0.62, depthWrite: false });
+    st.frost = new THREE.Mesh(new THREE.BoxGeometry(1, 1.02, 0.018), frostMat);
+    st.frost.renderOrder = 4;
+    st.frost.userData.noFit = true;
+    root.add(st.frost);
+
+    // the cage: brass edges, four legs, a faint glass floor; origin bead
+    st.cage = new THREE.Group();
+    root.add(st.cage);
+    const eg = [];
+    const H = HALF, c = O;
+    const e = 0.016;
+    for (const a of [-1, 1]) for (const b of [-1, 1]) {
+      eg.push(new THREE.BoxGeometry(2 * H, e, e).translate(c.x, c.y + a * H, c.z + b * H).toNonIndexed());
+      eg.push(new THREE.BoxGeometry(e, 2 * H, e).translate(c.x + a * H, c.y, c.z + b * H).toNonIndexed());
+      eg.push(new THREE.BoxGeometry(e, e, 2 * H).translate(c.x + a * H, c.y + b * H, c.z).toNonIndexed());
+    }
+    const diag = 2 * H * Math.SQRT2;
+    eg.push(new THREE.BoxGeometry(diag, e, e).rotateY(Math.PI / 4).translate(c.x, c.y - H, c.z).toNonIndexed());
+    eg.push(new THREE.BoxGeometry(diag, e, e).rotateY(-Math.PI / 4).translate(c.x, c.y - H, c.z).toNonIndexed());
+    eg.push(new THREE.CylinderGeometry(0.03, 0.045, c.y - H, 14).translate(c.x, (c.y - H) / 2, c.z).toNonIndexed());
+    eg.push(new THREE.CylinderGeometry(0.2, 0.22, 0.03, 28).translate(c.x, 0.015, c.z).toNonIndexed());
+    const edges = new THREE.Mesh(THREE.mergeGeometries(eg.map((g) => { const n = g.clone(); n.deleteAttribute('uv'); return n; })), K.mat.brass());
+    edges.castShadow = true;
+    st.cage.add(edges);
+    const bead = K.bead([c.x, c.y, c.z], C.brass, 0.034);
+    bead.material = K.mat.brass();
+    st.cage.add(bead);
+    // arrows: keys 0..5, query 6, weighted values 7..12, output 13; ghosts = the full values
+    st.arrows = arrowSet(2 * NT + 2, K.mat.paint('#ffffff'));
+    st.cage.add(st.arrows.shaft, st.arrows.head);
+    const ghostMat = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.6, transparent: true, opacity: 0.32, depthWrite: false });
+    st.ghosts = arrowSet(NT, ghostMat);
+    st.ghosts.shaft.castShadow = st.ghosts.head.castShadow = false;
+    st.cage.add(st.ghosts.shaft, st.ghosts.head);
+    st.strings = rodSet(NT, K.mat.string(C.ink));
+    st.cage.add(st.strings.mesh);
+    st.feet = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 16, 12), K.mat.paint(C.data), NT);
+    st.feet.userData.noFit = true; st.feet.frustumCulled = false;
+    st.cage.add(st.feet);
+    st.qline = K.tube([], C.dir, 0.006, { shadow: false });
+    st.cage.add(st.qline.mesh);
+    st.cord = K.tube([], C.dir, 0.006, { shadow: false });
+    root.add(st.cord.mesh);
+
+    // the pattern board (every word asks at once)
+    st.board = new THREE.Group();
+    st.board.visible = false;
+    root.add(st.board);
+    const bw = PX(NT - 1) - PX(0) + BOARD.cellW + 0.16, bh = NT * BOARD.rowH + 0.12;
+    const back = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, 0.04).translate(0, BOARD.y0 + NT * BOARD.rowH / 2, BOARD.z - 0.02), K.mat.plaster('#e9e2d6'));
+    back.castShadow = true; back.receiveShadow = true;
+    st.board.add(back);
+    const legs = [];
+    for (const x of [-bw / 2 + 0.05, bw / 2 - 0.05]) legs.push(new THREE.CylinderGeometry(0.02, 0.02, BOARD.y0, 10).translate(x, BOARD.y0 / 2, BOARD.z - 0.02));
+    const bl = new THREE.Mesh(THREE.mergeGeometries(legs), K.mat.brass());
+    bl.castShadow = true;
+    st.board.add(bl);
+    st.cells = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), K.mat.paint('#ffffff'), NT * NT);
+    st.cells.castShadow = true; st.cells.userData.noFit = true;
+    st.cells.setColorAt(0, COL.sand);
+    st.board.add(st.cells);
+    st.frostCells = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1, transparent: true, opacity: 0.7 }), NT * NT);
+    st.frostCells.userData.noFit = true;
+    st.board.add(st.frostCells);
+    const rf = [];
+    const fw = bw - 0.06, fh = BOARD.rowH;
+    rf.push(new THREE.BoxGeometry(fw, 0.016, 0.016).translate(0, fh / 2, 0), new THREE.BoxGeometry(fw, 0.016, 0.016).translate(0, -fh / 2, 0));
+    rf.push(new THREE.BoxGeometry(0.016, fh, 0.016).translate(-fw / 2, 0, 0), new THREE.BoxGeometry(0.016, fh, 0.016).translate(fw / 2, 0, 0));
+    st.rowFrame = new THREE.Mesh(THREE.mergeGeometries(rf), K.mat.paint(C.dir));
+    st.board.add(st.rowFrame);
+
+    // labels
+    st.words = TOKENS.map((w, j) => K.label([PX(j), PH * 0.5, PZ + PW / 2 + 0.01], w, { anchor: 'center', dy: 0, prio: 2 }));
+    st.nums = TOKENS.map((w, j) => K.label([PX(j), TOP + 0.01, PZ], '', { cls: 'readout', anchor: 'bottom', dy: j % 2 ? -24 : -5 }));
+    st.keyTags = TOKENS.map((w) => K.label([0, 0, 0], w, { cls: 'tag', anchor: 'bottom', dy: -3 }));
+    st.keyScores = TOKENS.map((w) => K.label([0, 0, 0], w, { anchor: 'bottom', dy: -4, prio: 1 }));
+    st.qTag = K.label([0, 0, 0], '', { anchor: 'bottom', dy: -6, prio: 2 });
+    st.zTag = K.label([0, 0, 0], '', { anchor: 'top', dy: 7, prio: 2 });
+    st.diag = TOKENS.map((w) => K.label([0, 0, 0], w, { cls: 'tag', anchor: 'center', dy: 0 }));
+    st.boardTag = K.label([0, BOARD.y0 + NT * BOARD.rowH + 0.08, BOARD.z], '', { cls: 'tag', anchor: 'bottom', dy: -2 });
+    st.noteEl = K.label([0, 0, 0], '', { cls: 'note', anchor: 'bottom', dy: -6 });
+    st.fig = K.figure();
+    st.fig.group.visible = false;
+    root.add(st.fig.group);
+    K.pick(pillars, (hit) => {
+      const x = hit.point.x - S.root.position.x;
+      let best = 0;
+      for (let j = 1; j < NT; j++) if (Math.abs(PX(j) - x) < Math.abs(PX(best) - x)) best = j;
+      S.setKnob('asker', best);
+    });
+    // the √d experiment (toy, seeded): computed once
+    st.spread = { d3: dotSpread(3, 4000, 7), d64: dotSpread(64, 4000, 7), top: randomHeadTop(64, 6, 6) };
+    st.fill = 1; st.num = 'weight';
+  },
+
+  rebuild(S, id) {
+    const st = S.state, k = S.knobs;
+    if (id === 'asker') loadQuery(S, k.asker);
+    if (id === '*' && S.changed.includes('asker') && !S.changed.includes('turn')) loadQuery(S, k.asker);
+    compute(S);
+    if (id === '*' || id === 'asker' || id === 'mask' || id === 'same' || id === 'view') { pourSand(S); return; }
+    if (st.playing) { st.playing = false; st.fill = 1; if (st.done) { const d = st.done; st.done = null; d(); } }
+    refresh(S);
+  },
+
+  frame(S, t) {
+    const st = S.state;
+    if (!st.playing) return false;
+    if (st.t0 == null) st.t0 = t;
+    const u = Math.min(1, Math.max(0, (t - st.t0 - 0.2) / 0.9));
+    st.fill = 1 - (1 - u) * (1 - u);
+    paintSand(S);
+    S.invalidate();
+    if (u >= 1) {
+      st.playing = false;
+      if (st.done) { const d = st.done; st.done = null; d(); }
+      return false;
+    }
+    return true;
+  },
+
+  onTier(S) { paintLabels(S); },
+
+  solids(S) {
+    const st = S.state, k = S.knobs;
+    const P = (x, y, z) => [x, -z, y];                     // three (x, y, z) -> JSCAD z-up
+    const out = [];
+    for (let j = 0; j < NT; j++) {
+      out.push(J.primitives.cuboid({ size: [PW, PW, PH], center: P(PX(j), PH / 2, PZ) }));
+      out.push(J.booleans.subtract(
+        J.primitives.cylinder({ radius: CUP_R, height: CUP_H, center: P(PX(j), PH + CUP_H / 2, PZ), segments: 28 }),
+        J.primitives.cylinder({ radius: CUP_R - 0.02, height: CUP_H, center: P(PX(j), PH + CUP_H / 2 + 0.02, PZ), segments: 28 })));
+      const h = Math.max(0.01, SAND_H * st.row.w[j]);
+      out.push(J.primitives.cylinder({ radius: SAND_R, height: h, center: P(PX(j), PH + 0.02 + h / 2, PZ), segments: 24 }));
+    }
+    if (k.view === 'pattern') {
+      for (let i = 0; i < NT; i++) for (let j = 0; j <= (k.mask ? i : NT - 1); j++) {
+        const dz = 0.02 + BOARD.depth * st.pattern[i][j];
+        out.push(J.primitives.cuboid({ size: [BOARD.cellW, dz, BOARD.rowH - 0.05], center: P(PX(j), BOARD.y0 + (NT - 1 - i + 0.5) * BOARD.rowH, BOARD.z + dz / 2) }));
+      }
+      out.push(J.primitives.cuboid({ size: [PX(NT - 1) - PX(0) + BOARD.cellW + 0.16, 0.04, NT * BOARD.rowH + 0.12], center: P(0, BOARD.y0 + NT * BOARD.rowH / 2, BOARD.z - 0.02) }));
+      return out;
+    }
+    // the cage edges and legs
+    const H = HALF;
+    for (const a of [-1, 1]) for (const b of [-1, 1]) {
+      out.push(J.primitives.cuboid({ size: [2 * H + 0.04, 0.04, 0.04], center: P(O.x, O.y + a * H, O.z + b * H) }));
+      out.push(J.primitives.cuboid({ size: [0.04, 0.04, 2 * H + 0.04], center: P(O.x + a * H, O.y, O.z + b * H) }));
+      out.push(J.primitives.cuboid({ size: [0.04, 2 * H + 0.04, 0.04], center: P(O.x + a * H, O.y + b * H, O.z) }));
+      out.push(J.primitives.cuboid({ size: [0.04, 0.04, O.y - H], center: P(O.x + a * H, (O.y - H) / 2, O.z + b * H) }));
+    }
+    // arrows as printable solids: a cylinder shaft and a cone head, turned from +z onto the arrow
+    const place = (g, A, d, len) => {                       // g spans z in [−len/2, len/2]
+      const dj = [d.x, -d.z, d.y];
+      const th = Math.acos(Math.max(-1, Math.min(1, dj[2]))), ph = Math.atan2(dj[1], dj[0]);
+      const m = P(A.x + d.x * len / 2, A.y + d.y * len / 2, A.z + d.z * len / 2);
+      return J.transforms.translate(m, J.transforms.rotateZ(ph, J.transforms.rotateY(th, g)));
+    };
+    const arrow = (a, b, r) => {
+      const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), d = B.clone().sub(A), len = d.length();
+      if (len < 1e-4) return;
+      d.divideScalar(len);
+      const hl = Math.min(r * 6, len * 0.45);
+      out.push(place(J.primitives.cylinder({ radius: r, height: len - hl + r, segments: 12 }), A, d, len - hl + r));
+      const M = A.clone().addScaledVector(d, len - hl);
+      out.push(place(J.primitives.cylinderElliptic({ height: hl, startRadius: [r * 2.6, r * 2.6], endRadius: [r * 0.2, r * 0.2], segments: 12 }), M, d, hl));
+    };
+    const w = (v) => { const p = toW(v); return [p.x, p.y, p.z]; };
+    const r0 = 0.035;
+    if (k.view === 'values') {
+      let acc = [0, 0, 0];
+      for (let j = 0; j < NT; j++) {
+        if (st.row.w[j] < 0.02) continue;
+        const next = acc.map((c, i) => c + st.row.w[j] * VALUES[j][i]);
+        arrow(w(acc), w(next), r0 * 0.7); acc = next;
+      }
+      arrow(w([0, 0, 0]), w(st.row.z), r0);
+    } else {
+      for (let j = 0; j < NT; j++) arrow(w([0, 0, 0]), w(st.keys[j]), r0 * 0.8);
+      arrow(w([0, 0, 0]), w(st.q), r0);
+    }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**A question in a room of labels.** Each word holds up a key (blue arrow): what I contain. "it" also asks a query (violet): what am I looking for? Karpathy\'s framing. Toy arrows, 3 numbers each.',
+        2: 'Attention lets a word gather from earlier words. Each word makes a **key** (blue: what I contain) and a **query** (violet: what I\'m looking for), lists of d_head numbers; with d_head = 3 they are arrows in this cage (toy values). Karpathy\'s framing. "it" asks: which key fits?',
+        3: 'Per head: q = x·W_Q + b_Q, k = x·W_K + b_K, each d_head long (GPT-2 small 64; this toy 3, hand-picked). The QK circuit decides where to look. Karpathy: query "what am I looking for", key "what do I contain", value "what I will tell you if you pick me".',
+      },
+      cam: CAM.main,
+      set: { asker: 4, view: 'scores', scale: true, mask: true, same: false, turn: 81, tilt: -6, qlen: 1.9 },
+      enter(S) { scene(S, { num: 'none', shadows: false, figure: 'point', point: (S2) => toW(S2.state.q) }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**How well does each key fit?** Drop each key\'s shadow onto the question\'s line. Shadow ahead: a plus score; behind: a minus. Score = shadow × question length. Best fit for "it": "cat", 3.37.',
+        2: '**q·k is a shadow.** Drop each key onto the query\'s line (the strings); the dot product is that shadow\'s length times |q|. Same way: big; at right angles: 0; opposite: negative. 3Blue1Brown\'s picture of the dot product. Live: q·k_cat = 3.37, q·k_the = −3.01.',
+        3: 'q·k = |q||k|cos θ = |q|·(k·q̂): each string drops k onto q\'s line and the bead marks k·q̂. Raw scores above the cups (live). All pairs at once: `einops.einsum(q, k, "batch posn_Q nheads d_head, batch posn_K nheads d_head -> batch nheads posn_Q posn_K")`.',
+      },
+      cam: CAM.shadow,
+      set: { asker: 4, view: 'scores', scale: true, mask: true, same: false, turn: 81, tilt: -6, qlen: 1.9 },
+      enter(S) { scene(S, { num: 'raw' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Shrink the scores first.** Each score is divided by √3 here (by 8 in GPT-2). Without it, long arrows give wild scores, one word grabs all the sand, and learning stalls. The note has a live test.',
+        2: 'Scores are divided by √d_head before softmax. A dot product adds up d_head random products, so its spread grows like √d_head (live toy test in the note). Unscaled, softmax saturates: one weight near 1, gradients near 0. ARENA says the same.',
+        3: 'If q and k have i.i.d. unit-variance entries, Var(q·k) = d_head, so std = √d_head; dividing restores unit scale. The note\'s random 64-d head: top weight near 1 raw vs 0.44 scaled. Saturated softmax has ∂w/∂s ≈ 0. Code: `attn_scores / self.cfg.d_head**0.5`.',
+      },
+      cam: CAM.main,
+      set: { asker: 4, view: 'scores', scale: true, mask: true, same: false, turn: 81, tilt: -6, qlen: 1.9 },
+      enter(S) { scene(S, { num: 'score', note: 'spread', noteAt: [-1.95, 2.5, -0.45], noteAnchor: 'left' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Share out one cup of sand.** Softmax turns scores into shares that add up to exactly 1: the amber sand. Bigger scores win more than their fair share, but no visible word gets zero. "cat" gets 0.566.',
+        2: 'Softmax: w_j = e^(s_j) / Σ e^(s_k). Exponentials make every share positive and let bigger scores win more; dividing by the total makes them add to 1 (the note). Scores 1.94 and 1.50 become 0.566 and 0.364: a gap of 0.44 is a ratio e^0.44 ≈ 1.55.',
+        3: '`attn_pattern = attn_scores_masked.softmax(-1)`: adding a constant to every score changes nothing (code subtracts the max). w_cat/w_it = e^(s_cat − s_it) = e^0.44 = 1.55. A soft argmax, sharper as |q| grows.',
+      },
+      cam: CAM.cups,
+      set: { asker: 4, view: 'scores', scale: true, mask: true, same: false, turn: 81, tilt: -6, qlen: 1.9 },
+      enter(S) { scene(S, { num: 'weight', note: 'sum', shadows: false, keyWords: false, noteAt: [0, -0.08, 2.1], noteAnchor: 'top' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Pour in what they carry.** Each word also has a value (teal): what it passes on. "it" takes 0.57 of cat\'s value, 0.36 of its own and crumbs of the rest, tip to tail. The black arrow: its new meaning.',
+        2: 'Each word has a **value** (teal, another toy arrow): what it will tell you. Output z = Σ w_j v_j: shrink each value by its sand and lay them tip to tail; the dark arrow is the sum. "it" now points much like "cat": information moved between words.',
+        3: 'z_i = Σ_j A_ij v_j with v = x·W_V + b_V; then W_O maps z to d_model and heads are summed into the residual stream. QK decides where from, OV decides what moves. Toy: z_it = 0.57·v_cat + 0.36·v_it + … (live in the note). Faint arrows: the full values.',
+      },
+      cam: CAM.vals,
+      set: { asker: 4, view: 'values', scale: true, mask: true, same: false, turn: 81, tilt: -6, qlen: 1.9 },
+      enter(S) { scene(S, { num: 'weight', note: 'z', noteAt: NOTE_BELOW, noteAnchor: 'top' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**No peeking ahead.** In training every word guesses its next word at the same time. Seeing later words would be copying the answer, so they sit behind frosted glass with weight exactly 0.',
+        2: 'The board is the whole pattern: row = asking word, column = word looked at. Training predicts every next token at once, so no word may see later ones (cheating). Scores right of the diagonal become −∞ before softmax: weight 0; rows still sum to 1.',
+        3: 'Every posn_Q is trained at once, so key_pos > query_pos must be masked. ARENA: `mask = t.triu(all_ones, diagonal=1).bool()`, `attn_scores.masked_fill_(mask, self.IGNORE)`, IGNORE = −inf. Mask scores, not probabilities: rows still sum to 1.',
+      },
+      cam: CAM.board,
+      set: { asker: 1, view: 'pattern', scale: true, mask: true, same: false },
+      enter(S) { scene(S, { num: 'weight', note: 'rows', noteAt: [0, BOARD.y0 + NT * BOARD.rowH + 0.25, BOARD.z], noteAnchor: 'bottom' }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**You write this in code.** Make queries, keys and values with matrix multiplies, score every query against every key, shrink, hide the future, softmax, then mix the values. A few lines of einsum.',
+        2: 'ARENA [1.1] `Attention.forward`: q, k, v = `einops.einsum` with `W_Q`, `W_K`, `W_V` + biases; `attn_scores` from q, k; `self.apply_causal_mask(attn_scores / self.cfg.d_head**0.5)`; `.softmax(-1)`; z from v and the pattern; `W_O`, sum heads, `+ b_O`.',
+        3: 'Shapes: q, k, v `[batch, posn, nheads, d_head]`; attn_scores `[batch, nheads, posn_Q, posn_K]` (this board, one head); z: "batch posn_K nheads d_head, batch nheads posn_Q posn_K -> batch posn_Q nheads d_head"; then W_O, + b_O.',
+      },
+      cam: CAM.board,
+      set: { asker: 4, view: 'pattern', scale: true, mask: true, same: false },
+      enter(S) { scene(S, { num: 'weight' }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Sand is a hint, not proof.** "purred" gives "it" the most sand, yet "cat" moves its arrow further (a longer value). Sand says "looked here", not "this caused it". Proof needs experiments (week 8).',
+        2: 'Patterns are hints, not explanations: "Attention is not Explanation" (Jain & Wallace 2019) vs "…is not not Explanation" (Wiegreffe & Pinter 2019). Here "it" gets more weight than "cat", but cat\'s longer value moves z more. Practice: test causally, e.g. activation patching (W8).',
+        3: 'Contested. Weights ignore value norms: here w_it > w_cat but ‖w_cat v_cat‖ > ‖w_it v_it‖ (Kobayashi et al. 2020). Many heads park weight on token 0 as a no-op "sink". Current method: causal interventions (activation/path patching, W8) plus QK/OV circuits.',
+      },
+      cam: CAM.vals,
+      set: { asker: 5, view: 'values', scale: true, mask: true, same: false, turn: 62, tilt: -13, qlen: 1.7 },
+      enter(S) { scene(S, { num: 'weight', note: 'push', noteAt: NOTE_BELOW, noteAnchor: 'top' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** A search engine works like this: your query is scored against every page\'s key, the best matches win, and you get their contents. So does a recommender matching you to films.',
+        2: 'Any soft lookup: search engines (query vs document keys), recommenders (user vector · item vectors), retrieval for RAG. In this course: induction heads (week 7) are two such searchlights in a chain, and IOI (week 8) is a circuit of them.',
+        3: 'A differentiable key-value memory, softmax(QKᵀ/√d)·V: dense retrieval and RAG, memory networks, modern Hopfield networks (Ramsauer et al. 2020), cross-attention in translation and diffusion models; induction heads (W7), the IOI circuit (W8).',
+      },
+      cam: CAM.main,
+      set: { asker: 5, view: 'scores', scale: true, mask: true, same: false },
+      enter(S) { scene(S, { num: 'weight', figure: 'point', point: (S2) => toW(S2.state.q) }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'Point the question straight away from the "cat" key, and make it longer (3). What share does "cat" get?',
+        2: 'Aim q exactly opposite k_cat, with |q| = 3. Weight on "cat"?',
+        3: 'q ≈ −3·k̂_cat (asker "it"). softmax weight on cat?' },
+      options: [{ t: 'Tiny, but not zero', ok: true }, { t: 'Exactly zero' }, { t: 'Negative' }, { t: 'Still the biggest' }],
+      why: { 1: 'A negative score gives a very small share, but e raised to any number is above zero. Here about 0.002: a few grains.',
+        2: 'q·k_cat ≈ −5.9, scaled ≈ −3.4; e^(−3.4) is small but positive, so the weight is about 0.002 (live). Softmax weights are never negative and never exactly 0 unless masked.',
+        3: 'w_j = e^(s_j)/Σ_k e^(s_k) > 0 for any finite s_j. Only IGNORE = −inf (the mask) gives exactly 0. Negative scores push weight toward 0, never past it.' },
+      show(S) {
+        const kc = KEYS[1], L = Math.hypot(...kc);
+        const turn = Math.round(Math.atan2(-kc[0], -kc[2]) / RAD), tilt = Math.round(Math.asin(-kc[1] / L) / RAD);
+        S.setKnobs({ asker: 4, view: 'scores', scale: true, mask: true, same: false, turn, tilt, qlen: 3 });
+        scene(S, { num: 'weight' }); S.fly(CAM.main);
+        return pourSand(S);
+      } },
+    { q: { 1: 'Make every key the same arrow. How does "it" share out its sand?',
+        2: 'All keys equal. What pattern does "it" get?',
+        3: 'k_j = k̄ for all j, causal mask on, query at position 4. Pattern?' },
+      options: [{ t: 'Evenly over the words it can see', ok: true }, { t: 'All on "cat"' }, { t: 'All on itself' }, { t: 'Evenly over all six words' }],
+      why: { 1: 'Same keys give the same scores, so the same shares: 0.2 each for the five words "it" can see. "purred" is still behind the glass.',
+        2: 'Every q·k_j is identical, and softmax of equal scores is uniform: 1/5 = 0.2 over the visible words, 0 for the masked one. Attention can only prefer what the keys tell apart.',
+        3: 'softmax(c·1) = 1/n over unmasked entries: 1/(pos + 1) = 0.2. Uniform attention = mean-pooling over the prefix; heads that do this on purpose exist.' },
+      show(S) {
+        S.setKnobs({ asker: 4, view: 'scores', scale: true, mask: true, same: true, turn: 81, tilt: -6, qlen: 1.9 });
+        scene(S, { num: 'weight' }); S.fly(CAM.main);
+        return pourSand(S);
+      } },
+    { q: { 1: 'The first word, "the", asks, with the future hidden. Where does its sand go?',
+        2: 'Causal mask on; the query at position 0 ("the"). Its attention pattern?',
+        3: 'Query position 0 under the causal mask: pattern and z?' },
+      options: [{ t: 'All of it on itself', ok: true }, { t: 'Evenly over all six' }, { t: 'None anywhere' }, { t: 'Mostly on "cat"' }],
+      why: { 1: 'It can see only itself, and the shares must add to 1, so it gets all the sand: weight 1. Its output is just its own value.',
+        2: 'Row 0 has one visible key, itself; softmax over one score is 1. So z = v_the exactly. The first row of every causal pattern is [1, 0, 0, …].',
+        3: 'Masked row 0: softmax([s₀, −inf, …]) = [1, 0, …], z₀ = v₀. Heads often use position 0 as a default "sink" when nothing else fits.' },
+      show(S) {
+        S.setKnobs({ asker: 0, view: 'scores', scale: true, mask: true, same: false });
+        scene(S, { num: 'weight' }); S.fly(CAM.main);
+        return pourSand(S);
+      } },
+    { q: { 1: 'Make the question arrow twice as long. What happens to the sand?',
+        2: 'Double |q| (same direction). The pattern becomes…',
+        3: 'q → 2q. Effect on softmax(q·k/√d)?' },
+      options: [{ t: 'Sharper: the winner takes more', ok: true }, { t: 'Flatter: more even' }, { t: 'No change' }, { t: 'A different winner' }],
+      why: { 1: 'Every score doubles, so the gaps double, and softmax turns bigger gaps into bigger differences: "cat" goes from 0.566 to about 0.70.',
+        2: 'Doubling |q| doubles every score, so gaps double; softmax is sharper and the ranking is unchanged. Live: w_cat 0.566 → 0.704. |q| acts like an inverse temperature.',
+        3: 'softmax(2s) is a sharper softmax(s) with the same argmax: temperature ½. Weight or query norms are one way heads become near-hard lookups.' },
+      show(S) {
+        S.setKnobs({ asker: 4, view: 'scores', scale: true, mask: true, same: false, turn: 81, tilt: -6, qlen: 3.8 });
+        scene(S, { num: 'weight' }); S.fly(CAM.main);
+        return pourSand(S);
+      } },
+    { q: { 1: 'Suppose all the sand lands in one cup (weight 1). What is the output?',
+        2: 'One weight is 1, the rest 0. Output z?',
+        3: 'A one-hot attention row. z = ?' },
+      options: [{ t: 'Exactly that word\'s value', ok: true }, { t: 'The average of all the values' }, { t: 'Zero' }, { t: 'That word\'s key' }],
+      why: { 1: 'The mix takes all of one value and none of the others, so it is that value exactly. Shown: the first word, which can only see itself.',
+        2: 'z = Σ w_j v_j with w = (1, 0, …) is v_j itself: here z = v_the = (−0.60, −0.80, 0.20). Hard attention is a copy.',
+        3: 'z = e_jᵀV = v_j: a pure copy of that position\'s value (then W_O). Induction and name-mover heads (W7-8) are near-copies like this.' },
+      show(S) {
+        S.setKnobs({ asker: 0, view: 'values', scale: true, mask: true, same: false });
+        scene(S, { num: 'weight', note: 'z', noteAt: [0.26, O.y + 0.62, O.z], noteAnchor: 'bottom' }); S.fly(CAM.vals);
+        return pourSand(S);
+      } },
+    { q: { 1: 'Turn off the shrink (÷√3). The sand gets…',
+        2: 'Remove the ÷√d_head scaling. The pattern gets…',
+        3: 'Drop the 1/√d_head factor. Effect?' },
+      options: [{ t: 'Sharper', ok: true }, { t: 'Flatter' }, { t: 'Unchanged' }, { t: 'Perfectly even' }],
+      why: { 1: 'Every score gets √3 ≈ 1.73 times bigger, so the winner takes more: "cat" goes from 0.566 to 0.676.',
+        2: 'Scores ×√3; softmax sharpens: w_cat 0.566 → 0.676 (live). With d_head = 64 the factor is 8, which is why unscaled attention saturates.',
+        3: 'Same as temperature 1/√d. For d = 64 that pushes softmax into saturation at init, where ∂w/∂s ≈ 0: the reason for the scale (Vaswani et al. 2017).' },
+      show(S) {
+        S.setKnobs({ asker: 4, view: 'scores', scale: false, mask: true, same: false, turn: 81, tilt: -6, qlen: 1.9 });
+        scene(S, { num: 'weight' }); S.fly(CAM.main);
+        return pourSand(S);
+      } },
+  ],
+
+  where: {
+    1: 'Search engines, recommenders and every "find the closest match, then fetch its contents" system; in this course, induction heads (week 7) and the IOI circuit (week 8).',
+    2: 'Soft key-value lookup appears in search and retrieval (RAG), recommenders, memory networks and cross-attention; induction heads (W7) and the IOI circuit (W8) are chains of these heads.',
+    3: 'softmax(QKᵀ/√d)V: dense retrieval, modern Hopfield networks, memory networks, cross-attention (translation, diffusion); interpretability splits it into QK and OV circuits (W7-8).',
+  },
+  links: [
+    { label: 'Film · W5 transformer', href: '../../intuition/films/w5-transformer.html' },
+    { label: 'Film · attention, deep', href: '../../intuition/films/deep-w05-attention.html' },
+    { label: 'Week 5 pack', href: '../../index.html#week-05' },
+    { label: 'Demo · transformer block', href: '../../index.html#demo/transformer-block' },
+    { label: 'Case · softmax attention & causal mask', href: '../../index.html#cases/softmax-attention-and-causal-mask' },
+    { label: 'Case · transformer architecture', href: '../../index.html#cases/transformer-architecture' },
+    { label: 'Map · attention head', href: '../../index.html#map/node=attention-head' },
+    { label: 'Map · softmax attention & causal mask', href: '../../index.html#map/node=softmax-attention-and-causal-mask' },
+    { label: 'Map · QK circuit', href: '../../index.html#map/node=qk-circuit' },
+    { label: 'Map · OV circuit', href: '../../index.html#map/node=ov-circuit' },
+  ],
+  remix: 'Build a single-file three.js scene on a round plinth: six plaster pillars in a row labelled the, cat, sat, and, it, purred, each with a glass cup on top. Behind them a brass-edged cube is a 3-D vector space (d_head = 3): six blue key arrows from its centre and one violet query arrow for the asking word, set by turn, tilt and length sliders. Drop a thin string from each key tip onto the query\'s line: the dot product as a shadow. Scores q·k/√3, masked to −inf for later words (a frosted glass panel), then softmax into amber sand whose heights sum to 1. A values view lays teal value arrows, each scaled by its weight, tip to tail from the centre, and a board view shows the whole 6×6 lower-triangular attention pattern.',
+  credit: 'Toy vectors (3 numbers each), hand-picked; every score, weight and sum is computed live, following ARENA [1.1] Attention.forward (scores / d_head**0.5, apply_causal_mask with IGNORE = −inf, softmax(-1), z, W_O). Framings borrowed from Andrej Karpathy (query, key, value) and 3Blue1Brown (the dot product as a projection). Debate: Jain & Wallace 2019; Wiegreffe & Pinter 2019; Kobayashi et al. 2020. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Highway · Object Lessons</title>
+<meta name="description" content="Why deep nets need a shortcut: a gradient beam passes down through up to 50 panes of glass, vanishing or exploding, until a residual pipe keeps a path worth exactly 1.">
+<link rel="stylesheet" href="../kit.css">
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   04 · d02-highway: "The highway" (W2 deep, ARENA [0.2] ResNets)
+   A toy network: a chain of N scalar layers. The backward pass multiplies the
+   gradient by every layer's local slope, so what reaches the input is a
+   product. Every number on screen comes from the MATH block below, which is
+   extracted and checked in node against independent computations (LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+const BN_EPS = 1e-5;   // ARENA: BatchNorm2d(num_features, eps=1e-05, momentum=0.1)
+
+/* Local slope of every layer, in FORWARD order (index 0 = the layer next to the input).
+   plain:      x_l = g·x_(l-1)                slope g
+   BatchNorm:  x_l = BN(g·x_(l-1))            slope g/√(g²v + ε) on the part of the gradient that
+               BN passes (v = batch variance of x_(l-1)); BN divides the gain back out, so ≈ 1
+   residual:   x_l = x_(l-1) + f(x_(l-1))     slope 1 + f'                                        */
+function layerSlopes(N, { g, res, fp, norm }) {
+  const out = [];
+  let v = 1;                                  // the toy input batch has variance 1
+  for (let l = 0; l < N; l++) {
+    if (res) out.push(1 + fp);
+    else if (norm) {
+      const vy = g * g * v;                   // variance of y = g·x over the batch
+      out.push(Math.abs(g) / Math.sqrt(vy + BN_EPS));
+      v = vy / (vy + BN_EPS);                 // variance after normalising (a hair under 1)
+    } else out.push(g);
+  }
+  return out;
+}
+
+/* Backward pass: the gradient leaves the loss as dL/dL = 1 and each layer multiplies it by its
+   slope on the way down (chain rule). beam[d] = the gradient after passing d layers from the top. */
+function backward(slopes) {
+  const beam = [1];
+  for (let d = 0; d < slopes.length; d++) beam.push(beam[d] * slopes[slopes.length - 1 - d]);
+  return beam;
+}
+
+/* Π(1 + f'_l) multiplied out: one term per route (skip or branch at every block).
+   e[k] = total worth of the routes through exactly k branches (the elementary symmetric
+   polynomial of degree k in f'_1..f'_N); Σ e[k] = Π(1 + f'_l). */
+function routeSums(fps) {
+  const e = [1];
+  for (const f of fps) {
+    e.push(0);
+    for (let k = e.length - 1; k >= 1; k--) e[k] += f * e[k - 1];
+  }
+  return e;
+}
+function routeList(N, fp) {                   // every route as a bitmask of the branches it takes
+  const out = [];
+  for (let m = 0; m < (1 << N); m++) {
+    let k = 0;
+    for (let b = 0; b < N; b++) if (m & (1 << b)) k++;
+    out.push({ m, k, worth: fp ** k });
+  }
+  return out;
+}
+const binom = (n, k) => { let c = 1; for (let i = 1; i <= k; i++) c = (c * (n - k + i)) / i; return c; };
+const MATH = { BN_EPS, layerSlopes, backward, routeSums, routeList, binom };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const PANE_W = 1.24, PANE_T = 0.02, HOLE_R = 0.165, PIPE_R = 0.13;
+const Y_TOP = 2.68, Y_BOT = 0.46, CROSS_Y = 2.92, LAMP_Y = 3.07, IN_Y = 0.135;
+const POST = 0.6, R0 = 0.05;
+const RESNET34 = [3, 4, 6, 3];           // ARENA ResNet34: n_blocks_per_group (input side first)
+const COL = {
+  red: new THREE.Color(C.grad), hot: new THREE.Color('#ffe2a8'), ash: new THREE.Color('#c9c1b5'),
+  teal: new THREE.Color(C.aux), smoke: new THREE.Color('#6f6a64'), amber: new THREE.Color(C.prob),
+  clear: new THREE.Color('#f4f7f7'), brass: new THREE.Color(C.brass),
+};
+const CAM = {
+  front: { pos: [3.2, 3.0, 7.4], target: [0, 1.5, 0] },
+  high: { pos: [2.6, 5.2, 6.8], target: [0, 1.45, 0] },
+  low: { pos: [3.6, 1.6, 7.0], target: [0, 1.4, 0] },
+  routes: { pos: [1.9, 5.6, 5.9], target: [0, 1.5, 0] },
+  bars: { pos: [1.4, 3.1, 7.2], target: [0, 1.2, 0.3] },
+  side: { pos: [-3.4, 2.6, 6.9], target: [0, 1.45, 0] },
+};
+
+/* numbers: 3 significant figures, powers of ten outside [0.001, 100000) */
+const SUP = { '-': '⁻', 0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴', 5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹' };
+const sup = (n) => String(n).split('').map((c) => SUP[c] ?? c).join('');
+function num(v, d = 3) {
+  if (!Number.isFinite(v)) return v > 0 ? '∞' : '−∞';
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  let s;
+  if (a >= 1e-3 && a < 1e5) {
+    const e = Math.floor(Math.log10(a));
+    s = e >= d ? String(Math.round(v / 10 ** (e - d + 1)) * 10 ** (e - d + 1)) : v.toPrecision(d);
+  } else {
+    let e = Math.floor(Math.log10(a)), m = v / 10 ** e;
+    if (Math.abs(Number(m.toFixed(d - 1))) >= 10) { m /= 10; e += 1; }
+    s = `${m.toFixed(d - 1)} × 10${sup(e)}`;
+  }
+  return s.replace('-', '−');
+}
+const numT = (v, d = 4) => String(Number(v.toPrecision(d))).replace('-', '−');     // no trailing zeros
+const g2 = (v) => String(Number(v.toFixed(2))).replace('-', '−');          // 0.7, 1.05, −0.1
+const signed = (v) => (v < 0 ? `− ${g2(-v)}` : `+ ${g2(v)}`);
+
+/* ======================================================== object behaviour */
+
+function paneY(N, i) { return N === 1 ? (Y_TOP + Y_BOT) / 2 : Y_TOP - (i * (Y_TOP - Y_BOT)) / (N - 1); }
+
+function compute(S) {
+  const st = S.state, k = S.knobs;
+  const N = Math.round(k.depth);
+  st.N = N;
+  st.slopes = layerSlopes(N, { g: k.gain, res: k.res, fp: k.fp, norm: k.norm });
+  st.beam = backward(st.slopes);
+  st.bottom = st.beam[N];
+  st.e = k.res ? routeSums(new Array(N).fill(k.fp)) : null;
+}
+
+/* beam width and colour from the gradient's size (log scale: width shows powers of ten) */
+function beamLook(I, out) {
+  const s = Math.log10(Math.max(1e-300, Math.abs(I)));
+  const r = R0 * Math.min(2.1, Math.max(0.05, 1 + s / 5));
+  out.copy(COL.red);
+  if (s < 0) out.lerp(COL.ash, Math.min(1, -s / 3.5));
+  else out.lerp(COL.hot, Math.min(0.85, s / 4));
+  return r;
+}
+
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _c = new THREE.Color();
+
+function layoutPanes(S) {
+  const st = S.state, k = S.knobs, N = st.N;
+  st.panes.geometry = k.res ? st.geoHole : st.geoSolid;
+  st.panes.count = N;
+  const groups = st.groups && k.res && N === 16;
+  let gi = 0;
+  const ends = [];
+  { let acc = 0; for (const n of RESNET34) { acc += n; ends.push(acc); } }
+  for (let i = 0; i < N; i++) {
+    _m.makeTranslation(0, paneY(N, i), 0);
+    st.panes.setMatrixAt(i, _m);
+    // tint: plain panes show their gain (smoke < 1 < amber); residual panes are clear
+    if (groups) {
+      const fromBottom = N - 1 - i;
+      gi = ends.findIndex((e) => fromBottom < e);
+      _c.copy(gi % 2 ? COL.clear : COL.brass).lerp(COL.clear, gi % 2 ? 0 : 0.15);
+    } else if (k.res || k.norm) _c.copy(COL.clear);
+    else if (k.gain < 1) _c.copy(COL.clear).lerp(COL.smoke, Math.min(1, (1 - k.gain) / 0.7));
+    else _c.copy(COL.clear).lerp(COL.amber, Math.min(1, (k.gain - 1) / 0.5));
+    st.panes.setColorAt(i, _c);
+  }
+  st.panes.instanceMatrix.needsUpdate = true;
+  if (st.panes.instanceColor) st.panes.instanceColor.needsUpdate = true;
+  st.panes.material.opacity = k.res ? 0.2 : k.norm ? 0.2 : 0.2 + Math.min(0.2, Math.abs(k.gain - 1) * 0.35);
+  st.pipe.visible = !!k.res;
+  st.pipe.material.opacity = st.showRoutes && N <= 5 ? 0.1 : 0.2;
+}
+
+/* the beam: N + 1 segments, drawn down to fraction u of the way (the pour) */
+function drawBeam(S) {
+  const st = S.state, N = st.N, u = st.u;
+  const showBeam = !(st.showRoutes && N <= 5);
+  let n = 0;
+  if (showBeam) {
+    for (let d = 0; d <= N; d++) {
+      const y0 = d === 0 ? CROSS_Y : paneY(N, d - 1);
+      const y1 = d === N ? IN_Y : paneY(N, d);
+      const f = Math.max(0, Math.min(1, u - d));
+      if (f <= 0) break;
+      const r = beamLook(st.beam[d], _c);
+      const yb = y0 - (y0 - y1) * f;
+      _p.set(0, (y0 + yb) / 2, 0);
+      _s.set(r, Math.max(1e-4, y0 - yb), r);
+      _m.compose(_p, _q.identity(), _s);
+      st.beamMesh.setMatrixAt(n, _m);
+      st.beamMesh.setColorAt(n, _c);
+      n++;
+    }
+  }
+  st.beamMesh.count = n;
+  st.beamMesh.instanceMatrix.needsUpdate = true;
+  if (st.beamMesh.instanceColor) st.beamMesh.instanceColor.needsUpdate = true;
+  // the glow where the beam lands on the input
+  const done = u >= N + 1 - 1e-9;
+  st.spot.visible = done && showBeam;
+  if (st.spot.visible) {
+    const r = beamLook(st.bottom, _c);
+    st.spot.material.color.copy(_c);
+    st.spot.scale.set(r * 2.6, 1, r * 2.6);
+  }
+}
+
+/* level numbers: every pane for short stacks, about five evenly spaced for tall ones */
+function levelList(N) {          // the bottom (d = N) is the readout's job
+  if (N <= 6) return [...Array(N - 1).keys()].map((i) => i + 1);
+  const L = new Set();
+  const n = N <= 12 ? 3 : 4;
+  for (let j = 1; j <= n; j++) L.add(Math.round((N * j) / (n + 1)));
+  return [...L].filter((d) => d >= 1 && d < N).sort((a, b) => a - b);
+}
+
+function powText(S, d) {       // the gradient after d panes, as a formula
+  const k = S.knobs;
+  if (k.res) return `${g2(1 + k.fp)}${sup(d)}`;
+  if (k.norm) return null;
+  return `${g2(k.gain)}${sup(d)}`;
+}
+
+function paintLabels(S) {
+  const st = S.state, k = S.knobs, N = st.N, t = S.tier;
+  const lv = st.levels ? levelList(N) : [];
+  const groupsOn = st.groups && k.res && N === 16;
+  st.levelTags.forEach((L, j) => {
+    const d = lv[j];
+    if (d == null || groupsOn || (st.showRoutes && N <= 5)) { L.show(false); return; }
+    const y = paneY(N, d - 1) - (paneY(N, 0) - paneY(N, 1)) / 2;
+    L.move([PANE_W / 2 + 0.04, y, 0]);
+    const p = powText(S, d), v = num(st.beam[d]);
+    L.set(t === 1 || !p ? v : `${p} = ${v}`);
+    L.show(st.u >= d);
+  });
+  // ResNet34's four BlockGroups (beat 7)
+  const ends = []; { let a = 0; for (const n of RESNET34) { a += n; ends.push(a); } }
+  st.groupTags.forEach((L, gi) => {
+    if (!groupsOn) { L.show(false); return; }
+    const lo = gi === 0 ? 0 : ends[gi - 1], hi = ends[gi] - 1;            // counted from the bottom
+    const iTop = N - 1 - hi, iBot = N - 1 - lo;
+    L.move([PANE_W / 2 + 0.04, (paneY(N, iTop) + paneY(N, iBot)) / 2, 0]);
+    const n = RESNET34[gi], ch = [64, 128, 256, 512][gi];
+    L.set(t === 1 ? `${n} blocks` : t === 2 ? `BlockGroup · ${n} blocks` : `BlockGroup(${n}, → ${ch})`);
+    L.show(true);
+  });
+  // readout at the input
+  const bot = st.bottom;
+  let head;
+  if (k.res) head = t === 1 ? `reaches the input: **${num(bot)}**` : `at the input: (1 ${signed(k.fp)})${sup(N)} = **${num(bot)}**`;
+  else if (k.norm) head = t === 1 ? `reaches the input: **${num(bot)}**` : `at the input: **${num(bot)}** (≈ ×${num(st.bottom ** (1 / N))} per pane)`;
+  else head = t === 1 ? `reaches the input: **${num(bot)}**` : `at the input: ${g2(k.gain)}${sup(N)} = **${num(bot)}**`;
+  if (t === 3) head = head.replace('at the input', '∂L/∂x₀');
+  st.readout.set(head);
+  st.readout.show(st.u >= N + 1 - 1e-9 && !st.showRoutes);
+  st.inTag.show(!st.showRoutes);
+  st.lossTag.set(t === 3 ? 'loss · ∂L/∂L = 1' : t === 2 ? 'loss (gradient 1)' : 'the loss');
+  st.inTag.set(t === 3 ? 'x₀ (input)' : t === 2 ? 'input / first layer' : 'first layer');
+  paintRouteNote(S);
+}
+
+/* ---------------------------------------------------------------- routes */
+
+function buildRoutes(S) {
+  const st = S.state, k = S.knobs, N = st.N;
+  if (st.routeMesh) { S.root.remove(st.routeMesh); st.routeMesh.geometry.dispose(); st.routeMesh = null; }
+  if (!(st.showRoutes && N <= 5)) return;
+  const list = routeList(N, k.fp);
+  const geos = [];
+  const RS = 0.075, RB = 0.43;                         // skip lane (inside the pipe), branch lane (in the glass)
+  const halfGap = N > 1 ? Math.min(0.12, (paneY(N, 0) - paneY(N, 1)) * 0.22) : 0.12;
+  for (const R of list) {
+    const th = ((R.m + 0.5) / list.length) * Math.PI * 2 + 0.35;
+    const straight = R.m === 0;                        // the all-skip route runs down the axis
+    const cx = straight ? 0 : Math.cos(th), cz = straight ? 0 : Math.sin(th);
+    const pts = [new THREE.Vector3(0, CROSS_Y - 0.02, 0), new THREE.Vector3(RS * cx, CROSS_Y - 0.1, RS * cz)];
+    for (let i = 0; i < N; i++) {
+      const block = N - 1 - i;                         // bit 0 = the block next to the input
+      const rho = (R.m >> block) & 1 ? RB : RS, y = paneY(N, i);
+      pts.push(new THREE.Vector3(rho * cx, y + halfGap, rho * cz), new THREE.Vector3(rho * cx, y - halfGap, rho * cz));
+    }
+    pts.push(new THREE.Vector3(RS * cx, IN_Y + 0.12, RS * cz), new THREE.Vector3(0, IN_Y + 0.01, 0));
+    const w = Math.abs(R.worth);
+    const r = 0.006 + 0.016 * Math.min(1, w);
+    const path = new THREE.CurvePath();
+    for (let i = 0; i + 1 < pts.length; i++) path.add(new THREE.LineCurve3(pts[i], pts[i + 1]));
+    const geo = new THREE.TubeGeometry(path, pts.length * 3, r, 7, false);
+    const col = R.worth < 0 ? COL.teal : COL.red.clone().lerp(COL.ash, R.k === 0 ? 0 : Math.min(0.5, 0.14 * R.k));
+    const arr = new Float32Array(geo.attributes.position.count * 3);
+    for (let i = 0; i < arr.length; i += 3) { arr[i] = col.r; arr[i + 1] = col.g; arr[i + 2] = col.b; }
+    geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    geos.push(geo);
+  }
+  const merged = THREE.mergeGeometries(geos);
+  geos.forEach((g) => g.dispose());
+  st.routeMesh = new THREE.Mesh(merged, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, emissive: '#2a0808', emissiveIntensity: 0.4 }));
+  st.routeMesh.castShadow = true;
+  S.root.add(st.routeMesh);
+}
+
+function paintRouteNote(S) {
+  const st = S.state, k = S.knobs, N = st.N, t = S.tier;
+  const on = st.showRoutes && k.res;
+  if (!on) { st.routeNote.show(false); return; }
+  const e = st.e, total = e.reduce((a, b) => a + b, 0);
+  if (N <= 5) {
+    const terms = e.map((ek, kk) => {
+      if (kk === 0) return '1';
+      const c = binom(N, kk), p = Math.abs(k.fp) ** kk, neg = k.fp < 0 && kk % 2 === 1;
+      return `${neg ? '−' : '+'} ${c === 1 ? '' : c + '×'}${numT(p)}`;
+    }).join(' ');
+    st.routeNote.set(t === 1
+      ? `**${2 ** N} routes** down\nthey add up to **${numT(total)}**\n= ${g2(1 + k.fp)} × … (${N} times)`
+      : `**${2 ** N} routes** (2${sup(N)})\n${terms}\n= **${numT(total)}** = ${g2(1 + k.fp)}${sup(N)}`);
+  } else {
+    let kmax = 0;
+    e.forEach((v, i) => { if (Math.abs(v) > Math.abs(e[kmax])) kmax = i; });
+    st.routeNote.set(t === 1
+      ? `**2${sup(N)} routes**, grouped by how\nmany panes they cross (bars)\nmost blame: routes through **${kmax}**\nall together: **${num(total)}**`
+      : t === 2
+        ? `**2${sup(N)}** = ${num(2 ** N)} routes\nbar k: routes through k branches\npeak at k = **${kmax}** (${num(e[kmax])})\nsum = **${num(total)}** = ${g2(1 + k.fp)}${sup(N)}`
+        : `2${sup(N)} routes; bar k = e_k\npeak e_${kmax} = ${num(e[kmax])}\nΣ e_k = **${num(total)}** = ${g2(1 + k.fp)}${sup(N)}`);
+  }
+  st.routeNote.show(true);
+}
+
+/* bars in front of the tower: worth of the routes through k branches, k = 0, 1, 2, ... */
+const BARS = { n: 21, x0: -0.8, x1: 0.8, z: 1.04, h: 0.95 };
+function paintBars(S) {
+  const st = S.state, k = S.knobs;
+  const on = st.showRoutes && k.res;
+  st.bars.visible = on;
+  st.barRail.visible = on;
+  st.barTag.show(on);
+  if (!on) return;
+  const e = st.e, kmax = Math.min(st.N, BARS.n - 1), n = kmax + 1;
+  const big = Math.max(...e.slice(0, n).map(Math.abs));
+  const dx = (BARS.x1 - BARS.x0) / Math.max(1, BARS.n - 1);
+  const w = Math.min(0.1, dx * 0.72);
+  for (let i = 0; i < n; i++) {
+    const h = Math.max(0.004, (BARS.h * Math.abs(e[i])) / big);
+    _p.set(BARS.x0 + dx * i + (BARS.n - n) * dx / 2, 0.03 + h / 2, BARS.z);
+    _s.set(w, h, 0.07);
+    _m.compose(_p, _q.identity(), _s);
+    st.bars.setMatrixAt(i, _m);
+    st.bars.setColorAt(i, e[i] < 0 ? COL.teal : COL.red);
+  }
+  st.bars.count = n;
+  st.bars.instanceMatrix.needsUpdate = true;
+  if (st.bars.instanceColor) st.bars.instanceColor.needsUpdate = true;
+  st.barRail.scale.x = (n - 1) * dx + 0.16;
+  st.barTag.move([BARS.x0 + (BARS.n - n) * dx / 2 - 0.02, 0.02, BARS.z + 0.06]);
+  st.barTag.set(S.tier === 1 ? 'k = 0: the straight route →' : S.tier === 2 ? 'k = 0 (all skips) →' : 'e₀ = 1 →');
+}
+
+/* --------------------------------------------------------------- the pour */
+
+function pour(S, o = {}) {
+  const st = S.state;
+  if (st.done) { const d = st.done; st.done = null; d(); }
+  if (S.shot || o.instant) { st.u = st.N + 1; st.playing = false; refresh(S); return Promise.resolve(); }
+  st.u = 0; st.t0 = null; st.playing = true;
+  refresh(S);
+  return new Promise((res) => { st.done = res; });
+}
+function refresh(S) { drawBeam(S); paintLabels(S); S.invalidate(); }
+
+function rebuildAll(S) {
+  const st = S.state;
+  compute(S);
+  st.showRoutes = !!S.knobs.routes && !!S.knobs.res;
+  layoutPanes(S);
+  buildRoutes(S);
+  paintBars(S);
+  dimKnobs(S);
+}
+
+function dimKnobs(S) {
+  const k = S.knobs;
+  const dim = (id, on) => {
+    const el = document.getElementById('k-' + id);
+    const row = el && el.closest('.k-knob');
+    if (row) row.style.opacity = on ? '0.42' : '';
+  };
+  dim('gain', k.res); dim('norm', k.res); dim('fp', !k.res); dim('routes', !k.res);
+}
+
+/* scene configuration shared by beats and predictions */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.levels = o.levels !== false;
+  st.groups = !!o.groups;
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.at || [-0.98, 0, 0.62], o.face || [0.4, 0, 6]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.point });
+    if (S.shot) doPose(); else setTimeout(doPose, 520);
+  } else st.fig.group.visible = false;
+  layoutPanes(S);
+  refresh(S);
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'd02-highway', num: '04', week: 2, kind: 'deep',
+  title: 'The highway',
+  subtitle: 'Why deep nets need a shortcut: a gradient passing down through 50 panes of glass.',
+  back2d: '#week-02',
+  film: 'deep-w02-conv',
+  plinth: { r: 1.4, h: 0.14 },
+
+  knobs: [
+    { id: 'depth', type: 'range', label: { 1: 'Layers (panes)', 2: 'Depth N', 3: 'N (layers)' }, min: 2, max: 50, step: 1, value: 10, fmt: (v) => String(Math.round(v)) },
+    { id: 'gain', type: 'range', label: { 1: 'Each pane\'s gain', 2: 'Gain g per layer (plain)', 3: 'slope g (plain)' }, min: 0.3, max: 1.5, step: 0.01, value: 0.8, fmt: (v) => v.toFixed(2) },
+    { id: 'res', type: 'toggle', label: { 1: 'Shortcut pipe', 2: 'Residual skip', 3: 'x + F(x)' }, value: false },
+    { id: 'fp', type: 'range', label: { 1: 'Side branch slope f′', 2: 'Branch slope f′ (residual)', 3: 'f′ = ∂F/∂x per block' }, min: -0.5, max: 0.5, step: 0.01, value: 0, fmt: (v) => g2(v) },
+    { id: 'norm', type: 'toggle', label: { 1: 'Rescale each layer (BatchNorm)', 2: 'BatchNorm after each layer', 3: 'BatchNorm2d per layer' }, value: false },
+    { id: 'routes', type: 'toggle', label: { 1: 'Show every route', 2: 'Show routes (residual)', 3: 'Expand Π(1 + f′)' }, value: false },
+  ],
+
+  setup(S) {
+    const st = S.state, root = S.root;
+    // brass frame: base plate, four posts, a top ring and a cross that holds the lamp
+    const parts = [];
+    parts.push(new THREE.BoxGeometry(1.42, 0.05, 1.42).translate(0, 0.025, 0));
+    for (const [x, z] of [[-POST, -POST], [POST, -POST], [-POST, POST], [POST, POST]]) {
+      parts.push(new THREE.CylinderGeometry(0.021, 0.021, CROSS_Y - 0.05, 12).translate(x, 0.05 + (CROSS_Y - 0.05) / 2, z));
+      parts.push(new THREE.SphereGeometry(0.036, 14, 10).translate(x, CROSS_Y + 0.01, z));
+    }
+    for (const [x, z, w, d] of [[0, -POST, 2 * POST, 0.03], [0, POST, 2 * POST, 0.03], [-POST, 0, 0.03, 2 * POST], [POST, 0, 0.03, 2 * POST]]) {
+      parts.push(new THREE.BoxGeometry(w, 0.03, d).translate(x, CROSS_Y, z));
+    }
+    const arm = 2 * POST * Math.SQRT2;
+    parts.push(new THREE.BoxGeometry(arm, 0.022, 0.022).rotateY(Math.PI / 4).translate(0, CROSS_Y, 0));
+    parts.push(new THREE.BoxGeometry(arm, 0.022, 0.022).rotateY(-Math.PI / 4).translate(0, CROSS_Y, 0));
+    parts.push(new THREE.CylinderGeometry(0.07, 0.09, 0.05, 20).translate(0, CROSS_Y + 0.035, 0));
+    const frame = new THREE.Mesh(THREE.mergeGeometries(parts.map((g) => g.toNonIndexed())), K.mat.brass());
+    frame.castShadow = true; frame.receiveShadow = true;
+    root.add(frame);
+    parts.forEach((g) => g.dispose());
+
+    // the loss lamp and the input plate
+    st.lamp = new THREE.Mesh(new THREE.SphereGeometry(0.115, 28, 18),
+      new THREE.MeshStandardMaterial({ color: C.grad, emissive: C.grad, emissiveIntensity: 0.55, roughness: 0.35 }));
+    st.lamp.position.set(0, LAMP_Y, 0);
+    st.lamp.castShadow = true;
+    root.add(st.lamp);
+    const inp = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.085, 0.86).translate(0, 0.05 + 0.0425, 0), K.mat.paint(C.data));
+    inp.castShadow = true; inp.receiveShadow = true;
+    root.add(inp);
+    st.spot = new THREE.Mesh(new THREE.CircleGeometry(1, 36).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: C.grad }));
+    st.spot.position.set(0, IN_Y + 0.002, 0);
+    root.add(st.spot);
+
+    // panes: one instanced mesh (solid glass, or glass with a hole for the pipe), built with JSCAD
+    const slab = J.primitives.cuboid({ size: [PANE_W, PANE_W, PANE_T] });
+    const holed = J.booleans.subtract(slab, J.primitives.cylinder({ radius: HOLE_R, height: PANE_T * 3, segments: 40 }));
+    st.geoSolid = K.mesh(slab).geometry;
+    st.geoHole = K.mesh(holed).geometry;
+    const glass = K.mat.glass('#ffffff', 0.22);
+    glass.side = THREE.DoubleSide;
+    st.panes = new THREE.InstancedMesh(st.geoSolid, glass, 50);
+    st.panes.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    st.panes.setColorAt(0, COL.clear);
+    st.panes.renderOrder = 2;
+    st.panes.userData.noFit = true;
+    root.add(st.panes);
+
+    // the highway: a clear teal pipe straight down through every hole
+    const pipeMat = K.mat.glass(C.aux, 0.2);
+    pipeMat.side = THREE.DoubleSide;
+    st.pipe = new THREE.Mesh(new THREE.CylinderGeometry(PIPE_R, PIPE_R, CROSS_Y - IN_Y, 40, 1, true).translate(0, (CROSS_Y + IN_Y) / 2, 0), pipeMat);
+    st.pipe.renderOrder = 3;
+    st.pipe.visible = false;
+    root.add(st.pipe);
+
+    // the beam: instanced unlit cylinders, one per gap between panes
+    st.beamMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 18, 1), new THREE.MeshBasicMaterial({ color: '#ffffff' }), 51);
+    st.beamMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    st.beamMesh.setColorAt(0, COL.red);
+    st.beamMesh.count = 0;
+    st.beamMesh.userData.noFit = true;
+    st.beamMesh.frustumCulled = false;
+    root.add(st.beamMesh);
+
+    // route bars (worth of routes through k branches) on a brass rail in front
+    st.bars = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), K.mat.paint('#ffffff'), BARS.n);
+    st.bars.setColorAt(0, COL.brass);
+    st.bars.castShadow = true;
+    st.bars.visible = false;
+    st.bars.userData.noFit = true;
+    root.add(st.bars);
+    st.barRail = new THREE.Mesh(new THREE.BoxGeometry(1, 0.03, 0.11).translate(0, 0.015, BARS.z), K.mat.brass());
+    st.barRail.castShadow = true; st.barRail.receiveShadow = true;
+    st.barRail.visible = false;
+    root.add(st.barRail);
+
+    // labels
+    st.lossTag = K.label([0, LAMP_Y + 0.13, 0], 'the loss', { cls: 'tag', anchor: 'bottom', dy: -4 });
+    st.inTag = K.label([0.43, 0.12, 0.43], 'first layer', { cls: 'tag', anchor: 'left', dx: 8, dy: 4 });
+    st.readout = K.label([0, 0.13, 0.43], '', { cls: 'readout', anchor: 'top', dy: 12 });
+    st.levelTags = [...Array(6)].map(() => K.label([0, 0, 0], '', { anchor: 'left', dx: 6, dy: 0, prio: 1 }));
+    st.groupTags = [...Array(4)].map(() => K.label([0, 0, 0], '', { anchor: 'left', dx: 6, dy: 0, prio: 1 }));
+    st.routeNote = K.label([-0.72, 2.3, 0], '', { cls: 'note', anchor: 'right', dx: -10, dy: 0 });
+    st.barTag = K.label([0, 0, 0], '', { cls: 'tag', anchor: 'right', dx: -6, dy: 0 });
+    st.routeNote.show(false); st.barTag.show(false);
+    st.fig = K.figure();
+    st.fig.group.visible = false;
+    root.add(st.fig.group);
+    st.u = 0;
+  },
+
+  rebuild(S, id) {
+    const st = S.state;
+    rebuildAll(S);
+    if (id === '*' || id === 'res' || id === 'norm' || id === 'routes') { pour(S); return; }
+    // slider scrubs: redraw at once, no pour
+    if (st.playing) { st.playing = false; if (st.done) { const d = st.done; st.done = null; d(); } }
+    st.u = st.N + 1;
+    refresh(S);
+  },
+
+  frame(S, t) {
+    const st = S.state;
+    if (!st.playing) return false;
+    if (st.t0 == null) st.t0 = t;
+    const dur = 1.25, end = st.N + 1;
+    st.u = Math.min(end, Math.max(0, ((t - st.t0 - 0.25) / dur) * end));
+    refresh(S);
+    if (st.u >= end) {
+      st.playing = false;
+      if (st.done) { const d = st.done; st.done = null; d(); }
+      return false;
+    }
+    return true;
+  },
+
+  onTier(S) { paintLabels(S); paintBars(S); },
+
+  solids(S) {
+    const st = S.state, k = S.knobs, N = st.N;
+    const out = [];
+    const P = (x, y, z) => [x, -z, y];                       // three (x, y, z) -> JSCAD z-up
+    out.push(J.primitives.cuboid({ size: [1.42, 1.42, 0.05], center: P(0, 0.025, 0) }));
+    for (const [x, z] of [[-POST, -POST], [POST, -POST], [-POST, POST], [POST, POST]]) {
+      out.push(J.primitives.cylinder({ radius: 0.03, height: CROSS_Y - 0.03, center: P(x, (CROSS_Y + 0.03) / 2, z), segments: 16 }));
+    }
+    out.push(J.primitives.cuboid({ size: [2 * POST + 0.06, 0.06, 0.04], center: P(0, CROSS_Y, -POST) }));
+    out.push(J.primitives.cuboid({ size: [2 * POST + 0.06, 0.06, 0.04], center: P(0, CROSS_Y, POST) }));
+    out.push(J.primitives.cuboid({ size: [0.06, 2 * POST + 0.06, 0.04], center: P(-POST, CROSS_Y, 0) }));
+    out.push(J.primitives.cuboid({ size: [0.06, 2 * POST + 0.06, 0.04], center: P(POST, CROSS_Y, 0) }));
+    out.push(J.primitives.sphere({ radius: 0.115, center: P(0, LAMP_Y, 0), segments: 24 }));
+    out.push(J.primitives.cylinder({ radius: 0.09, height: 0.16, center: P(0, CROSS_Y + 0.05, 0), segments: 20 }));
+    out.push(J.primitives.cuboid({ size: [0.86, 0.86, 0.085], center: P(0, 0.0925, 0) }));
+    // panes (printable: each pane reaches the four posts), holed when residual
+    const t = Math.max(PANE_T, Math.min(0.04, (Y_TOP - Y_BOT) / Math.max(1, N - 1) * 0.45));
+    for (let i = 0; i < N; i++) {
+      let pane = J.primitives.cuboid({ size: [2 * POST + 0.02, 2 * POST + 0.02, t], center: P(0, paneY(N, i), 0) });
+      if (k.res) pane = J.booleans.subtract(pane, J.primitives.cylinder({ radius: HOLE_R, height: t * 3, center: P(0, paneY(N, i), 0), segments: 32 }));
+      out.push(pane);
+    }
+    if (k.res) {
+      const h = CROSS_Y - IN_Y;
+      out.push(J.booleans.subtract(
+        J.primitives.cylinder({ radius: PIPE_R, height: h, center: P(0, (CROSS_Y + IN_Y) / 2, 0), segments: 32 }),
+        J.primitives.cylinder({ radius: PIPE_R - 0.025, height: h + 0.02, center: P(0, (CROSS_Y + IN_Y) / 2, 0), segments: 32 })));
+    }
+    // the beam as a rod whose width follows the gradient (log scale), segment by segment
+    for (let d = 0; d <= N; d++) {
+      const y0 = d === 0 ? CROSS_Y : paneY(N, d - 1), y1 = d === N ? IN_Y : paneY(N, d);
+      const r = Math.max(0.012, beamLook(st.beam[d], _c));
+      out.push(J.primitives.cylinder({ radius: r, height: y0 - y1, center: P(0, (y0 + y1) / 2, 0), segments: 12 }));
+    }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**Blame flows down.** The red beam is the gradient: how much each layer is to blame for the loss. It leaves the loss on top at full strength, and every pane multiplies it by its layer\'s gain, here 0.8.',
+        2: '**Backprop is a beam going down.** The gradient leaves the loss at 1, and by the chain rule each layer multiplies it by its gain g (its local slope, 0.8 here). Ten panes deliver 0.8¹⁰ = 0.107. Karpathy\'s framing: backprop is the chain rule, node by node. Width: log scale.',
+        3: '∂L/∂x₀ = ∂L/∂x_N · Π ∂x_l/∂x_(l−1). Toy: a chain of scalar linear layers with slope g, so d panes down the gradient is g^d (live at each pane; beam width ∝ log). In a real net each factor is a Jacobian set by weights and activations: a ReLU passes 0 or 1.',
+      },
+      cam: CAM.front,
+      set: { depth: 10, gain: 0.8, res: false, fp: 0, norm: false, routes: false },
+      enter(S) { scene(S, { figure: 'point', point: [0, LAMP_Y, 0] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Twenty panes at 0.7: almost nothing arrives.** 0.7 times itself 20 times is 0.0008. The bottom layers get no blame, so they stop learning. Gains above 1 explode instead: 1.3, twenty times, is 190.',
+        2: 'Multiply many numbers below 1 and the product **vanishes**: 0.7²⁰ = 7.98 × 10⁻⁴. Above 1 it **explodes**: 1.3²⁰ = 190. Either way the bottom layers get a useless signal: no learning, or wild steps. Only gains near 1 survive depth.',
+        3: 'Plain chain: ‖∂L/∂x₀‖ ≈ Π‖J_l‖, exponential in depth. N = 20: g = 0.7 gives 7.98 × 10⁻⁴, g = 1.3 gives 190. Xavier/Kaiming init aims for gain ≈ 1 at the start; training drifts. Sigmoid\'s slope ≤ ¼ made it acute (Hochreiter 1991; Bengio et al. 1994).',
+      },
+      cam: CAM.front,
+      set: { depth: 20, gain: 0.7, res: false, fp: 0, norm: false, routes: false },
+      enter(S) { scene(S, { figure: 'shrug' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Punch a hole in every pane.** A residual block outputs x + f(x): its input plus a correction. The + x is a clear pipe straight down. With quiet branches the beam arrives at full strength, exactly 1.',
+        2: 'He et al. (2015) made each block return **x + f(x)**. Its slope is 1 + f′: the 1 is the + x, a clear pipe the gradient falls straight down. At f′ = 0 the input gets exactly 1 (live). A block that learns nothing is harmless, so a deep net starts out as a shallow one.',
+        3: 'x_(l+1) = x_l + F(x_l), so ∂x_(l+1)/∂x_l = I + ∂F/∂x_l. He et al. 2016 ("Identity Mappings"): ∂L/∂x_l = ∂L/∂x_L·(1 + ∂/∂x_l ΣF_i); the 1 carries blame back undamped. Toy: (1 + f′)^N. A scalar can still compound: try f′ = −0.1 in Knobs.',
+      },
+      cam: CAM.front,
+      set: { depth: 20, gain: 0.7, res: true, fp: 0, norm: false, routes: false },
+      enter(S) { scene(S, { figure: 'cheer' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Every route counts.** With 3 blocks the blame has 8 ways down: at each block, through the pipe (×1) or through the glass (×f′). The straight route is worth exactly 1. All 8 add up to the full product.',
+        2: 'Multiply out (1 + f′)³ and each term is one **route**: at every block pick 1 (skip) or f′ (branch). 2³ = 8 strings; the straight one is worth 1, the rest f′ᵏ (thinner). Sum: 1 + 3(0.5) + 3(0.25) + 0.125 = 3.375 = 1.5³, live. Fifty blocks: 2⁵⁰ routes.',
+        3: 'Π(1 + f′_l) = Σ over subsets S of blocks of Π_(l∈S) f′_l: 2^N routes. Routes through k branches sum to e_k, the k-th elementary symmetric polynomial (here C(N,k)·f′ᵏ, the bars). The empty route, worth 1, is always there. Veit et al. 2016: "unraveled view".',
+      },
+      cam: CAM.routes,
+      set: { depth: 3, res: true, fp: 0.5, norm: false, routes: true },
+      enter(S) { scene(S, {}); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Is a deep ResNet secretly shallow?** Group the routes by how many panes they cross: most blame takes routes through only a few. One reading: many shallow nets voting together. Still argued about.',
+        2: 'Bars: routes grouped by how many branches k they cross. With 50 blocks at f′ = 0.05, most gradient flows through k = 2 (live). Veit et al. 2016 read ResNets as ensembles of shallow paths: delete a block and accuracy barely drops. How depth is used is still studied.',
+        3: 'Contested. Veit et al. 2016: effective paths are short; deleting one block is benign (not so for VGG). Counter-evidence: blocks refine features iteratively (Jastrzębski et al. 2018) and early/downsampling blocks can\'t go. Inconsequential for you: add the skips.',
+      },
+      cam: CAM.bars,
+      set: { depth: 50, res: true, fp: 0.05, norm: false, routes: true },
+      enter(S) { scene(S, { levels: false }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**BatchNorm rescales every layer** to a typical size of 1, which pulls each pane\'s gain to 1: the beam survives. It works; why it works is still argued. For you it is a library call, `nn.BatchNorm2d`.',
+        2: '`BatchNorm2d` divides each channel by its batch spread, so in this linear toy it cancels g: ×1.00 per pane (live). It works; why is contested: ARENA\'s reading, less **internal covariate shift** (Ioffe & Szegedy 2015), vs a **smoother loss landscape** (Santurkar et al. 2018).',
+        3: 'y = γ(x − μ_B)/√(σ²_B + ε) + β; slope here g/√(g²v + ε) ≈ 1. Train: batch stats, updates running_mean/var (momentum 0.1); eval() uses them. Why it helps (ICS vs smoothness) is contested; deep BN nets without skips still explode at init (Yang et al. 2019).',
+      },
+      cam: CAM.front,
+      set: { depth: 20, gain: 0.7, res: false, fp: 0, norm: true, routes: false },
+      enter(S) { scene(S, {}); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**You build this tower.** A ResidualBlock is one pane plus its pipe; a BlockGroup is a few in a row; ResNet34 stacks 16 blocks in 4 groups. The whole trick is one line: add the input back on.',
+        2: 'ARENA [0.2]: in `ResidualBlock`, `self.left` is conv, BN, ReLU, conv, BN (the pane); `self.right` is `nn.Identity()` (the pipe) unless shapes change. `forward` returns `self.relu(x_left + x_right)`. `BlockGroup` chains blocks; `ResNet34` has [3, 4, 6, 3] = 16.',
+        3: '`return self.relu(x_left + x_right)`. right = `nn.Identity()` iff first_stride == 1 and in_feats == out_feats, else a 1×1 stride-s `Conv2d` + `BatchNorm2d`. 34 = 1 + 2·16 + 1 layers. ReLU after the sum is ResNet v1; He et al. 2016 moved it inside the branch.',
+      },
+      cam: CAM.side,
+      set: { depth: 16, res: true, fp: 0.02, norm: false, routes: false },
+      enter(S) { scene(S, { groups: true, levels: false }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** The transformer you build in week 5 is this tower: its residual stream is the pipe, and every attention head and MLP reads it and adds back. Same trick: U-Net, an LSTM\'s memory.',
+        2: 'GPT-2\'s **residual stream** is this pipe: every attention and MLP block reads it and adds its output back (24 adds in GPT-2 small, as here). Interpretability reads that stream (weeks 6-8). Cousins: U-Net skip links, the LSTM cell state (a +, not a ×), highway networks.',
+        3: 'Transformer: resid_mid = resid_pre + attn_out, resid_post = resid_mid + mlp_out: a shared bus (Elhage et al. 2021). LSTM: c_t = f_t ⊙ c_(t−1) + i_t ⊙ g_t, the cell path ×f_t (Hochreiter & Schmidhuber 1997). Highway nets gate the skip; DenseNet concatenates.',
+      },
+      cam: CAM.high,
+      set: { depth: 24, res: true, fp: 0, norm: false, routes: false },
+      enter(S) { scene(S, { figure: 'point', point: [0, 1.6, 0] }); } },
+  ],
+
+  predict: [
+    { q: { 1: '30 panes, each with gain 0.8. How much blame reaches the bottom?',
+        2: 'Plain stack, N = 30, g = 0.8. What gradient reaches the input?',
+        3: 'Plain chain, 30 layers of slope 0.8: ∂L/∂x₀ ≈ ?' },
+      options: [{ t: 'About 0.001', ok: true }, { t: 'About 0.24' }, { t: 'About 0.5' }, { t: 'Exactly 0' }],
+      why: { 1: '0.8 thirty times over is 0.0012: about a thousandth. Not zero, but far too small to learn from.',
+        2: '0.8³⁰ = 1.24 × 10⁻³. Each pane keeps 80%, so after 30 almost nothing is left. It never hits exactly 0: vanishing is exponential decay, not a cut-off.',
+        3: 'g^N = 0.8³⁰ = e^(30·ln 0.8) = e^(−6.69) = 1.24 × 10⁻³: exponential in depth. Move g halfway to 1 (0.9) and it is 0.042.' },
+      show(S) {
+        S.setKnobs({ depth: 30, gain: 0.8, res: false, fp: 0, norm: false, routes: false });
+        scene(S, {}); S.fly(CAM.front);
+        return pour(S);
+      } },
+    { q: { 1: 'Add the shortcut pipe to 50 blocks whose side branches do nothing (f′ = 0). What reaches the bottom?',
+        2: 'Residual stack, N = 50, every branch slope f′ = 0. Gradient at the input?',
+        3: '50 blocks x + F(x) with ∂F/∂x = 0. ∂L/∂x₀ = ?' },
+      options: [{ t: 'Exactly 1: full strength', ok: true }, { t: 'Zero' }, { t: '50' }, { t: '2⁵⁰' }],
+      why: { 1: 'Every block multiplies by 1 + 0 = 1, and 1 times itself 50 times is still 1. The pipe hands the blame down untouched.',
+        2: 'Slope per block is 1 + f′ = 1, so the product is 1⁵⁰ = 1. Of the 2⁵⁰ routes only the straight one is worth anything, and it is worth exactly 1.',
+        3: 'Π(1 + 0) = 1: only the empty route survives (e₀ = 1, e_k = 0 for k ≥ 1). The identity path is exactly the Jacobian I.' },
+      show(S) {
+        S.setKnobs({ depth: 50, gain: 0.7, res: true, fp: 0, norm: false, routes: false });
+        scene(S, {}); S.fly(CAM.front);
+        return pour(S);
+      } },
+    { q: { 1: 'Gain 1.2 in each of 40 layers. How big is the blame at the bottom?',
+        2: 'Plain stack, N = 40, g = 1.2. Gradient at the input?',
+        3: 'Π of 40 slopes of 1.2 ≈ ?' },
+      options: [{ t: 'About 1,500', ok: true }, { t: 'About 48' }, { t: 'About 8' }, { t: 'Infinite' }],
+      why: { 1: '1.2 forty times over is about 1,470. A little over 1, many times, gets huge: that is exploding.',
+        2: '1.2⁴⁰ = 1.47 × 10³. Not 40 × 1.2 = 48: depth multiplies, it doesn\'t add. Steps that big fling the bottom weights around.',
+        3: 'e^(40·ln 1.2) = e^(7.29) ≈ 1470. Exploding gradients are why people clip (clip_grad_norm_) and why RNNs over long sequences were hard.' },
+      show(S) {
+        S.setKnobs({ depth: 40, gain: 1.2, res: false, fp: 0, norm: false, routes: false });
+        scene(S, {}); S.fly(CAM.front);
+        return pour(S);
+      } },
+    { q: { 1: 'A net with BatchNorm: why must you call model.eval() before testing it?',
+        2: 'Why call `model.eval()` before evaluating a net with `BatchNorm2d`?',
+        3: '`model.eval()` changes BatchNorm2d how?' },
+      options: [{ t: 'So it normalises with averages saved during training, not this batch\'s', ok: true },
+        { t: 'To switch off gradient tracking' }, { t: 'To freeze the weights' }, { t: 'So BatchNorm skips normalising' }],
+      why: { 1: 'In training, BatchNorm measures each batch. At test time you may have one image, so it uses the averages it saved while training. eval() flips that switch.',
+        2: 'Training mode normalises with this batch\'s mean and variance (and updates running_mean / running_var); eval mode uses the running buffers, so one image gives the same answer alone or in a batch. Gradients: `t.no_grad()`.',
+        3: '`self.training` False: x̂ = (x − running_mean)/√(running_var + ε), no buffer update. Forgetting it makes test outputs depend on batch composition. `torch.inference_mode()` / `no_grad` is separate.' },
+      show(S) {
+        S.setKnobs({ depth: 20, gain: 0.7, res: false, fp: 0, norm: true, routes: false });
+        scene(S, {}); S.fly(CAM.front);
+        return pour(S);
+      } },
+    { q: { 1: '3 blocks with shortcut pipes, each side branch worth 0.5. How many routes down, and what do they add to?',
+        2: 'Three residual blocks, f′ = 0.5 each. Number of routes, and their total?',
+        3: 'Expand (1 + f′)³ with f′ = 0.5: routes and total?' },
+      options: [{ t: '8 routes, adding to 3.375', ok: true }, { t: '3 routes, adding to 1.5' }, { t: '6 routes, adding to 3' }, { t: '8 routes, adding to 1' }],
+      why: { 1: 'Each block offers 2 choices, so 2 × 2 × 2 = 8 routes. The straight one is worth 1; the others 0.5, 0.25 or 0.125. Together: 3.375, the same as 1.5 × 1.5 × 1.5.',
+        2: '2³ = 8 routes: 1 with no branches (1), 3 with one (0.5 each), 3 with two (0.25), 1 with three (0.125). Sum 3.375 = 1.5³.',
+        3: 'e = (1, 3f′, 3f′², f′³) = (1, 1.5, 0.75, 0.125); Σe_k = 3.375 = (1 + f′)³. Binomial here because every f′ is equal.' },
+      show(S) {
+        S.setKnobs({ depth: 3, res: true, fp: 0.5, norm: false, routes: true });
+        scene(S, {}); S.fly(CAM.routes);
+        return pour(S);
+      } },
+    { q: { 1: 'Shortcut pipes on, but every side branch has slope −0.1, over 50 blocks. What reaches the bottom?',
+        2: 'Residual stack, N = 50, every f′ = −0.1. Gradient at the input?',
+        3: '(1 + f′)^50 with f′ = −0.1 ≈ ?' },
+      options: [{ t: 'About 0.005: it still shrinks', ok: true }, { t: 'Exactly 1: the pipe protects it' }, { t: 'Zero' }, { t: 'About 5' }],
+      why: { 1: 'Each block now multiplies by 1 − 0.1 = 0.9, and 0.9 fifty times is 0.005. The pipe makes "do nothing" the default; it doesn\'t forbid shrinking.',
+        2: '0.9⁵⁰ = 5.15 × 10⁻³. The straight route is still worth 1, but routes through negative branches subtract. Real branches are matrices pointing many ways, so they rarely all cancel the pipe; normalisation keeps f′ small.',
+        3: 'Π(1 + f′) = 0.9⁵⁰ = 5.15 × 10⁻³: e₀ = 1 is cancelled by the alternating e_k. With random-sign Jacobians the cross terms average out instead; the skip sets the scale, it guarantees nothing.' },
+      show(S) {
+        S.setKnobs({ depth: 50, res: true, fp: -0.1, norm: false, routes: false });
+        scene(S, {}); S.fly(CAM.front);
+        return pour(S);
+      } },
+  ],
+
+  where: {
+    1: 'Every deep network since 2015 has a highway like this: the transformer\'s residual stream (week 5), U-Net image models, and in spirit the LSTM\'s memory line.',
+    2: 'The residual stream of every transformer in this course, U-Net skip links, highway networks and the LSTM cell state all keep an additive path worth 1 so blame can reach the bottom.',
+    3: 'Residual streams (transformers), U-Net skips, highway nets, LSTM cell state, DenseNet concatenation; normalisation layers (BatchNorm, LayerNorm, RMSNorm) keep branch gains tame.',
+  },
+  links: [
+    { label: 'Film · CNNs, deep', href: '../../intuition/films/deep-w02-conv.html' },
+    { label: 'Film · W2 CNNs', href: '../../intuition/films/w2-cnns.html' },
+    { label: 'Week 2 pack', href: '../../index.html#week-02' },
+    { label: 'Case · ResNets', href: '../../index.html#cases/resnets' },
+    { label: 'Case · BatchNorm', href: '../../index.html#cases/batchnorm' },
+    { label: 'Case · residual stream', href: '../../index.html#cases/residual-stream' },
+    { label: 'Map · residual block', href: '../../index.html#map/node=residual-block' },
+    { label: 'Map · BatchNorm', href: '../../index.html#map/node=batchnorm' },
+    { label: 'Map · ResNet34', href: '../../index.html#map/node=resnet34' },
+    { label: 'Map · residual stream', href: '../../index.html#map/node=residual-stream' },
+    { label: 'Demo · residual stream bus', href: '../../index.html#demo/residual-stream-bus' },
+  ],
+  remix: 'Build a single-file three.js scene: a brass-framed tower of N horizontal glass panes (N from 2 to 50) on a round plinth, a red glowing sphere (the loss) on top and a blue plate (the input) at the bottom. A red beam runs down the axis; below pane d its intensity is the product of the layer slopes above it (plain: g^d; residual: (1 + f′)^d; BatchNorm: g/√(g²v + 1e-5) per layer, about 1). Draw the beam width on a log scale and print the value beside a few panes. A residual toggle cuts a round hole in every pane and runs a clear teal pipe through them all; a "routes" toggle, for N ≤ 5, draws all 2^N routes as strings that pass either inside the pipe (×1) or through the glass (×f′), thickness by worth, plus bars for the total worth of routes through k branches, k = 0, 1, 2, …',
+  credit: 'Toy maths, computed live: a chain of scalar layers (gains, BatchNorm with ARENA\'s eps = 1e-5, residual products and their expansion into routes). Code names from ARENA [0.2] ResNets (ResidualBlock, BlockGroup, ResNet34, BatchNorm2d). Papers: He et al. 2015 and 2016; Veit et al. 2016; Ioffe & Szegedy 2015; Santurkar et al. 2018; Yang et al. 2019. Backprop framing after Andrej Karpathy\'s micrograd. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>
