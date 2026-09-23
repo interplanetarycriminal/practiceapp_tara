@@ -1,0 +1,1041 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>One cube, three squashes · Object Lessons</title>
+<meta name="description" content="The backward pass of a matmul is the same box of products squashed along the other axes: forward squashes k, dA squashes j, dB squashes i; and unbroadcast sums the copies back up.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+/* axis letters: einsum names are case-sensitive, so no uppercase here */
+.k-label.k-letter{text-transform:none; letter-spacing:0; font:700 13px/1.15 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color:color-mix(in srgb, var(--k-brass) 45%, var(--ink)); background:var(--wash); border:1px solid color-mix(in srgb, var(--k-brass) 40%, var(--rule));
+  border-radius:6px; padding:1px 5px; min-width:0; box-shadow:var(--shadow-s)}  /* .k-tag (the beat pill) sets min-width:52px */
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   08 · d04-squash: "One cube, three squashes" (W4 deep, ARENA [0.4] Backprop)
+   The (i, k, j) box of object 02, filled three ways: A·B squashed along k
+   (forward), dC·B along j (dA) and A·dC along i (dB); plus unbroadcast (db).
+   ARENA's matmul2d_back0/1 and unbroadcast are mirrored in the MATH block and
+   every gradient is checked in node against loops, Python and central
+   finite differences (the readout shows the finite difference live).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* Toy integers 0-3 (hand-checkable). A5, B5 are the same matrices as object 02 (the matmul
+   cube); G5 is a toy upstream gradient dL/dC (think L = sum(G * C), whose dL/dC is exactly G). */
+const A5 = [[2, 1, 0, 3, 1], [1, 3, 2, 0, 2], [0, 2, 1, 1, 3], [3, 0, 1, 2, 1], [1, 2, 3, 1, 0]];
+const B5 = [[1, 0, 2, 1, 2], [3, 1, 0, 2, 1], [0, 2, 1, 3, 0], [1, 1, 3, 0, 2], [2, 3, 1, 1, 0]];
+const G5 = [[1, 0, 2, 1, 0], [2, 1, 0, 3, 1], [0, 3, 1, 0, 2], [1, 2, 0, 1, 3], [3, 0, 1, 2, 1]];
+const X5 = [[0, 2, 1, 3, 1], [2, 0, 3, 1, 2], [1, 1, 0, 2, 3], [3, 2, 1, 0, 1], [1, 3, 2, 1, 0]];
+const BIAS5 = [2, 1, 3, 0, 1];
+
+const crop = (M, r, c) => M.slice(0, r).map((row) => row.slice(0, c));
+const range = (n) => Array.from({ length: n }, (_, i) => i);
+
+/* einsum by brute force (identical to object 02): every assignment of the letters is one cell of
+   the box; letters missing after "->" are summed. Returns the result and every cell ("term"). */
+function parseEinsum(spec) {
+  const [lhs, rhs] = spec.split('->');
+  const ins = lhs.split(',').map((s) => s.trim().split(/\s+/).filter(Boolean));
+  const out = rhs.trim() ? rhs.trim().split(/\s+/) : [];
+  return { ins, out };
+}
+function shapeOf(t) { const d = []; for (let x = t; Array.isArray(x); x = x[0]) d.push(x.length); return d; }
+function entry(t, idx) { let x = t; for (const i of idx) x = x[i]; return x; }
+function zeros(sh) { return sh.length ? range(sh[0]).map(() => zeros(sh.slice(1))) : 0; }
+function einsum(spec, ...ops) {
+  const { ins, out } = parseEinsum(spec);
+  if (ins.length !== ops.length) throw new Error('einsum: ' + ins.length + ' inputs named, ' + ops.length + ' given');
+  const size = {};
+  ins.forEach((names, o) => {
+    const sh = shapeOf(ops[o]);
+    if (sh.length !== names.length) throw new Error('einsum: input ' + o + ' has ' + sh.length + ' dims');
+    names.forEach((n, a) => {
+      if (size[n] != null && size[n] !== sh[a]) throw new Error('einsum: size mismatch for ' + n);
+      size[n] = sh[a];
+    });
+  });
+  const letters = [...new Set(ins.flat())];
+  for (const n of out) if (!(n in size)) throw new Error('einsum: output letter ' + n + ' not in inputs');
+  const summed = letters.filter((n) => !out.includes(n));
+  const outShape = out.map((n) => size[n]);
+  let res = out.length ? zeros(outShape) : 0;
+  const terms = [];
+  const total = letters.reduce((p, n) => p * size[n], 1);
+  for (let cnum = 0; cnum < total; cnum++) {
+    const at = {};
+    let r = cnum;
+    for (let a = letters.length - 1; a >= 0; a--) { const n = letters[a]; at[n] = r % size[n]; r = Math.floor(r / size[n]); }
+    const idx = ins.map((names) => names.map((n) => at[n]));
+    const factors = idx.map((ix, o) => entry(ops[o], ix));
+    const v = factors.reduce((p, x) => p * x, 1);
+    const o = out.map((n) => at[n]);
+    if (out.length) { let x = res; for (let a = 0; a < o.length - 1; a++) x = x[o[a]]; x[o[o.length - 1]] += v; } else res += v;
+    terms.push({ at, idx, factors, v, out: o });
+  }
+  return { res, terms, letters, summed, size, outShape, ins, out };
+}
+
+/* ARENA [0.4], mirrored: the 2D matmul and its two backward functions, and unbroadcast */
+function matmul(x, y) {            // plain loops: (n, m) @ (m, p)
+  return range(x.length).map((i) => range(y[0].length).map((j) => {
+    let s = 0; for (let k = 0; k < y.length; k++) s += x[i][k] * y[k][j]; return s;
+  }));
+}
+const T = (m) => range(m[0].length).map((j) => range(m.length).map((i) => m[i][j]));
+function _matmul2d(x, y) { return matmul(x, y); }
+function matmul2d_back0(grad_out, out, x, y) { return matmul(grad_out, T(y)); }   // grad_out @ y.T
+function matmul2d_back1(grad_out, out, x, y) { return matmul(T(x), grad_out); }   // x.T @ grad_out
+/* ARENA's unbroadcast(broadcasted, original) for nested arrays: (1) sum away prepended dims,
+   (2) sum (keepdims) over dims where original had size 1 */
+function unbroadcast(broadcasted, original) {
+  let b = broadcasted;
+  const oShape = shapeOf(original);
+  while (shapeOf(b).length > oShape.length) b = b.reduce((acc, row) => addNested(acc, row));
+  const bShape = shapeOf(b);
+  oShape.forEach((o, ax) => { if (o === 1 && bShape[ax] > 1) b = sumAxisKeep(b, ax); });
+  return b;
+}
+function addNested(a, b) { return Array.isArray(a) ? a.map((x, i) => addNested(x, b[i])) : a + b; }
+function sumAxisKeep(t, ax) {
+  if (ax === 0) return [t.reduce((acc, row) => addNested(acc, row))];
+  return t.map((sub) => sumAxisKeep(sub, ax - 1));
+}
+
+/* the loss behind the toy upstream gradient: L = sum(G * C), so dL/dC = G exactly */
+const lossOf = (G, C) => C.reduce((s, row, i) => s + row.reduce((t, c, j) => t + G[i][j] * c, 0), 0);
+/* central finite differences, the independent check of one entry */
+function fdA(A, B, G, i, k, eps = 1e-3) {
+  const Ap = A.map((r) => r.slice()), Am = A.map((r) => r.slice());
+  Ap[i][k] += eps; Am[i][k] -= eps;
+  return (lossOf(G, matmul(Ap, B)) - lossOf(G, matmul(Am, B))) / (2 * eps);
+}
+function fdB(A, B, G, k, j, eps = 1e-3) {
+  const Bp = B.map((r) => r.slice()), Bm = B.map((r) => r.slice());
+  Bp[k][j] += eps; Bm[k][j] -= eps;
+  return (lossOf(G, matmul(A, Bp)) - lossOf(G, matmul(A, Bm))) / (2 * eps);
+}
+function fdBias(X, b, G, j, eps = 1e-3) {     // y = x + b (b broadcast over rows), L = sum(G * y)
+  const y = (bb) => X.map((row) => row.map((x, c) => x + bb[0][c]));
+  const bp = b.map((r) => r.slice()), bm = b.map((r) => r.slice());
+  bp[0][j] += eps; bm[0][j] -= eps;
+  return (lossOf(G, y(bp)) - lossOf(G, y(bm))) / (2 * eps);
+}
+
+/* the box of each mode: which products fill it (one einsum per squash) */
+function operands(mode, ni, nk, nj) {
+  const A = crop(A5, ni, nk), B = crop(B5, nk, nj), G = crop(G5, ni, nj);
+  switch (mode) {
+    case 'fwd': return { spec: 'i k, k j -> i j', ops: [A, B], names: ['A', 'B'], out: 'C' };
+    case 'dA': return { spec: 'i j, k j -> i k', ops: [G, B], names: ['dC', 'B'], out: 'dA' };
+    case 'dB': return { spec: 'i k, i j -> k j', ops: [A, G], names: ['A', 'dC'], out: 'dB' };
+    case 'ub': {   // db = unbroadcast(dy, b): dB with A replaced by a column of ones
+      const ones = range(ni).map(() => [1]);
+      return { spec: 'i o, i j -> o j', ops: [ones, G], names: ['1', 'dy'], out: 'db' };
+    }
+    default: throw new Error('mode ' + mode);
+  }
+}
+const MATH = { A5, B5, G5, X5, BIAS5, crop, einsum, matmul, T, _matmul2d, matmul2d_back0, matmul2d_back1,
+  unbroadcast, lossOf, fdA, fdB, fdBias, operands };
+// MATH-END
+
+/* BOX-MACHINE-BEGIN ===========================================================
+   THE SQUASH BOX. One machine, two pages: d01-cube and d04-squash carry identical copies of
+   this block (the kit stays untouched). A plan lists every product cell ("term": value v,
+   lattice slot, output bin) and the numbered plaques on the box's faces. Blocks are instanced;
+   a block's length along the squash axis is v·u and its footprint is fixed, so squashing =
+   sliding blocks onto the output face, where each bin's blocks stack into a bar whose length
+   is exactly the sum. The squash axis is chosen per plan: 'back' (depth), 'right' (across) or
+   'floor' (down). World: y up; rows r run down, cols c run +x, depth d runs +z (toward you).
+   ========================================================================== */
+const BOX = (() => {
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  const sm = (x) => x * x * (3 - 2 * x);
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+  const OTHER = { x: ['y', 'z'], y: ['x', 'z'], z: ['x', 'y'] };
+  const FACE = {   // n: normal into the box; R, U: the plaque's text right / up directions
+    back: { ax: 'z', dir: 1, n: [0, 0, 1], R: [1, 0, 0], U: [0, 1, 0] },
+    right: { ax: 'x', dir: -1, n: [-1, 0, 0], R: [0, 0, 1], U: [0, 1, 0] },
+    floor: { ax: 'y', dir: 1, n: [0, 1, 0], R: [1, 0, 0], U: [0, 0, -1] },
+  };
+  const PAL = {
+    fwd: { base: ['#f5efe4', '#e2d5bf'], focus: ['#2f6fdb', '#5f92e8'], tap: '#16398f' },
+    bwd: { base: ['#f6e3dd', '#e6c3b8'], focus: ['#d64545', '#e57878'], tap: '#962323' },
+    zero: '#c9bfad',
+  };
+  const TONE = {
+    data: { cell: '#f8f4ec', soft: '#d2dff7', strong: '#2f6fdb', ink: '#1f3f82', head: '#2f6fdb' },
+    grad: { cell: '#fbf2ef', soft: '#f6d4cf', strong: '#d64545', ink: '#8a2424', head: '#c43b3b' },
+    out: { cell: '#f3eee5', soft: '#e9dcc4', strong: '#b58a3c', ink: '#2b2a33', head: '#9a7431' },
+    idle: { cell: '#eee8de', soft: '#e2dace', strong: '#8f8676', ink: '#a0978a', head: '#8f8676' },
+    ones: { cell: '#f2f0ec', soft: '#dbe4f4', strong: '#6f8fcf', ink: '#6d7a93', head: '#6f8fcf' },
+  };
+  const FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  const FLOOR = 0.05;          // plaque thickness; the box floor sits on top of it
+  function rrect(g, x, y, w, h, r) {
+    g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+  }
+  function atlas(aniso) {        // number tiles 0..99 for the bar caps
+    const cv = document.createElement('canvas'); cv.width = cv.height = 1024;
+    const g = cv.getContext('2d'), cell = 102.4;
+    for (let n = 0; n < 100; n++) {
+      const x = (n % 10) * cell, y = Math.floor(n / 10) * cell;
+      g.fillStyle = '#fbf8f2'; rrect(g, x + 6, y + 6, cell - 12, cell - 12, 17); g.fill();
+      g.lineWidth = 3; g.strokeStyle = '#c9b793'; g.stroke();
+      g.fillStyle = '#2b2a33'; g.font = `700 ${n > 9 ? 50 : 58}px ${FONT}`;
+      g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(n), x + cell / 2, y + cell / 2 + 3);
+    }
+    const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = aniso;
+    return t;
+  }
+
+  /* ---- plan builder for product boxes (every einsum with two inputs) ----
+     o = { s, u, face, tone, E (einsum result), map(at) -> {box, r, d, c},
+           boxes: [{ n: {r, d, c}, ox, frame }], zBack, plaques: [{ box, face, num(r, c), tone, role, title }],
+           tags: [{ box, edge: 'r' | 'd' | 'c', letter, summed }], label(term) -> {lab, num}, binName(bin) } */
+  function lattice(o) {
+    const s = o.s, F = FACE[o.face];
+    const P = { s, u: o.u, fw: 0.74 * s, face: o.face, tone: o.tone, kind: 'lattice', terms: [], bins: [], boxes: [],
+      plaques: [], tags: o.tags || [], ghosts: [], extraTags: o.extraTags || [] };
+    for (const bx of o.boxes) {
+      const n = bx.n, x0 = bx.ox, e = { x0, x1: x0 + n.c * s, y0: FLOOR, y1: FLOOR + n.r * s, z0: o.zBack, z1: o.zBack + n.d * s };
+      P.boxes.push({ n, e, frame: bx.frame !== false, stack: 0,
+        X: (c) => e.x0 + (c + 0.5) * s, Y: (r) => e.y1 - (r + 0.5) * s, Z: (d) => e.z0 + (d + 0.5) * s });
+    }
+    const index = new Map();
+    for (const tm of o.E.terms) {
+      const d = o.map(tm.at), B = P.boxes[d.box];
+      const key = d.box + '|' + tm.out.join(',');
+      let b = index.get(key);
+      if (b == null) {
+        b = P.bins.length; index.set(key, b);
+        P.bins.push({ key, box: d.box, out: tm.out, terms: [], total: 0, face: o.face,
+          cell: o.face === 'back' ? [d.r, d.c] : o.face === 'right' ? [d.r, d.d] : [d.d, d.c] });
+      }
+      const L = tm.v * o.u;
+      P.terms.push({ v: tm.v, bin: b, box: d.box, r: d.r, d: d.d, c: d.c, ax: F.ax, dir: F.dir, path: 'lerp',
+        p0: V(B.X(d.c), B.Y(d.r), B.Z(d.d)), L, tm, tone: o.tone, alt: 0,
+        wave: (d.r + d.d + d.c) / Math.max(1, B.n.r + B.n.d + B.n.c - 3), ...(o.label ? o.label(tm) : {}) });
+      P.bins[b].terms.push(P.terms.length - 1); P.bins[b].total += tm.v;
+    }
+    const nrm = V(...F.n);
+    for (const Bn of P.bins) {
+      const B = P.boxes[Bn.box], e = B.e, T0 = P.terms[Bn.terms[0]];
+      const dist = (T) => (o.face === 'back' ? T.d : o.face === 'right' ? B.n.c - 1 - T.c : B.n.r - 1 - T.r);
+      const order = Bn.terms.slice().sort((a, b) => dist(P.terms[a]) - dist(P.terms[b]));
+      Bn.base = o.face === 'back' ? V(B.X(T0.c), B.Y(T0.r), e.z0) : o.face === 'right' ? V(e.x1, B.Y(T0.r), B.Z(T0.d)) : V(B.X(T0.c), e.y0, B.Z(T0.d));
+      Bn.nv = nrm.clone(); Bn.up = V(...(o.face === 'floor' ? [0, 0, -1] : [0, 1, 0]));
+      let off = 0; Bn.top = -1;
+      order.forEach((n, j) => {
+        const T = P.terms[n];
+        T.alt = j % 2;
+        T.p1 = Bn.base.clone().addScaledVector(nrm, off + T.L / 2);
+        off += T.L;
+        if (T.v > 0) Bn.top = n;
+      });
+      Bn.len = off; Bn.single = Bn.terms.length === 1;
+      B.stack = Math.max(B.stack, off, 0.04);
+      Bn.name = o.binName ? o.binName(Bn) : '';
+    }
+    for (const q of o.plaques || []) P.plaques.push(plaqueOn(P, q));
+    return P;
+  }
+  function plaqueOn(P, q) {    // a numbered plaque on one face of box q.box, cells aligned with the slots
+    const B = P.boxes[q.box || 0], e = B.e, n = B.n;
+    const rows = q.face === 'floor' ? n.d : n.r, cols = q.face === 'right' ? n.d : n.c;
+    const corner = q.face === 'back' ? V(e.x0, e.y1, e.z0) : q.face === 'right' ? V(e.x1, e.y1, e.z0) : V(e.x0, e.y0, e.z0);
+    const proj = q.proj || (q.face === 'back' ? (T) => [T.r, T.c] : q.face === 'right' ? (T) => [T.r, T.d] : (T) => [T.d, T.c]);
+    return { box: q.box || 0, rows, cols, corner, proj, ...q };
+  }
+
+  /* ---- the machine ---- */
+  function create(S) {
+    const root = new THREE.Group();
+    S.root.add(root);
+    const M = { S, root, plan: null, f: 1, t: 0, focusBin: -1, tapTerm: -1, tapNote: null, tok: 0, plaques: [],
+      text: null, onTap: null, lattice, FACE, sm, clamp01 };
+    const aniso = Math.min(8, S.renderer ? S.renderer.capabilities.getMaxAnisotropy() : 1);
+
+    const CAPT = 260;
+    const blocks = new THREE.InstancedMesh(new THREE.RoundedBoxGeometry(1, 1, 1, 2, 0.06),
+      new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.84, metalness: 0 }), CAPT);
+    blocks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    blocks.castShadow = true; blocks.receiveShadow = true; blocks.frustumCulled = false;
+    const white = new THREE.Color('#ffffff');
+    for (let n = 0; n < CAPT; n++) blocks.setColorAt(n, white);
+    blocks.count = 0;
+    root.add(blocks);
+
+    const ghosts = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), K.mat.glass(C.data, 0.16), 32);
+    ghosts.count = 0; ghosts.frustumCulled = false; ghosts.renderOrder = 3;
+    root.add(ghosts);
+
+    const edges = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), K.mat.brass(), 24);
+    edges.count = 0; edges.castShadow = true; edges.frustumCulled = false;
+    root.add(edges);
+
+    const CAPN = 64;
+    const capGeo = new THREE.BufferGeometry();
+    const capPos = new Float32Array(CAPN * 12), capUV = new Float32Array(CAPN * 8), idx = [];
+    for (let q = 0; q < CAPN; q++) { const a = q * 4; idx.push(a, a + 1, a + 2, a, a + 2, a + 3); }
+    capGeo.setIndex(idx);
+    const capPosAttr = new THREE.BufferAttribute(capPos, 3).setUsage(THREE.DynamicDrawUsage);
+    const capUVAttr = new THREE.BufferAttribute(capUV, 2);
+    capGeo.setAttribute('position', capPosAttr);
+    capGeo.setAttribute('uv', capUVAttr);
+    capGeo.setDrawRange(0, 0);
+    const caps = new THREE.Mesh(capGeo, new THREE.MeshBasicMaterial({ map: atlas(aniso), alphaTest: 0.5 }));
+    caps.frustumCulled = false;
+    root.add(caps);
+
+    M.anchor = new THREE.Object3D(); root.add(M.anchor);
+    M.read = K.label(M.anchor, '', { cls: 'readout', dy: -12 });
+    M.read.show(false);
+    const tagPool = [];
+
+    /* ---------- plaques (canvas textures, one per matrix face) ---------- */
+    const PX = 112;
+    function makePlaque(q) {
+      const F = FACE[q.face], s = M.plan.s;
+      const m = 0.14 * s, hh = q.title ? 0.5 * s : 0, headTop = q.face !== 'floor';
+      const W = q.cols * s + 2 * m, H = q.rows * s + 2 * m + hh;
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(W / s * PX); cv.height = Math.round(H / s * PX);
+      const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = aniso;
+      const R = V(...F.R), U = V(...F.U), N = V(...F.n);
+      const quat = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(R, U, N));
+      const TL = q.corner.clone().addScaledVector(R, -m).addScaledVector(U, m + (headTop ? hh : 0));
+      const ctr = TL.clone().addScaledVector(R, W / 2).addScaledVector(U, -H / 2);
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, metalness: 0 }));
+      mesh.quaternion.copy(quat); mesh.position.copy(ctr).addScaledVector(N, 0.003); mesh.receiveShadow = true;
+      const th = FLOOR;
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(W + 0.03, H + 0.03, th), K.mat.plaster('#e6dfd2'));
+      slab.quaternion.copy(quat); slab.position.copy(ctr).addScaledVector(N, -th / 2); slab.castShadow = true; slab.receiveShadow = true;
+      root.add(mesh, slab);
+      const Q = { q, mesh, slab, cv, g: cv.getContext('2d'), tex, m, hh, headTop, key: null, visible: true };
+      K.pick(mesh, (hit) => tapPlaque(Q, hit));
+      return Q;
+    }
+    function dropPlaques() {
+      for (const Q of M.plaques) {
+        K.unpick(Q.mesh);
+        root.remove(Q.mesh, Q.slab);
+        Q.mesh.geometry.dispose(); Q.mesh.material.dispose(); Q.tex.dispose(); Q.slab.geometry.dispose(); Q.slab.material.dispose();
+      }
+      M.plaques = [];
+    }
+    function drawPlaque(Q, hl) {
+      const key = [...hl].join(';') + '|' + (Q.q.stamp || '');
+      if (key === Q.key) return;
+      Q.key = key;
+      const { q, g, cv } = Q, tone = TONE[q.tone || 'data'], s = M.plan.s;
+      const mpx = Q.m / s * PX, hpx = Q.hh / s * PX, W = cv.width, H = cv.height;
+      g.clearRect(0, 0, W, H);
+      g.fillStyle = '#ebe4d6'; g.fillRect(0, 0, W, H);
+      g.strokeStyle = 'rgba(181,138,60,0.8)'; g.lineWidth = 6; g.strokeRect(3, 3, W - 6, H - 6);
+      const gy = (Q.headTop ? hpx : 0) + mpx;
+      if (q.title) {
+        g.fillStyle = tone.head; g.textAlign = 'left'; g.textBaseline = 'middle';
+        let fs = Math.round(PX * 0.34);
+        g.font = `700 ${fs}px ${FONT}`;
+        while (fs > 14 && g.measureText(q.title).width > W - 2 * mpx - 8) { fs -= 2; g.font = `700 ${fs}px ${FONT}`; }
+        const hy = Q.headTop ? mpx * 0.55 + hpx / 2 : gy + q.rows * PX + mpx * 0.45 + hpx / 2;
+        g.fillText(q.title, mpx + 4, hy);
+      }
+      const ins = PX * 0.07;
+      for (let r = 0; r < q.rows; r++) for (let c = 0; c < q.cols; c++) {
+        const x = mpx + c * PX, y = gy + r * PX, h = hl.get(r * 64 + c) || 0;
+        g.fillStyle = h === 2 ? tone.strong : h === 1 ? tone.soft : tone.cell;
+        rrect(g, x + ins, y + ins, PX - 2 * ins, PX - 2 * ins, PX * 0.13); g.fill();
+        const txt = q.num ? q.num(r, c) : null;
+        if (txt != null && txt !== '') {
+          g.fillStyle = h === 2 ? '#ffffff' : tone.ink;
+          g.font = `700 ${Math.round(PX * (String(txt).length > 2 ? 0.36 : 0.5))}px ${FONT}`;
+          g.textAlign = 'center'; g.textBaseline = 'middle';
+          g.fillText(String(txt), x + PX / 2, y + PX / 2 + PX * 0.03);
+        }
+      }
+      Q.tex.needsUpdate = true;
+    }
+    function hlFor(Q) {
+      const hl = new Map(), P = M.plan, q = Q.q, B = M.focusBin >= 0 ? P.bins[M.focusBin] : null;
+      if (q.role === 'out') {
+        if (B && B.box === q.box && B.face === q.face && B.cell) hl.set(B.cell[0] * 64 + B.cell[1], 2);
+        if (q.outProj && B) { const rc = q.outProj(B); if (rc) hl.set(rc[0] * 64 + rc[1], 2); }
+        return hl;
+      }
+      if (B) for (const n of B.terms) {
+        const T = P.terms[n]; if (T.box !== q.box) continue;
+        const rc = q.proj(T); if (rc) hl.set(rc[0] * 64 + rc[1], 1);
+      }
+      if (M.tapTerm >= 0) {
+        const T = P.terms[M.tapTerm];
+        if (T.box === q.box) { const rc = q.proj(T); if (rc) hl.set(rc[0] * 64 + rc[1], 2); }
+      }
+      if (M.tapCell && M.tapCell.Q === Q) hl.set(M.tapCell.r * 64 + M.tapCell.c, 2);
+      return hl;
+    }
+    function tapPlaque(Q, hit) {
+      if (!hit.uv || !Q.visible) return;
+      const q = Q.q, s = M.plan.s, W = Q.cv.width, H = Q.cv.height;
+      const x = hit.uv.x * W - Q.m / s * PX, y = (1 - hit.uv.y) * H - (Q.headTop ? Q.hh / s * PX : 0) - Q.m / s * PX;
+      const r = Math.floor(y / PX), c = Math.floor(x / PX);
+      if (r < 0 || c < 0 || r >= q.rows || c >= q.cols) return;
+      const P = M.plan;
+      M.tapCell = null; M.tapNote = null;
+      if (q.role === 'out') {
+        const b = P.bins.findIndex((B) => B.box === q.box && ((B.face === q.face && B.cell && B.cell[0] === r && B.cell[1] === c) || (q.outProj && (() => { const rc = q.outProj(B); return rc && rc[0] === r && rc[1] === c; })())));
+        if (b >= 0) { M.tapTerm = -1; M.focusBin = b; paint(); update(); if (M.onTap) M.onTap(-1); return; }
+      }
+      const hits = [];
+      P.terms.forEach((T, n) => { if (T.box === q.box && q.role !== 'out') { const rc = q.proj(T); if (rc && rc[0] === r && rc[1] === c) hits.push(n); } });
+      if (hits.length) {
+        const pick = hits.find((n) => P.terms[n].bin === M.focusBin) ?? hits[0];
+        tapTerm(pick);
+        return;
+      }
+      if (q.note) { M.tapTerm = -1; M.tapCell = { Q, r, c }; M.tapNote = q.note(r, c); paint(); update(); }
+    }
+    function tapTerm(n) {
+      const T = M.plan.terms[n];
+      if (!T) return;
+      M.tapTerm = n; M.focusBin = T.bin; M.tapNote = null; M.tapCell = null;
+      paint(); update();
+      if (M.onTap) M.onTap(n);
+    }
+    K.pick(blocks, (hit) => { if (hit.instanceId != null && hit.instanceId < M.plan.terms.length) tapTerm(hit.instanceId); });
+
+    /* ---------- build a plan ---------- */
+    M.set = (P) => {
+      M.plan = P;
+      M.tapTerm = -1; M.tapNote = null; M.tapCell = null;
+      if (M.focusBin >= P.bins.length) M.focusBin = -1;
+      dropPlaques();
+      for (const q of P.plaques) M.plaques.push(makePlaque(q));
+      blocks.count = Math.min(CAPT, P.terms.length);
+      capGeo.setDrawRange(0, Math.min(CAPN, P.bins.length) * 6);
+      for (let b = 0; b < Math.min(CAPN, P.bins.length); b++) {          // cap UVs: the bin's total
+        const n = Math.max(0, Math.min(99, Math.round(P.bins[b].total)));
+        const e = 0.004, u0 = (n % 10) / 10 + e, u1 = (n % 10 + 1) / 10 - e;
+        const vt = 1 - Math.floor(n / 10) / 10 - e, vb = 1 - (Math.floor(n / 10) + 1) / 10 + e;
+        capUV.set([u0, vb, u1, vb, u1, vt, u0, vt], b * 8);
+      }
+      capUVAttr.needsUpdate = true;
+      // tags
+      const want = (P.tags || []).length + (P.extraTags || []).length;
+      while (tagPool.length < want) {
+        const o = new THREE.Object3D(); root.add(o);
+        tagPool.push({ o, L: K.label(o, '', { cls: 'tag letter', anchor: 'right', dx: -6, dy: 0 }) });
+      }
+      tagPool.forEach((tg, i) => tg.L.show(i < want));
+      // the readout floats above the scene (over the back wall), never over the blocks
+      const bb = new THREE.Box3();
+      for (const Q of M.plaques) bb.expandByObject(Q.slab);
+      for (const B of P.boxes) { bb.expandByPoint(V(B.e.x0, B.e.y1, B.e.z0)); bb.expandByPoint(V(B.e.x1, B.e.y1, B.e.z0)); }
+      M.top = bb.isEmpty() ? null : { y: bb.max.y + 0.05 + ((P.extraTags || []).length ? 0.3 : 0), z: bb.min.z };
+      paint(); update();
+    };
+    M.showTags = (on) => { M.tagsOn = on; update(); };
+    M.tagsOn = true;
+
+    /* ---------- per-frame pose ---------- */
+    const _p = V(), _q = new THREE.Quaternion(), _s = V(), _m = new THREE.Matrix4(), _c = new THREE.Color(), _R = V(), _a = V();
+    function pose(T, t, p, q) {
+      q.identity();
+      if (T.path === 'lerp') { p.lerpVectors(T.p0, T.p1, t); return; }
+      if (T.path === 'gather') {       // out along the face normal first, then slide in the face plane
+        const a = sm(clamp01(t / 0.5)), b = sm(clamp01((t - 0.5) / 0.5));
+        p.copy(T.p0); p[T.ax] = lerp(T.p0[T.ax], T.p1[T.ax], a);
+        for (const k of OTHER[T.ax]) p[k] = lerp(T.p0[k], T.p1[k], b);
+        return;
+      }
+      const F = M.plan.flip;           // lift, half-turn about the diagonal, settle
+      const a = sm(clamp01(t / 0.25)), b = sm(clamp01((t - 0.25) / 0.5)), c = sm(clamp01((t - 0.75) / 0.25));
+      if (c > 0) { p.lerpVectors(T.pR, T.p1, c); return; }
+      if (b > 0) { p.copy(T.pL).sub(F.c).applyAxisAngle(F.n, Math.PI * b).add(F.c); q.setFromAxisAngle(F.n, Math.PI * b); return; }
+      p.lerpVectors(T.p0, T.pL, a);
+    }
+    const grow = (f, w) => {
+      const x = clamp01((f - 0.55 * w) / 0.45);
+      if (x <= 0) return 0;
+      const c1 = 1.3, c3 = c1 + 1, y = x - 1;
+      return 1 + c3 * y * y * y + c1 * y * y;
+    };
+    function capScale(P, B, t) {
+      if (P.flip) return t < 0.03 || t > 0.97 ? 1 : 0;
+      if (B.single) return 1;
+      return sm(clamp01((t - 0.86) / 0.14));
+    }
+    function edgesOf(e, list) {
+      const r = 0.022, cx = (e.x0 + e.x1) / 2, cy = (e.y0 + e.y1) / 2, cz = (e.z0 + e.z1) / 2;
+      const lx = e.x1 - e.x0 + r, ly = e.y1 - e.y0 + r, lz = e.z1 - e.z0 + r;
+      for (const y of [e.y0, e.y1]) for (const z of [e.z0, e.z1]) list.push([cx, y, z, lx, r, r]);
+      for (const x of [e.x0, e.x1]) for (const z of [e.z0, e.z1]) list.push([x, cy, z, r, ly, r]);
+      for (const x of [e.x0, e.x1]) for (const y of [e.y0, e.y1]) list.push([x, y, cz, r, r, lz]);
+    }
+    function squashed(B, t) {         // box extents with the far side pushed toward the output face
+      const e = { ...B.e }, P = M.plan;
+      if (P.kind !== 'lattice') return e;
+      const k = t;
+      if (P.face === 'back') e.z1 = e.z0 + lerp(e.z1 - e.z0, B.stack, k);
+      else if (P.face === 'right') e.x0 = e.x1 - lerp(e.x1 - e.x0, B.stack, k);
+      else e.y1 = e.y0 + lerp(e.y1 - e.y0, B.stack, k);
+      return e;
+    }
+    function update() {
+      const P = M.plan; if (!P) return;
+      const f = M.f, t = M.t, N = Math.min(CAPT, P.terms.length);
+      for (let n = 0; n < N; n++) {
+        const T = P.terms[n];
+        pose(T, t, _p, _q);
+        const g = grow(f, T.wave);
+        let L, fw;
+        if (T.v > 0) { L = T.L * Math.min(g, 1.04); fw = P.fw * (0.35 + 0.65 * Math.min(1, g)); }
+        else { const z = Math.min(1, g) * (1 - clamp01(t / 0.4)); L = 0.035 * P.s * z; fw = P.fw * 0.5 * z; }
+        if (T.grow === 'face' && T.v > 0 && t === 0) _p[T.ax] -= T.dir * (T.L - L) / 2;
+        if (n === M.tapTerm) fw *= 1.1;
+        if (fw < 1e-4 || L < 1e-5) _s.set(1e-5, 1e-5, 1e-5);
+        else { _s.set(fw, fw, fw); _s[T.ax] = L; }
+        _m.compose(_p, _q, _s);
+        blocks.setMatrixAt(n, _m);
+      }
+      blocks.instanceMatrix.needsUpdate = true;
+      blocks.boundingSphere = null; blocks.boundingBox = null;
+      // caps: the bin's total, riding on its outermost block
+      const fill = grow(f, 1);
+      for (let b = 0; b < Math.min(CAPN, P.bins.length); b++) {
+        const B = P.bins[b];
+        let w = P.fw * 0.8 * capScale(P, B, t) * Math.min(1, fill) * (B.hideCap ? 0 : 1);
+        if (B.top >= 0) { const T = P.terms[B.top]; pose(T, t, _p, _q); _p.addScaledVector(B.nv, T.L / 2 + 0.006); }
+        else _p.copy(B.base).addScaledVector(B.nv, 0.006);
+        B.capPos = B.capPos || V(); B.capPos.copy(_p);
+        if (w < 1e-4) w = 0;
+        _R.crossVectors(B.up, B.nv);
+        const hw = w / 2, o = b * 12;
+        for (let k = 0; k < 4; k++) {
+          const sr = k === 0 || k === 3 ? -1 : 1, su = k < 2 ? -1 : 1;
+          _a.copy(_p).addScaledVector(_R, sr * hw).addScaledVector(B.up, su * hw);
+          capPos[o + k * 3] = _a.x; capPos[o + k * 3 + 1] = _a.y; capPos[o + k * 3 + 2] = _a.z;
+        }
+      }
+      capPosAttr.needsUpdate = true;
+      // frame
+      const list = [];
+      for (const B of P.boxes) if (B.frame) edgesOf(squashed(B, t), list);
+      edges.count = Math.min(24, list.length);
+      list.slice(0, 24).forEach(([x, y, z, sx, sy, sz], i) => { _m.compose(_p.set(x, y, z), _q.identity(), _s.set(sx, sy, sz)); edges.setMatrixAt(i, _m); });
+      edges.instanceMatrix.needsUpdate = true;
+      // ghosts: the broadcast copies (fade in with the fill, out with the squash)
+      const gk = sm(clamp01(f / 0.5)) * (1 - sm(clamp01(t / 0.35)));
+      ghosts.count = Math.min(32, P.ghosts.length);
+      P.ghosts.slice(0, 32).forEach((G, i) => {
+        const k = Math.max(1e-5, gk);
+        _m.compose(_p.copy(G.p), _q.identity(), _s.set(G.sz[0] * k, G.sz[1] * k, G.sz[2] * k));
+        ghosts.setMatrixAt(i, _m);
+      });
+      ghosts.instanceMatrix.needsUpdate = true;
+      // plaque swaps (transpose: before / after)
+      for (const Q of M.plaques) {
+        const vis = Q.q.showIf ? Q.q.showIf(t) : true;
+        if (vis !== Q.visible) { Q.visible = vis; Q.mesh.visible = vis; Q.slab.visible = vis; }
+      }
+      // tags
+      const tags = (P.tags || []), extra = (P.extraTags || []);
+      tags.forEach((tg, i) => {
+        const B = P.boxes[tg.box || 0], e = squashed(B, t), slot = tagPool[i];
+        if (!slot) return;
+        const pos = tg.edge === 'r' ? [e.x0, (e.y0 + e.y1) / 2, e.z1] : tg.edge === 'c' ? [(e.x0 + e.x1) / 2, e.y0, e.z1] : [e.x0, e.y0, (e.z0 + e.z1) / 2];
+        if (tg.at) { const a = tg.at(e, t); pos[0] = a[0]; pos[1] = a[1]; pos[2] = a[2]; }
+        slot.o.position.set(pos[0], pos[1], pos[2]);
+        const done = tg.summed && (P.kind === 'lattice' ? t > 0.97 : t > 0.97);
+        const L = typeof tg.letter === 'function' ? tg.letter(t) : tg.letter;
+        slot.L.set(done ? { 1: `${L} · added up`, 2: `${L} · summed`, 3: `${L} · contracted` } : L);
+        slot.L.anchor(tg.anchor || (tg.edge === 'c' ? 'top' : 'right'));
+        slot.L.show(M.tagsOn && !(tg.hideIf && tg.hideIf(t)));
+      });
+      extra.forEach((tg, i) => {
+        const slot = tagPool[tags.length + i]; if (!slot) return;
+        const B = P.boxes[tg.box || 0], e = B.e;
+        slot.o.position.set((e.x0 + e.x1) / 2, e.y1 + (tg.lift ?? 0.5 * P.s + 0.12), e.z0);
+        slot.L.set(tg.text); slot.L.anchor('bottom'); slot.L.show(M.tagsOn);
+      });
+      // readout anchor: above the thing it reads (x), at the top of the back wall (y, z)
+      if (M.tapTerm >= 0) { pose(P.terms[M.tapTerm], t, _p, _q); M.anchor.position.copy(_p); }
+      else if (M.tapCell) { M.anchor.position.copy(M.tapCell.Q.mesh.position); }
+      else if (M.focusBin >= 0 && P.bins[M.focusBin].capPos) M.anchor.position.copy(P.bins[M.focusBin].capPos);
+      if (M.top) { M.anchor.position.y = M.top.y; M.anchor.position.z = M.top.z; }
+      S.invalidate();
+    }
+    function paint() {
+      const P = M.plan; if (!P) return;
+      for (let n = 0; n < Math.min(CAPT, P.terms.length); n++) {
+        const T = P.terms[n], pal = PAL[T.tone || P.tone || 'fwd'];
+        const col = T.v === 0 ? PAL.zero : n === M.tapTerm ? pal.tap : T.bin === M.focusBin ? pal.focus[T.alt] : pal.base[T.alt];
+        blocks.setColorAt(n, _c.set(col));
+      }
+      blocks.instanceColor.needsUpdate = true;
+      for (const Q of M.plaques) drawPlaque(Q, hlFor(Q));
+      M.refreshText();
+    }
+    M.refreshText = () => {
+      const txt = M.text ? M.text(M) : '';
+      M.read.set(txt || '');
+      M.read.show(!!txt);
+    };
+    M.paint = paint;
+    M.update = update;
+    M.tapTermAt = tapTerm;
+    M.focus = (bin, term = -1) => { M.focusBin = bin; M.tapTerm = term; M.tapNote = null; M.tapCell = null; paint(); update(); };
+    M.setT = (t) => { M.t = clamp01(t); update(); };
+    M.setF = (f) => { M.f = clamp01(f); update(); };
+    M.cancel = () => { M.tok++; };
+    M.to = (key, target, ms, ease) => {      // animate M.f or M.t; resolves at the end (at once under ?shot=1)
+      const tok = M.tok, from = M[key];
+      if (S.shot || !ms || from === target) { M[key] = target; update(); return Promise.resolve(tok === M.tok); }
+      return S.tween(ms, (p) => { if (tok !== M.tok) return; M[key] = from + (target - from) * p; update(); }, ease)
+        .then(() => tok === M.tok);
+    };
+    M.wait = (ms) => { const tok = M.tok; return S.shot ? Promise.resolve(true) : new Promise((r) => setTimeout(() => r(tok === M.tok), ms)); };
+    /* STL: the squashed state (every bar resting on its face) plus the plaque slabs */
+    M.solids = () => {
+      const P = M.plan, out = [];
+      if (!P) return out;
+      const cub = (x, y, z, sx, sy, sz) => J.primitives.cuboid({ center: [x, -z, y], size: [Math.max(sx, 1e-3), Math.max(sz, 1e-3), Math.max(sy, 1e-3)] });
+      for (const T of P.terms) {
+        if (T.v <= 0) continue;
+        const p = T.p1, s = [P.fw, P.fw, P.fw];
+        s[{ x: 0, y: 1, z: 2 }[T.ax]] = T.L;
+        out.push(cub(p.x, p.y, p.z, s[0], s[1], s[2]));
+      }
+      for (const Q of M.plaques) {
+        if (!Q.visible) continue;
+        const b = new THREE.Box3().setFromObject(Q.slab), c = b.getCenter(V()), z = b.getSize(V());
+        out.push(cub(c.x, c.y, c.z, z.x, z.y, z.z));
+      }
+      return out;
+    };
+    return M;
+  }
+  return { create, lattice, FACE, FLOOR, sm, clamp01 };
+})();
+/* BOX-MACHINE-END */
+
+/* ============================================================ modes */
+
+const CAM = {
+  box: { pos: [-4.4, 5.2, 5.9], target: [0, 0.9, 0] },
+  side: { pos: [-5.9, 4.4, 3.9], target: [0, 0.9, 0] },
+  high: { pos: [-3.8, 6.3, 5.4], target: [0, 0.6, 0] },
+  all: { pos: [-5.0, 5.0, 5.4], target: [0, 0.7, 0] },
+  front: { pos: [-2.6, 4.4, 7.2], target: [0, 0.8, 0] },
+};
+const FACE_OF = { fwd: 'back', dA: 'right', dB: 'floor', ub: 'floor' };
+const OUT_OF = { fwd: 'C', dA: 'dA', dB: 'dB', ub: 'db' };
+
+function slotSize(boxes, gap) {       // one slot size per scene: the box and its plaques fill the plinth
+  const Wn = boxes.reduce((a, b) => a + b.n.c, 0) + gap * (boxes.length - 1);
+  const Dn = Math.max(...boxes.map((b) => b.n.d)), Hn = Math.max(...boxes.map((b) => b.n.r));
+  return Math.min(0.8, 2.1 / Math.hypot(Wn / 2 + 0.14, Dn / 2 + 0.34), 2.9 / (Hn + 0.75));
+}
+function place(boxes, s, gap) {       // centre the box (floor plaque title in front) on the plinth
+  const W = boxes.reduce((a, b) => a + b.n.c * s, 0) + gap * s * (boxes.length - 1);
+  let x = -W / 2;
+  for (const b of boxes) { b.ox = x; x += b.n.c * s + gap * s; }
+  return -Math.max(...boxes.map((b) => b.n.d)) * s / 2 - 0.3 * s;
+}
+const idxStr = (ix) => ix.join(',');
+function labeller(names) {           // "dC[1,0]·B[2,0]" and "2·0"; the 1s of unbroadcast are left out
+  return (tm) => {
+    const keep = names.map((nm, o) => o).filter((o) => names[o] !== '1');
+    return { lab: keep.map((o) => `${names[o]}[${idxStr(tm.idx[o])}]`).join('·'), num: keep.map((o) => tm.factors[o]).join('·') };
+  };
+}
+
+function planMode(mode, ni, nk, nj) {
+  if (mode === 'all') return planAll(ni, nk, nj);
+  const kk = mode === 'ub' ? 1 : nk;
+  const o = MATH.operands(mode, ni, kk, nj);
+  const E = MATH.einsum(o.spec, ...o.ops);
+  const n = { r: ni, d: kk, c: nj };
+  const boxes = [{ n }];
+  const s = slotSize(boxes, 0), zBack = place(boxes, s, 0);
+  const map = mode === 'ub' ? (at) => ({ box: 0, r: at.i, d: at.o, c: at.j }) : (at) => ({ box: 0, r: at.i, d: at.k, c: at.j });
+  const A = MATH.crop(MATH.A5, ni, nk), B = MATH.crop(MATH.B5, nk, nj), G = MATH.crop(MATH.G5, ni, nj), bias = MATH.BIAS5.slice(0, nj);
+  const pA = (tone, role, extra = '') => ({ box: 0, face: 'right', tone, role, num: (r, c) => A[r][c], title: `A  ${ni}×${nk}${extra}` });
+  const pB = (tone, role, extra = '') => ({ box: 0, face: 'floor', tone, role, num: (r, c) => B[r][c], title: `B  ${nk}×${nj}${extra}` });
+  const pG = (name) => ({ box: 0, face: 'back', tone: 'grad', role: 'in', num: (r, c) => G[r][c], title: `${name}  ${ni}×${nj}` });
+  const plaques = {
+    fwd: [pA('data', 'in'), pB('data', 'in'), { box: 0, face: 'back', tone: 'out', role: 'out', num: null, title: `C  ${ni}×${nj}` }],
+    dA: [pG('dC'), pB('data', 'in'), pA('idle', 'out', '  ← dA lands here')],
+    dB: [pG('dC'), pA('data', 'in'), pB('idle', 'out', '  ← dB lands here')],
+    ub: [pG('dy'), { box: 0, face: 'right', tone: 'ones', role: 'in', num: () => 1, title: `1s  ${ni}×1` },
+      { box: 0, face: 'floor', tone: 'data', role: 'out', num: (r, c) => bias[c], title: `b  1×${nj}  ← db` }],
+  }[mode];
+  const tags = {
+    fwd: [{ edge: 'r', letter: 'i' }, { edge: 'd', letter: 'k', summed: true }, { edge: 'c', letter: 'j' }],
+    dA: [{ edge: 'r', letter: 'i' }, { edge: 'd', letter: 'k' }, { edge: 'c', letter: 'j', summed: true }],
+    dB: [{ edge: 'r', letter: 'i', summed: true }, { edge: 'd', letter: 'k' }, { edge: 'c', letter: 'j' }],
+    ub: [{ edge: 'r', letter: 'i', summed: true }, { edge: 'c', letter: 'j' }],
+  }[mode].map((t) => ({ box: 0, ...t }));
+  const names = { fwd: ['A', 'B'], dA: ['dC', 'B'], dB: ['A', 'dC'], ub: ['1', 'dy'] }[mode];
+  const P = BOX.lattice({ s, u: mode === 'ub' ? s / 3 : s / 9, face: FACE_OF[mode], tone: mode === 'fwd' ? 'fwd' : 'bwd', E, map,
+    boxes: boxes.map((b) => ({ n: b.n, ox: b.ox })), zBack, plaques, tags, label: labeller(names),
+    binName: (Bn) => `${OUT_OF[mode]}[${idxStr(Bn.out)}]` });
+  if (mode === 'ub') {               // glass copies of b, one in every row: the broadcast
+    const bx = P.boxes[0];
+    for (let i = 0; i < ni; i++) for (let j = 0; j < nj; j++) P.ghosts.push({ p: new THREE.Vector3(bx.X(j), bx.Y(i), bx.Z(0)), sz: [0.9 * s, 0.9 * s, 0.9 * s] });
+  }
+  P.mode = mode; P.dims = { ni, nk, nj }; P.data = { A, B, G, bias, X: MATH.crop(MATH.X5, ni, nj) };
+  return P;
+}
+
+/* the shape rule: dA's bars on A's wall and dB's towers on B's floor, both at once (already squashed) */
+function planAll(ni, nk, nj) {
+  const n = { r: ni, d: nk, c: nj }, boxes = [{ n }];
+  const s = slotSize(boxes, 0), zBack = place(boxes, s, 0);
+  const A = MATH.crop(MATH.A5, ni, nk), B = MATH.crop(MATH.B5, nk, nj), G = MATH.crop(MATH.G5, ni, nj);
+  const map = (at) => ({ box: 0, r: at.i, d: at.k, c: at.j });
+  const common = { s, u: s / 9, tone: 'bwd', map, boxes: [{ n, ox: boxes[0].ox, frame: false }], zBack, plaques: [], tags: [] };
+  const oA = MATH.operands('dA', ni, nk, nj), oB = MATH.operands('dB', ni, nk, nj);
+  const PA = BOX.lattice({ ...common, face: 'right', E: MATH.einsum(oA.spec, ...oA.ops), label: labeller(['dC', 'B']), binName: (Bn) => `dA[${idxStr(Bn.out)}]` });
+  const PB = BOX.lattice({ ...common, face: 'floor', E: MATH.einsum(oB.spec, ...oB.ops), label: labeller(['A', 'dC']), binName: (Bn) => `dB[${idxStr(Bn.out)}]` });
+  const nt = PA.terms.length, nb = PA.bins.length;
+  const P = { ...PA, face: 'right', terms: [...PA.terms, ...PB.terms.map((T) => ({ ...T, bin: T.bin + nb }))],
+    bins: [...PA.bins, ...PB.bins.map((Bn) => ({ ...Bn, terms: Bn.terms.map((x) => x + nt), top: Bn.top >= 0 ? Bn.top + nt : -1 }))] };
+  P.plaques = [
+    { box: 0, face: 'back', tone: 'grad', role: 'in', num: (r, c) => G[r][c], title: `dC  ${ni}×${nj}` },
+    { box: 0, face: 'right', tone: 'idle', role: 'out', num: (r, c) => A[r][c], title: `A  ${ni}×${nk}  ← dA  ${ni}×${nk}` },
+    { box: 0, face: 'floor', tone: 'idle', role: 'out', num: (r, c) => B[r][c], title: `B  ${nk}×${nj}  ← dB  ${nk}×${nj}` },
+  ].map((q) => ({ ...q, rows: q.face === 'floor' ? nk : ni, cols: q.face === 'right' ? nk : nj,
+    corner: q.face === 'back' ? new THREE.Vector3(P.boxes[0].e.x0, P.boxes[0].e.y1, P.boxes[0].e.z0)
+      : q.face === 'right' ? new THREE.Vector3(P.boxes[0].e.x1, P.boxes[0].e.y1, P.boxes[0].e.z0)
+        : new THREE.Vector3(P.boxes[0].e.x0, P.boxes[0].e.y0, P.boxes[0].e.z0),
+    proj: q.face === 'back' ? (T) => [T.r, T.c] : q.face === 'right' ? (T) => [T.r, T.d] : (T) => [T.d, T.c] }));
+  P.mode = 'all'; P.dims = { ni, nk, nj }; P.data = { A, B, G };
+  return P;
+}
+
+/* ============================================================ readout */
+
+const X1 = (s, tier) => (tier === 1 ? s.replace(/·/g, ' × ') : s);
+function fdOf(P, Bn) {               // central finite difference of L for the focused entry (live)
+  const D = P.data, name = Bn.name.split('[')[0], o = Bn.out;
+  if (name === 'dA') return { x: `A[${o[0]},${o[1]}]`, v: MATH.fdA(D.A, D.B, D.G, o[0], o[1]) };
+  if (name === 'dB') return { x: `B[${o[0]},${o[1]}]`, v: MATH.fdB(D.A, D.B, D.G, o[0], o[1]) };
+  if (name === 'db') return { x: `b[0,${o[1]}]`, v: MATH.fdBias(D.X, [D.bias], D.G, o[1]) };
+  return null;
+}
+function readout(S) {
+  return (M) => {
+    const P = M.plan; if (!P) return '';
+    const tier = S.tier, lines = [];
+    if (M.tapTerm >= 0) {
+      const T = P.terms[M.tapTerm];
+      if (P.mode === 'ub') lines.push(`**${T.lab}** = ${T.v}: the blame on b's copy in row ${T.r}`);
+      else lines.push(`**${X1(T.lab, tier)}** = ${X1(T.num, tier)} = ${T.v}`);
+    }
+    if (M.focusBin >= 0 && S.state.sums !== false) {
+      const Bn = P.bins[M.focusBin];
+      lines.push(`**${Bn.name}** = ${X1(Bn.terms.map((n) => P.terms[n].num).join(' + '), tier)} = ${Bn.total}`);
+      const fd = S.state.fd === false ? null : fdOf(P, Bn);
+      if (fd) {
+        const ok = Math.abs(fd.v - Bn.total) < 1e-6 ? '✓' : '✗';
+        lines.push(tier === 1 ? `nudge test: the loss moves ${fd.v.toFixed(3)} per unit ${ok}`
+          : tier === 2 ? `nudge ${fd.x} by ±0.001: slope ${fd.v.toFixed(3)} ${ok}`
+            : `(L(${fd.x}+ε) − L(${fd.x}−ε)) / 2ε = ${fd.v.toFixed(3)} ${ok}`);
+      }
+    }
+    return lines.join('\n');
+  };
+}
+
+/* ============================================================ scenes */
+
+function findBin(P, name) { return P.bins.findIndex((Bn) => Bn.name === name); }
+function defaultFocus(P) {
+  const pref = { fwd: 'C[1,0]', dA: 'dA[1,1]', dB: 'dB[1,0]', ub: 'db[0,1]' }[P.mode];
+  const b = pref ? findBin(P, pref) : -1;
+  return b >= 0 ? b : (P.mode === 'all' ? -1 : 0);
+}
+function scene(S, o = {}) {
+  const st = S.state, M = st.box;
+  M.cancel();
+  st.sums = o.sums !== false; st.fd = o.fd !== false;
+  M.showTags(o.tags !== false);
+  const b = o.focus == null ? -1 : typeof o.focus === 'string' ? findBin(M.plan, o.focus) : o.focus;
+  M.focus(b, -1);
+  const F = st.fig;
+  if (o.figure) {
+    F.group.visible = true;
+    F.place(o.figAt || [-1.75, 0, 1.2], [0, 0.7, 0]);
+    F.pose('stand', { ms: 0 });
+    const doPose = () => { if (F.group.visible) F.pose(o.figure, { at: o.at ? o.at(S) : undefined }); };
+    if (S.shot) doPose(); else setTimeout(doPose, 600);
+  } else F.group.visible = false;
+}
+async function fillThenSquash(S, o = {}) {
+  const M = S.state.box;
+  M.cancel();
+  M.t = 0; M.f = o.fill === false ? 1 : 0; M.update();
+  if (o.fill !== false && !(await M.to('f', 1, o.fillMs ?? 1300, (p) => p))) return false;
+  if (o.squash === false) { S.setKnob('squash', 0, { silent: true }); return true; }
+  if (!(await M.wait(o.pause ?? 350))) return false;
+  const ok = await M.to('t', 1, o.ms ?? 1500);
+  if (ok) S.setKnob('squash', 1, { silent: true });
+  return ok;
+}
+function play(S) {
+  if (S.knobs.mode === 'all') { K.toast('All three blames are shown already squashed'); return Promise.resolve(); }
+  return fillThenSquash(S);
+}
+function wallPoint(S, face) {        // a world point on a face of the box, for the stick figure to point at
+  const M = S.state.box, e = M.plan.boxes[0].e;
+  const p = face === 'right' ? new THREE.Vector3(e.x1, (e.y0 + e.y1) / 2, (e.z0 + e.z1) / 2)
+    : face === 'floor' ? new THREE.Vector3((e.x0 + e.x1) / 2, e.y0, (e.z0 + e.z1) / 2) : new THREE.Vector3((e.x0 + e.x1) / 2, (e.y0 + e.y1) / 2, e.z0);
+  M.root.localToWorld(p);
+  return [p.x, p.y, p.z];
+}
+
+/* worked numbers quoted by the captions, computed from the maths above */
+const W = (() => {
+  const E = (mode, ni, nk, nj) => { const o = MATH.operands(mode, ni, nk, nj); return MATH.einsum(o.spec, ...o.ops); };
+  const ex = (Ee, pick) => { const ts = Ee.terms.filter(pick); return { expr: ts.map((t) => t.factors.join('·')).join(' + '), plain: ts.map((t) => t.factors.join('×')).join(' + '), v: ts.reduce((s, t) => s + t.v, 0) }; };
+  const f = E('fwd', 3, 4, 3), a = E('dA', 3, 4, 3), b = E('dB', 3, 4, 3), u = E('ub', 3, 1, 4);
+  const c10 = ex(f, (t) => t.out[0] === 1 && t.out[1] === 0);
+  const dA11 = ex(a, (t) => t.out[0] === 1 && t.out[1] === 1);
+  const dB10 = ex(b, (t) => t.out[0] === 1 && t.out[1] === 0);
+  const db01 = { ...ex(u, (t) => t.out[1] === 1) };
+  db01.plain = u.terms.filter((t) => t.out[1] === 1).map((t) => t.factors[1]).join(' + ');
+  const A = MATH.crop(MATH.A5, 3, 4), B = MATH.crop(MATH.B5, 4, 3), G = MATH.crop(MATH.G5, 3, 3);
+  const dA = MATH.matmul2d_back0(G, MATH._matmul2d(A, B), A, B);
+  const fd03 = MATH.fdA(A, B, G, 0, 3);
+  const A345 = MATH.crop(MATH.A5, 3, 4), B345 = MATH.crop(MATH.B5, 4, 5), G345 = MATH.crop(MATH.G5, 3, 5);
+  const dA345 = MATH.matmul2d_back0(G345, MATH._matmul2d(A345, B345), A345, B345);
+  const db35 = MATH.unbroadcast(MATH.crop(MATH.G5, 3, 5), [MATH.BIAS5.slice(0, 5)]);
+  return { c10, dA11, dB10, db01, dA03: dA[0][3], fd03, dA345shape: [dA345.length, dA345[0].length], db35 };
+})();
+
+/* ================================================================== run() */
+
+run({
+  id: 'd04-squash', num: '08', week: 4, kind: 'deep',
+  title: 'One cube, three squashes',
+  subtitle: 'The backward pass of a matmul is the same box of products, squashed along the other axes.',
+  back2d: '#week-04',
+  film: 'deep-w04-backprop',
+  plinth: { r: 2.3, h: 0.14 },
+
+  knobs: [
+    { id: 'mode', type: 'select', wide: true, label: { 1: 'Which squash', 2: 'Pass', 3: 'contraction' }, value: 'fwd',
+      options: [
+        ['fwd', { 1: 'Forward: C = A × B', 2: 'Forward: C = A @ B (squash k)', 3: '"i k, k j -> i j"' }],
+        ['dA', { 1: 'Blame for A (dA)', 2: 'dA = dC @ Bᵀ (squash j)', 3: '"i j, k j -> i k"' }],
+        ['dB', { 1: 'Blame for B (dB)', 2: 'dB = Aᵀ @ dC (squash i)', 3: '"i k, i j -> k j"' }],
+        ['ub', { 1: 'Copies adding up (bias)', 2: 'Unbroadcast: y = x + b', 3: 'db = unbroadcast(dy, b)' }],
+        ['all', { 1: 'Both blames at once', 2: 'dA and dB together (shape rule)', 3: 'dA, dB (squashed)' }],
+      ] },
+    { id: 'ni', type: 'range', label: { 1: 'Rows of A (i)', 2: 'i (rows of A, C)', 3: 'i' }, min: 1, max: 5, step: 1, value: 3, fmt: (v) => String(v) },
+    { id: 'nk', type: 'range', label: { 1: 'Shared length (k)', 2: 'k (cols of A, rows of B)', 3: 'k' }, min: 1, max: 5, step: 1, value: 4, fmt: (v) => String(v) },
+    { id: 'nj', type: 'range', label: { 1: 'Columns of B (j)', 2: 'j (cols of B, C)', 3: 'j' }, min: 1, max: 5, step: 1, value: 3, fmt: (v) => String(v) },
+    { id: 'squash', type: 'range', wide: true, label: { 1: 'Squash (add up)', 2: 'Squash = sum along the missing letter', 3: 'squash t' },
+      min: 0, max: 1, step: 0.01, value: 0, fmt: (v) => v.toFixed(2) },
+    { id: 'play', type: 'button', wide: true, label: { 1: 'Play: fill the box, then squash', 2: 'Play: fill, then squash', 3: 'Play' }, onClick: (S) => play(S) },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.box = BOX.create(S);
+    st.box.text = readout(S);
+    st.fig = K.figure();
+    st.fig.group.visible = false;
+    S.root.add(st.fig.group);
+  },
+
+  rebuild(S, id) {
+    const st = S.state, k = S.knobs, M = st.box;
+    if (id === 'squash') {
+      if (k.mode === 'all') { S.setKnob('squash', 1, { silent: true }); K.toast('Both blames are shown already squashed'); return; }
+      M.cancel(); M.f = 1; M.setT(k.squash); return;
+    }
+    M.cancel();
+    const P = planMode(k.mode, k.ni, k.nk, k.nj);
+    if (k.mode === 'all' && k.squash !== 1) S.setKnob('squash', 1, { silent: true });
+    M.f = 1; M.t = k.mode === 'all' ? 1 : k.squash;
+    M.set(P);
+    M.focus(defaultFocus(P), -1);
+    if (id !== '*') { M.f = 0; M.update(); M.to('f', 1, 700, (p) => p); }
+  },
+
+  onTier(S) { S.state.box.refreshText(); S.state.box.update(); },
+
+  solids(S) { return S.state.box.solids(); },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: `**Forward: the matmul cube again.** Each block is an A number × a B number; push the blocks back to the wall and each bar is one number of C. Row 1, column 0: ${W.c10.plain} = ${W.c10.v}.`,
+        2: `**Forward: C = A @ B squashes k.** Block (i, k, j) = A[i,k]·B[k,j]; sliding along k onto the back wall stacks each depth-row into C[i,j] (C[1,0] = ${W.c10.v}). Now run it backwards: the loss hands back dC, one red number per entry of C.`,
+        3: 'Forward contracts k: `"i k, k j -> i j"`. Backward we are handed G = ∂L/∂C (toy integers; take L = Σ G ⊙ C, whose gradient is exactly G). Block A[i,k]B[k,j] reaches L only through C[i,j], so its blame is G[i,j] × the other factor.',
+      },
+      cam: CAM.box,
+      set: { mode: 'fwd', ni: 3, nk: 4, nj: 3, squash: 0 },
+      enter(S) { scene(S, { focus: 'C[1,0]' }); fillThenSquash(S, { pause: 450 }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Blame for A: the same box, pushed sideways.** Each block is now red blame × a B number. Push them onto A\'s wall: each bar says how hard one A number pushes the loss. A\'s own numbers are never used.',
+        2: `**dA squashes j.** dA[i,k] = Σⱼ dC[i,j]·B[k,j]: refill the box with dC (back wall) × B (floor), slide along j onto A's wall. The bars land in A's exact shape: \`dC @ B.T\`. dA[1,1] = ${W.dA11.expr} = ${W.dA11.v}.`,
+        3: '∂L/∂A[i,k] = Σⱼ G[i,j]·∂C[i,j]/∂A[i,k] = Σⱼ G[i,j]B[k,j] = (GBᵀ)[i,k]: `"i j, k j -> i k"`, contracting j. The readout\'s central difference on L = Σ G ⊙ AB agrees. No A inside: C is linear in A.',
+      },
+      cam: CAM.side,
+      set: { mode: 'dA', ni: 3, nk: 4, nj: 3, squash: 0 },
+      enter(S) {
+        scene(S, { focus: 'dA[1,1]', figure: 'point', at: (S2) => wallPoint(S2, 'right') });
+        fillThenSquash(S, { pause: 450 });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Blame for B: the same box, dropped to the floor.** Each block is an A number × red blame. Let them fall onto B\'s floor: each tower says how hard one B number pushes the loss.',
+        2: `**dB squashes i.** dB[k,j] = Σᵢ A[i,k]·dC[i,j]: refill with A (right wall) × dC (back wall), drop along i onto B's floor. Towers in B's shape: \`A.T @ dC\`. dB[1,0] = ${W.dB10.expr} = ${W.dB10.v}. One box, three squashes: k, j, i.`,
+        3: '∂L/∂B[k,j] = Σᵢ A[i,k]G[i,j] = (AᵀG)[k,j]: `"i k, i j -> k j"`. Each axis of the (i, k, j) box is contracted once: forward k, dA j, dB i. Each costs the same i·k·j multiply-adds, so backward costs about twice the forward.',
+      },
+      cam: CAM.high,
+      set: { mode: 'dB', ni: 3, nk: 4, nj: 3, squash: 0 },
+      enter(S) { scene(S, { focus: 'dB[1,0]' }); fillThenSquash(S, { pause: 450 }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Each blame lands on its own number\'s wall.** A is 2×4, so its blame is 2×4; B is 4×3, so its blame is 4×3. The shapes leave only one way to multiply.',
+        2: '**The shape rule: a gradient has its input\'s shape.** dA must be 2×4, dB 4×3. From dC (2×3) and B (4×3), the only product that makes 2×4 is dC @ Bᵀ; from A and dC, only Aᵀ @ dC makes 4×3. The transposes fall out of the shapes.',
+        3: '∂L/∂X has X\'s shape, so each backward einsum is the forward one with an input\'s letters moved to the output: `"i j, k j -> i k"`, `"i k, i j -> k j"`. Karpathy\'s backprop-ninja habit: derive matmul backward by matching shapes, then check one entry.',
+      },
+      cam: CAM.all,
+      set: { mode: 'all', ni: 2, nk: 4, nj: 3, squash: 1 },
+      enter(S) { scene(S, { figure: 'think', tags: false }); } },
+
+    { tag: 'core',
+      cap: {
+        1: `**Copies send their blame home.** b was copied into every row. Going back, each copy gets its own red blame; drop them onto b and add. b's blame is the column sum: ${W.db01.plain} = ${W.db01.v}.`,
+        2: '**Unbroadcast: copied forward means summed backward.** y = x + b copies b (1×4) down 3 rows. Each copy receives dy[i,j]; b collects db[j] = Σᵢ dy[i,j]. It is dB with A swapped for 1s: the same drop along i. (x was not copied: dx = dy.)',
+        3: 'Broadcast = multiply by ones: y = x + 1·b with 1 of shape (i, 1), so db = 1ᵀdy = dy.sum(0, keepdims=True), shape (1, j). ARENA\'s `unbroadcast(broadcasted, original)`: sum away prepended dims, then dims where original had size 1.',
+      },
+      cam: CAM.front,
+      set: { mode: 'ub', ni: 3, nk: 1, nj: 4, squash: 0 },
+      enter(S) { scene(S, { focus: 'db[0,1]' }); fillThenSquash(S, { pause: 600, fillMs: 1600 }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**This week you code these.** One function for A\'s blame, one for B\'s, one that adds copies back up. The readout does the nudge test: wiggle one number of A and watch the loss move.',
+        2: '**ARENA [0.4]:** `matmul2d_back0` returns `grad_out @ y.T`, `matmul2d_back1` returns `x.T @ grad_out`, and `unbroadcast` sums out broadcast dims (the `multiply_back` functions call it). The readout nudges one entry: (L(+ε) − L(−ε))/2ε matches.',
+        3: '`def matmul2d_back0(grad_out, out, x, y): return grad_out @ y.T`; back1: `x.T @ grad_out`; registered via `BACK_FUNCS.add_back_func(_matmul2d, 0, ...)` and checked by `tests.test_matmul2d(Tensor)`. A central difference, as in the readout, is the cheap sanity check.',
+      },
+      cam: CAM.side,
+      set: { mode: 'dA', ni: 3, nk: 4, nj: 3, squash: 1 },
+      enter(S) { scene(S, { focus: 'dA[0,3]' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Every layer of every network trains this way. A weight is shared by all the examples in a batch, so its blame is a sum over the batch: unbroadcast again. Statistics\' XᵀX is this box too.',
+        2: 'Every linear layer\'s backward, in every framework, is these squashes. A weight used by all 64 examples in a batch is broadcast, so its gradient sums over the batch. Least squares\' normal equations XᵀXw = Xᵀy squash the samples axis the same way.',
+        3: '`nn.Linear` (y = x Wᵀ + b): grad_x = grad_y @ W, grad_W = grad_yᵀ @ x (a sum over the batch), grad_b = grad_y.sum(0). Reverse-mode autodiff of any einsum is an einsum. Also: XᵀX and Xᵀy in OLS, Gram matrices, gradient accumulation.',
+      },
+      cam: CAM.all,
+      set: { mode: 'all', ni: 3, nk: 4, nj: 3, squash: 1 },
+      enter(S) { scene(S, { figure: 'cheer', tags: false }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'A is 3×4 and B is 4×5. What shape is A\'s blame, dA?',
+        2: 'A (3×4), B (4×5), C = A @ B. What is the shape of dA = ∂L/∂A?',
+        3: 'A ∈ ℝ^(3×4), B ∈ ℝ^(4×5): shape of ∂L/∂A?' },
+      options: [{ t: `${W.dA345shape.join('×')}`, ok: true }, { t: '4×5' }, { t: '3×5' }, { t: '4×3' }],
+      why: { 1: 'Blame for A always has A\'s shape: one blame number per A number, so 3 × 4.',
+        2: `dA = dC @ Bᵀ = (3×5)(5×4) = ${W.dA345shape.join('×')}: A's shape, one partial derivative per entry. The bars land on A's wall, one per A number.`,
+        3: `One partial per entry of A: (${W.dA345shape.join(', ')}). G (3, 5) · Bᵀ (5, 4) contracts j (size 5).` },
+      show(S) {
+        S.setKnobs({ mode: 'dA', ni: 3, nk: 4, nj: 5, squash: 0 });
+        scene(S, { focus: 'dA[1,1]' }); S.fly(CAM.side);
+        return fillThenSquash(S, { fill: false, pause: 200 });
+      } },
+    { q: { 1: 'To get B\'s blame, which way does the box get squashed?',
+        2: 'dB[k,j] = Σ ? A[i,k]·dC[i,j]. Which axis of the (i, k, j) box is summed?',
+        3: 'Contracted index of ∂L/∂B for C = AB?' },
+      options: [{ t: 'i: down the rows, onto B\'s floor', ok: true }, { t: 'k' }, { t: 'j' }, { t: 'None: nothing is summed' }],
+      why: { 1: 'B has no i in it, so i must be added away: the blocks drop down the rows onto B\'s floor.',
+        2: 'B is (k, j), so the letter to remove is i: every row\'s A[i,k]·dC[i,j] stacks onto B[k,j]\'s tile. Forward removed k, dA removed j: one axis each.',
+        3: 'i: ∂L/∂B = AᵀG = Σᵢ A[i,:]ᵀ G[i,:], a sum of outer products over the rows (samples, in a linear layer).' },
+      show(S) {
+        S.setKnobs({ mode: 'dB', ni: 3, nk: 4, nj: 3, squash: 0 });
+        scene(S, { focus: 'dB[1,0]' }); S.fly(CAM.high);
+        return fillThenSquash(S, { fill: false, pause: 200 });
+      } },
+    { q: { 1: 'b (1×5) is copied down 3 rows and added. What is b\'s blame, db?',
+        2: 'y = x + b with b (1×5) broadcast to (3×5). Given dy (3×5), what is db?',
+        3: 'b: (1, 5) broadcast to (3, 5). unbroadcast(dy, b) = ?' },
+      options: [{ t: 'dy summed over the 3 rows, shape (1, 5)', ok: true }, { t: 'dy\'s first row' }, { t: 'The average of dy\'s rows' }, { t: 'dy itself, shape (3, 5)' }],
+      why: { 1: `Each of b's numbers had 3 copies, and every copy passes its blame back. So db is each column of dy added up: ${W.db35[0].join(', ')}.`,
+        2: `Each copy's gradient flows back unchanged (∂y/∂b = 1) and the three copies add: db = dy.sum(0, keepdims=True) = [${W.db35[0].join(', ')}], b's shape. Averaging would be wrong: the copies all really acted.`,
+        3: `unbroadcast sums the dims where original had size 1 (keepdims): [${W.db35[0].join(', ')}], shape (1, 5). For b of shape (5,), it sums the prepended dim instead.` },
+      show(S) {
+        S.setKnobs({ mode: 'ub', ni: 3, nk: 1, nj: 5, squash: 0 });
+        scene(S, { focus: 'db[0,1]' }); S.fly(CAM.front);
+        return fillThenSquash(S, { fill: false, pause: 200 });
+      } },
+    { q: { 1: 'dA = dC @ ?  Which matrix goes in the blank?',
+        2: 'Complete it: dA = dC @ ?',
+        3: '`matmul2d_back0(grad_out, out, x, y)` returns grad_out @ ?' },
+      options: [{ t: 'Bᵀ (B transposed)', ok: true }, { t: 'B' }, { t: 'Aᵀ' }, { t: 'A' }],
+      why: { 1: 'The blame for A mixes the red blame with B\'s numbers, and B must be flipped so the shapes fit: dC (3×3) @ Bᵀ (3×4) makes A\'s 3×4.',
+        2: 'dC is i×j and dA must be i×k, so the other factor must be j×k: Bᵀ. The box view: dC·B products summed over j. ARENA\'s solution: `grad_out @ y.T`.',
+        3: '`y.T`: G (i, j) @ Bᵀ (j, k) = (i, k). And back1: `x.T @ grad_out`. Shapes alone force both.' },
+      show(S) {
+        S.setKnobs({ mode: 'dA', ni: 3, nk: 4, nj: 3, squash: 0 });
+        scene(S, { focus: 'dA[1,1]' }); S.fly(CAM.side);
+        return fillThenSquash(S, { fill: false, pause: 200 });
+      } },
+    { q: { 1: 'Does A\'s blame (dA) use A\'s own numbers?',
+        2: 'C = A @ B. Does dA = ∂L/∂A depend on the values in A?',
+        3: 'For C = AB with upstream G, does ∂L/∂A depend on A?' },
+      options: [{ t: 'No: only dC and B go into it', ok: true }, { t: 'Yes: it is A × dC' }, { t: 'Yes: it needs A and B' }, { t: 'Only A\'s biggest number' }],
+      why: { 1: 'Nudging an A number changes C by exactly the B numbers it meets, whatever A is. So its blame is dC × B. A\'s wall only sets the shape.',
+        2: 'C is linear in A, so ∂C/∂A is B, whatever A holds: dA = dC @ Bᵀ. (A still matters through dC if later layers are nonlinear.) A\'s plaque is grey: unused.',
+        3: 'No: C is linear in A, so ∂L/∂A = GBᵀ with no A term; A enters only via G when downstream is nonlinear. Likewise dB = AᵀG has no B.' },
+      show(S) {
+        S.setKnobs({ mode: 'dA', ni: 3, nk: 4, nj: 3, squash: 0 });
+        scene(S, { focus: 'dA[1,1]' }); S.fly(CAM.side);
+        return fillThenSquash(S, { pause: 200 });
+      } },
+  ],
+
+  where: { 1: 'Every layer of every network trains with these squashes. A weight shared across a batch sums its blame over the batch. Statistics\' XᵀX is the same box.',
+    2: 'Linear layers\' backward in every framework, gradient sums over a batch (the weights are broadcast across examples), least squares\' normal equations XᵀXw = Xᵀy, Gram matrices.',
+    3: 'Reverse-mode AD of any einsum (swap an input\'s letters into the output), nn.Linear\'s grad_W = grad_yᵀx and grad_b = grad_y.sum(0), OLS normal equations, Gram/kernel matrices, gradient accumulation.' },
+  links: [
+    { label: 'Film · backprop, deep', href: '../../intuition/films/deep-w04-backprop.html' },
+    { label: 'Film · W4 backprop', href: '../../intuition/films/w4-backprop.html' },
+    { label: 'Week 4 pack', href: '../../index.html#week-04' },
+    { label: 'Demo · backprop & training', href: '../../index.html#demo/backprop-training' },
+    { label: 'Case · backprop & topological order', href: '../../index.html#cases/backprop-and-topological-order' },
+    { label: 'Case · broadcasting', href: '../../index.html#cases/broadcasting' },
+    { label: 'Map · unbroadcast', href: '../../index.html#map/node=unbroadcast' },
+    { label: 'Map · backward function', href: '../../index.html#map/node=backward-function' },
+    { label: 'Map · linear layer', href: '../../index.html#map/node=linear-layer' },
+    { label: 'Map · computational graph', href: '../../index.html#map/node=computational-graph' },
+    { label: 'Object · the matmul cube', href: 'd01-cube.html' },
+  ],
+  remix: 'Build a single-file three.js scene of one (i, k, j) = (3, 4, 3) box with three numbered plaques: A (3×4) on the right wall, B (4×3) on the floor, and on the back wall C (forward) or a red upstream gradient dC (3×3, small integers). Three buttons refill the box with instanced blocks and squash it along a different axis: Forward, block = A[i,k]·B[k,j], slide along k onto the back wall (bars = C); dA, block = dC[i,j]·B[k,j], slide along j onto A\'s wall (bars = dC @ B.T, A\'s shape); dB, block = A[i,k]·dC[i,j], drop along i onto B\'s floor (towers = A.T @ dC). Block length ∝ value, equal footprints, so each bar\'s length is its sum; label bar ends. Add an unbroadcast mode (b of shape 1×j copied down i rows as glass ghosts; red dy blocks drop onto b, db = dy.sum(0)) and a readout with a central finite difference of L = sum(dC * (A @ B)).',
+  credit: 'Backward functions and names: ARENA [0.4] Build Your Own Backpropagation Framework (`matmul2d_back0`, `matmul2d_back1`, `unbroadcast`), mirrored in the page and checked against loops, Python and central finite differences. Shape-matching habit from Andrej Karpathy\'s "Becoming a Backprop Ninja"; the cube picture from Basil Hosmer\'s "Inside the Matrix". Toy integers. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>
