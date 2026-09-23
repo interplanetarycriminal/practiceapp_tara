@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Say a word, cheaply, then look inside</title>
+<meta name="theme-color" content="#1c2140">
+<style>
+#predict{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(18,20,44,.72);z-index:5;padding:16px;box-sizing:border-box}
+#predict.on{display:flex}
+#predict .card{background:#fbf6ea;color:#2a2934;border-radius:6px;max-width:420px;width:100%;padding:16px 16px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);transform:rotate(-.6deg);font:15px/1.35 system-ui,-apple-system,'Segoe UI',sans-serif}
+#predict h3{margin:0 0 4px;font:700 19px 'Comic Neue','Segoe Print','Bradley Hand','Chalkboard SE','Comic Sans MS',cursive}
+#predict p{margin:0 0 10px;font-size:14px;color:#4a4858}
+#predict .opts{display:grid;gap:7px}
+#predict .opts button{font:inherit;text-align:left;background:#f7e3a0;color:#2a2934;border:0;border-radius:8px;padding:9px 11px;min-height:40px;cursor:pointer}
+#predict .opts button.skipq{background:#e6e1f2;text-align:center}
+#predict .fb{margin-top:10px;font-weight:600;min-height:1.2em}
+</style>
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /* ================= the honest maths ================= */
+  // prompt: "the mind egg wrote a ..."  -> 10 candidate next tokens with fixed logits
+  var TOK = ['story', 'tale', 'poem', 'letter', 'song', 'novel', 'list', 'joke', 'fish', 'invoice'];
+  var LOGITS = [3.1, 2.6, 2.2, 1.8, 1.5, 1.2, 0.8, 0.5, -0.2, -1.0];
+  function softmax(r) { var m = -Infinity; r.forEach(function (v) { if (v > m) m = v; }); var e = r.map(function (v) { return v === -Infinity ? 0 : Math.exp(v - m); }), s = e.reduce(function (a, b) { return a + b; }, 0); return e.map(function (v) { return v / s; }); }
+  function withT(lg, T) { return lg.map(function (v) { return v / Math.max(T, 1e-3); }); }        // apply_temperature
+  // sample_top_p: sort descending, cumsum, keep the smallest prefix whose cumsum reaches top_p
+  function nucleus(probs, p) {
+    var idx = probs.map(function (_, i) { return i; }).sort(function (a, b) { return probs[b] - probs[a]; });
+    var cum = [], s = 0; idx.forEach(function (i) { s += probs[i]; cum.push(s); });
+    var n = 1; while (n < idx.length && cum[n - 1] < p) n++;
+    var keep = idx.slice(0, n), ks = 0; keep.forEach(function (i) { ks += probs[i]; });
+    var out = probs.map(function (v, i) { return keep.indexOf(i) >= 0 ? v / ks : 0; });
+    return { idx: idx, cum: cum, n: n, out: out, kept: ks };
+  }
+  function topk(probs, k) { var idx = probs.map(function (_, i) { return i; }).sort(function (a, b) { return probs[b] - probs[a]; }).slice(0, k), s = 0; idx.forEach(function (i) { s += probs[i]; }); return probs.map(function (v, i) { return idx.indexOf(i) >= 0 ? v / s : 0; }); }
+
+  // beam search tree: real probabilities, log-probs summed
+  var TREE = { a: { p: .5, next: { fish: .4, story: .3, tale: .3 } }, the: { p: .4, next: { end: .9, egg: .1 } }, one: { p: .1, next: { day: 1 } } };
+  var ln = Math.log;
+  var GREEDY = { path: ['a', 'fish'], lp: ln(.5) + ln(.4) };           // -1.609
+  var BEAMS = [];
+  Object.keys(TREE).forEach(function (w) { Object.keys(TREE[w].next).forEach(function (w2) { BEAMS.push({ path: [w, w2], lp: ln(TREE[w].p) + ln(TREE[w].next[w2]) }); }); });
+  BEAMS.sort(function (a, b) { return b.lp - a.lp; });                  // best: "the end" -1.022
+
+  // KV cache FLOPs for GPT-2 small shapes (per generated token, whole model)
+  var D = 768, NL = 12, DMLP = 3072;
+  function perTokenDense() { return 2 * (4 * D * D + 2 * D * DMLP); }  // W_Q,W_K,W_V,W_O + MLP in/out, 2 FLOPs per MAC
+  function flopsNoCache(n) { var a = 0; for (var i = 1; i <= n; i++) a += 4 * i * D; return NL * (n * perTokenDense() + a); }
+  function flopsCache(n) { return NL * (perTokenDense() + 4 * n * D); }
+  function cacheFloats(n) { return 2 * NL * n * D; }                    // keys + values, every layer
+  // identical-logits check on a tiny real attention (d=3): recompute vs cached
+  var WQ = [[.5, -.2, .1], [.3, .8, -.4], [-.6, .1, .9]], WK = [[.2, .7, -.3], [-.5, .4, .6], [.9, -.1, .2]], WV = [[.4, .1, .3], [-.2, .6, .5], [.7, -.3, .1]];
+  var XS = [[1, 0, .2], [.3, .9, -.1], [-.4, .5, .8], [.6, -.7, .3], [.2, .2, .9]];
+  function mv(x, M) { var o = []; for (var j = 0; j < M[0].length; j++) { var s = 0; for (var i = 0; i < x.length; i++) s += x[i] * M[i][j]; o.push(s); } return o; }
+  function dot(a, b) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+  function attnLast(q, Ks, Vs) { var a = softmax(Ks.map(function (k) { return dot(q, k) / Math.sqrt(3); })), z = [0, 0, 0]; a.forEach(function (w, j) { for (var d = 0; d < 3; d++) z[d] += w * Vs[j][d]; }); return z; }
+  var fullZ = (function () { var K = XS.map(function (x) { return mv(x, WK); }), V = XS.map(function (x) { return mv(x, WV); }); return attnLast(mv(XS[4], WQ), K, V); })();
+  var cacheZ = (function () { var pk = [], pv = []; for (var i = 0; i < 4; i++) { pk.push(mv(XS[i], WK)); pv.push(mv(XS[i], WV)); } pk.push(mv(XS[4], WK)); pv.push(mv(XS[4], WV)); return attnLast(mv(XS[4], WQ), pk, pv); })();
+  var maxDiff = Math.max.apply(null, fullZ.map(function (v, i) { return Math.abs(v - cacheZ[i]); }));
+
+  // hooks: layer-0 heads each ADD a direct contribution to the final logits
+  var HEADS = [
+    { name: 'L0H0', c: [.1, .1, .3, .2, .4, 0, 0, .2, 0, 0] },
+    { name: 'L0H1', c: [0, .2, 0, .5, 0, .1, .6, 0, 0, .3] },
+    { name: 'L0H2', c: [1.3, .7, .2, 0, 0, .4, 0, 0, 0, 0] },            // the "story writer"
+    { name: 'L0H3', c: [.2, 0, .1, 0, .3, 0, 0, .5, .4, 0] }
+  ];
+  var BASE = LOGITS.map(function (v, i) { return v - HEADS.reduce(function (s, h) { return s + h.c[i]; }, 0); }); // everything else
+  function logitsAblate(off) { return BASE.map(function (v, i) { return v + HEADS.reduce(function (s, h, hi) { return s + (off[hi] ? 0 : h.c[i]); }, 0); }); }
+  function lossOf(lg) { return -Math.log(softmax(lg)[0]); }            // target token: "story"
+  var P0 = softmax(LOGITS), L0 = lossOf(LOGITS), LZ = lossOf(logitsAblate([0, 0, 1, 0])), PZ = softmax(logitsAblate([0, 0, 1, 0]));
+  window.__dw6 = { P0: P0, nuc: nucleus(P0, .9), greedy: GREEDY, beams: BEAMS, noCache20: flopsNoCache(20), cache20: flopsCache(20), maxDiff: maxDiff, L0: L0, LZ: LZ };
+
+  var f2 = function (v) { return Math.abs(v) < .005 ? '0.00' : v.toFixed(2); };
+  function human(n) { return n >= 1e9 ? (n / 1e9).toFixed(1) + ' GFLOP' : (n / 1e6).toFixed(0) + ' MFLOP'; }
+
+  /* ================= drawing helpers ================= */
+  function lay(W, H) { var ph = W < 560; return { ph: ph, fs: ph ? 12 : 15, pad: ph ? 14 : 40 }; }
+  function bg(ctx, W, H, t, warm) { F.sky(ctx, W, H, P.night, warm ? '#3b3466' : '#2b2f5c'); F.stars(ctx, W, H, t, 'dw6', 36); }
+  function txt(ctx, s, x, y, sz, col, o) { o = o || {}; F.hand(ctx, s, x, y, sz, col || P.chalk, { align: o.align, font: o.mono ? F.MONO : undefined, bold: o.mono ? false : undefined, wobble: o.mono ? .2 : 1, seed: o.seed || s, reveal: o.reveal, outline: o.outline }); }
+  function mono(ctx, s, x, y, sz, col, align, reveal) { txt(ctx, s, x, y, sz, col, { mono: true, align: align || 'left', reveal: reveal }); }
+  function alpha(ctx, a, fn) { if (a <= 0) return; ctx.save(); ctx.globalAlpha = Math.min(1, a); fn(); ctx.restore(); }
+  // lantern bars: probs (array), optional kept mask, highlight index
+  function lanterns(ctx, x, y, w, h, probs, o) {
+    o = o || {}; var n = probs.length, bw = w / n, mx = o.max || Math.max.apply(null, probs), t = o.t || 0;
+    probs.forEach(function (p, i) {
+      var bx = x + i * bw, off = o.cut && o.cut[i], hh = h * p / mx;
+      ctx.fillStyle = 'rgba(253,250,240,.08)'; ctx.fillRect(bx + 2, y, bw - 4, h);
+      if (!off) { ctx.fillStyle = o.col && o.col(i) || P.butter; ctx.fillRect(bx + 3, y + h - hh, bw - 6, hh); F.lantern(ctx, bx + bw / 2, y + h - hh - 10, Math.min(7, bw * .22), clamp(p * 3, .15, 1), t); }
+      else F.paper(ctx, bx + bw / 2, y + h - 6, bw - 4, 14, '#8c86a8', { seed: 'cut' + i, rot: .1 });
+      if (o.nums !== false) mono(ctx, off ? 'cut' : (p < .095 ? p.toFixed(2).slice(1) : p.toFixed(2)), bx + bw / 2, y + h + 10, o.nsz || 10, off ? '#a79fc2' : P.chalk, 'center');
+      ctx.save(); ctx.translate(bx + bw / 2, y + h + (o.nsz || 10) + 12); ctx.rotate(o.rotLab == null ? (i === n - 1 ? 1.15 : .6) : o.rotLab); ctx.fillStyle = i === o.hi ? P.pink : 'rgba(253,250,240,.85)'; ctx.font = (o.lsz || 11) + 'px ' + F.HAND; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(TOK[i], 0, 0); ctx.restore();
+    });
+  }
+  function codeCard(ctx, x, y, w, lines, sz, reveal, colFn) {
+    var h = lines.length * sz * 1.5 + sz * 1.2;
+    F.paper(ctx, x + w / 2, y + h / 2, w, h, '#20243f', { seed: 'code' + lines[0], rot: -.004 });
+    lines.forEach(function (s, i) { var r = reveal == null ? 1 : clamp(reveal * lines.length - i, 0, 1); if (r <= 0) return; mono(ctx, s, x + sz * .7, y + sz * 1.2 + i * sz * 1.5, sz, colFn ? colFn(s, i) : (s.trim().charAt(0) === '#' ? '#9d98b8' : P.mint), 'left', r); });
+    return h;
+  }
+
+  /* ================= predict-then-watch (never gated) ================= */
+  var PRED = { asked: false, choice: null, lastT: 0, el: null };
+  function predictEl() {
+    if (PRED.el) return PRED.el;
+    var st = document.querySelector('#ifilm .stage'), d = document.createElement('div'); d.id = 'predict';
+    d.innerHTML = '<div class="card"><h3>Predict, then watch</h3><p>Two words to write. Greedy grabs the best word each step. A width-2 beam keeps two paths alive. Which ends with the higher total log-prob?</p><div class="opts">' +
+      '<button data-a="greedy">Greedy: best word each step must be best overall</button><button data-a="beam">Beam: it can find a better pair</button>' +
+      '<button data-a="tie">A tie: they always agree</button>' +
+      '<button class="skipq" data-a="skip">Just show me</button></div><div class="fb" aria-live="polite"></div></div>';
+    st.appendChild(d); PRED.el = d;
+    [].forEach.call(d.querySelectorAll('button'), function (b) {
+      b.onclick = function (e) {
+        e.stopPropagation(); PRED.choice = b.dataset.a; var fb = d.querySelector('.fb');
+        fb.textContent = b.dataset.a === 'skip' ? 'Watching...' : b.dataset.a === 'beam' ? 'Yes. Watch the sums.' : 'A fair bet. Watch the sums.';
+        setTimeout(function () { d.classList.remove('on'); resume(); }, b.dataset.a === 'skip' ? 150 : 900);
+      };
+    });
+    return d;
+  }
+  function isPlaying() { var b = document.querySelector('#ifilm .pp'); return b && b.getAttribute('aria-label') === 'Pause'; }
+  function pause() { if (isPlaying()) document.querySelector('#ifilm .pp').click(); }
+  function resume() { if (!isPlaying()) document.querySelector('#ifilm .pp').click(); }
+  function maybeAsk(t, at) {
+    var natural = t - PRED.lastT > 0 && t - PRED.lastT < .25; PRED.lastT = t;
+    if (PRED.el && PRED.el.classList.contains('on') && Math.abs(t - at) > .6) PRED.el.classList.remove('on');
+    if (!PRED.asked && natural && t >= at && t < at + .5 && !window.__noPredict) { PRED.asked = true; pause(); predictEl().classList.add('on'); }
+  }
+
+  /* ================= tree drawing (beam search) ================= */
+  function drawTree(ctx, W, H, l, t, o) {
+    var Ly = lay(W, H), x0 = Ly.ph ? 36 : W / 2 - 330, x1 = Ly.ph ? W * .42 : W / 2 - 60, x2 = Ly.ph ? W * .74 : W / 2 + 190;
+    var top = Ly.ph ? 40 : 60, span = Ly.ph ? Math.min(330, H * .52) : Math.min(420, H * .6);
+    var words = Object.keys(TREE), leaves = [], sz = Ly.ph ? 12 : 15;
+    words.forEach(function (w) { Object.keys(TREE[w].next).forEach(function (w2) { leaves.push([w, w2]); }); });
+    var ly = function (k) { return top + span * (k + .5) / leaves.length; };
+    var wy = {}; words.forEach(function (w) { var ks = []; leaves.forEach(function (lf, k) { if (lf[0] === w) ks.push(ly(k)); }); wy[w] = (ks[0] + ks[ks.length - 1]) / 2; });
+    var root = top + span / 2;
+    F.egg(ctx, x0, root, Ly.ph ? 16 : 22, t, {});
+    txt(ctx, '"wrote"', x0, root + (Ly.ph ? 32 : 40), sz - 1, P.chalk);
+    words.forEach(function (w) {
+      var alive = o.alive1 ? o.alive1(w) : 1, y = wy[w];
+      ctx.strokeStyle = 'rgba(253,250,240,' + (.15 + .5 * alive) + ')'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x0 + 16, root); ctx.lineTo(x1 - 30, y); ctx.stroke();
+      alpha(ctx, .25 + .75 * alive, function () {
+        F.paper(ctx, x1, y, Ly.ph ? 62 : 86, Ly.ph ? 34 : 40, o.hi1 === w ? P.butter : P.cream, { seed: 'n1' + w, rot: .02 });
+        txt(ctx, w, x1, y - 5, sz, P.ink); mono(ctx, 'p=' + TREE[w].p.toFixed(1), x1, y + (Ly.ph ? 10 : 12), sz - 3, '#6b5a9a', 'center');
+      });
+      Object.keys(TREE[w].next).forEach(function (w2) {
+        var k = -1; leaves.forEach(function (lf, kk) { if (lf[0] === w && lf[1] === w2) k = kk; });
+        var y2 = ly(k), a2 = o.alive2 ? o.alive2(w, w2) : 1, lp = ln(TREE[w].p) + ln(TREE[w].next[w2]);
+        if (o.show2 != null && o.show2 <= 0) return;
+        alpha(ctx, (o.show2 == null ? 1 : o.show2) * (.2 + .8 * a2), function () {
+          ctx.strokeStyle = 'rgba(253,250,240,.45)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x1 + 30, y); ctx.lineTo(x2 - 34, y2); ctx.stroke();
+          var hl = o.hl2 && o.hl2(w, w2);
+          F.paper(ctx, x2, y2, Ly.ph ? 64 : 88, Ly.ph ? 26 : 30, hl ? hl : P.cream, { seed: 'n2' + w + w2, rot: -.015 });
+          txt(ctx, w2 + ' ' + TREE[w].next[w2].toFixed(1), x2, y2, sz - 2, P.ink);
+          if (o.sums) mono(ctx, lp.toFixed(2), x2 + (Ly.ph ? 38 : 52), y2, sz - 3, a2 > .5 ? P.butter : '#8f89ab', 'left');
+        });
+      });
+    });
+    return { x0: x0, x1: x1, x2: x2, root: root, wy: wy, ly: ly, leaves: leaves, bottom: top + span };
+  }
+
+  /* ================= chapters ================= */
+  var chapters = [
+    { name: 'the fortune-teller', start: 0, dur: 16, cap: {
+        1: 'The mind egg is writing: <b>"...wrote a ___"</b>. Ten words hang as lanterns, each as tall as the model\'s score for it. A paper fortune-teller asks: <b>which word, at what cost?</b>',
+        2: 'The model outputs <b>logits</b>, one per vocab word. <b>softmax</b> turns them into probabilities that sum to 1. <b>Temperature</b> divides the logits first: low T sharpens, high T flattens.',
+        3: 'ARENA\'s <code>TransformerSampler.sample_next_token</code> calls <code>apply_temperature(logits, temperature)</code> which is just <code>logits / temperature</code>, then the chosen sampler. Real d_vocab is 50257; we show 10.' },
+      draw: function (ctx, t, l, W, H) {
+        var Ly = lay(W, H); bg(ctx, W, H, t);
+        var T = l < 6 ? 1 : l < 10 ? lerp(1, .4, ramp(l, 6, 9)) : lerp(.4, 1.8, ramp(l, 10, 14));
+        var pr = softmax(withT(LOGITS, T)), x = Ly.pad, w = W - 2 * Ly.pad, h = Ly.ph ? H * .34 : H * .42, y = Ly.ph ? 96 : 110;
+        alpha(ctx, ramp(l, 0, 1), function () { lanterns(ctx, x, y, w, h, pr, { t: t, max: .9, hi: 0 }); });
+        F.egg(ctx, Ly.ph ? 34 : 70, Ly.ph ? 48 : 60, Ly.ph ? 18 : 24, t, {});
+        alpha(ctx, ramp(l, 1.5, 3), function () { F.note(ctx, 'which word,\nat what cost?', W - (Ly.ph ? 84 : 150), Ly.ph ? 46 : 58, Ly.ph ? 14 : 19, { color: P.pink, rot: .04, seed: 'ft' }); });
+        var ty = y + h + (Ly.ph ? 62 : 70);
+        alpha(ctx, ramp(l, 3, 4), function () {
+          mono(ctx, 'logits  = [' + LOGITS.slice(0, Ly.ph ? 4 : 10).map(function (v) { return v.toFixed(1); }).join(', ') + (Ly.ph ? ', ...]' : ']'), Ly.pad, ty, Ly.fs, P.chalk);
+          mono(ctx, 'T = ' + T.toFixed(2) + '   p = softmax(logits / T)', Ly.pad, ty + Ly.fs * 1.8, Ly.fs, T < .8 ? P.sky : T > 1.2 ? P.orange : P.butter);
+          mono(ctx, 'p[story] = ' + pr[0].toFixed(3) + '   sum = ' + pr.reduce(function (a, b) { return a + b; }, 0).toFixed(3), Ly.pad, ty + Ly.fs * 3.6, Ly.fs, P.mint);
+        });
+      } },
+    { name: 'nucleus, live', start: 16, dur: 24, cap: {
+        1: 'Top-p trims the tail. Line the lanterns up tallest first, and pour their light into a jar one by one. Stop the moment the jar reaches <b>p = 0.90</b>. Everything after that line is cut, and the survivors share the light again.',
+        2: '<b>Nucleus (top-p) sampling</b>: sort probabilities, take the cumulative sum, keep the smallest set whose sum reaches top_p, renormalise, sample. Unlike <b>top-k</b>, the size of the set adapts: a confident model keeps 2 words, an unsure one keeps 8.',
+        3: '<code>sample_top_p(logits, top_p, min_tokens_to_keep=1)</code>: <code>logits.sort(descending=True)</code>, <code>probs.cumsum(-1)</code>, <code>t.searchsorted(cumsum, top_p, side="left")</code> gives n_keep. Compare <code>sample_top_k(logits, k)</code> with <code>t.topk</code>.' },
+      draw: function (ctx, t, l, W, H) {
+        var Ly = lay(W, H); bg(ctx, W, H, t);
+        var T = l < 15 ? 1 : lerp(1, l < 19.5 ? .55 : 1.6, ramp(l, l < 19.5 ? 15 : 19.5, l < 19.5 ? 18 : 22.5));
+        var pr = softmax(withT(LOGITS, T)), N = nucleus(pr, .9), cutP = ramp(l, 8, 10);
+        var sorted = N.idx.map(function (i) { return pr[i]; });
+        var x = Ly.pad + (Ly.ph ? 0 : 20), w = W - 2 * Ly.pad - (Ly.ph ? 0 : 40), h = Ly.ph ? H * .27 : H * .26, y = Ly.ph ? 40 : 50;
+        // sorted bars
+        var n = sorted.length, bw = w / n;
+        sorted.forEach(function (p, j) {
+          var bx = x + j * bw, keep = j < N.n, a = keep ? 1 : lerp(1, .25, cutP);
+          alpha(ctx, a, function () { ctx.fillStyle = keep ? P.butter : '#a79fc2'; var hh = h * p / .75; ctx.fillRect(bx + 3, y + h - hh, bw - 6, hh); });
+          mono(ctx, p.toFixed(2).slice(1), bx + bw / 2, y + h + 9, Ly.ph ? 9 : 11, P.chalk, 'center');
+          ctx.save(); ctx.translate(bx + bw / 2 - 3, y + h + 19); ctx.rotate(j === n - 1 ? 1.15 : .7); ctx.fillStyle = 'rgba(253,250,240,.85)'; ctx.font = (Ly.ph ? 10 : 12) + 'px ' + F.HAND; ctx.fillText(TOK[N.idx[j]], 0, 0); ctx.restore();
+        });
+        // cumulative staircase
+        var cy = y + h + (Ly.ph ? 74 : 90), ch = Ly.ph ? H * .25 : H * .24, draw = ramp(l, 2, 7) * n;
+        ctx.strokeStyle = 'rgba(253,250,240,.2)'; ctx.lineWidth = 1; ctx.strokeRect(x, cy, w, ch);
+        var py = cy + ch * (1 - .9);
+        ctx.setLineDash([6, 4]); ctx.strokeStyle = P.pink; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, py); ctx.lineTo(x + w, py); ctx.stroke(); ctx.setLineDash([]);
+        mono(ctx, 'top_p = 0.90', x + w - 4, py - 9, Ly.ph ? 10 : 12, P.pink, 'right');
+        ctx.strokeStyle = P.mint; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x, cy + ch);
+        var prev = 0;
+        for (var j = 0; j < n && j < draw; j++) { var c = N.cum[j], fx = x + (j + Math.min(1, draw - j)) * bw; ctx.lineTo(x + j * bw, cy + ch * (1 - prev)); ctx.lineTo(x + j * bw, cy + ch * (1 - c)); ctx.lineTo(fx, cy + ch * (1 - c)); prev = c; }
+        ctx.stroke();
+        mono(ctx, 'cumsum', x + 4, cy + ch - 10, Ly.ph ? 10 : 12, P.mint, 'left');
+        // cut line
+        alpha(ctx, cutP, function () {
+          var cx = x + N.n * bw; ctx.strokeStyle = P.red; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(cx, y - 10); ctx.lineTo(cx, cy + ch + 6); ctx.stroke();
+          txt(ctx, 'scissors: keep ' + N.n + ' of 10', Math.min(cx + 6, x + w - (Ly.ph ? 120 : 160)), y - 12, Ly.ph ? 12 : 15, P.red, { align: 'left', seed: 'sc' });
+        });
+        var ty = cy + ch + (Ly.ph ? 30 : 36);
+        alpha(ctx, ramp(l, 10, 11), function () {
+          mono(ctx, 'T=' + T.toFixed(2) + '  kept mass ' + N.kept.toFixed(3) + '  -> renormalise / ' + N.kept.toFixed(3), Ly.pad, ty, Ly.fs - 1, P.butter);
+          var ren = N.idx.slice(0, Math.min(N.n, Ly.ph ? 4 : 6)).map(function (i) { return TOK[i] + ' ' + N.out[i].toFixed(2); }).join('  ');
+          mono(ctx, ren + (N.n > (Ly.ph ? 4 : 6) ? ' ...' : ''), Ly.pad, ty + Ly.fs * 1.7, Ly.fs - 1, P.mint);
+          var k3 = topk(pr, 3);
+          mono(ctx, 'top-k (k=3) would keep 3 whatever T is: story ' + k3[0].toFixed(2), Ly.pad, ty + Ly.fs * 3.4, Ly.fs - 2, '#b8b2d4');
+        });
+      } },
+    { name: 'greedy vs beam', start: 40, dur: 26, cap: {
+        1: 'Two words to write. <b>Greedy</b> grabs the brightest lantern each step and never looks back. A <b>beam</b> of paper planes keeps the best two paths alive, adding up how likely each whole path is, and tears off the weak ones.',
+        2: '<b>Greedy</b> = argmax each step (T → 0 is the same thing). <b>Beam search</b> keeps num_beams partial sequences ranked by <b>summed log-probs</b>. log(p1·p2) = log p1 + log p2, so adding logs is multiplying probabilities without underflow.',
+        3: 'ARENA\'s <code>greedy_search(logits)</code> is <code>logits.argmax()</code>. <code>beam_search(input_text, num_beams, num_return_sequences, max_new_tokens, no_repeat_ngram_size)</code> keeps a <code>Beams</code> object of tokens and logprob_sums, and <code>generate</code> + <code>filter</code> each step.' },
+      draw: function (ctx, t, l, W, H) {
+        var Ly = lay(W, H); bg(ctx, W, H, t, true); maybeAsk(t, 46);
+        var greedyP = ramp(l, 1, 4), beamP = ramp(l, 8, 12), tear = ramp(l, 13, 15);
+        var top2words = ['a', 'the'];
+        var G = drawTree(ctx, W, H, l, t, {
+          sums: l > 9, show2: ramp(l, .5, 1.5),
+          hi1: l < 8 ? 'a' : null,
+          alive1: function (w) { return l < 13 ? 1 : top2words.indexOf(w) >= 0 ? 1 : 1 - tear; },
+          alive2: function (w, w2) { if (l < 13) return 1; var r = -1; BEAMS.forEach(function (b, i) { if (b.path[0] === w && b.path[1] === w2) r = i; }); return r < 2 ? 1 : 1 - tear; },
+          hl2: function (w, w2) { if (w === 'a' && w2 === 'fish' && greedyP > .5) return P.sky; if (l > 15 && w === 'the' && w2 === 'end') return P.mint; return null; }
+        });
+        // greedy plane
+        if (greedyP > 0 && greedyP < 1) { var gx = lerp(G.x0, G.x2, greedyP), gy = greedyP < .5 ? lerp(G.root, G.wy.a, greedyP * 2) : lerp(G.wy.a, G.ly(0), (greedyP - .5) * 2); F.plane(ctx, gx, gy - 14, 12, 0, P.sky); }
+        // beam planes
+        if (beamP > 0 && beamP < 1) { ['a', 'the'].forEach(function (w, k) { var gx = lerp(G.x0, G.x1, beamP), gy = lerp(G.root, G.wy[w], beamP); F.plane(ctx, gx, gy - 14, 11, 0, k ? P.mint : P.butter); }); }
+        var ty = G.bottom + (Ly.ph ? 26 : 34), sz = Ly.fs;
+        alpha(ctx, ramp(l, 4, 5), function () { mono(ctx, 'greedy: a -> fish   log .5 + log .4 = ' + GREEDY.lp.toFixed(3), Ly.pad, ty, sz - 1, P.sky); });
+        alpha(ctx, ramp(l, 15, 16), function () { mono(ctx, 'beam:   the -> end  log .4 + log .9 = ' + BEAMS[0].lp.toFixed(3), Ly.pad, ty + sz * 1.7, sz - 1, P.mint); });
+        alpha(ctx, ramp(l, 18, 19), function () {
+          var ok = PRED.choice === 'beam', lead = PRED.choice && PRED.choice !== 'skip' ? (ok ? 'you called it: ' : 'answer: ') : 'answer: ';
+          F.note(ctx, lead + 'beam wins, p = ' + Math.exp(BEAMS[0].lp).toFixed(2) + ' vs ' + Math.exp(GREEDY.lp).toFixed(2) + '\nthe best first word was not on the best path', W / 2, Math.min(ty + sz * 5, H - 34), Ly.ph ? 11 : 15, { color: P.butter, seed: 'bw', font: F.MONO, rot: -.01 });
+        });
+      } },
+    { name: 'the card box (KV cache)', start: 66, dur: 26, cap: {
+        1: 'Every time the egg writes a new word, it used to reread the whole story from the start. Now it keeps a card box: each old word\'s <b>key</b> and <b>value</b> cards stay filed. A new word only makes its own two cards and reads the box.',
+        2: 'Keys and values of past tokens never change (causal mask), so we <b>cache</b> them. Per step we run only the new token through the dense layers: cost goes from ~n × 170M FLOPs to ~170M FLOPs. The price is memory: the cache grows by 2 × n_layers × d_model numbers per token.',
+        3: 'Counted for GPT-2 small (d_model 768, n_layers 12, d_mlp 3072), 2 FLOPs per multiply-add, ignoring LayerNorm and unembed. Logits are identical: attention for the new query only needs <code>k = t.cat([past_k, k_new], dim=1)</code> and the same for v.' },
+      draw: function (ctx, t, l, W, H) {
+        var Ly = lay(W, H); bg(ctx, W, H, t);
+        var step = Math.max(1, Math.min(20, Math.floor(ramp(l, 1, 16) * 20) + 1));
+        var x = Ly.pad, w = W - 2 * Ly.pad, y = Ly.ph ? 30 : 40, h = Ly.ph ? H * .3 : H * .36, mx = flopsNoCache(20), bw = w / 20;
+        txt(ctx, 'FLOPs to write token n', x, y - 6, Ly.ph ? 12 : 15, P.chalk, { align: 'left' });
+        for (var n = 1; n <= step; n++) {
+          var a = flopsNoCache(n) / mx * h, b = flopsCache(n) / mx * h, bx = x + (n - 1) * bw;
+          ctx.fillStyle = 'rgba(232,116,124,.8)'; ctx.fillRect(bx + 2, y + 10 + h - a, bw / 2 - 2, a);
+          ctx.fillStyle = P.mint; ctx.fillRect(bx + bw / 2, y + 10 + h - Math.max(b, 1.5), bw / 2 - 2, Math.max(b, 1.5));
+        }
+        mono(ctx, 'no cache', x + 4, y + 24, Ly.ph ? 10 : 12, P.red, 'left'); mono(ctx, 'with cache', x + 4, y + 40, Ly.ph ? 10 : 12, P.mint, 'left');
+        var ty = y + h + (Ly.ph ? 34 : 44), sz = Ly.fs - (Ly.ph ? 1 : 0);
+        mono(ctx, 'n = ' + step + '   no cache ' + human(flopsNoCache(step)) + '   cache ' + human(flopsCache(step)), Ly.pad, ty, sz, P.butter);
+        mono(ctx, 'saved this step: ' + human(flopsNoCache(step) - flopsCache(step)) + '  (' + (flopsNoCache(step) / flopsCache(step)).toFixed(1) + 'x)', Ly.pad, ty + sz * 1.7, sz, P.mint);
+        // memory meter + card box
+        var my = ty + sz * 3.4, mw = Ly.ph ? w * .55 : w * .4, fill = cacheFloats(step) / cacheFloats(20);
+        ctx.strokeStyle = P.chalk; ctx.lineWidth = 1.5; ctx.strokeRect(Ly.pad, my, mw, 14); ctx.fillStyle = P.orange; ctx.fillRect(Ly.pad + 1, my + 1, (mw - 2) * fill, 12);
+        mono(ctx, 'cache: ' + (cacheFloats(step) / 1000).toFixed(0) + 'k floats (' + (cacheFloats(step) * 4 / 1024).toFixed(0) + ' KB fp32)', Ly.pad, my + 30, sz - 1, P.orange);
+        var bxx = Ly.ph ? W - 86 : Ly.pad + mw + 80, byy = my + (Ly.ph ? 8 : 0);
+        F.paper(ctx, bxx, byy + 18, Ly.ph ? 120 : 160, Ly.ph ? 50 : 60, '#b98e5e', { seed: 'box', rot: .02 });
+        for (var c = 0; c < Math.min(step, 12); c++) F.paper(ctx, bxx - (Ly.ph ? 52 : 70) + c * (Ly.ph ? 9 : 12), byy + 2 - (c % 2) * 3, 8, 22, c % 2 ? P.pink : P.sky, { seed: 'card' + c, shadow: false });
+        txt(ctx, 'K / V card box', bxx, byy + 36, Ly.ph ? 11 : 13, P.ink, { seed: 'boxl' });
+        alpha(ctx, ramp(l, 17, 18.5), function () {
+          F.note(ctx, 'same answer either way: max |z_full - z_cached| = ' + (maxDiff === 0 ? '0 (bit-identical)' : maxDiff.toExponential(1)) + '\nk = t.cat([past_k, k_new], dim=1)', W / 2, Math.min(my + (Ly.ph ? 84 : 96), H - 30), Ly.ph ? 10 : 14, { color: P.butter, seed: 'kvn', font: F.MONO, rot: .01 });
+        });
+      } },
+    { name: 'the plumbing museum', start: 92, dur: 18, cap: {
+        1: 'A plumber arrives. The model is a museum of pipes, and every joint has a labelled <b>tap</b>. One flash of the camera photographs the water at every tap at once.',
+        2: '<b>TransformerLens</b> wraps GPT-2 as a <b>HookedTransformer</b>. Every activation passes through a named <b>HookPoint</b>. <code>run_with_cache</code> runs the model once and returns logits plus an <b>ActivationCache</b> of every hook\'s value.',
+        3: '<code>logits, cache = model.run_with_cache(tokens)</code>; <code>cache["blocks.0.attn.hook_pattern"]</code> is <code>(1, 12, 35, 35)</code> for 35 tokens, same as <code>cache["pattern", 0]</code> via <code>utils.get_act_name</code>. <code>hook_z</code> is <code>(1, 35, 12, 64)</code>.' },
+      draw: function (ctx, t, l, W, H) {
+        var Ly = lay(W, H); bg(ctx, W, H, t);
+        var taps = ['hook_embed', 'blocks.0.hook_resid_pre', 'blocks.0.attn.hook_pattern', 'blocks.0.attn.hook_z', 'blocks.0.hook_resid_post', 'ln_final.hook_normalized'];
+        var shapes = ['(1, 35, 768)', '(1, 35, 768)', '(1, 12, 35, 35)', '(1, 35, 12, 64)', '(1, 35, 768)', '(1, 35, 768)'];
+        var px = Ly.ph ? 36 : W / 2 - 260, top = Ly.ph ? 34 : 50, gap = Ly.ph ? Math.min(62, (H - 150) / 6) : Math.min(84, (H - 140) / 6);
+        ctx.strokeStyle = '#8fa6c9'; ctx.lineWidth = Ly.ph ? 14 : 20; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(px, top - 10); ctx.lineTo(px, top + gap * 5 + 20); ctx.stroke();
+        ctx.strokeStyle = 'rgba(169,201,239,.9)'; ctx.lineWidth = Ly.ph ? 6 : 9; ctx.setLineDash([10, 12]); ctx.lineDashOffset = -t * 40; ctx.beginPath(); ctx.moveTo(px, top - 10); ctx.lineTo(px, top + gap * 5 + 20); ctx.stroke(); ctx.setLineDash([]); ctx.lineCap = 'butt';
+        var flash = l > 9 && l < 10.2 ? 1 - Math.abs(l - 9.6) / .6 : 0;
+        taps.forEach(function (name, i) {
+          var yy = top + i * gap, a = ramp(l, 1 + i * .8, 2 + i * .8);
+          alpha(ctx, a, function () {
+            ctx.fillStyle = P.orange; ctx.beginPath(); ctx.arc(px, yy, Ly.ph ? 7 : 10, 0, 6.283); ctx.fill();
+            ctx.strokeStyle = P.chalk; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(px + 8, yy); ctx.lineTo(px + 26, yy); ctx.stroke();
+            F.paper(ctx, px + 30 + (Ly.ph ? 118 : 150), yy, Ly.ph ? 232 : 290, Ly.ph ? 34 : 40, l > 10 ? P.butter : P.cream, { seed: 'tag' + i, rot: (i % 2 ? .01 : -.01) });
+            mono(ctx, name, px + 40, yy - (Ly.ph ? 6 : 7), Ly.ph ? 10.5 : 13, P.ink, 'left');
+            if (l > 10) mono(ctx, shapes[i], px + 40, yy + (Ly.ph ? 8 : 10), Ly.ph ? 9.5 : 12, '#6b5a9a', 'left');
+          });
+        });
+        if (flash > 0) { ctx.fillStyle = 'rgba(255,255,240,' + flash * .7 + ')'; ctx.fillRect(0, 0, W, H); }
+        var cy = top + gap * 5 + (Ly.ph ? 44 : 60);
+        alpha(ctx, ramp(l, 8, 9), function () {
+          mono(ctx, 'logits, cache = model.run_with_cache(tokens)', Ly.pad, cy, Ly.fs - (Ly.ph ? 1.5 : 0), P.mint);
+          mono(ctx, 'cache["blocks.0.attn.hook_pattern"].shape', Ly.pad, cy + Ly.fs * 1.7, Ly.fs - (Ly.ph ? 1.5 : 0), P.butter);
+        });
+        if (!Ly.ph) F.person(ctx, W / 2 + 330, H * .45, 60, t, { color: P.sky });
+      } },
+    { name: 'close a tap', start: 110, dur: 20, cap: {
+        1: 'The plumber closes one tap: head 2 of layer 0, the one that keeps whispering "story". The water still flows everywhere else. Watch the lanterns redistribute, and the model get a little worse at predicting "story".',
+        2: 'A <b>hook function</b> receives the activation and the hook, and returns an edited one. We zero head 2 of <code>hook_z</code> and call <code>run_with_hooks</code>. Only this forward pass changes. The <b>loss</b> on the true next word, story, rises from ' + L0.toFixed(2) + ' to ' + LZ.toFixed(2) + '.',
+        3: 'Toy: each head adds a direct contribution to the logits, so zeroing its <code>z[:, :, 2, :]</code> removes exactly that. Real heads feed later layers too, so effects compound. ARENA: <code>fwd_hooks=[("blocks.1.attn.hook_pattern", hook_function)]</code>, <code>return_type="loss"</code>.' },
+      draw: function (ctx, t, l, W, H) {
+        var Ly = lay(W, H); bg(ctx, W, H, t, true);
+        var z = ramp(l, 6, 9), lg = LOGITS.map(function (v, i) { return v - z * HEADS[2].c[i]; }), pr = softmax(lg), loss = lossOf(lg);
+        var hx = Ly.pad, hw = W - 2 * Ly.pad, hy = Ly.ph ? 28 : 40, cw = hw / 4;
+        HEADS.forEach(function (h, i) {
+          var off = i === 2 && z > .5;
+          F.paper(ctx, hx + cw * (i + .5), hy + 16, cw - 10, 34, off ? '#8c86a8' : (i === 2 ? P.butter : P.cream), { seed: 'hd' + i, rot: (i - 1.5) * .015 });
+          txt(ctx, h.name + (off ? ' 0' : ''), hx + cw * (i + .5), hy + 16, Ly.ph ? 13 : 16, off ? P.chalk : P.ink, { seed: 'hn' + i + off });
+        });
+        if (l > 3 && l < 9) { F.arrow(ctx, W / 2 + (Ly.ph ? 40 : 60), hy + 90, hx + cw * 2.5, hy + 36, P.red, 3, 'wr'); txt(ctx, 'close this tap', W / 2 + (Ly.ph ? 40 : 60), hy + 104, Ly.ph ? 13 : 16, P.red, { seed: 'ct' }); }
+        var y = hy + (Ly.ph ? 120 : 140), h = Ly.ph ? H * .26 : H * .32;
+        lanterns(ctx, Ly.pad, y, hw, h, pr, { t: t, max: .6, hi: 0, col: function (i) { return pr[i] > P0[i] + .003 ? P.teal : pr[i] < P0[i] - .003 ? P.pink : P.butter; } });
+        var ty = y + h + (Ly.ph ? 64 : 72);
+        mono(ctx, 'p[story] ' + P0[0].toFixed(3) + ' -> ' + pr[0].toFixed(3), Ly.pad, ty, Ly.fs, P.pink);
+        mono(ctx, 'loss = -log p[story] = ' + loss.toFixed(3) + (z > 0 ? '  (+' + (loss - L0).toFixed(3) + ')' : ''), Ly.pad, ty + Ly.fs * 1.7, Ly.fs, P.butter);
+        alpha(ctx, ramp(l, 12, 13), function () { mono(ctx, 'weights untouched. next run: head 2 is back', Ly.pad, ty + Ly.fs * 3.4, Ly.fs - 1, P.mint); });
+      } },
+    { name: 'your code', start: 130, dur: 20, cap: {
+        1: 'Where the story stops being true: the fortune-teller\'s scissors change <b>which</b> word comes out, not what the egg knows. Closing a tap changes <b>one run</b>, not the pipes. Hooks are the first steering wheel: see inside, then nudge.',
+        2: 'Sampling choices (T, top-k, top-p, beams, frequency penalty) change outputs, never knowledge. Hooks edit activations for a single forward pass; the weights are untouched. The same hook that reads can also add a steering vector: that is where activation steering begins.',
+        3: 'The code is your ARENA [1.1] sampling section and TransformerLens intro, trimmed. <code>apply_frequency_penalty</code> subtracts <code>freq_penalty × count</code> per already-used token; beam search adds <code>no_repeat_ngram_size</code>.' },
+      draw: function (ctx, t, l, W, H) {
+        var Ly = lay(W, H); bg(ctx, W, H, t);
+        var sz = Ly.ph ? 9.6 : 13, w = Ly.ph ? W - 20 : Math.min(820, W - 80), x = (W - w) / 2;
+        var A = ['def sample_top_p(logits, top_p, min_tokens_to_keep=1):',
+          '    srt, idx = logits.sort(descending=True)',
+          '    cumul = srt.softmax(-1).cumsum(-1)',
+          '    n = t.searchsorted(cumul, top_p, side="left")',
+          '    n = max(n.item() + 1, min_tokens_to_keep)',
+          '    dist = t.distributions.Categorical(logits=srt[:n])',
+          '    return idx[dist.sample()].item()'];
+        var B = ['def head_ablation_hook(z, hook, head=2):',
+          '    z[:, :, head, :] = 0.0  # [batch,posn,head,d_head]',
+          '    return z',
+          'loss = model.run_with_hooks(tokens,',
+          '    return_type="loss",',
+          '    fwd_hooks=[("blocks.0.attn.hook_z",',
+          '                head_ablation_hook)])'];
+        sz = Math.min(13, (w - 18) / (58 * 0.61));
+        var h1 = codeCard(ctx, x, Ly.ph ? 14 : 24, w, A, sz, ramp(l, 1, 6));
+        var h2 = 0;
+        alpha(ctx, ramp(l, 6, 7), function () { h2 = codeCard(ctx, x, (Ly.ph ? 14 : 24) + h1 + 14, w, B, sz, ramp(l, 6.5, 10)); });
+        var ny = (Ly.ph ? 14 : 24) + h1 + 14 + (h2 || B.length * sz * 1.5 + sz * 1.2) + (Ly.ph ? 40 : 50);
+        alpha(ctx, ramp(l, 11, 12), function () { F.note(ctx, 'hooks are the first steering wheel', W / 2, Math.min(ny, H - 90), Ly.ph ? 15 : 20, { color: P.mint, rot: -.02, seed: 'steer' }); });
+        alpha(ctx, ramp(l, 13, 14), function () { F.note(ctx, 'changes the output, not the knowledge\nchanges one run, not the weights', W / 2, Math.min(ny + (Ly.ph ? 72 : 84), H - 34), Ly.ph ? 12 : 15, { color: P.butter, rot: .015, seed: 'stop' }); });
+      } }
+  ];
+
+  /* ================= coda: sliders + tap heads to ablate ================= */
+  var C = { T: 1, p: .9, k: 10, off: [0, 0, 0, 0], geo: null };
+  function codaDist() { var lg = logitsAblate(C.off), pr = softmax(withT(lg, C.T)); var kk = topk(pr, C.k), N = nucleus(kk, C.p); return { lg: lg, pr: pr, fin: N.out, n: N.n, loss: lossOf(lg) }; }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;font-size:14px">' +
+        '<label for="cT">T</label><input id="cT" type="range" min="0.05" max="2" step="0.05" value="1"><span id="vT">1.00</span>' +
+        '<label for="cK">top-k</label><input id="cK" type="range" min="1" max="10" step="1" value="10"><span id="vK">10</span>' +
+        '<label for="cP">top-p</label><input id="cP" type="range" min="0.05" max="1" step="0.05" value="0.9"><span id="vP">0.90</span></div>' +
+        '<div style="font-size:13px;opacity:.85;margin-top:4px">Tap a head card on the stage to zero it with a hook. Live: final sampling distribution and the loss on "story".</div>';
+      var bind = function (id, key, out, fmt) { var el = panel.querySelector('#' + id); el.oninput = function () { C[key] = +el.value; panel.querySelector('#' + out).textContent = fmt(C[key]); }; };
+      bind('cT', 'T', 'vT', function (v) { return v.toFixed(2); }); bind('cK', 'k', 'vK', function (v) { return String(v); }); bind('cP', 'p', 'vP', function (v) { return v.toFixed(2); });
+    },
+    down: function (x, y, api) { var g = C.geo; if (!g) return; if (y > g.y - 20 && y < g.y + 20 && x > g.x && x < g.x + g.w) { var i = Math.floor((x - g.x) / (g.w / 4)); C.off[i] = C.off[i] ? 0 : 1; api.audio.blip(C.off[i] ? 330 : 560); } },
+    move: function () {}, up: function () {},
+    draw: function (ctx, t, W, H, api) {
+      var Ly = lay(W, H); bg(ctx, W, H, t); var R = codaDist();
+      var hx = Ly.pad, hw = W - 2 * Ly.pad, hy = Ly.ph ? 34 : 44, cw = hw / 4; C.geo = { x: hx, y: hy, w: hw };
+      HEADS.forEach(function (h, i) { var off = C.off[i]; F.paper(ctx, hx + cw * (i + .5), hy, cw - 10, 34, off ? '#8c86a8' : P.cream, { seed: 'ch' + i }); txt(ctx, h.name + (off ? ' off' : ''), hx + cw * (i + .5), hy, Ly.ph ? 13 : 16, off ? P.chalk : P.ink, { seed: 'chn' + i + off }); });
+      var y = hy + (Ly.ph ? 50 : 64), h = Ly.ph ? H * .34 : H * .42;
+      lanterns(ctx, Ly.pad, y, hw, h, R.fin, { t: t, max: 1, hi: 0, cut: R.fin.map(function (v) { return v === 0; }) });
+      var ty = y + h + (Ly.ph ? 62 : 72);
+      mono(ctx, 'kept ' + R.n + ' of 10   p[story] = ' + R.fin[0].toFixed(3), Ly.pad, ty, Ly.fs, P.butter);
+      mono(ctx, 'loss on "story" = ' + R.loss.toFixed(3) + '  (clean ' + L0.toFixed(3) + ')', Ly.pad, ty + Ly.fs * 1.7, Ly.fs, R.loss > L0 + 1e-6 ? P.pink : R.loss < L0 - 1e-6 ? P.teal : P.mint);
+      mono(ctx, 'loss ignores T/k/p: sampling changes output, not knowledge', Ly.pad, ty + Ly.fs * 3.4, Ly.fs - 2, '#b8b2d4');
+    }
+  };
+
+  F.play({
+    title: 'Deep dive W6 · Say a word, cheaply, then look inside',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: sampling & decoding', href: '../../index.html#demo/sampling-decoding' },
+      { label: 'Week 6 pack', href: '../../index.html#week-06' },
+      { label: 'Map: top-p sampling', href: '../../index.html#map/node=top-p-sampling' },
+      { label: 'Map: KV cache', href: '../../index.html#map/node=kv-cache' },
+      { label: 'Map: hooks', href: '../../index.html#map/node=hooks' },
+      { label: 'Case: nucleus sampling', href: '../../index.html#cases/nucleus-sampling' },
+      { label: 'Case: beam search', href: '../../index.html#cases/beam-search' },
+      { label: 'Case: KV caching', href: '../../index.html#cases/kv-caching' },
+      { label: 'Case: hooks', href: '../../index.html#cases/hooks' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
