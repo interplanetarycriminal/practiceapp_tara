@@ -1,0 +1,1282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Anatomy of One Step · Object Lessons</title>
+<meta name="description" content="A tiny linear regression's loss bowl, sliced open: slopes, the gradient, the wiggle test, and what SGD, momentum and Adam each do with one gradient.">
+<link rel="stylesheet" href="../kit.css">
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   06 · d03-step: "Anatomy of one step" (W3 deep, ARENA [0.3] Optimization)
+   The terrain is the exact mean-squared-error loss of a straight line through
+   six toy points. Every number on screen is computed below: slopes from the
+   residuals (what loss.backward() returns), steps from ARENA's own SGD and
+   Adam solution classes. The MATH block is extracted and checked in node.
+   ========================================================================= */
+
+// MATH-BEGIN
+const XS = [1, 2, 3, 4, 5, 6];                     // toy inputs, NOT centred (mean 3.5)
+const YS = [2.1, 2.2, 3.5, 4.3, 4.6, 6.1];         // toy targets = 0.8x + 1 + noise, noise ⟂ 1 and x,
+                                                   // so the least-squares line is exactly (w, b) = (0.8, 1.0)
+const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+const X_MEAN = mean(XS);                                           // 3.5
+const X_STD = Math.sqrt(mean(XS.map((x) => (x - X_MEAN) ** 2)));   // 1.7078 (population std)
+const FEATURE = {                                  // the three ways to feed x to the same line
+  raw: (x) => x,
+  centred: (x) => x - X_MEAN,
+  standard: (x) => (x - X_MEAN) / X_STD,
+};
+
+/* The model y_hat = w * f(x) + b; loss = mean((y_hat - y)^2), times `scale` (the "loss x2" switch). */
+function loss(mode, w, b, scale = 1) {
+  const f = FEATURE[mode];
+  let s = 0;
+  for (let i = 0; i < XS.length; i++) { const r = w * f(XS[i]) + b - YS[i]; s += r * r; }
+  return scale * s / XS.length;
+}
+/* dL/dw = 2 mean(r f(x)), dL/db = 2 mean(r), r = y_hat - y: what loss.backward() leaves in w.grad, b.grad */
+function grad(mode, w, b, scale = 1) {
+  const f = FEATURE[mode], n = XS.length;
+  let gw = 0, gb = 0;
+  for (let i = 0; i < n; i++) { const u = f(XS[i]), r = w * u + b - YS[i]; gw += 2 * r * u / n; gb += 2 * r / n; }
+  return [scale * gw, scale * gb];
+}
+/* Hessian (constant: the loss is exactly quadratic) = 2 [[mean f^2, mean f], [mean f, 1]] */
+function hessian(mode, scale = 1) {
+  const u = XS.map(FEATURE[mode]);
+  const m1 = mean(u), m2 = mean(u.map((v) => v * v));
+  return [[2 * scale * m2, 2 * scale * m1], [2 * scale * m1, 2 * scale]];
+}
+/* symmetric 2x2: eigenvalues l1 >= l2, unit eigenvectors v1 (steepest), v2 (gentlest) */
+function eig2(H) {
+  const a = H[0][0], c = H[0][1], d = H[1][1];
+  const tr = a + d, det = a * d - c * c, disc = Math.sqrt(Math.max(0, tr * tr / 4 - det));
+  const l1 = tr / 2 + disc, l2 = tr / 2 - disc;
+  let v1 = Math.abs(c) > 1e-12 ? [c, l1 - a] : (a >= d ? [1, 0] : [0, 1]);
+  const n1 = Math.hypot(v1[0], v1[1]);
+  v1 = [v1[0] / n1, v1[1] / n1];
+  return { l1, l2, v1, v2: [-v1[1], v1[0]], kappa: l1 / l2 };
+}
+/* the bottom of the bowl: exact least squares */
+function lstsq(mode) {
+  const u = XS.map(FEATURE[mode]), mu = mean(u), my = mean(YS);
+  let sxy = 0, sxx = 0;
+  u.forEach((v, i) => { sxy += (v - mu) * (YS[i] - my); sxx += (v - mu) ** 2; });
+  const w = sxy / sxx;
+  return [w, my - w * mu];
+}
+/* the same line in each coordinate system: y = w x + b = w_c (x - m) + b_c = w_s (x - m)/s + b_s */
+function fromRaw(mode, p) {
+  const [w, b] = p;
+  if (mode === 'raw') return [w, b];
+  if (mode === 'centred') return [w, b + w * X_MEAN];
+  return [w * X_STD, b + w * X_MEAN];
+}
+function toRaw(mode, p) {
+  const [w, b] = p;
+  if (mode === 'raw') return [w, b];
+  if (mode === 'centred') return [w, b - w * X_MEAN];
+  const wr = w / X_STD;
+  return [wr, b - wr * X_MEAN];
+}
+
+/* ARENA's solution classes, line for line (params = [theta], a Float64Array of length 2). */
+class SGD {
+  constructor(params, { lr, momentum = 0.0, weight_decay = 0.0 }) {
+    this.params = params;
+    this.lr = lr;
+    this.mu = momentum;
+    this.lmda = weight_decay;
+    this.b = params.map((p) => new Float64Array(p.length));
+  }
+  step() {
+    this.params.forEach((theta, pi) => {
+      const b = this.b[pi];
+      for (let i = 0; i < theta.length; i++) {
+        let g = theta.grad[i];
+        if (this.lmda !== 0) g = g + this.lmda * theta[i];
+        if (this.mu !== 0) { b[i] = this.mu * b[i] + g; g = b[i]; }   // b.copy_(mu*b + g); g = b
+        theta[i] -= this.lr * g;
+      }
+    });
+  }
+}
+class Adam {
+  constructor(params, { lr = 0.001, betas = [0.9, 0.999], eps = 1e-08, weight_decay = 0.0 }) {
+    this.params = params;
+    this.lr = lr;
+    [this.beta1, this.beta2] = betas;
+    this.eps = eps;
+    this.lmda = weight_decay;
+    this.t = 1;
+    this.m = params.map((p) => new Float64Array(p.length));
+    this.v = params.map((p) => new Float64Array(p.length));
+  }
+  step() {
+    this.params.forEach((theta, pi) => {
+      const m = this.m[pi], v = this.v[pi];
+      for (let i = 0; i < theta.length; i++) {
+        let g = theta.grad[i];
+        if (this.lmda !== 0) g = g + this.lmda * theta[i];
+        m[i] = this.beta1 * m[i] + (1 - this.beta1) * g;
+        v[i] = this.beta2 * v[i] + (1 - this.beta2) * g * g;
+        const m_hat = m[i] / (1 - this.beta1 ** this.t);
+        const v_hat = v[i] / (1 - this.beta2 ** this.t);
+        theta[i] -= this.lr * m_hat / (Math.sqrt(v_hat) + this.eps);
+      }
+    });
+    this.t += 1;
+  }
+}
+/* n steps of backward(), optimizer.step(), zero_grad() from p0, keeping every landing point,
+   every gradient and the optimiser's own buffers (momentum b; Adam m, v) after each step. */
+function runOpt(mode, p0, kind, hp, n, scale = 1) {
+  const theta = Float64Array.from(p0);
+  const opt = kind === 'adam'
+    ? new Adam([theta], { lr: hp.lr, betas: [hp.beta1 ?? 0.9, 0.999] })
+    : new SGD([theta], { lr: hp.lr, momentum: kind === 'mom' ? hp.mu : 0.0 });
+  const P = [[theta[0], theta[1]]], G = [], B = [], M = [], V = [];
+  for (let t = 1; t <= n; t++) {
+    const g = grad(mode, theta[0], theta[1], scale);      // loss.backward()
+    G.push(g);
+    theta.grad = g;
+    opt.step();                                           // optimizer.step()
+    theta.grad = null;                                    // optimizer.zero_grad()
+    if (kind === 'mom') B.push([opt.b[0][0], opt.b[0][1]]);
+    if (kind === 'adam') { M.push([opt.m[0][0], opt.m[0][1]]); V.push([opt.v[0][0], opt.v[0][1]]); }
+    if (!Number.isFinite(theta[0]) || !Number.isFinite(theta[1])) break;
+    P.push([theta[0], theta[1]]);
+  }
+  return { P, G, B, M, V };
+}
+/* momentum's step t in ARENA's recursive form. b_t = mu b_(t-1) + g_t and theta -= lr b_t give
+   step_t = mu step_(t-1) - lr g_t: the memory (last step x mu) plus the fresh push (SGD's own step). */
+function momentumSplit(P, G, t, lr, mu) {
+  const prev = t >= 2 ? [P[t - 1][0] - P[t - 2][0], P[t - 1][1] - P[t - 2][1]] : [0, 0];
+  const g = G[t - 1];
+  return { from: P[t - 1], mem: [mu * prev[0], mu * prev[1]], fresh: [-lr * g[0], -lr * g[1]],
+    net: [P[t][0] - P[t - 1][0], P[t][1] - P[t - 1][1]] };
+}
+/* Adam's step t: m_hat = m_t / (1 - b1^t), v_hat = v_t / (1 - b2^t), step = -lr m_hat / (sqrt(v_hat) + eps) */
+function adamStep(M, V, t, lr, b1 = 0.9, b2 = 0.999, eps = 1e-8) {
+  const m = M[t - 1], v = V[t - 1];
+  const mh = [m[0] / (1 - b1 ** t), m[1] / (1 - b1 ** t)];
+  const vh = [v[0] / (1 - b2 ** t), v[1] / (1 - b2 ** t)];
+  return { mh, vh, step: [-lr * mh[0] / (Math.sqrt(vh[0]) + eps), -lr * mh[1] / (Math.sqrt(vh[1]) + eps)] };
+}
+/* the wiggle test (finite differences, ARENA [0.4]): nudge one parameter by eps, re-run the forward pass */
+function wiggle(mode, p, axis, eps, scale = 1) {
+  const e = axis === 'w' ? [eps, 0] : [0, eps];
+  const L0 = loss(mode, p[0], p[1], scale);
+  const Lp = loss(mode, p[0] + e[0], p[1] + e[1], scale);
+  const Lm = loss(mode, p[0] - e[0], p[1] - e[1], scale);
+  const g = grad(mode, p[0], p[1], scale)[axis === 'w' ? 0 : 1];
+  return { L0, Lp, dL: Lp - L0, pred: eps * g, forward: (Lp - L0) / eps, central: (Lp - Lm) / (2 * eps), g };
+}
+/* the contour through p: an exact ellipse around the bottom (L is quadratic), starting at p */
+function levelRing(mode, p, n = 360) {
+  const E = eig2(hessian(mode)), s = lstsq(mode);
+  const c = loss(mode, p[0], p[1]) - loss(mode, s[0], s[1]);
+  if (c <= 1e-12) return [];
+  const a1 = Math.sqrt(2 * c / E.l1), a2 = Math.sqrt(2 * c / E.l2);
+  const d = [p[0] - s[0], p[1] - s[1]];
+  const th0 = Math.atan2((d[0] * E.v2[0] + d[1] * E.v2[1]) / a2, (d[0] * E.v1[0] + d[1] * E.v1[1]) / a1);
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const th = th0 + (i / n) * 2 * Math.PI, u = a1 * Math.cos(th), v = a2 * Math.sin(th);
+    pts.push([s[0] + u * E.v1[0] + v * E.v2[0], s[1] + u * E.v1[1] + v * E.v2[1]]);
+  }
+  return pts;
+}
+/* split a vector into its parts across (v1, steep) and along (v2, gentle) the gully */
+function acrossAlong(mode, d) {
+  const E = eig2(hessian(mode));
+  return [d[0] * E.v1[0] + d[1] * E.v1[1], d[0] * E.v2[0] + d[1] * E.v2[1]];
+}
+/* the sign that makes "along" point from p0 toward the bottom, and the distance travelled that way */
+function towardBottom(mode, p0) {
+  const s = lstsq(mode);
+  return Math.sign(acrossAlong(mode, [s[0] - p0[0], s[1] - p0[1]])[1]) || 1;
+}
+function alongGully(mode, p0, p) {
+  return towardBottom(mode, p0) * acrossAlong(mode, [p[0] - p0[0], p[1] - p0[1]])[1];
+}
+const MATH = { XS, YS, X_MEAN, X_STD, FEATURE, loss, grad, hessian, eig2, lstsq, fromRaw, toRaw,
+  SGD, Adam, runOpt, momentumSplit, adamStep, wiggle, levelRing, acrossAlong, towardBottom, alongGully };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const HALF = 1.5;                 // the plotted square: ±1.5 around the bottom, in units of w and b
+const SIZE = 3.3;                 // its world side
+const SW = SIZE / (2 * HALF);     // world per unit of w or b, the SAME both ways, so right angles stay right
+const DZ = 2.0;                   // loss range shown, [L*, L* + 2]; the plaster is sliced flat above it
+const HEIGHT = 1.1;               // world height of that range
+const ZS = HEIGHT / DZ;
+const BASE = 0.12;
+const NGRID = 132;
+const R = 0.062;                  // ball radius
+const TR = 0.011;                 // string radius
+const START = [0.8, 0.0];         // the ball's line, raw coordinates: the right tilt, but 1 too low
+const HP0 = { sgd: { lr: 0.05 }, mom: { lr: 0.05, mu: 0.9 }, adam: { lr: 0.2, beta1: 0.9 } };
+const OPTS = [
+  { id: 'sgd', name: 'SGD', color: C.data },
+  { id: 'mom', name: 'Momentum', color: C.aux },
+  { id: 'adam', name: 'Adam', color: C.dir },
+];
+const OPT = Object.fromEntries(OPTS.map((o) => [o.id, o]));
+const FRONT = [0.05, 0.14, 1.74];   // readout spot for top views: the front edge, below the gully
+const HESS_AT = [-0.55, 1.2, -1.98]; // the Hessian note hangs under the board's left half
+const KG = 0.075;                 // gradient arrow: units of (w, b) drawn per unit of slope
+const RUN = { w: 0.1, b: 0.3 };   // the slope triangle's run along each axis (b is gentle: a longer run)
+const TMAX = 12;
+const MODE_NAME = { raw: { 1: 'raw x', 2: 'raw x', 3: 'x' }, centred: { 1: 'centred x', 2: 'x − 3.5', 3: 'x − x̄' },
+  standard: { 1: 'standardised x', 2: '(x − 3.5)/1.71', 3: '(x − x̄)/σ' } };
+
+const CAM = {   // authored views; fit: k = close-up (otherwise the kit fits the whole plinth)
+  front: { pos: [0.1, 2.3, 9.4], target: [0.1, 1.06, 0.2], fit: 1.36 },
+  side: { pos: [9.4, 2.1, 0.0], target: [0, 0.72, 0], fit: 1.3 },
+  top: { pos: [0.35, 8.6, 3.9], target: [0, 0.45, 0.25] },
+  gtop: { pos: [-0.12, 5.7, 2.75], target: [-0.1, 0.55, 0.95], fit: 1.45 },
+  wig: { pos: [0.2, 1.5, 5.4], target: [0.12, 0.62, 1.1], fit: 1.35 },
+  close: { pos: [0.55, 3.5, 4.3], target: [0.17, 0.52, 0.9], fit: 1.55 },
+  ctop: { pos: [0.25, 5.4, 2.9], target: [0.2, 0.5, 0.9], fit: 1.5 },
+  mtop: { pos: [0.12, 6.3, 1.2], target: [0.1, 0.5, 0.78], fit: 1.95 },   // nearly overhead: (w, b) vectors keep their proportions
+  bowl: { pos: [0.3, 7.25, 4.9], target: [0, 0.95, -0.45], fit: 1.0 },
+  wide: { pos: [4.4, 5.0, 7.8], target: [0, 0.85, -0.2] },
+};
+
+const fx = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+const sx = (v, d = 2) => { const t = fx(v, d); return t.startsWith('−') ? t : (Number(t) === 0 ? t : '+' + t); };
+const pr = (p, d = 2) => `(${fx(p[0], d)}, ${fx(p[1], d)})`;
+const ps = (p, d = 2) => `(${sx(p[0], d)}, ${sx(p[1], d)})`;
+const UP = new THREE.Vector3(0, 1, 0);
+
+/* ========================================================= world mapping */
+
+function surfL(st, p) { return loss(st.mode, p[0], p[1]); }               // the displayed (unscaled) loss
+function hOf(st, L) { return BASE + (Math.min(L, st.Ltop) - st.Lmin) * ZS; }
+function Xw(st, w) { return (w - st.c[0]) * SW; }
+function Zb(st, b) { return -(b - st.c[1]) * SW; }
+/* a point on the displayed surface, lifted along its normal */
+function W(st, p, lift = 0) {
+  const L = surfL(st, p);
+  const v = new THREE.Vector3(Xw(st, p[0]), hOf(st, L), Zb(st, p[1]));
+  if (lift) {
+    if (L >= st.Ltop) v.y += lift;
+    else {
+      const g = grad(st.mode, p[0], p[1]);
+      const nx = -g[0] * ZS / SW, nz = g[1] * ZS / SW, n = Math.hypot(nx, 1, nz);
+      v.x += lift * nx / n; v.y += lift / n; v.z += lift * nz / n;
+    }
+  }
+  return v;
+}
+const lo = (st, i) => st.c[i] - HALF, hi = (st, i) => st.c[i] + HALF;
+function inDomain(st, p) { return p[0] >= lo(st, 0) - 1e-9 && p[0] <= hi(st, 0) + 1e-9 && p[1] >= lo(st, 1) - 1e-9 && p[1] <= hi(st, 1) + 1e-9; }
+function clampIn(st, p, m = 0) {
+  return [Math.min(hi(st, 0) - m, Math.max(lo(st, 0) + m, p[0])), Math.min(hi(st, 1) - m, Math.max(lo(st, 1) + m, p[1]))];
+}
+/* clip segment a→b to the plotted square (Liang–Barsky); null when it misses */
+function clipSeg(st, a, b) {
+  let t0 = 0, t1 = 1;
+  const d = [b[0] - a[0], b[1] - a[1]];
+  for (let i = 0; i < 2; i++) {
+    for (const [p, q] of [[-d[i], a[i] - lo(st, i)], [d[i], hi(st, i) - a[i]]]) {
+      if (Math.abs(p) < 1e-12) { if (q < 0) return null; continue; }
+      const r = q / p;
+      if (p < 0) { if (r > t1) return null; if (r > t0) t0 = r; } else { if (r < t0) return null; if (r < t1) t1 = r; }
+    }
+  }
+  return { a: [a[0] + d[0] * t0, a[1] + d[1] * t0], b: [a[0] + d[0] * t1, a[1] + d[1] * t1], cut: t1 < 1 - 1e-9 };
+}
+/* a straight segment in (w, b), laid on the plaster like a string */
+function drape(st, a, b, lift, dmax = 0.012) {
+  const s = clipSeg(st, a, b);
+  if (!s) return [];
+  const len = Math.hypot(s.b[0] - s.a[0], s.b[1] - s.a[1]);
+  const n = Math.max(2, Math.ceil(len / dmax) + 1), out = [];
+  for (let i = 0; i < n; i++) {
+    const f = i / (n - 1);
+    out.push(W(st, [s.a[0] + (s.b[0] - s.a[0]) * f, s.a[1] + (s.b[1] - s.a[1]) * f], lift));
+  }
+  return out;
+}
+
+/* a straight hop from a toward b, both lifted: raise the far end until the whole chord clears the
+   plaster (the bowl is convex, so this only bites where the flat top slices it) */
+function clearChord(st, a, b, lift) {
+  const A = W(st, a, lift), B = W(st, b, lift);
+  const c0 = Math.min(A.y - hOf(st, surfL(st, a)), lift * 0.7);   // keep at least the start's clearance
+  let need = B.y;
+  for (let i = 1; i <= 48; i++) {
+    const s = i / 48, q = [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s];
+    need = Math.max(need, A.y + (hOf(st, surfL(st, q)) + c0 - A.y) / s);
+  }
+  B.y = need;
+  return { A, B };
+}
+
+/* ======================================================== small builders */
+
+const CONE = new THREE.ConeGeometry(1, 1, 16, 1).translate(0, 0.5, 0);
+const CYL = new THREE.CylinderGeometry(1, 1, 1, 10, 1).translate(0, 0.5, 0);
+/* an arrow laid on the surface: a string plus a cone at the end */
+function lying(hex, r, opacity = 1) {
+  const mat = opacity < 1
+    ? new THREE.MeshStandardMaterial({ color: hex, roughness: 0.8, transparent: true, opacity, depthWrite: false })
+    : K.mat.string(hex);
+  const tube = K.tube([], hex, r, { material: mat, shadow: opacity >= 1 });
+  const hm = opacity < 1 ? mat : K.mat.paint(hex);
+  const head = new THREE.Mesh(CONE, hm);
+  head.castShadow = opacity >= 1;
+  const group = new THREE.Group();
+  group.add(tube.mesh, head);
+  const tmpv = new THREE.Vector3();
+  return {
+    group, mat,
+    show(v) { group.visible = !!v; },
+    set(pts, withHead = true) {
+      if (pts.length < 2) { group.visible = false; return; }
+      group.visible = true;
+      let total = 0;
+      for (let i = 1; i < pts.length; i++) total += pts[i].distanceTo(pts[i - 1]);
+      const hl = withHead ? Math.min(r * 8, total * 0.45) : 0;
+      if (!withHead || hl < 1e-4) { tube.set(pts); head.visible = false; return; }
+      // walk back hl along the polyline from the tip
+      let acc = 0, i = pts.length - 1;
+      while (i > 0 && acc + pts[i].distanceTo(pts[i - 1]) < hl) { acc += pts[i].distanceTo(pts[i - 1]); i--; }
+      const tip = pts[pts.length - 1];
+      const seg = pts[i].distanceTo(pts[Math.max(0, i - 1)]);
+      const base = i > 0 ? tmpv.copy(pts[i]).lerp(pts[i - 1], Math.min(1, (hl - acc) / Math.max(seg, 1e-9))).clone() : pts[0].clone();
+      tube.set([...pts.slice(0, i), base]);
+      head.visible = true;
+      head.position.copy(base);
+      const dir = tip.clone().sub(base);
+      const len = Math.max(1e-4, dir.length());
+      head.scale.set(r * 2.7, len, r * 2.7);
+      head.quaternion.setFromUnitVectors(UP, dir.normalize());
+    },
+  };
+}
+/* a straight rod between two world points */
+function rod(mat, r) {
+  const m = new THREE.Mesh(CYL, mat);
+  m.castShadow = true;
+  return {
+    mesh: m,
+    set(a, b) {
+      const d = b.clone().sub(a), len = d.length();
+      m.visible = len > 1e-5;
+      if (!m.visible) return;
+      m.position.copy(a);
+      m.scale.set(r, len, r);
+      m.quaternion.setFromUnitVectors(UP, d.normalize());
+    },
+  };
+}
+function ghostBead(hex, r) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16),
+    new THREE.MeshStandardMaterial({ color: hex, roughness: 0.5, transparent: true, opacity: 0.55, depthWrite: false }));
+  return m;
+}
+function flagMesh() {
+  const g = new THREE.Group();
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.34, 8).translate(0, 0.17, 0), K.mat.brass());
+  pole.castShadow = true;
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0); shape.lineTo(0.16, -0.045); shape.lineTo(0, -0.09); shape.closePath();
+  const cloth = new THREE.Mesh(new THREE.ShapeGeometry(shape), K.mat.paint(C.good));
+  cloth.material.side = THREE.DoubleSide;
+  cloth.position.set(0.004, 0.335, 0);
+  cloth.castShadow = true;
+  g.add(pole, cloth);
+  return g;
+}
+
+/* ============================================================ the terrain */
+
+/* The kit's contour shader divides by fwidth(height), which is exactly 0 on the sliced-flat top:
+   smoothstep(0, 0, x) is undefined there and speckles the plaster (seen on SwiftShader). Page-side
+   patch, noted in the LEDGER: floor the width, which leaves every sloped pixel unchanged. */
+function flatSafeContours(mat) {
+  const orig = mat.onBeforeCompile;
+  if (typeof orig !== 'function' || mat.userData.flatSafe) return;
+  mat.userData.flatSafe = true;
+  mat.onBeforeCompile = (sh, r) => {
+    orig.call(mat, sh, r);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('smoothstep(0.0, kw * 1.15,', 'smoothstep(0.0, max(kw * 1.15, 1e-4),')
+      .replace('smoothstep(0.0, kw5 * 1.5,', 'smoothstep(0.0, max(kw5 * 1.5, 1e-4),');
+  };
+  mat.customProgramCacheKey = () => 'k-contour-flatsafe';
+}
+
+function setMode(S, mode) {
+  const st = S.state;
+  st.mode = mode;
+  st.c = lstsq(mode);
+  st.Lmin = loss(mode, st.c[0], st.c[1]);
+  st.Ltop = st.Lmin + DZ;
+  st.E = eig2(hessian(mode));
+}
+
+function buildTerrain(S, force = false) {
+  const st = S.state, k = S.knobs;
+  const p = fromRaw(st.mode, st.p0raw);
+  const key = `${st.mode}|${k.slice}|${k.slice === 'none' ? '' : p.map((v) => v.toFixed(6)).join(',')}`;
+  if (key === st.terrKey && !force) return;
+  st.terrKey = key;
+  const prev = st.hf, prevMode = st.terrMode, prevFull = st.terrFull;
+  if (prev) { K.unpick(prev.top); S.root.remove(prev.mesh); }
+  let w0 = lo(st, 0), w1 = hi(st, 0), b0 = lo(st, 1), b1 = hi(st, 1);
+  if (k.slice === 'w') b0 = p[1];            // cut the front away: the face shows L(w, b at the ball)
+  if (k.slice === 'b') w1 = p[0];            // cut the right away: the face shows L(w at the ball, b)
+  const span = Math.max(w1 - w0, b1 - b0);
+  // fmax a little above the flat top keeps the top off a contour level (no stipple on the plateau)
+  const hf = K.heightfield((w, b) => loss(st.mode, w, b), {
+    x: [w0, w1], y: [b0, b1], n: Math.max(16, Math.round(NGRID * span / (2 * HALF))), size: span * SW,
+    zScale: ZS, fmin: st.Lmin, fmax: st.Lmin + DZ * 1.06, clamp: [st.Lmin - 1, st.Ltop], base: BASE, contours: 11,
+    tint: ['#9fc6b8', '#e9e1d2', '#f4efe6'],
+  });
+  flatSafeContours(hf.top.material);
+  hf.mesh.position.set(((w0 + w1) / 2 - st.c[0]) * SW, 0, -((b0 + b1) / 2 - st.c[1]) * SW);
+  S.root.add(hf.mesh);
+  K.pick(hf.top, (hit) => tapTerrain(S, hit));
+  st.hf = hf;
+  st.terrMode = st.mode;
+  st.terrFull = k.slice === 'none';
+  // same world grid, new inputs: morph the plaster from the old surface to the new one
+  if (prev && prevFull && st.terrFull && prevMode !== st.mode && !S.shot && prev.nx === hf.nx && prev.ny === hf.ny) {
+    const tp = hf.top.geometry.attributes.position, tc = hf.top.geometry.attributes.color;
+    const sp = hf.skirt.geometry.attributes.position;
+    const oY = new Float32Array(tp.count), nY = new Float32Array(tp.count);
+    const oC = prev.top.geometry.attributes.color.array.slice(), nC = tc.array.slice();
+    for (let i = 0; i < tp.count; i++) { oY[i] = prev.top.geometry.attributes.position.array[3 * i + 1]; nY[i] = tp.array[3 * i + 1]; }
+    const osY = new Float32Array(sp.count), nsY = new Float32Array(sp.count);
+    for (let i = 0; i < sp.count; i++) { osY[i] = prev.skirt.geometry.attributes.position.array[3 * i + 1]; nsY[i] = sp.array[3 * i + 1]; }
+    st.morphing = true;
+    const token = (st.morphToken = (st.morphToken || 0) + 1);
+    S.tween(1100, (t) => {
+      if (token !== st.morphToken) return;
+      for (let i = 0; i < tp.count; i++) tp.array[3 * i + 1] = oY[i] + (nY[i] - oY[i]) * t;
+      for (let i = 0; i < tc.array.length; i++) tc.array[i] = oC[i] + (nC[i] - oC[i]) * t;
+      for (let i = 0; i < sp.count; i++) sp.array[3 * i + 1] = osY[i] + (nsY[i] - osY[i]) * t;
+      tp.needsUpdate = true; tc.needsUpdate = true; sp.needsUpdate = true;
+      hf.top.geometry.computeVertexNormals();
+      if (t >= 1) { st.morphing = false; draw(S); }
+    });
+  }
+  if (prev) prev.dispose();
+  // the flag at the bottom of the bowl (live coordinates: the bottom moves when x is re-measured)
+  st.flag.position.set(0, hOf(st, st.Lmin), 0);
+  st.flagOk = !(k.slice === 'w' && p[1] > st.c[1]) && !(k.slice === 'b' && p[0] < st.c[0]);
+  const cc = st.c;
+  st.flagTag.set({ 1: 'best line', 2: `least squares ${pr(cc, 2)}`, 3: `argmin L = ${pr(cc, 3)}` });
+  // axes along the edges
+  const e = HALF * SW, off = 0.16, lift = 0.03;
+  st.axW.set(new THREE.Vector3(-e, lift, e + off), new THREE.Vector3(e + 0.22, lift, e + off));
+  st.axB.set(new THREE.Vector3(-e - off, lift, e), new THREE.Vector3(-e - off, lift, -e - 0.22));
+  st.axL.set(new THREE.Vector3(-e - off, lift, -e - off), new THREE.Vector3(-e - off, BASE + HEIGHT + 0.36, -e - off));
+  st.tagW.move(new THREE.Vector3(e + 0.22, lift, e + off));
+  st.tagB.move(new THREE.Vector3(-e - off, lift, -e - 0.22));
+  st.tagL.move(new THREE.Vector3(-e - off, BASE + HEIGHT + 0.36, -e - off));
+}
+
+function tapTerrain(S, hit) {
+  const st = S.state;
+  const v = S.root.worldToLocal(hit.point.clone());
+  const p = clampIn(st, [v.x / SW + st.c[0], -v.z / SW + st.c[1]], 0.1);
+  st.p0raw = toRaw(st.mode, p);
+  if (!st.show.steps && !st.show.grad && S.knobs.slice === 'none') { st.show.grad = true; st.show.ring = true; st.note = 'grad'; }
+  buildTerrain(S);
+  compute(S);
+  draw(S);
+}
+
+/* ============================================================ the board */
+
+const BX0 = -1.12, BY0 = 1.42, UX = 2.24 / 7, UY = 0.84 / 7, BZ = -2.02;
+const bpt = (x, y) => new THREE.Vector3(BX0 + x * UX, BY0 + Math.max(-0.4, Math.min(7.6, y)) * UY, BZ + 0.035);
+function buildBoard(S) {
+  const st = S.state, g = new THREE.Group();
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(2.62, 1.2, 0.035), K.mat.plaster('#f6f1e8'));
+  panel.position.set(0, BY0 + 0.39, BZ);
+  panel.castShadow = true; panel.receiveShadow = true;
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(2.68, 1.26, 0.02), K.mat.brass());
+  frame.position.set(0, BY0 + 0.39, BZ - 0.022);
+  g.add(panel, frame);
+  for (const x of [-1.05, 1.05]) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, BY0 - 0.2, 10).translate(0, (BY0 - 0.2) / 2, 0), K.mat.brass());
+    post.position.set(x, 0, BZ - 0.03);
+    post.castShadow = true;
+    g.add(post);
+  }
+  const brass = K.mat.brass();
+  const ax1 = rod(brass, 0.006), ax2 = rod(brass, 0.006);
+  ax1.set(bpt(0, 0), bpt(7.25, 0)); ax2.set(bpt(0, 0), bpt(0, 7.35));
+  g.add(ax1.mesh, ax2.mesh);
+  // data: six blue beads
+  const dots = new THREE.InstancedMesh(new THREE.SphereGeometry(0.036, 18, 12), K.mat.paint(C.data), XS.length);
+  const mtx = new THREE.Matrix4();
+  XS.forEach((x, i) => { mtx.makeTranslation(bpt(x, YS[i]).add(new THREE.Vector3(0, 0, 0.012))); dots.setMatrixAt(i, mtx); });
+  dots.castShadow = true;
+  g.add(dots);
+  // residual sticks (red), the model line (ink), the best line (green), the step's new line, the pivot
+  st.resid = XS.map(() => { const r = rod(K.mat.paint(C.grad), 0.0075); g.add(r.mesh); return r; });
+  st.line = rod(K.mat.ink ? K.mat.ink() : K.mat.paint(C.ink), 0.0095);
+  st.best = rod(K.mat.paint(C.good), 0.006);
+  st.newLine = rod(K.mat.paint(C.data), 0.006);
+  g.add(st.line.mesh, st.best.mesh, st.newLine.mesh);
+  st.pivot = K.bead([0, 0, 0], C.brass, 0.03);
+  st.pivot.material = K.mat.brass();
+  g.add(st.pivot);
+  lineOn(st.best, 0.8, 1.0, 0.004);
+  st.board = g;
+  S.root.add(g);
+  st.boardTag = K.label(new THREE.Vector3(0, BY0 + 1.03, BZ), { 1: 'toy data: 6 points', 2: 'toy data · 6 points', 3: 'toy data, n = 6' }, { cls: 'tag', anchor: 'bottom', dy: -2 });
+}
+function lineOn(r, w, b, dz = 0) {   // draw y = w x + b across the board, clipped to it
+  const pts = [];
+  const x0 = 0, x1 = 7.1, y = (x) => w * x + b;
+  let a = x0, c = x1;
+  const ylo = -0.3, yhi = 7.5;
+  if (Math.abs(w) > 1e-9) {
+    const xa = (ylo - b) / w, xb = (yhi - b) / w;
+    a = Math.max(a, Math.min(xa, xb)); c = Math.min(c, Math.max(xa, xb));
+  } else if (b < ylo || b > yhi) { r.mesh.visible = false; return; }
+  if (c <= a) { r.mesh.visible = false; return; }
+  const A = bpt(a, y(a)), B = bpt(c, y(c));
+  A.z += dz; B.z += dz;
+  r.set(A, B);
+}
+function drawBoard(S) {
+  const st = S.state, on = !!st.show.board;
+  st.board.visible = on;
+  st.boardTag.show(on && !!st.show.tags);
+  if (!on) return;
+  const [w, b] = st.p0raw;
+  lineOn(st.line, w, b, 0.01);
+  XS.forEach((x, i) => {
+    const yh = w * x + b;
+    const A = bpt(x, YS[i]), B = bpt(x, yh);
+    A.z += 0.006; B.z += 0.006;
+    st.resid[i].set(A, B);
+  });
+  const xp = st.mode === 'raw' ? 0 : X_MEAN;
+  st.pivot.position.copy(bpt(xp, w * xp + b)).add(new THREE.Vector3(0, 0, 0.02));
+  st.pivot.visible = !!st.show.pivot;
+  // the line after the dissected step
+  const one = st.show.steps && S.knobs.opt !== 'all' ? S.knobs.opt : null;
+  if (one && st.stepEnd) {
+    const q = toRaw(st.mode, st.stepEnd);
+    st.newLine.mesh.material.color.set(OPT[one].color);
+    lineOn(st.newLine, q[0], q[1], 0.016);
+  } else st.newLine.mesh.visible = false;
+}
+
+/* ============================================================ compute + draw */
+
+function compute(S) {
+  const st = S.state, k = S.knobs;
+  st.scale = k.x2 ? 2 : 1;
+  st.p = fromRaw(st.mode, st.p0raw);
+  st.L0 = loss(st.mode, st.p[0], st.p[1], st.scale);
+  st.g = grad(st.mode, st.p[0], st.p[1], st.scale);
+  st.gd = grad(st.mode, st.p[0], st.p[1]);
+  st.runs = {};
+  for (const o of OPTS) st.runs[o.id] = runOpt(st.mode, st.p, o.id, st.hp[o.id], TMAX, st.scale);
+  st.runs.cmp = runOpt(st.mode, st.p, 'sgd', { lr: st.hp.mom.lr }, TMAX, st.scale);   // SGD at momentum's lr
+}
+
+function draw(S) {
+  const st = S.state, k = S.knobs, sh = st.show;
+  const cut = k.slice !== 'none';
+  const hide = !!st.morphing;                       // strings wait until the plaster has settled
+  st.ball.position.copy(W(st, st.p, R * 0.92));
+  st.anchor.position.copy(st.readAt || st.ball.position);
+  st.flag.visible = !!st.flagOk && sh.flag !== false;
+  drawProfile(S, cut);
+  drawGrad(S, !cut && !hide);
+  drawSteps(S, !cut && !hide && !!sh.steps);
+  if (st.readAt) st.anchor.position.copy(st.readAt);
+  drawBoard(S);
+  // axes + tags: in a cut view, only the axis that runs along the cut
+  const ax = !!sh.axes, tg = ax && !!sh.tags;
+  const onW = ax && k.slice !== 'b', onB = ax && k.slice !== 'w', onL = ax && !cut;
+  st.axW.show(onW); st.axB.show(onB); st.axL.show(onL);
+  st.tagW.show(tg && onW); st.tagB.show(tg && onB); st.tagL.show(tg && onL);
+  st.flagTag.show(!!sh.flagTag && st.flag.visible);
+  readouts(S);
+  S.invalidate();
+}
+
+/* ---- the cut views: the edge, a brass straightedge, and the slope triangle or the wiggle test */
+function drawProfile(S, on) {
+  const st = S.state, k = S.knobs, P = st.prof;
+  P.group.visible = on;
+  if (!on) return;
+  const ax = k.slice, i = ax === 'w' ? 0 : 1, p = st.p;
+  const at = (u) => (ax === 'w' ? [u, p[1]] : [p[0], u]);
+  const face = ax === 'w' ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);
+  // along the cut: world direction of +1 in this parameter
+  const run1 = ax === 'w' ? new THREE.Vector3(SW, 0, 0) : new THREE.Vector3(0, 0, -SW);
+  // the edge of the cut face (this IS the slice curve)
+  const n = 220, pts = [];
+  const u0 = lo(st, i), u1 = ax === 'w' ? hi(st, 0) : hi(st, 1);
+  for (let j = 0; j <= n; j++) {
+    const u = u0 + (u1 - u0) * j / n;
+    pts.push(W(st, at(u)).addScaledVector(face, TR * 1.4).add(new THREE.Vector3(0, TR * 0.5, 0)));
+  }
+  P.edge.set(pts);
+  // tangent through the ball: height(u) = h0 + slope * ZS * (u - p_i)
+  const g = st.gd[i], h0 = hOf(st, surfL(st, p));
+  const O = W(st, p).addScaledVector(face, 0.028);
+  const dir = run1.clone().add(new THREE.Vector3(0, g * ZS, 0));      // world change per +1 of the parameter
+  const topY = BASE + HEIGHT + 0.42, botY = 0.05;
+  let a = -0.8 / dir.length(), b = 0.8 / dir.length();
+  const ylim = (y) => (g * ZS === 0 ? [-Infinity, Infinity] : [(y - h0) / (g * ZS)]);
+  if (Math.abs(g * ZS) > 1e-9) {
+    const ua = ylim(botY)[0], ub = ylim(topY)[0];
+    a = Math.max(a, Math.min(ua, ub)); b = Math.min(b, Math.max(ua, ub));
+  }
+  a = Math.max(a, u0 - p[i]); b = Math.min(b, u1 - p[i]);
+  P.rod.set(O.clone().addScaledVector(dir, a), O.clone().addScaledVector(dir, b));
+  // the slope triangle (run RUN, rise on the straightedge) or the wiggle (run eps, rise to the real edge)
+  const wig = !!st.wig;
+  const e = wig ? k.eps : RUN[ax];
+  const B = O.clone().addScaledVector(run1, e);
+  const onRod = O.clone().addScaledVector(dir, e);
+  const q = at(p[i] + e);
+  const real = inDomain(st, q) ? W(st, q).addScaledVector(face, 0.028) : onRod.clone();
+  P.run.set(O, B);
+  P.rise.set(B, wig ? real : onRod);
+  P.tick.visible = wig;
+  P.tick.position.copy(onRod);
+  P.ghost.visible = wig;
+  P.ghost.position.copy(inDomain(st, q) ? W(st, q, R * 0.8).addScaledVector(face, 0.02) : onRod);
+  st.riseTip = wig ? real : onRod;
+  P.riseMark.position.copy(st.riseTip);
+}
+
+/* ---- the gradient: two slopes, their sum, the level ring and a right angle */
+function drawGrad(S, full) {
+  const st = S.state, sh = st.show, p = st.p, g = st.g;
+  const gl = Math.hypot(g[0], g[1]);
+  const on = full && !!sh.grad && gl > 1e-9;
+  const cap = 1.35, sc = Math.min(KG, cap / Math.max(gl, 1e-9));
+  const tip = [p[0] + sc * g[0], p[1] + sc * g[1]];
+  st.gArrow.set(drape(st, p, tip, TR * 1.6));
+  st.gArrow.show(on);
+  const parts = on && !!sh.parts;
+  st.gW.set(drape(st, p, [p[0] + sc * g[0], p[1]], TR));
+  st.gB.set(drape(st, [p[0] + sc * g[0], p[1]], tip, TR));
+  st.gW.show(parts && Math.abs(g[0]) > 1e-6); st.gB.show(parts && Math.abs(g[1]) > 1e-6);
+  // downhill
+  const dn = on && !!sh.down;
+  st.down.set(drape(st, p, [p[0] - sc * g[0], p[1] - sc * g[1]], TR * 1.4));
+  st.down.show(dn);
+  // the level ring through the ball, clipped to the square
+  const ringOn = full && !!sh.ring;
+  const ring = ringOn ? levelRing(st.mode, p) : [];
+  const runs = [];
+  let cur = [];
+  for (const q of ring) {
+    if (inDomain(st, q)) cur.push(q);
+    else if (cur.length) { runs.push(cur); cur = []; }
+  }
+  if (cur.length) runs.push(cur);
+  if (runs.length > 1 && ring.length && inDomain(st, ring[0]) && inDomain(st, ring[ring.length - 1])) {
+    runs[0] = runs.pop().concat(runs[0]);        // the ring starts at the ball: stitch the wrap-around
+  }
+  st.rings.forEach((t, j) => {
+    const r = runs[j];
+    if (r && r.length > 1) { t.set(r.map((q) => W(st, q, TR))); t.mesh.visible = true; } else t.mesh.visible = false;
+  });
+  // right angle between the ring and the gradient
+  const ra = ringOn && on && !!sh.right;
+  if (ra) {
+    const u = [g[0] / gl, g[1] / gl], t = [-u[1], u[0]], a = 0.13;
+    const q1 = [p[0] + a * t[0], p[1] + a * t[1]], q2 = [q1[0] + a * u[0], q1[1] + a * u[1]], q3 = [p[0] + a * u[0], p[1] + a * u[1]];
+    st.right.set([...drape(st, q1, q2, TR * 1.2), ...drape(st, q2, q3, TR * 1.2)]);
+  }
+  st.right.mesh.visible = ra;
+}
+
+/* ---- the steps: path so far, the dissected step, momentum's memory + push, Adam's box */
+function drawSteps(S, on) {
+  const st = S.state, k = S.knobs;
+  const which = on ? (k.opt === 'all' ? ['sgd', 'mom', 'adam'] : [k.opt]) : [];
+  st.stepEnd = null;
+  st.stepInfo = {};
+  for (const o of OPTS) {
+    const V = st.vis[o.id], shown = which.includes(o.id);
+    const Rn = st.runs[o.id];
+    const t = Math.min(k.t, Rn.P.length - 1);
+    // at step 1 momentum IS plain SGD: in "all three", draw it once
+    const dup = k.opt === 'all' && o.id === 'mom' && t === 1;
+    if (!shown || t < 1 || dup) {
+      V.path.mesh.visible = false; V.arrow.show(false); V.ghost.visible = false; V.from.visible = false;
+      if (shown && dup) st.stepInfo[o.id] = { dup: true };
+      continue;
+    }
+    const P = Rn.P, a = P[t - 1], b = P[t];
+    // path so far
+    if (t > 1) {
+      const pts = [];
+      for (let j = 0; j < t; j++) { if (!inDomain(st, P[j])) break; pts.push(W(st, P[j], TR)); }
+      V.path.set(pts); V.path.mesh.visible = pts.length > 1;
+      V.from.visible = inDomain(st, a);
+      V.from.position.copy(W(st, a, R * 0.55));
+    } else { V.path.mesh.visible = false; V.from.visible = false; }
+    // the step itself: a hop from a to b (a straight chord above the bowl)
+    const clip = clipSeg(st, a, b);
+    const off = !inDomain(st, b);
+    if (clip && inDomain(st, a)) {
+      const { A, B } = clearChord(st, a, clip.b, R * 0.6);
+      const d = B.clone().sub(A), len = d.length();
+      const shorten = off ? 0 : Math.min(R * 0.75, len * 0.3);
+      V.arrow.set(A, A.clone().addScaledVector(d.normalize(), Math.max(1e-4, len - shorten)));
+      V.arrow.show(true);
+      V.ghost.visible = !off;
+      V.ghost.position.copy(W(st, b, R * 0.75));
+    } else { V.arrow.show(false); V.ghost.visible = false; }
+    st.stepInfo[o.id] = { t, a, b, off, d: [b[0] - a[0], b[1] - a[1]], La: loss(st.mode, a[0], a[1], st.scale), Lb: loss(st.mode, b[0], b[1], st.scale) };
+    if (k.opt !== 'all') { st.stepEnd = b; st.stepFrom = a; }
+  }
+  // momentum's step opened up, as two pulls laid on the plaster from the same spot: the memory
+  // (0.9 x the last step, faded teal) and the fresh push (SGD's own step, blue); the bold teal hop
+  // is their sum. Seen from overhead (the beat's camera) the strings keep their (w, b) proportions.
+  const momOn = on && k.opt === 'mom';
+  const Rm = st.runs.mom, tm = Math.min(k.t, Rm.P.length - 1);
+  const sp = momOn && tm >= 1 && st.stepInfo.mom ? momentumSplit(Rm.P, Rm.G, tm, st.hp.mom.lr, st.hp.mom.mu) : null;
+  const pull = (v, arrow) => {
+    if (Math.hypot(v[0], v[1]) < 1e-6) { arrow.show(false); return; }
+    const pts = drape(st, sp.from, [sp.from[0] + v[0], sp.from[1] + v[1]], TR * 1.5);
+    arrow.set(pts);
+    arrow.show(pts.length > 1);
+  };
+  if (sp && inDomain(st, sp.from)) {
+    if (tm >= 2) pull(sp.mem, st.memArrow); else st.memArrow.show(false);
+    pull(sp.fresh, st.freshArrow);
+    st.stepInfo.mom.split = sp;
+  } else { st.memArrow.show(false); st.freshArrow.show(false); }
+  // beside it, plain SGD at the same lr for the same number of steps (faint blue)
+  const cmpOn = momOn && tm >= 2;
+  if (cmpOn) {
+    const Pc = st.runs.cmp.P, tc = Math.min(tm, Pc.length - 1), pts = [];
+    for (let j = 0; j <= tc; j++) { if (!inDomain(st, Pc[j])) break; pts.push(W(st, Pc[j], TR)); }
+    st.cmpPath.set(pts);
+    st.cmpPath.mesh.visible = pts.length > 1;
+    st.cmpEnd.visible = pts.length === tc + 1;
+    st.cmpEnd.position.copy(W(st, Pc[tc], R * 0.45));
+    if (st.stepInfo.mom) {
+      st.stepInfo.mom.prog = { mom: alongGully(st.mode, Rm.P[0], Rm.P[tm]), sgd: alongGully(st.mode, Pc[0], Pc[tc]),
+        Lmom: loss(st.mode, Rm.P[tm][0], Rm.P[tm][1], st.scale), Lsgd: loss(st.mode, Pc[tc][0], Pc[tc][1], st.scale) };
+    }
+  } else { st.cmpPath.mesh.visible = false; st.cmpEnd.visible = false; }
+  // Adam's per-axis ruler: a box of half-width lr around the step's start
+  const adOn = on && k.opt === 'adam';
+  const Ra = st.runs.adam, ta = Math.min(k.t, Ra.P.length - 1);
+  if (adOn && ta >= 1) {
+    const c = Ra.P[ta - 1], h = st.hp.adam.lr;
+    const cs = [[c[0] - h, c[1] - h], [c[0] + h, c[1] - h], [c[0] + h, c[1] + h], [c[0] - h, c[1] + h]];
+    const pts = [];
+    for (let j = 0; j < 4; j++) pts.push(...drape(st, cs[j], cs[(j + 1) % 4], TR * 1.2));
+    st.box.set(pts);
+    st.box.mesh.visible = pts.length > 1;
+    st.stepInfo.adam.parts = adamStep(Ra.M, Ra.V, ta, h);
+  } else st.box.mesh.visible = false;
+  // the readout follows the dissected step
+  if (on && k.opt !== 'all' && st.stepFrom && inDomain(st, st.stepFrom)) st.anchor.position.copy(W(st, st.stepFrom, R));
+}
+
+/* ============================================================ readouts */
+
+function readouts(S) {
+  const st = S.state, k = S.knobs, T = S.tier, g = st.g, sc = st.scale;
+  const x2 = sc !== 1 ? ' (×2)' : '';
+  const nm = st.note;
+  let r = '';
+  const cut = k.slice !== 'none';
+  if (cut && (nm === 'slope' || nm === 'wiggle')) {
+    const ax = k.slice, i = ax === 'w' ? 0 : 1, gi = g[i], run = RUN[ax];
+    if (nm === 'slope' || !st.wig) {
+      r = T === 1 ? `slope along ${ax}: **${fx(gi, 2)}**\n${ax} + ${run} → loss ${sx(run * gi, 2)}`
+        : T === 2 ? `∂L/∂${ax} = **${fx(gi, 2)}**${x2}\nrun ${run} → rise ${sx(run * gi, 3)}`
+          : `∂L/∂${ax} = ${ax === 'w' ? '2·mean(r·x)' : '2·mean(r)'}\n= **${fx(gi, 3)}**${x2}`;
+    } else {
+      const wv = wiggle(st.mode, st.p, ax, k.eps, sc);
+      r = T === 1 ? `nudge ${ax} by ${fx(k.eps, 3)}\nloss changes **${sx(wv.dL, 4)}**\nstraightedge said ${sx(wv.pred, 4)}`
+        : T === 2 ? `ε = ${fx(k.eps, 3)} · ΔL = **${sx(wv.dL, 4)}**\nε·∂L/∂${ax} = ${sx(wv.pred, 4)}\nΔL/ε = ${fx(wv.forward, 3)}`
+          : `forward (L(${ax}+ε) − L)/ε = **${fx(wv.forward, 4)}**\ncentral (L(${ax}+ε) − L(${ax}−ε))/2ε = ${fx(wv.central, 4)}\n∂L/∂${ax} = ${fx(wv.g, 4)} · ε = ${fx(k.eps, 3)}`;
+    }
+  } else if (nm === 'grad' || nm === 'down' || nm === 'min') {
+    const gl = Math.hypot(g[0], g[1]);
+    if (gl < 1e-6) r = T === 1 ? 'slopes **(0.00, 0.00)**\nflat in every direction' : `∇L = **(0.00, 0.00)**${x2}\nflat: the bottom`;
+    else if (nm === 'down') {
+      const to = [st.c[0] - st.p[0], st.c[1] - st.p[1]];
+      const ang = Math.acos(Math.max(-1, Math.min(1, (-g[0] * to[0] - g[1] * to[1]) / (gl * Math.hypot(to[0], to[1]))))) * 180 / Math.PI;
+      r = T === 1 ? `downhill = minus the gradient\n${ang.toFixed(0)}° off the way to the flag`
+        : `−∇L = ${ps([-g[0], -g[1]])}${x2}\n${ang.toFixed(0)}° off the direction to the bottom`;
+    } else {
+      r = T === 1 ? `the two slopes: **${pr(g)}**\nsteepness ${fx(gl, 2)}`
+        : T === 2 ? `∇L = (∂L/∂w, ∂L/∂b)\n= **${pr(g)}**${x2} · |∇L| = ${fx(gl, 2)}`
+          : `∇L = 2·(mean(r·f(x)), mean(r)) = **${pr(g, 3)}**${x2}`;
+    }
+  } else if (nm === 'step') {
+    const info = st.stepInfo || {};
+    if (k.opt === 'all') {
+      const lines = [];
+      for (const o of OPTS) {
+        const I = info[o.id];
+        if (!I) continue;
+        if (I.dup) { lines.push(`${o.name}: same as SGD at step 1`); continue; }
+        lines.push(`${o.name} ${I.off ? 'leaves the map' : ps(I.d, 2)}`);
+      }
+      r = `${T === 1 ? 'step' : 'Δθ at step'} ${k.t}${x2}\n` + lines.join('\n');
+    } else {
+      const I = info[k.opt];
+      if (!I) r = '';
+      else if (k.opt === 'sgd') {
+        r = T === 1 ? `SGD step ${I.t}: ${ps(I.d, 2)}\nloss ${fx(I.La, 3)} → **${I.off ? 'off the map' : fx(I.Lb, 3)}**`
+          : T === 2 ? `−lr·∇L = ${ps(I.d, 3)}${x2}\nloss ${fx(I.La, 3)} → **${I.off ? 'off the map' : fx(I.Lb, 3)}**`
+            : `θ ← θ − lr·g, lr = ${fx(st.hp.sgd.lr, 3)}\nΔθ = ${ps(I.d, 3)} · L → **${I.off ? 'off' : fx(I.Lb, 3)}**`;
+      } else if (k.opt === 'mom') {
+        const sp = I.split, pg = I.prog, mu = fx(st.hp.mom.mu, 1);
+        if (!sp) r = `${T === 1 ? 'momentum step' : 'Δθ at step'} ${I.t}: **${ps(I.d, 3)}**${x2}`;
+        else if (I.t < 2) {
+          r = T === 1 ? `step 1: no memory yet\n= SGD's step **${ps(I.d, 2)}**`
+            : T === 2 ? `t = 1: b = g, so Δθ = −lr·∇L\n= **${ps(I.d, 3)}**${x2} (plain SGD)`
+              : `b₁ = g₁ ⇒ Δθ₁ = −lr·g₁ = **${ps(I.d, 3)}**${x2}`;
+        } else {
+          // split each vector across / along the gully (a round bowl has no gully: use w and b)
+          const gully = st.E.kappa >= 1.5, sg = towardBottom(st.mode, st.p);
+          const part = (v) => { if (!gully) return v; const a = acrossAlong(st.mode, v); return [a[0], sg * a[1]]; };
+          const m = part(sp.mem), f = part(sp.fresh), n = part(sp.net);
+          const sum = (j, d) => `${fx(m[j], d)} ${f[j] < 0 ? '−' : '+'} ${fx(Math.abs(f[j]), d)} → **${fx(n[j], d)}**`;
+          const nm = gully ? { 1: ['sideways', 'down the gully'], 2: ['across', 'along'], 3: ['v₁ (steep)', 'v₂ (gentle)'] }[T] : ['w', 'b'];
+          const d2 = T === 1 ? 2 : 3;
+          let tail = '';
+          if (pg && gully && pg.sgd > 1e-4 && pg.mom > 0) {
+            tail = T === 1 ? `after ${I.t} steps: **${fx(pg.mom / pg.sgd, 1)}×** as far as SGD`
+              : T === 2 ? `${I.t} steps down the gully: **${fx(pg.mom, 2)}** (SGD ${fx(pg.sgd, 2)})`
+                : `Σ along v₂: **${fx(pg.mom, 3)}** vs SGD ${fx(pg.sgd, 3)}`;
+          } else if (pg) tail = `loss after ${I.t} steps: **${fx(pg.Lmom, 3)}** (SGD ${fx(pg.Lsgd, 3)})`;
+          const head = T === 1 ? `step ${I.t} = ${mu} × last step + today's push`
+            : T === 2 ? `Δθ = ${mu}·(last Δθ) − lr·∇L, t = ${I.t}${x2}` : `Δθₜ = μ·Δθₜ₋₁ − lr·gₜ, t = ${I.t}${x2}`;
+          r = [head, `${nm[0]} ${sum(0, T === 1 ? 2 : 3)}`, `${nm[1]} ${sum(1, d2)}`, tail].filter(Boolean).join('\n');
+        }
+      } else {
+        const A = I.parts;
+        r = T === 1 ? `Adam step ${I.t}: **${ps(I.d, 3)}**\nbox: ± step size ${fx(st.hp.adam.lr, 2)}`
+          : T === 2 ? `−lr·m̂/√v̂ = **${ps(I.d, 3)}**${x2}\nruler ±lr = ±${fx(st.hp.adam.lr, 3)}`
+            : A ? `m̂ = ${pr(A.mh, 3)}, √v̂ = (${fx(Math.sqrt(A.vh[0]), 3)}, ${fx(Math.sqrt(A.vh[1]), 3)})\nΔθ = **${ps(I.d, 4)}**` : '';
+      }
+    }
+  } else if (nm === 'centre' && st.noteMode !== 'hess') {
+    r = T === 1 ? `slopes **${pr(g)}**\n(${S.tr(MODE_NAME[st.mode])})` : `∇L = **${pr(g)}**${x2}\ninputs: ${S.tr(MODE_NAME[st.mode])}`;
+  }
+  const side = cut && (nm === 'slope' || nm === 'wiggle');
+  (side ? st.readSide : st.readout).set(r);
+  st.readSide.show(side && !!r);
+  st.readout.show(!side && !!r);
+  // the free note: the Hessian and its condition number
+  if (st.noteMode === 'hess') {
+    const H = hessian(st.mode, sc), E = st.E;
+    const raw = eig2(hessian('raw')).kappa;
+    // with the centring note, the gradient joins this one label (one card, clear of the bowl)
+    const gl = nm === 'centre' ? (T === 1 ? `slopes **${pr(g)}** · ${S.tr(MODE_NAME[st.mode])}\n` : `∇L = **${pr(g)}**${x2} · inputs: ${S.tr(MODE_NAME[st.mode])}\n`) : '';
+    st.hessLbl.set(gl + (T === 1
+      ? `steep ÷ gentle = **${fx(E.kappa, 2)}** (raw inputs: ${fx(raw, 1)})`
+      : `H = [[${fx(H[0][0], 2)}, ${fx(H[0][1], 2)}], [${fx(H[1][0], 2)}, ${fx(H[1][1], 2)}]]\nκ = λmax/λmin = **${fx(E.kappa, 2)}** (raw: ${fx(raw, 1)})`));
+    st.hessLbl.show(true);
+  } else st.hessLbl.show(false);
+}
+
+/* ============================================================ scene config */
+
+function scene(S, o) {
+  const st = S.state;
+  st.show = {
+    grad: !!o.grad, parts: !!o.parts, ring: !!o.ring, right: !!o.right, down: !!o.down, steps: !!o.steps,
+    board: !!o.board, pivot: !!o.pivot, axes: !!o.axes, tags: !!o.tags, flagTag: !!o.flagTag, flag: o.flag !== false,
+  };
+  st.readAt = o.readAt ? new THREE.Vector3(...o.readAt) : null;
+  st.readout.anchor(o.readAnchor || 'bottom');
+  st.note = o.note || null;
+  st.wig = !!o.wig;
+  st.noteMode = o.hess ? 'hess' : null;
+  if (o.hess) { st.hessLbl.move(new THREE.Vector3(...(o.hessAt || [-0.95, BASE + HEIGHT + 0.12, 1.25]))); st.hessLbl.anchor(o.hessAnchor || 'bottom'); }
+  if (o.ball) st.p0raw = o.ball.slice();
+  buildTerrain(S);
+  compute(S);
+  if (o.figure) {
+    const F = st.fig;
+    F.group.visible = true;
+    F.place(o.figAt || [1.25, 0, 0.5], o.face ?? -1.1);
+    if (o.figOnTop) F.group.position.y = hOf(st, st.Ltop);
+    else F.group.position.y = 0;
+    F.pose('stand', { ms: 0 });
+    const doPose = () => F.pose(o.figure, { at: o.at ? (typeof o.at === 'function' ? o.at(S) : o.at) : undefined });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  draw(S);
+}
+const ballWorld = (S) => S.state.ball.getWorldPosition(new THREE.Vector3());
+
+function resetHp(S) { S.state.hp = JSON.parse(JSON.stringify(HP0)); }
+function syncLr(S) {
+  const st = S.state, id = S.knobs.opt === 'all' ? 'sgd' : S.knobs.opt;
+  S.setKnob('lr', st.hp[id].lr, { silent: true });
+}
+function stepNote(S) {
+  const st = S.state;
+  st.show.steps = true;
+  st.note = 'step';
+  if (S.knobs.slice !== 'none') { S.setKnob('slice', 'none', { silent: true }); buildTerrain(S); }
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'd03-step', num: '06', week: 3, kind: 'deep',
+  title: 'Anatomy of one step',
+  subtitle: 'What a gradient is, and what SGD, momentum and Adam each do with it.',
+  back2d: '#week-03',
+  film: 'deep-w03-adam',
+  plinth: { r: 2.56, h: 0.14 },
+
+  knobs: [
+    { id: 'inputs', type: 'select', wide: true, label: { 1: 'How x is measured', 2: 'Inputs', 3: 'Feature x' }, value: 'raw',
+      options: [['raw', { 1: 'Raw: x = 1 to 6', 2: 'Raw x (1 … 6)', 3: 'x' }],
+        ['centred', { 1: 'Centred: x − 3.5', 2: 'Centred (x − 3.5)', 3: 'x − x̄' }],
+        ['standard', { 1: 'Centred and scaled', 2: 'Standardised ((x − 3.5)/1.71)', 3: '(x − x̄)/σ' }]] },
+    { id: 'opt', type: 'select', label: { 1: 'Stepper', 2: 'Optimiser', 3: 'Optimiser' }, value: 'sgd',
+      options: [['sgd', 'SGD'], ['mom', { 1: 'Momentum', 2: 'Momentum', 3: 'SGD, μ = 0.9' }], ['adam', 'Adam'], ['all', 'All three']] },
+    { id: 'slice', type: 'select', label: { 1: 'Cut the plaster', 2: 'Slice', 3: 'Section' }, value: 'none',
+      options: [['none', { 1: 'No cut', 2: 'None', 3: 'none' }], ['w', { 1: 'Along w', 2: 'Along w', 3: 'b = b₀' }], ['b', { 1: 'Along b', 2: 'Along b', 3: 'w = w₀' }]] },
+    { id: 'x2', type: 'toggle', label: { 1: 'Loss twice as big', 2: 'Loss × 2', 3: 'L → 2L' }, value: false },
+    { id: 'lr', type: 'range', label: { 1: 'Step size (shown stepper)', 2: 'Learning rate lr (shown optimiser)', 3: 'lr (shown; SGD + momentum in All)' },
+      min: 0.002, max: 1, log: true, value: 0.05, fmt: (v) => K.fmt(v, 3) },
+    { id: 't', type: 'range', label: { 1: 'Which step to open up', 2: 'Step dissected, t', 3: 't' }, min: 1, max: TMAX, step: 1, value: 1, fmt: (v) => String(v) },
+    { id: 'eps', type: 'range', label: { 1: 'Nudge size', 2: 'Wiggle size ε', 3: 'ε (finite difference)' }, min: 0.001, max: 0.5, log: true, value: 0.1, fmt: (v) => K.fmt(v, 3) },
+    { id: 'reset', type: 'button', wide: true, label: { 1: 'Ball back to start', 2: 'Ball back to (0.8, 0)', 3: 'θ ← (0.8, 0)' },
+      onClick: (S) => { S.state.p0raw = START.slice(); buildTerrain(S); compute(S); draw(S); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    resetHp(S);
+    st.p0raw = START.slice();
+    st.show = {};
+    setMode(S, 'raw');
+    st.ball = K.bead([0, 0, 0], C.ink, R);
+    st.anchor = new THREE.Object3D();
+    S.root.add(st.ball, st.anchor);
+    st.flag = flagMesh();
+    st.flag.rotation.y = -0.6;
+    S.root.add(st.flag);
+    // axes
+    const brassArrow = () => { const a = K.arrow([0, 0, 0], [1, 0, 0], C.brass, { r: 0.009 }); a.group.traverse((m) => { if (m.isMesh) m.material = K.mat.brass(); }); S.root.add(a.group); return a; };
+    st.axW = brassArrow(); st.axB = brassArrow(); st.axL = brassArrow();
+    st.tagW = K.label([0, 0, 0], { 1: 'w = tilt of the line', 2: 'w (slope)', 3: 'w' }, { cls: 'tag', anchor: 'left', dx: 6, dy: 0 });
+    st.tagB = K.label([0, 0, 0], { 1: 'b = height of the line', 2: 'b (intercept)', 3: 'b' }, { cls: 'tag', anchor: 'bottom', dy: -4 });
+    st.tagL = K.label([0, 0, 0], { 1: 'height = how badly it misses', 2: 'loss (MSE)', 3: 'L(w, b)' }, { cls: 'tag', anchor: 'bottom', dy: -4 });
+    st.flagTag = K.label(st.flag, { 1: 'best line', 2: 'least squares (0.8, 1.0)', 3: 'argmin L' }, { cls: 'tag', anchor: 'bottom', dy: -40 });
+    // the cut view: edge, straightedge, slope triangle, wiggle
+    const P = { group: new THREE.Group() };
+    P.edge = K.tube([], C.ink, TR * 1.1);
+    P.rod = rod(K.mat.brass(), 0.0125);
+    P.run = rod(K.mat.brass(), 0.0065);
+    P.rise = rod(K.mat.paint(C.grad), 0.0075);
+    P.tick = K.bead([0, 0, 0], C.brass, 0.022); P.tick.material = K.mat.brass();
+    P.ghost = ghostBead(C.ink, R * 0.8);
+    P.riseMark = new THREE.Object3D();
+    P.group.add(P.edge.mesh, P.rod.mesh, P.run.mesh, P.rise.mesh, P.tick, P.ghost, P.riseMark);
+    P.group.visible = false;
+    S.root.add(P.group);
+    st.prof = P;
+    // gradient pieces
+    st.gArrow = lying(C.grad, 0.017);
+    st.gW = lying('#e38a8a', 0.011);
+    st.gB = lying('#e38a8a', 0.011);
+    st.down = lying(C.ink, 0.014);
+    st.rings = [0, 1, 2, 3].map(() => { const t = K.tube([], C.ink, TR * 0.9); S.root.add(t.mesh); return t; });
+    st.right = K.tube([], C.brass, 0.0085, { material: K.mat.brass() });
+    S.root.add(st.gArrow.group, st.gW.group, st.gB.group, st.down.group, st.right.mesh);
+    // steppers
+    st.vis = {};
+    for (const o of OPTS) {
+      const path = K.tube([], o.color, TR * 0.85);
+      const arrow = K.arrow([0, 0, 0], [0, 1, 0], o.color, { r: 0.016 });
+      const ghost = ghostBead(o.color, R * 0.75);
+      const from = K.bead([0, 0, 0], o.color, R * 0.5);
+      S.root.add(path.mesh, arrow.group, ghost, from);
+      st.vis[o.id] = { path, arrow, ghost, from };
+    }
+    st.memArrow = lying(C.aux, 0.0115, 0.55);            // momentum's memory: 0.9 x the last step
+    st.freshArrow = lying(C.data, 0.0115);               // the fresh push: SGD's own step from here
+    st.cmpPath = K.tube([], C.data, TR * 0.7, { material: new THREE.MeshStandardMaterial({ color: C.data, roughness: 0.8, transparent: true, opacity: 0.45, depthWrite: false }), shadow: false });
+    st.cmpEnd = ghostBead(C.data, R * 0.45);
+    S.root.add(st.memArrow.group, st.freshArrow.group, st.cmpPath.mesh, st.cmpEnd);
+    st.box = K.tube([], C.brass, 0.008, { material: K.mat.brass() });
+    S.root.add(st.box.mesh);
+    // the board, the figure, labels
+    buildBoard(S);
+    st.fig = K.figure();
+    st.fig.group.scale.setScalar(0.72);
+    S.root.add(st.fig.group);
+    st.readout = K.label(st.anchor, '', { cls: 'readout', dy: -16 });
+    st.readSide = K.label(st.ball, '', { cls: 'readout', anchor: 'right', dx: -14, dy: 6 });
+    st.readSide.show(false);
+    st.hessLbl = K.label([0, 0, 0], '', { cls: 'note', anchor: 'bottom', dy: -6 });
+    st.hessLbl.move(new THREE.Vector3(-0.95, BASE + HEIGHT + 0.12, 1.25));
+    st.hessLbl.show(false);
+  },
+
+  rebuild(S, id) {
+    const st = S.state, k = S.knobs, ch = new Set(S.changed || []);
+    if (id === '*') {                                  // a beat or a prediction: deterministic setup
+      resetHp(S);
+      if (ch.has('lr') && k.opt !== 'all') st.hp[k.opt].lr = k.lr;
+      syncLr(S);
+      st.p0raw = START.slice();
+      setMode(S, k.inputs);
+      buildTerrain(S);
+      compute(S);
+      draw(S);
+      return;
+    }
+    if (id === 'inputs') { setMode(S, k.inputs); buildTerrain(S); compute(S); draw(S); return; }
+    if (id === 'slice') {
+      buildTerrain(S);
+      if (k.slice !== 'none') { st.note = st.wig ? 'wiggle' : 'slope'; }
+      else if (!st.show.steps) { st.show.grad = true; st.show.ring = true; st.note = 'grad'; }
+      compute(S); draw(S); return;
+    }
+    if (id === 'eps') {
+      st.wig = true; st.note = 'wiggle';
+      if (k.slice === 'none') { S.setKnob('slice', 'w', { silent: true }); buildTerrain(S); }
+      draw(S); return;
+    }
+    if (id === 'opt') { syncLr(S); stepNote(S); compute(S); draw(S); return; }
+    if (id === 'lr') {
+      if (k.opt === 'all') { st.hp.sgd.lr = k.lr; st.hp.mom.lr = k.lr; } else st.hp[k.opt].lr = k.lr;
+      stepNote(S); compute(S); draw(S); return;
+    }
+    if (id === 't') { stepNote(S); draw(S); return; }
+    if (id === 'x2') { compute(S); draw(S); }
+  },
+
+  onTier(S) { draw(S); },
+
+  solids(S) {
+    const st = S.state, out = [st.hf.geom];
+    out.push(J.primitives.sphere({ radius: R, center: (() => { const v = W(st, st.p, R * 0.92); return [v.x, -v.z, v.y]; })(), segments: 20 }));
+    if (S.knobs.slice === 'none') {
+      const ring = levelRing(st.mode, st.p).filter((q) => inDomain(st, q));
+      if (ring.length > 3) {
+        const pts = ring.filter((_, i) => i % 3 === 0).map((q) => { const v = W(st, q, 0.012); return [v.x, -v.z, v.y]; });
+        const tube = K.tubeSolid(pts, 0.016, 8);
+        if (tube) out.push(tube);
+      }
+    }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**Slice the loss along w.** Each spot on this plaster is one straight line through the 6 toy points on the board; height = how badly it misses. At the ball the cut edge falls 7 per unit of w: slope −7.',
+        2: '**The slope along w.** Height is L(w, b) = mean((w·x + b − y)²) for a line through 6 toy points (board). Freeze b and cut: the brass straightedge touches the edge at the ball. Its tilt, **∂L/∂w = −7**, says: nudge w up a little and the loss falls 7× as much.',
+        3: 'Section at b = 0: L(w, 0) is a parabola with ∂²L/∂w² = 2·mean(x²) = 30.3. Tangent slope ∂L/∂w = 2·mean(r·x) = −7.00, r = ŷ − y. Heights above L* + 2 = 2.09 are sliced flat to fit the plinth.',
+      },
+      cam: CAM.front,
+      set: { inputs: 'raw', slice: 'w', opt: 'sgd', t: 1, x2: false },
+      enter(S) {
+        scene(S, { note: 'slope', board: true, axes: true, tags: true, figure: 'point', figOnTop: true, figAt: [1.18, 0, 0.62], face: -1.35, at: ballWorld });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Now slice along b.** Same ball, the other direction. This edge is gentle: slope −2. Steep one way, gentle the other: that mismatch is what the rest of this object is about.',
+        2: 'Freeze w and cut along b: **∂L/∂b = 2·mean(ŷ − y) = −2**, twice the average miss. Every prediction is about 1 too low, so lifting the line helps. This slice curves gently (∂²L/∂b² = 2); the w-slice curved 15× harder (30.3).',
+        3: 'L(0.8, b) = (b − 1)² + 0.087: ∂L/∂b = 2·mean(r) = −2.00, ∂²L/∂b² = 2. Partial derivatives are slopes of sections; one `loss.backward()` fills both `w.grad` and `b.grad`.',
+      },
+      cam: CAM.side,
+      set: { inputs: 'raw', slice: 'b', opt: 'sgd', t: 1, x2: false },
+      enter(S) { scene(S, { note: 'slope', axes: true, tags: true }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Put the two slopes together:** that pair is the gradient (red). It points straight uphill, at a right angle to the level ring through the ball. The opposite way is steepest downhill.',
+        2: '∇L = (∂L/∂w, ∂L/∂b) = (−7, −2): the w-part, then the b-part, tip to tail. A small move u changes the loss by ∇L·u, largest along ∇L. Along the ring the loss stays put (∇L·u = 0): hence the right angle. 3Blue1Brown\'s picture: steepest ascent.',
+        3: 'D_u L = ∇L·u ≤ |∇L| (Cauchy–Schwarz), with equality iff u ∥ ∇L. Tangents t of the level set L = c satisfy ∇L·t = 0, so ∇L ⟂ contours. Here −∇L points 74° away from the minimum: pathological curvature.',
+      },
+      cam: CAM.gtop,
+      set: { inputs: 'raw', slice: 'none', opt: 'sgd', t: 1, x2: false },
+      enter(S) { scene(S, { note: 'grad', grad: true, parts: true, ring: true, right: true, readAt: FRONT, readAnchor: 'top' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The wiggle test.** Nudge w a hair, re-measure the loss, divide by the nudge: you get the slope back. It\'s how you check a gradient you computed yourself (next week: your own backprop).',
+        2: 'Finite differences: (L(w + ε) − L(w))/ε → ∂L/∂w as ε → 0. ε = 0.1 gives −5.48 (the edge bends away from the straightedge), ε = 0.01 gives −6.85. ARENA [0.4] calls it the sanity check: one extra forward pass per weight, so only for testing.',
+        3: 'Forward difference error = ½·L″·ε = 15.2ε here; the central difference (L(w+ε) − L(w−ε))/2ε is exact for a quadratic (−7.000). ARENA [0.4]\'s bonus "Central Difference Checking" tests your `backprop` this way.',
+      },
+      cam: CAM.wig,
+      set: { inputs: 'raw', slice: 'w', opt: 'sgd', t: 1, eps: 0.1, x2: false },
+      enter(S) { scene(S, { note: 'wiggle', wig: true, flag: false, figure: 'lean', figOnTop: true, figAt: [1.18, 0, 0.62], face: -1.35, at: ballWorld }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**One SGD step:** move against the gradient, stride = step size × slope. The slope is steep sideways, so it leaps across the gully and barely moves along it. Long where steep.',
+        2: 'SGD: θ ← θ − lr·∇L. At lr 0.05 the step is (+0.35, +0.10): 3.5× longer in w than in b, because the slope is. So it fixes "too low" mostly by tilting the line, overshoots the floor and lands on the far wall (live numbers).',
+        3: 'Δθ = −lr·g = (0.35, 0.10). Across the gully (λmax = 32.0) the error scales by 1 − lr·λ = −0.60: overshoot. Along it (λmin = 0.365), by 0.98: a crawl. Stable iff lr < 2/λmax = 0.063. In ARENA\'s words, GD takes the preconditioner P = I.',
+      },
+      cam: CAM.close,
+      set: { inputs: 'raw', slice: 'none', opt: 'sgd', t: 1, x2: false },
+      enter(S) { scene(S, { note: 'step', steps: true, grad: true, board: true }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Momentum remembers:** each step = 0.9 × the last step (faded) + today\'s push (blue). Sideways pushes flip and cancel; along-the-gully ones agree and pile up: 3.6× SGD\'s progress in 9 steps.',
+        2: 'SGD with momentum: b ← μ·b + g, θ ← θ − lr·b, so each step = μ × the last step + SGD\'s fresh push −lr·∇L (μ = 0.9). Step 9 opened up: across the gully memory and push nearly cancel; along it they add. After 9 steps it is 3.6× further down the gully than SGD at the same lr (faint blue).',
+        3: 'b_t = μ·b_(t−1) + g_t is ARENA\'s `b.copy_(self.mu*b + g); g = b` (torch dampening 0), so Δθ_t = μ·Δθ_(t−1) − lr·g_t. A steady push grows to lr/(1 − μ) = 10·lr per step; across the gully the heavy ball rings with modulus √μ ≈ 0.95. Goh (Distill) has the full picture.',
+      },
+      cam: CAM.mtop,
+      set: { inputs: 'raw', slice: 'none', opt: 'mom', t: 9, x2: false },
+      enter(S) { scene(S, { note: 'step', steps: true, readAt: [0.05, 1.22, 1.4], readAnchor: 'top' }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Adam gives each direction its own ruler.** It divides every slope by that slope\'s usual size, so its first step is one step size along each axis, steep or not: the brass box.',
+        2: 'Adam steps −lr·m̂/√v̂ per coordinate: m̂ averages g, v̂ averages g². At step 1, m̂ = g and √v̂ = |g|, so each coordinate moves exactly lr = 0.2 (up to ε): the box corner. Adam\'s lr is a distance; SGD\'s lr is an exchange rate, × slope.',
+        3: 'θ ← θ − lr·m̂/(√v̂ + ε), m̂ = m/(1 − β₁ᵗ), v̂ = v/(1 − β₂ᵗ); t = 1 gives −lr·sign(g). A diagonal preconditioner: it rescales axes but cannot undo a tilt (even the ideal diagonal leaves κ = 18.7 of 87.6).',
+      },
+      cam: CAM.ctop,
+      set: { inputs: 'raw', slice: 'none', opt: 'adam', t: 1, x2: false },
+      enter(S) { scene(S, { note: 'step', steps: true, grad: true, readAt: FRONT, readAnchor: 'top' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Centre the inputs:** measure x from its middle (3.5), not from 0. The narrow gully becomes a gentle bowl, and the blame lands where it belongs: the tilt was right, only the height was off.',
+        2: 'With raw x, b is the height at x = 0, far from the data, so tilting also shifts every prediction: w and b tangle (κ = 87.6). Centred, w pivots at the middle (brass pin): H turns diagonal, κ = 2.92, and w\'s slope here drops from −7 to 0. Andrew Ng: normalise inputs.',
+        3: 'H = 2·[[mean x², mean x], [mean x, 1]]: centring zeroes the off-diagonal (κ 87.6 → 2.92); standardising gives 2I (κ = 1). For deep nets, why BatchNorm/LayerNorm help is contested: smoother landscapes (Santurkar 2018) vs internal covariate shift.',
+      },
+      cam: CAM.bowl,
+      set: { inputs: 'centred', slice: 'none', opt: 'sgd', t: 1, x2: false },
+      enter(S) { scene(S, { note: 'centre', hess: true, hessAt: HESS_AT, hessAnchor: 'top', grad: true, ring: true, board: true, pivot: true, flagTag: true }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Any "if I nudge this, how much does that move?" question: a drug dose, a price, a thermostat. Next week, backprop finds these slopes for every weight at once.',
+        2: 'Slopes as sensitivities are everywhere: an option\'s delta, a price elasticity, an engineer\'s error budget. And input scaling before any gradient-trained model. Next week (W4) backprop computes the whole gradient in one backward pass.',
+        3: 'Gradients as local linear sensitivity: finance\'s Greeks, adjoint methods in weather and CFD, gradient × input attribution in interpretability. Conditioning governs every iterative solver; preconditioning and normalisation are the fixes.',
+      },
+      cam: CAM.wide,
+      set: { inputs: 'raw', slice: 'none', opt: 'all', t: 6, x2: false },
+      enter(S) { scene(S, { note: 'grad', grad: true, ring: true, steps: false, board: true, figure: 'cheer', figAt: [2.0, 0, 1.28], face: -0.5 }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'The red gradient arrow and the level ring through the ball: what angle do they make?',
+        2: 'What is the angle between ∇L at the ball and the contour through it?',
+        3: 'Angle between ∇L(θ) and the level set {L = L(θ)} at θ?' },
+      options: [{ t: '90°: a right angle', ok: true }, { t: 'About 45°' }, { t: '0°: the arrow runs along the ring' }, { t: 'Depends on how narrow the bowl is' }],
+      why: { 1: 'Always a right angle. Along the ring the loss doesn\'t change at all, so the most-uphill direction has to point straight off it.',
+        2: 'Walking along the ring the loss is constant, so ∇L·t = 0 for the ring\'s direction t: a zero dot product is a right angle. True on any smooth surface, however narrow the bowl.',
+        3: 'L(γ(s)) = c ⇒ ∇L·γ′(s) = 0 by the chain rule, so ∇L ⟂ level sets wherever ∇L ≠ 0. The narrowness only changes which way the contour runs, not the angle.' },
+      show(S) {
+        S.setKnobs({ inputs: 'raw', slice: 'none', opt: 'sgd', t: 1, x2: false });
+        scene(S, { note: 'grad', grad: true, ring: true, right: true, readAt: FRONT, readAnchor: 'top' });
+        return S.fly(CAM.gtop);
+      } },
+    { q: { 1: 'Here the slope along b is −2. Nudge b up by 0.01. About how much does the loss change?',
+        2: '∂L/∂b = −2.00 at the ball. Nudge b by ε = 0.01: ΔL ≈ ?',
+        3: '∂L/∂b = −2, ε = 0.01: first-order ΔL?' },
+      options: [{ t: 'About −0.02', ok: true }, { t: 'About −2' }, { t: 'About −0.2' }, { t: 'About +0.02' }],
+      why: { 1: 'Slope × nudge: −2 × 0.01 = −0.02. The measured change is −0.0199; the tiny difference is the curve bending.',
+        2: 'ΔL ≈ ε·∂L/∂b = 0.01 × (−2) = −0.02. Measured: −0.0199. The gap, 0.0001, is the curvature term ½·2·ε²: it shrinks 100× every time ε shrinks 10×.',
+        3: 'ΔL = ε·∂L/∂b + ½·∂²L/∂b²·ε² = −0.02 + 0.0001 = −0.0199, exact here (L is quadratic in b). First-order Taylor: the linearisation backprop computes.' },
+      show(S) {
+        S.setKnobs({ inputs: 'raw', slice: 'b', opt: 'sgd', t: 1, eps: 0.01, x2: false });
+        scene(S, { note: 'wiggle', wig: true });
+        return S.fly(CAM.side);
+      } },
+    { q: { 1: 'Make the loss twice as big everywhere. What happens to the SGD step and to Adam\'s first step?',
+        2: 'L → 2L. The SGD step and Adam\'s first step: what happens to each?',
+        3: 'Scale L by 2: effect on Δθ for SGD vs Adam (t = 1)?' },
+      options: [{ t: 'SGD\'s doubles; Adam\'s stays the same', ok: true }, { t: 'Both double' }, { t: 'Both stay the same' }, { t: 'SGD\'s stays; Adam\'s doubles' }],
+      why: { 1: 'SGD\'s stride is step size × slope, and every slope doubled. Adam divides the slope by its own typical size, so the 2s cancel.',
+        2: 'SGD: Δθ = −lr·g and g doubled, so (+0.70, +0.20), now overshooting up the far wall. Adam: m̂ and √v̂ both double and cancel: still (+0.20, +0.20). Loss scale is one reason Adam needs less lr tuning.',
+        3: 'g → 2g: SGD Δθ → 2Δθ (effective lr doubles). Adam: m̂ → 2m̂, √v̂ → 2√v̂, so Δθ is invariant up to ε. Same for any c > 0: Adam is loss-scale invariant, SGD is not.' },
+      show(S) {
+        S.setKnobs({ inputs: 'raw', slice: 'none', opt: 'all', t: 1, x2: true });
+        scene(S, { note: 'step', steps: true });
+        return S.fly(CAM.close);
+      } },
+    { q: { 1: 'Put the ball at the very bottom (the flag). How long is the gradient arrow there?',
+        2: 'At the least-squares fit (0.8, 1.0), what is ∇L?',
+        3: '∇L at the argmin of the MSE?' },
+      options: [{ t: 'Zero: no arrow at all', ok: true }, { t: 'Pointing at the steepest wall' }, { t: 'The same as anywhere else' }, { t: 'Pointing along the gully' }],
+      why: { 1: 'At the bottom every slice is flat, so both slopes are zero: no uphill direction, no arrow. Plain SGD would stop dead there.',
+        2: 'Both slices are flat at the bottom: ∂L/∂w = ∂L/∂b = 0, so ∇L = (0, 0) and every optimiser\'s fresh push vanishes. Setting ∇L = 0 is exactly how least squares is solved on paper.',
+        3: '∇L = 2Xᵀ(Xθ − y)/n = 0 are the normal equations; H ≻ 0 makes it the unique minimum. Momentum could still coast through it on stored velocity; plain SGD stops.' },
+      show(S) {
+        S.setKnobs({ inputs: 'raw', slice: 'none', opt: 'sgd', t: 1, x2: false });
+        scene(S, { note: 'min', grad: true, ring: true, flagTag: true, ball: [0.8, 1.0] });
+        return S.fly(CAM.top);
+      } },
+    { q: { 1: 'For a tiny step, which way should the ball move to lose height fastest?',
+        2: 'For a tiny step of fixed length, which direction lowers L fastest?',
+        3: 'argmin over |u| = 1 of ∇L·u?' },
+      options: [{ t: 'Exactly opposite the red arrow', ok: true }, { t: 'Straight at the bottom (the flag)' }, { t: 'Along the gully floor' }, { t: 'Along the w axis' }],
+      why: { 1: 'Opposite the gradient is steepest downhill. But it doesn\'t aim at the flag: here it misses by 74°, which is why narrow gullies are slow.',
+        2: 'The loss changes at rate ∇L·u, most negative for u = −∇L/|∇L|. It is not aimed at the minimum: here −∇L is 74° off (the ink arrow), which is why ravines are slow.',
+        3: 'u* = −∇L/|∇L| by Cauchy–Schwarz, in the Euclidean metric. In another metric (a preconditioner P) steepest descent becomes −P∇L: Adam and Newton change the ruler, not the gradient.' },
+      show(S) {
+        S.setKnobs({ inputs: 'raw', slice: 'none', opt: 'sgd', t: 1, x2: false });
+        scene(S, { note: 'down', grad: true, down: true, ring: true, readAt: FRONT, readAnchor: 'top' });
+        return S.fly(CAM.gtop);
+      } },
+    { q: { 1: 'Centre the inputs (measure x from its middle, 3.5). What happens to the slope along w at the ball?',
+        2: 'After centring x, what is ∂L/∂w for the same line?',
+        3: 'Reparameterise with x − x̄. ∂L/∂w at the same predictor?' },
+      options: [{ t: 'It drops to 0: w was never the problem', ok: true }, { t: 'It stays at −7' }, { t: 'It doubles' }, { t: 'It flips to +7' }],
+      why: { 1: 'The line\'s tilt was already right; it was just 1 too low. With raw x, tilting could fake a lift, so w got blamed. Centred, tilting pivots at the middle and can\'t lift: w\'s slope is 0.',
+        2: 'Centred, ∂L/∂w = 2·mean(r·(x − 3.5)). Every residual here is −1 plus noise that is uncorrelated with x, so the sum is exactly 0. All the blame (−2) lands on b.',
+        3: 'g_w(centred) = g_w(raw) − x̄·g_b = −7 − 3.5·(−2) = 0. Centring is a shear of parameter space that diagonalises H; the gradient transforms covariantly with it.' },
+      show(S) {
+        S.setKnobs({ inputs: 'centred', slice: 'none', opt: 'sgd', t: 1, x2: false });
+        scene(S, { note: 'centre', hess: true, hessAt: HESS_AT, hessAnchor: 'top', grad: true, parts: true, ring: true, board: true, pivot: true });
+        return S.fly(CAM.bowl);
+      } },
+  ],
+
+  where: { 1: 'Any "if I nudge this, how much does that move?" question: a drug dose, a price, a thermostat, and every weight in a network.',
+    2: 'Sensitivities (option deltas, price elasticities, error budgets), gradient checks for any code you differentiate, and scaling inputs before any gradient-trained model.',
+    3: 'Local linear sensitivity (Greeks, adjoint methods, gradient × input attributions), conditioning of iterative solvers, and preconditioning (Adam, Shampoo, K-FAC) plus input normalisation.' },
+  links: [
+    { label: 'Film · Adam, deep', href: '../../intuition/films/deep-w03-adam.html' },
+    { label: 'Film · W3 optimisers', href: '../../intuition/films/w3-optimisers.html' },
+    { label: 'Object · The ravine', href: 'w03-ravine.html' },
+    { label: 'Week 3 pack', href: '../../index.html#week-03' },
+    { label: 'Case · AdamW vs Adam', href: '../../index.html#cases/adamw-vs-adam' },
+    { label: 'Map · SGD', href: '../../index.html#map/node=sgd' },
+    { label: 'Map · momentum', href: '../../index.html#map/node=momentum' },
+    { label: 'Map · Adam', href: '../../index.html#map/node=adam' },
+    { label: 'Map · BatchNorm', href: '../../index.html#map/node=batchnorm' },
+    { label: 'Demo · backprop & training', href: '../../index.html#demo/backprop-training' },
+  ],
+  remix: 'Build a single-file three.js scene: a plaster heightfield of the mean-squared-error loss L(w, b) = mean((w·x + b − y)²) for six toy points x = 1…6, y = (2.1, 2.2, 3.5, 4.3, 4.6, 6.1), over w ∈ [−0.7, 2.3], b ∈ [−0.5, 2.5] at equal scale, sliced flat above L = 2.09, on a round plinth with a brass rim. A ball sits at (w, b) = (0.8, 0). Cut the plaster along w through the ball and lay a brass straightedge on the cut edge (slope −7), then along b (slope −2). Lay the gradient on the surface as a red string, at right angles to the contour ring through the ball. Show one SGD step (lr 0.05) as a blue hop, momentum\'s step 9 (μ 0.9) as 0.9 × its last step (faded teal) plus the fresh push (blue), beside plain SGD\'s shorter path, Adam\'s first step (lr 0.2) landing on the corner of a brass box of half-width lr. A switch re-measures x from its mean: the gully relaxes into a bowl and the condition number drops from 87.6 to 2.92.',
+  credit: 'Toy data, labelled as toy: six points whose noise is orthogonal to 1 and x, so the least-squares line is exactly (0.8, 1.0). Update rules: ARENA [0.3]\'s SGD and Adam solution classes, line for line; the wiggle test is ARENA [0.4]\'s finite differences. Pictures borrowed from Andrew Ng (normalising inputs rounds the contours), 3Blue1Brown (the gradient as steepest ascent) and Gabriel Goh\'s Distill essay "Why Momentum Really Works". Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

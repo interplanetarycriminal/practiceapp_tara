@@ -1,0 +1,877 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Two Machines in One Head · Object Lessons</title>
+<meta name="description" content="An attention head is two machines: QK decides where to look, OV decides what to move. A toy 3-D residual stream with live scores, ranks and squashes.">
+<link rel="stylesheet" href="../kit.css">
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   10 · d05-circuits: "Two machines in one head" (W5 deep dive, ARENA [1.1],
+   with the [1.2] QK / OV vocabulary). Toy residual stream d_model = 3.
+   Every number on screen is computed below with ARENA's Attention.forward
+   (one head, one destination row, zero biases); the MATH block is extracted
+   and checked in node against independent computations (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+const D_MODEL = 3;                                   // toy stream (ARENA's 2L model and GPT-2 small: 768)
+/* four toy tokens, the rows of x (residual vectors at positions 1..4); position 4 asks by default */
+const TOKENS = [[0.85, 0.35, -0.30], [0.45, -0.30, 0.80], [-0.30, 0.90, 0.20], [-0.75, -0.25, 0.45]];
+/* the hand-set toy head, three channels each; a head with d_head = d uses the first d:
+   W_Q = Q3[:, :d], W_K = K3[:, :d], W_V = V3[:, :d] (shape [d_model, d_head]), W_O = O3[:d, :] ([d_head, d_model]) */
+const HEAD0 = {
+  Q3: [[-2.1, -0.5, 0.4], [0.25, -0.5, 1.5], [0.25, 3.6, -0.4]],
+  K3: [[0.95, 0.05, 0.10], [-0.15, -0.20, 0.60], [0.10, 0.95, 0.15]],
+  V3: [[0.35, 0.75, 0.2], [-0.55, 0.1, 0.7], [0.6, 0.45, 0.3]],
+  O3: [[0.73, 0, -0.53], [-0.17, 0.75, -0.23], [0.28, 0.18, 0.38]],
+};
+
+const mm = (A, B) => A.map((r) => B[0].map((_, j) => r.reduce((s, a, m) => s + a * B[m][j], 0)));
+const T = (A) => A[0].map((_, j) => A.map((r) => r[j]));
+const vm = (v, A) => A[0].map((_, j) => v.reduce((s, a, m) => s + a * A[m][j], 0));   // row vector @ matrix
+const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
+const norm = (a) => Math.sqrt(dot(a, a));
+const cols = (A, d) => A.map((r) => r.slice(0, d));
+const rows = (A, d) => A.slice(0, d).map((r) => r.slice());
+const scal = (A, s) => A.map((r) => r.map((v) => v * s));
+
+/* symmetric eigen-decomposition (cyclic Jacobi), eigenvalues descending, eigenvectors as rows */
+function eigSym(S) {
+  const n = S.length, A = S.map((r) => r.slice()), V = A.map((_, i) => A.map((_, j) => (i === j ? 1 : 0)));
+  for (let sweep = 0; sweep < 60; sweep++) {
+    let off = 0;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) off += A[i][j] * A[i][j];
+    if (off < 1e-30) break;
+    for (let p = 0; p < n; p++) for (let q = p + 1; q < n; q++) {
+      if (Math.abs(A[p][q]) < 1e-300) continue;
+      const th = (A[q][q] - A[p][p]) / (2 * A[p][q]);
+      const t = (th >= 0 ? 1 : -1) / (Math.abs(th) + Math.sqrt(th * th + 1));
+      const c = 1 / Math.sqrt(t * t + 1), s = t * c;
+      for (let k = 0; k < n; k++) { const a = A[k][p], b = A[k][q]; A[k][p] = c * a - s * b; A[k][q] = s * a + c * b; }
+      for (let k = 0; k < n; k++) { const a = A[p][k], b = A[q][k]; A[p][k] = c * a - s * b; A[q][k] = s * a + c * b; }
+      for (let k = 0; k < n; k++) { const a = V[k][p], b = V[k][q]; V[k][p] = c * a - s * b; V[k][q] = s * a + c * b; }
+    }
+  }
+  const vals = A.map((r, i) => r[i]);
+  const idx = vals.map((_, i) => i).sort((a, b) => vals[b] - vals[a]);
+  return { vals: idx.map((i) => vals[i]), vecs: idx.map((i) => V.map((r) => r[i])) };
+}
+/* singular values (descending) and right singular vectors of W: the directions x W can point in */
+function svdRight(W) {
+  const e = eigSym(mm(T(W), W));
+  return { s: e.vals.map((v) => Math.sqrt(Math.max(0, v))), V: e.vecs };
+}
+function matrixRank(W) {
+  const { s } = svdRight(W);
+  return s[0] < 1e-12 ? 0 : s.filter((x) => x > 1e-6 * s[0]).length;
+}
+/* orthonormal basis of the image { x W : x in R^n } (rows) */
+function imageBasis(W) {
+  const { s, V } = svdRight(W);
+  return s[0] < 1e-12 ? [] : V.filter((_, i) => s[i] > 1e-6 * s[0]);
+}
+const project = (x, B) => B.reduce((acc, b) => { const c = dot(x, b); return acc.map((v, i) => v + c * b[i]); }, x.map(() => 0));
+
+function softmax(row) {
+  const m = Math.max(...row.filter(Number.isFinite));
+  const e = row.map((v) => (Number.isFinite(v) ? Math.exp(v - m) : 0));
+  const z = e.reduce((a, b) => a + b, 0);
+  return e.map((v) => v / z);
+}
+const IGNORE = -Infinity;                                        // ARENA: self.IGNORE = -inf
+/* ARENA apply_causal_mask, for the one query row we show: key positions after the query get IGNORE */
+function apply_causal_mask(attn_scores_row, query_pos) {
+  return attn_scores_row.map((s, key_pos) => (key_pos > query_pos ? IGNORE : s));
+}
+
+/* seeded toy heads for "New random head" (seed 0 = the hand-set head) */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function randn(r) { let u = 0; while (u === 0) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+function makeHead(seed) {
+  if (!seed) return HEAD0;
+  const r = mulberry32(seed * 7919 + 13);
+  const g = () => [0, 1, 2].map(() => [0, 1, 2].map(() => randn(r)));
+  const H = { Q3: g(), K3: g(), V3: g(), O3: g() };
+  // toy scaling only, so the arrows fit the case: sigma_max(Q3) sigma_max(K3) = 4, sigma_max(V3) = sigma_max(O3) = 0.97
+  const sm = (A) => svdRight(A).s[0];
+  const sq = Math.sqrt(4 / (sm(H.Q3) * sm(H.K3)));
+  return { Q3: scal(H.Q3, sq), K3: scal(H.K3, sq), V3: scal(H.V3, 0.97 / sm(H.V3)), O3: scal(H.O3, 0.97 / sm(H.O3)) };
+}
+
+/* the gauge: W_Q -> W_Q M, W_K -> W_K M^(-T) leaves every q.k (so W_QK) unchanged.
+   d_head >= 2: M = a rotation R (then M^(-T) = R). d_head = 1: nothing to rotate, M = [m], a stretch. */
+function twistMatrix(deg, d) {
+  const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+  if (d === 1) { const m = Math.pow(2, deg / 90); return [[[m]], [[1 / m]]]; }
+  if (d === 2) { const R = [[c, -s], [s, c]]; return [R, R]; }
+  const u = 1 / Math.sqrt(3), X = [[0, -u, u], [u, 0, -u], [-u, u, 0]];    // Rodrigues about (1,1,1)/sqrt3
+  const R = [0, 1, 2].map((i) => [0, 1, 2].map((j) => (i === j ? c : 0) + s * X[i][j] + (1 - c) * u * u));
+  return [R, R];
+}
+function headWeights(H, d_head, { twist = 0, sharp = 1, zeroOV = false } = {}) {
+  const [M, Mit] = twistMatrix(twist, d_head);
+  return {
+    W_Q: scal(mm(cols(H.Q3, d_head), M), sharp),
+    W_K: mm(cols(H.K3, d_head), Mit),
+    W_V: cols(H.V3, d_head),
+    W_O: zeroOV ? scal(rows(H.O3, d_head), 0) : rows(H.O3, d_head),
+  };
+}
+
+/* ARENA [1.1] Attention.forward, one head, destination row `dest`, biases zero (ARENA inits b = 0) */
+function forwardHead(x, W, dest) {
+  const d_head = W.W_Q[0].length;
+  const q = vm(x[dest], W.W_Q);                                  // einsum(resid, W_Q)
+  const k = x.map((xj) => vm(xj, W.W_K));
+  const v = x.map((xj) => vm(xj, W.W_V));
+  const attn_scores = k.map((kj) => dot(q, kj));                   // einsum(q, k)
+  const attn_scores_masked = apply_causal_mask(attn_scores.map((s) => s / Math.sqrt(d_head)), dest);
+  const attn_pattern = softmax(attn_scores_masked);               // softmax over key positions
+  const z = v[0].map((_, c) => v.reduce((s, vj, j) => s + attn_pattern[j] * vj[c], 0));
+  const attn_out = vm(z, W.W_O);                                  // einsum(z, W_O)
+  const W_QK = mm(W.W_Q, T(W.W_K)), W_OV = mm(W.W_V, W.W_O);
+  return {
+    d_head, dest, q, k, v, attn_scores, attn_scores_masked, attn_pattern, z, attn_out, W_QK, W_OV,
+    search: vm(x[dest], W_QK),                                   // x_dest W_QK: score_j = search . x_j / sqrt(d_head)
+    messages: x.map((xj) => vm(xj, W_OV)),                       // x_j W_OV: written if all attention went to j
+    readBasis: imageBasis(T(W.W_K)),                             // col(W_K): what the key side can see
+    writeBasis: imageBasis(W_OV),                                // image of W_OV: where the head can write
+    rankQK: matrixRank(W_QK), rankOV: matrixRank(W_OV),
+  };
+}
+const MATH = { D_MODEL, TOKENS, HEAD0, mm, T, vm, dot, norm, eigSym, svdRight, matrixRank, imageBasis, project,
+  softmax, IGNORE, apply_causal_mask, makeHead, twistMatrix, headWeights, forwardHead };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const SR = 0.6;                         // world units per residual-stream unit
+const HALF = 0.7;                       // cube half-size (world)
+const CY = 0.07 + HALF;                 // cube centre height (cubes stand on thin plaster bases)
+const CL = new THREE.Vector3(-1.2, CY, 0), CR = new THREE.Vector3(1.2, CY, 0);
+const BEAM_Y = CY + HALF + 0.011;       // the bridge rests on the cubes' inner top edges
+const BAR_Y = BEAM_Y + 0.05;            // feet of the attention bars (on the bridge)
+const BAR_X = [-0.36, -0.12, 0.12, 0.36], BAR_H = 0.95, BAR_W = 0.15;
+const UP = new THREE.Vector3(0, 1, 0), ZAX = new THREE.Vector3(0, 0, 1);
+const at = (c, r, s = SR) => new THREE.Vector3(c.x + s * r[0], c.y + s * r[1], c.z + s * r[2]);
+const fmt = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+const vec = (a, d = 2) => `(${a.map((v) => fmt(v, d)).join(', ')})`;
+const pct = (a) => `${Math.round(a * 100)}%`;
+const LETTERS = ['1', '2', '3', '4'];
+const SUB = ['₁', '₂', '₃', '₄'];
+
+/* close-up view helper: look at `target` from direction `dir`; the free square spans `span` world units */
+function view(target, dir, span, D = 5) {
+  const d = new THREE.Vector3(...dir).normalize();
+  const p = target.clone().addScaledVector(d, D);
+  return { pos: [p.x, p.y, p.z], target: [target.x, target.y, target.z], fit: +(0.5359 * D / span).toFixed(3) };
+}
+const CAM = {
+  whole: view(new THREE.Vector3(0, 1.05, 0.05), [0.12, 0.42, 1], 5.0),
+  wideR: view(new THREE.Vector3(0.1, 1.0, 0.05), [0.4, 0.4, 1], 5.0),
+  qk: view(new THREE.Vector3(-1.05, 0.98, 0.05), [-0.35, 0.5, 0.79], 2.6),
+  ov: view(new THREE.Vector3(1.1, 0.95, 0.05), [-0.22, 0.38, 0.9], 2.6),
+};
+
+/* shared geometry */
+const GEO = {
+  cyl: new THREE.CylinderGeometry(1, 1, 1, 14, 1).translate(0, 0.5, 0),
+  cone: new THREE.ConeGeometry(1, 1, 20, 1).translate(0, 0.5, 0),
+  ball: new THREE.SphereGeometry(1, 20, 14),
+  disc: new THREE.CircleGeometry(1, 72),
+  ring: new THREE.TorusGeometry(1, 0.012, 8, 96),
+  halo: new THREE.RingGeometry(0.78, 1, 48),
+};
+
+function arrow(mat, r) {
+  const group = new THREE.Group();
+  const shaft = new THREE.Mesh(GEO.cyl, mat), head = new THREE.Mesh(GEO.cone, mat);
+  shaft.castShadow = head.castShadow = true;
+  group.add(shaft, head);
+  const d = new THREE.Vector3();
+  return {
+    group, mat,
+    set(a, b, rr = r) {
+      d.subVectors(b, a);
+      const len = d.length();
+      group.visible = len > 1e-4;
+      if (!group.visible) return;
+      const hl = Math.min(rr * 6.5, len * 0.5);
+      shaft.scale.set(rr, Math.max(1e-4, len - hl), rr);
+      head.scale.set(rr * 2.5, hl, rr * 2.5);
+      head.position.y = len - hl;
+      group.position.copy(a);
+      group.quaternion.setFromUnitVectors(UP, d.normalize());
+    },
+  };
+}
+/* many arrows of one material: two instanced draws (shafts, heads) */
+function arrowSet(n, mat) {
+  const shafts = new THREE.InstancedMesh(GEO.cyl, mat, n), heads = new THREE.InstancedMesh(GEO.cone, mat, n);
+  shafts.castShadow = heads.castShadow = true;
+  shafts.count = heads.count = 0;
+  const o = new THREE.Object3D(), d = new THREE.Vector3();
+  return {
+    meshes: [shafts, heads],
+    set(list) {   // [{a, b, r}]
+      let k = 0;
+      for (const { a, b, r } of list) {
+        d.subVectors(b, a);
+        const len = d.length();
+        if (len < 1e-4) continue;
+        d.normalize();
+        const hl = Math.min(r * 6.5, len * 0.5);
+        o.position.copy(a); o.quaternion.setFromUnitVectors(UP, d); o.scale.set(r, Math.max(1e-4, len - hl), r);
+        o.updateMatrix(); shafts.setMatrixAt(k, o.matrix);
+        o.position.copy(a).addScaledVector(d, len - hl); o.scale.set(r * 2.5, hl, r * 2.5);
+        o.updateMatrix(); heads.setMatrixAt(k, o.matrix);
+        k++;
+      }
+      shafts.count = heads.count = k;
+      for (const m of [shafts, heads]) { m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); }
+    },
+  };
+}
+/* instanced segments (rods between point pairs): one draw call */
+function rods(n, mat, r) {
+  const m = new THREE.InstancedMesh(GEO.cyl, mat, n);
+  const o = new THREE.Object3D(), d = new THREE.Vector3();
+  m.count = 0;
+  return {
+    mesh: m,
+    set(pairs, rr = r) {
+      m.count = pairs.length;
+      pairs.forEach(([a, b], i) => {
+        d.subVectors(b, a);
+        const len = Math.max(1e-5, d.length());
+        o.position.copy(a);
+        o.quaternion.setFromUnitVectors(UP, d.normalize());
+        o.scale.set(rr, len, rr);
+        o.updateMatrix();
+        m.setMatrixAt(i, o.matrix);
+      });
+      m.instanceMatrix.needsUpdate = true;
+      m.computeBoundingSphere();
+    },
+  };
+}
+function balls(n, mat) {
+  const m = new THREE.InstancedMesh(GEO.ball, mat, n);
+  m.count = 0;
+  const o = new THREE.Object3D();
+  return {
+    mesh: m,
+    set(list) {   // [{p, r}]
+      m.count = list.length;
+      list.forEach(({ p, r }, i) => { o.position.copy(p); o.quaternion.identity(); o.scale.setScalar(r); o.updateMatrix(); m.setMatrixAt(i, o.matrix); });
+      m.instanceMatrix.needsUpdate = true;
+      m.computeBoundingSphere();
+    },
+  };
+}
+/* a subspace through a cube centre: disc for a plane, rod for a line, nothing for 0 or all 3 dims */
+function subspace(color, opacity) {
+  const g = new THREE.Group();
+  const discMat = new THREE.MeshStandardMaterial({ color, roughness: 0.3, metalness: 0, transparent: true, opacity,
+    depthWrite: false, side: THREE.DoubleSide });
+  const disc = new THREE.Mesh(GEO.disc, discMat);
+  const rim = new THREE.Mesh(GEO.ring, K.mat.paint(color));
+  const rod = new THREE.Mesh(GEO.cyl, K.mat.paint(color));
+  disc.renderOrder = 2;
+  g.add(disc, rim, rod);
+  const q = new THREE.Quaternion(), n = new THREE.Vector3(), a = new THREE.Vector3();
+  const api = {
+    group: g, discMat, enabled: true, dim: 0,
+    set(c, basis, R) {
+      api.dim = basis.length;
+      g.visible = api.enabled && (basis.length === 1 || basis.length === 2);
+      if (!g.visible) return;
+      disc.visible = rim.visible = basis.length === 2;
+      rod.visible = basis.length === 1;
+      if (basis.length === 2) {
+        n.set(...basis[0]).cross(new THREE.Vector3(...basis[1])).normalize();
+        q.setFromUnitVectors(ZAX, n);
+        for (const m of [disc, rim]) { m.position.copy(c); m.quaternion.copy(q); m.scale.setScalar(R); }
+      } else {
+        a.set(...basis[0]).normalize();
+        rod.position.copy(c).addScaledVector(a, -R);
+        rod.quaternion.setFromUnitVectors(UP, a);
+        rod.scale.set(0.014, 2 * R, 0.014);
+      }
+    },
+  };
+  return api;
+}
+
+/* ======================================================== object behaviour */
+
+function orientHalos(S) {
+  const st = S.state, m = st.halos, o = st.tmpO || (st.tmpO = new THREE.Object3D());
+  m.count = st.haloList.length;
+  st.haloList.forEach(({ p, s }, i) => { o.position.copy(p); o.quaternion.copy(S.camera.quaternion); o.scale.setScalar(s); o.updateMatrix(); m.setMatrixAt(i, o.matrix); });
+  m.instanceMatrix.needsUpdate = true;
+  m.computeBoundingSphere();
+}
+
+function compute(S) {
+  const st = S.state, k = S.knobs;
+  st.head = makeHead(st.seed);
+  st.W = headWeights(st.head, k.dhead, { twist: k.twist, sharp: k.sharp, zeroOV: k.zeroOV });
+  st.F = forwardHead(TOKENS, st.W, k.dest);
+  st.F0 = forwardHead(TOKENS, headWeights(st.head, k.dhead, { twist: 0, sharp: k.sharp, zeroOV: k.zeroOV }), k.dest);
+}
+
+function paintLeft(S) {
+  const st = S.state, F = st.F, k = S.knobs;
+  // tokens (the asking one wears a brass tip); amber rings: area proportional to its attention weight
+  st.haloList = [];
+  st.tokL.set(TOKENS.map((x, j) => ({ a: CL, b: at(CL, x), r: j === k.dest ? 0.02 : 0.016 })));
+  TOKENS.forEach((x, j) => {
+    const tip = at(CL, x);
+    st.tipL[j].position.copy(tip);
+    st.tipL[j].material = j === k.dest ? st.matBrass : st.matTok;
+    const A = F.attn_pattern[j];
+    if (A > 0.004) st.haloList.push({ p: tip, s: 0.05 + 0.1 * Math.sqrt(A) });
+    st.tagAt[j].position.copy(at(CL, x, SR + 0.13 / norm(x)));
+  });
+  orientHalos(S);
+  // the search direction x_dest W_QK: a fixed-length needle (its size is in the notes)
+  const sl = norm(F.search);
+  st.needleOn = sl > 1e-9;
+  if (st.needleOn) {
+    const u = F.search.map((v) => v / sl);
+    st.needleU = u;
+    st.needle.set(CL, at(CL, u, 0.64), 0.026);
+    st.needleTip.position.copy(at(CL, u, 0.76));
+    st.axis.set([[at(CL, u, -HALF * 0.97), at(CL, u, HALF * 0.97)]], 0.007);
+  } else { st.needle.group.visible = false; st.axis.set([]); }
+  // key-side reading subspace col(W_K)
+  st.readSub.set(CL, F.readBasis, 0.66);
+  // drop lines: to the reading subspace ('shadow') or onto the needle's axis ('reach')
+  const pairs = [], feet = [];
+  if (st.drops === 'shadow' && F.readBasis.length < 3) {
+    TOKENS.forEach((x) => { const p = at(CL, project(x, F.readBasis)); pairs.push([at(CL, x), p]); feet.push({ p, r: 0.024 }); });
+  } else if (st.drops === 'reach' && st.needleOn) {
+    TOKENS.forEach((x) => { const p = at(CL, st.needleU.map((v) => v * dot(x, st.needleU))); pairs.push([at(CL, x), p]); feet.push({ p, r: 0.022 }); });
+  }
+  st.dropL.set(pairs, 0.007);
+  st.feet.set(feet);
+  // the shared softmax: bars on the bridge
+  F.attn_pattern.forEach((A, j) => {
+    const masked = !Number.isFinite(F.attn_scores_masked[j]);
+    const b = st.bars[j];
+    b.scale.y = masked ? 0.012 : Math.max(0.012, BAR_H * A);
+    b.material = masked ? st.matMasked : st.matBar;
+  });
+}
+
+function paintRight(S) {
+  const st = S.state, F = st.F, t = st.t;
+  // tokens ride the squash x -> x((1 - t) I + t W_OV), turning from blue (token) to violet (message)
+  st.matMsg.color.set(C.data).lerp(st.cDir, t);
+  const pts = TOKENS.map((x, j) => x.map((v, i) => (1 - t) * v + t * F.messages[j][i]));
+  st.tokR.set(pts.map((p) => ({ a: CR, b: at(CR, p), r: 0.015 })));
+  // what gets written: sum_j A_j (x_j carried to stage t); at t = 1 this is attn_out
+  const o = [0, 1, 2].map((i) => pts.reduce((s, p, j) => s + F.attn_pattern[j] * p[i], 0));
+  st.out.set(CR, at(CR, o), 0.032);
+  st.outTip.position.copy(at(CR, o));
+  st.writeSub.set(CR, t > 0.999 ? F.writeBasis : [], 0.66);
+  // the 3Blue1Brown grid: lattice {-1, 0, 1}^3 carried by the same map
+  if (st.grid) {
+    const P = st.gridPts.map((x) => { const m = vm(x, F.W_OV); return at(CR, x.map((v, i) => (1 - t) * v + t * m[i])); });
+    st.gridBalls.set(P.map((p) => ({ p, r: 0.02 })));
+    st.gridRods.set(st.gridEdges.map(([a, b]) => [P[a], P[b]]), 0.005);
+    st.matGrid.color.set('#a8a092').lerp(st.cDir, t);
+  }
+  st.gridBalls.mesh.visible = st.gridRods.mesh.visible = !!st.grid;
+}
+
+function readouts(S) {
+  const st = S.state, F = st.F, k = S.knobs, tier = S.tier;
+  const A = F.attn_pattern;
+  const nums = A.map((a, j) => (Number.isFinite(F.attn_scores_masked[j]) ? (tier === 1 ? pct(a) : fmt(a)) : '×'));
+  st.barTag.set(tier === 3 ? `\`attn_pattern\` (query ${k.dest + 1})\n${nums.join(' · ')}` : `${tier === 1 ? 'attention' : 'attention A'}\n${nums.join(' · ')}`);
+  st.tagsL.forEach((L, j) => L.set(j === k.dest ? (tier === 1 ? `${LETTERS[j]} asks` : tier === 2 ? `${LETTERS[j]} · query` : `x${SUB[j]} · query`) : (tier === 3 ? `x${SUB[j]}` : LETTERS[j])));
+  st.cubeL.set(tier === 1 ? 'where to look' : tier === 2 ? 'QK · where to look' : 'QK circuit · W_Q W_Kᵀ');
+  st.cubeR.set(tier === 1 ? 'what to move' : tier === 2 ? 'OV · what to move' : 'OV circuit · W_V W_O');
+  st.outTag.set(tier === 3 ? 'attn_out' : 'written');
+  st.needleTag.set(tier === 1 ? 'looks for' : `x${SUB[k.dest]}W_QK`);
+  st.headTag.set(st.seed ? `random toy head #${st.seed}` : '');
+  st.headTag.show(!!st.seed && !st.codeTags);
+  note(S);
+}
+
+/* the live-maths note (one per beat / prediction) */
+function note(S) {
+  const st = S.state, F = st.F, k = S.knobs, tier = S.tier, mode = st.noteMode;
+  const N = st.note;
+  if (!mode) { N.show(false); return; }
+  N.show(true);
+  const A = F.attn_pattern, best = A.indexOf(Math.max(...A)), d = F.d_head;
+  const sc = F.attn_scores_masked.map((s) => (Number.isFinite(s) ? fmt(s) : '−∞'));
+  if (mode === 'scores') {
+    N.move(st.noteAtL);
+    const j = best, F0 = st.F0;
+    if (tier === 1) N.set(`token ${LETTERS[j]} reaches furthest along the teal arrow: it gets ${pct(A[j])}\n${k.twist ? `insides twisted ${Math.round(k.twist)}°: scores unchanged` : 'twist the insides in Knobs'}`);
+    else if (tier === 2) N.set(`scores q·kⱼ/√${d}: ${sc.join(' · ')}\nq = ${vec(F.q)} · k${SUB[j]} = ${vec(F.k[j])}${k.twist ? `\nuntwisted: q = ${vec(F0.q)} · k${SUB[j]} = ${vec(F0.k[j])}` : ''}`);
+    else N.set(`x${SUB[k.dest]}W_QK·xⱼ/√${d}: ${sc.join(' · ')}\n|x${SUB[k.dest]}W_QK| = ${fmt(norm(F.search))} · twist ${Math.round(k.twist)}°\nq = ${vec(F.q)}, k${SUB[j]} = ${vec(F.k[j])}`);
+  } else if (mode === 'shadow') {
+    N.move(st.noteAtL);
+    const top = A.map((a, j) => [a, j]).sort((a, b) => b[0] - a[0]);
+    const who = `${LETTERS[top[0][1]]} gets ${pct(top[0][0])}, ${LETTERS[top[1][1]]} gets ${pct(top[1][0])}`;
+    const see = d === 3 ? (tier === 1 ? 'sees all 3 directions' : 'reads all 3 directions') : d === 2 ? (tier === 1 ? 'sees 2 of 3 directions (the plane)' : 'reads a plane: 2 of 3 directions') : (tier === 1 ? 'sees 1 direction (the rod)' : 'reads a line: 1 of 3 directions');
+    N.set(tier === 3 ? `d_head = ${d}: rank W_QK = ${F.rankQK}, col(W_K) is ${d}-dim\nattn_pattern ${A.map((a) => fmt(a)).join(' · ')}` : `${tier === 1 ? 'head width' : 'd_head'} ${d}: ${see}\n${who}`);
+  } else if (mode === 'write') {
+    N.move(st.noteAtR);
+    const terms = A.map((a, j) => `${fmt(a)}·m${SUB[j]}`).join(' + ');
+    if (tier === 1) N.set(`all of space is pressed flat onto the violet plane\nwritten: mostly token ${LETTERS[best]}'s message (${pct(A[best])})`);
+    else if (tier === 2) N.set(`written = ${terms}\n= ${vec(F.attn_out)} · rank W_OV = ${F.rankOV}`);
+    else N.set(`attn_out = z W_O = ${vec(F.attn_out)}\nz = ${vec(F.z)} · rank W_OV = ${F.rankOV} ≤ d_head = ${d}`);
+  } else if (mode === 'indep') {
+    N.move(st.noteAtM);
+    const pat = A.map((a) => fmt(a)).join(' · ');
+    if (tier === 1) N.set(`attention ${A.map(pct).join(' · ')}\nwritten: ${norm(F.attn_out) < 1e-12 ? 'nothing at all' : vec(F.attn_out)}`);
+    else N.set(`${tier === 3 ? 'attn_pattern' : 'pattern'} ${pat}\n${tier === 3 ? 'attn_out' : 'written'} ${vec(F.attn_out)}${k.zeroOV ? ' (W_OV = 0)' : ''}`);
+  } else if (mode === 'rank') {
+    N.move(st.noteAtR);
+    const s = svdRight(F.W_OV).s;
+    N.set(tier === 1 ? `a ${d}-channel head can only write into ${d === 1 ? 'a line' : d === 2 ? 'a plane' : 'all 3 directions'}\nrank ${F.rankOV}` : `W_OV = W_V W_O, d_head = ${d}\nsingular values ${s.map((v) => fmt(v)).join(' · ')} → rank ${F.rankOV}`);
+  }
+}
+
+function place(S) {
+  const st = S.state;
+  const show = st.show || 'both';
+  st.left.visible = show !== 'ov';
+  st.right.visible = show !== 'qk';
+}
+
+/* scene configuration shared by beats and predictions */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.noteMode = o.note || null;
+  st.drops = o.drops || null;
+  st.grid = !!o.grid;
+  st.codeTags = !!o.code;
+  st.readSub.enabled = o.plane !== false;
+  st.readSub.discMat.opacity = o.plane === 'faint' ? 0.1 : 0.26;
+  st.writeSub.discMat.opacity = o.grid ? 0.07 : 0.1;
+  st.axis.mesh.visible = o.drops === 'reach';
+  for (const t of st.code) t.show(!!o.code);
+  const cubeTags = o.cubeTags !== false && !o.code;
+  st.cubeL.show(cubeTags); st.cubeR.show(cubeTags);
+  st.tagsL.forEach((L, j) => L.show(o.tokenTags === 'dest' ? j === S.knobs.dest : o.tokenTags !== false));
+  st.barTag.show(o.barTag !== false && !o.code);
+  st.outTag.show(!!o.outTag && !o.code);
+  st.needleTag.show(!!o.needleTag);
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || [-0.25, 0, 1.3], o.face || [-1.2, 0.6, 0]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.figPoint ? (typeof o.figPoint === 'function' ? o.figPoint(S) : o.figPoint) : undefined });
+    if (S.shot) doPose(); else setTimeout(doPose, 520);
+  } else st.fig.group.visible = false;
+  squash(S, o.squash === 'play' ? 'play' : 'done');
+  refresh(S);
+}
+
+/* the OV squash: t from 0 (identity) to 1 (W_OV) */
+function squash(S, how) {
+  const st = S.state;
+  if (how === 'play' && !S.shot) { st.t = 0; st.t0 = null; st.playing = true; }
+  else { st.t = 1; st.playing = false; }
+}
+
+function refresh(S) {
+  paintLeft(S); paintRight(S); readouts(S); place(S);
+  S.invalidate();
+}
+
+function useHead(S, seed) {
+  S.state.seed = seed;
+  compute(S);
+  squash(S, 'play');
+  refresh(S);
+}
+
+function wait(S, ms) { return S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)); }
+
+/* ================================================================== run() */
+
+run({
+  id: 'd05-circuits', num: '10', week: 5, kind: 'deep',
+  title: 'Two machines in one head',
+  subtitle: 'A head is a where-to-look machine (QK) and a what-to-move machine (OV).',
+  back2d: '#week-05',
+  film: 'deep-w05-attention',
+  plinth: { r: 2.6, h: 0.14 },
+
+  knobs: [
+    { id: 'dhead', type: 'range', label: { 1: 'Head width (channels)', 2: 'd_head', 3: 'd_head' }, min: 1, max: 3, step: 1, value: 2, fmt: (v) => String(v) },
+    { id: 'dest', type: 'select', label: { 1: 'Which word asks', 2: 'Asking token (query)', 3: 'Destination position' }, value: 3,
+      options: [[3, { 1: 'Word 4', 2: 'Token 4', 3: '4 (x₄)' }], [2, { 1: 'Word 3', 2: 'Token 3', 3: '3 (x₃)' }], [1, { 1: 'Word 2', 2: 'Token 2', 3: '2 (x₂)' }], [0, { 1: 'Word 1', 2: 'Token 1', 3: '1 (x₁)' }]] },
+    { id: 'sharp', type: 'range', label: { 1: 'Sharpen the looking', 2: 'Scale W_Q', 3: 'W_Q × c' }, min: 0.25, max: 4, log: true, value: 1, fmt: (v) => '×' + K.fmt(v, 2) },
+    { id: 'twist', type: 'range', label: { 1: 'Twist the insides', 2: 'Rotate W_Q, W_K together', 3: 'Gauge: W_Q M, W_K M⁻ᵀ' }, min: 0, max: 180, step: 1, value: 0, fmt: (v) => `${Math.round(v)}°` },
+    { id: 'zeroOV', type: 'toggle', label: { 1: 'Switch off the writer', 2: 'Zero W_OV', 3: 'W_OV = 0' }, value: false },
+    { id: 'show', type: 'select', label: { 1: 'Show', 2: 'Show', 3: 'Show' }, value: 'both',
+      options: [['both', { 1: 'Both machines', 2: 'QK and OV', 3: 'QK and OV' }], ['qk', { 1: 'Where to look', 2: 'QK only', 3: 'QK only' }], ['ov', { 1: 'What to move', 2: 'OV only', 3: 'OV only' }]] },
+    { id: 'newhead', type: 'button', wide: true, label: { 1: 'New random head', 2: 'New random head (seeded)', 3: 'New random head (seeded)' },
+      onClick: (S) => useHead(S, (S.state.seed || 0) + 1) },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.seed = 0; st.t = 1; st.show = 'both';
+    st.cDir = new THREE.Color(C.dir);
+    const brass = K.mat.brass();
+    st.matBrass = brass;
+    // plaster bases and brass cube frames (one instanced draw for 24 edges, one for 16 corners)
+    for (const c of [CL, CR]) {
+      const base = new THREE.Mesh(new THREE.RoundedBoxGeometry(1.62, 0.07, 1.62, 2, 0.02), K.mat.plaster('#ece4d6'));
+      base.position.set(c.x, 0.035, c.z);
+      base.castShadow = base.receiveShadow = true;
+      S.root.add(base);
+    }
+    const edges = [], corners = [];
+    for (const c of [CL, CR]) {
+      const P = (sx, sy, sz) => new THREE.Vector3(c.x + sx * HALF, c.y + sy * HALF, c.z + sz * HALF);
+      for (const a of [-1, 1]) for (const b of [-1, 1]) {
+        edges.push([P(-1, a, b), P(1, a, b)], [P(a, -1, b), P(a, 1, b)], [P(a, b, -1), P(a, b, 1)]);
+      }
+      for (const a of [-1, 1]) for (const b of [-1, 1]) for (const e of [-1, 1]) corners.push({ p: P(a, b, e), r: 0.026 });
+    }
+    const frame = rods(24, brass, 0.011); frame.set(edges); frame.mesh.castShadow = true;
+    const cn = balls(16, brass); cn.set(corners); cn.mesh.castShadow = true;
+    S.root.add(frame.mesh, cn.mesh);
+    for (const c of [CL, CR]) { const b = K.bead(c, C.ink, 0.03); b.castShadow = false; S.root.add(b); }   // origin studs
+
+    // left cube: the QK machine
+    st.left = new THREE.Group(); S.root.add(st.left);
+    st.matTok = K.mat.paint(C.data);
+    st.tokL = arrowSet(4, st.matTok); st.left.add(...st.tokL.meshes);
+    const hitMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+    st.tipL = TOKENS.map((_, j) => {
+      const m = new THREE.Mesh(GEO.ball, st.matTok); m.scale.setScalar(0.036);
+      const hit = new THREE.Mesh(new THREE.SphereGeometry(3.6, 10, 8), hitMat);
+      hit.visible = false; hit.userData.noFit = true; m.add(hit);            // raycasts still hit invisible meshes
+      K.pick(m, () => S.setKnob('dest', j));
+      st.left.add(m); return m;
+    });
+    const haloMat = new THREE.MeshBasicMaterial({ color: C.prob, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false });
+    st.halos = new THREE.InstancedMesh(GEO.halo, haloMat, 4); st.halos.count = 0; st.halos.renderOrder = 3; st.left.add(st.halos);
+    st.haloList = [];
+    st.needle = arrow(K.mat.paint(C.aux), 0.026);
+    st.left.add(st.needle.group);
+    st.needleTip = new THREE.Object3D(); st.left.add(st.needleTip);
+    st.axis = rods(1, new THREE.MeshStandardMaterial({ color: C.aux, transparent: true, opacity: 0.8, roughness: 0.6 }), 0.007);
+    st.left.add(st.axis.mesh);
+    st.readSub = subspace(C.aux, 0.26);
+    st.left.add(st.readSub.group);
+    st.dropL = rods(4, new THREE.MeshStandardMaterial({ color: C.aux, transparent: true, opacity: 0.85, roughness: 0.6 }), 0.007);
+    st.feet = balls(4, K.mat.paint(C.aux));
+    st.left.add(st.dropL.mesh, st.feet.mesh);
+
+    // right cube: the OV machine
+    st.right = new THREE.Group(); S.root.add(st.right);
+    st.matMsg = K.mat.paint(C.data);
+    st.tokR = arrowSet(4, st.matMsg); st.right.add(...st.tokR.meshes);
+    st.out = arrow(K.mat.paint(C.dir), 0.032);
+    st.right.add(st.out.group);
+    st.outTip = new THREE.Object3D(); st.right.add(st.outTip);
+    st.writeSub = subspace(C.dir, 0.14);
+    st.right.add(st.writeSub.group);
+    st.gridPts = [];
+    for (const a of [-1, 0, 1]) for (const b of [-1, 0, 1]) for (const c of [-1, 0, 1]) st.gridPts.push([a, b, c]);
+    st.gridEdges = [];
+    st.gridPts.forEach((p, i) => st.gridPts.forEach((q, j) => {
+      if (j > i && p.reduce((s, v, m) => s + Math.abs(v - q[m]), 0) === 1) st.gridEdges.push([i, j]);
+    }));
+    st.matGrid = new THREE.MeshStandardMaterial({ color: '#a8a092', roughness: 0.7, transparent: true, opacity: 0.8 });
+    st.gridBalls = balls(27, st.matGrid);
+    st.gridRods = rods(st.gridEdges.length, st.matGrid, 0.005);
+    st.right.add(st.gridBalls.mesh, st.gridRods.mesh);
+
+    // the shared softmax: four amber bars on a brass bridge resting on both cubes
+    st.matBar = K.mat.paint(C.prob);
+    st.matMasked = K.mat.plaster('#cfc6b8');
+    const beam = new THREE.Mesh(new THREE.RoundedBoxGeometry(1.18, 0.05, 0.3, 2, 0.015), brass);
+    beam.position.set(0, BEAM_Y + 0.025, 0); beam.castShadow = beam.receiveShadow = true;
+    S.root.add(beam);
+    const barGeo = new THREE.BoxGeometry(BAR_W, 1, BAR_W).translate(0, 0.5, 0);
+    st.bars = BAR_X.map((x) => {
+      const m = new THREE.Mesh(barGeo, st.matBar); m.position.set(x, BAR_Y, 0); m.castShadow = m.receiveShadow = true;
+      S.root.add(m); return m;
+    });
+
+    // labels
+    st.cubeL = K.label(new THREE.Vector3(CL.x - 0.1, CY + HALF + 0.05, CL.z), '', { cls: 'tag', dy: -6 });
+    st.cubeR = K.label(new THREE.Vector3(CR.x + 0.1, CY + HALF + 0.05, CR.z), '', { cls: 'tag', dy: -6 });
+    st.barTag = K.label(new THREE.Vector3(0, BAR_Y + BAR_H + 0.1, 0), '', { cls: 'readout', dy: -4 });
+    st.tagAt = TOKENS.map(() => { const o = new THREE.Object3D(); st.left.add(o); return o; });
+    st.tagsL = TOKENS.map((_, j) => K.label(st.tagAt[j], '', { cls: 'tag', anchor: 'center', dy: 0 }));
+    st.outTag = K.label(st.outTip, '', { cls: 'tag', anchor: 'left', dx: 9, dy: 0 });
+    st.needleTag = K.label(st.needleTip, '', { cls: 'tag', anchor: 'center', dy: 0 });
+    st.headTag = K.label(new THREE.Vector3(0, 0.02, 1.5), '', { cls: 'tag', anchor: 'top', dy: 8 });
+    st.code = [
+      K.label(new THREE.Vector3(CL.x - 0.3, CY + HALF + 0.05, CL.z), '`W_Q`, `W_K` → `attn_scores`', { cls: 'note', dy: -6 }),
+      K.label(new THREE.Vector3(CR.x + 0.3, CY + HALF + 0.05, CR.z), '`W_V` → `z` → `W_O`', { cls: 'note', dy: -6 }),
+      K.label(new THREE.Vector3(0, BAR_Y + BAR_H + 0.1, 0), '÷√d_head · `apply_causal_mask` · softmax → `attn_pattern`', { cls: 'note', dy: -4 }),
+      K.label(st.outTip, '`attn_out`', { cls: 'note brass', anchor: 'left', dx: 9, dy: 0 }),
+    ];
+    for (const t of st.code) t.show(false);
+    st.note = K.label(new THREE.Vector3(), '', { cls: 'note', anchor: 'bottom', dy: -6 });
+    st.note.show(false);
+    st.noteAtL = new THREE.Vector3(CL.x - 0.15, CY + HALF + 0.08, CL.z - 0.2);
+    st.noteAtR = new THREE.Vector3(CR.x + 0.15, CY + HALF + 0.08, CR.z - 0.2);
+    st.noteAtM = new THREE.Vector3(0, BAR_Y + BAR_H + 0.1, 0);
+    st.fig = K.figure();
+    S.root.add(st.fig.group);
+    st.fig.group.visible = false;
+  },
+
+  rebuild(S, id) {
+    const st = S.state;
+    if (id === '*') {                            // a beat or a prediction: the hand-set head
+      st.seed = 0;
+      st.show = S.knobs.show;
+      compute(S);
+      refresh(S);
+      return;
+    }
+    if (id === 'show') { st.show = S.knobs.show; place(S); S.invalidate(); return; }
+    compute(S);
+    if (id === 'dhead' || id === 'zeroOV') squash(S, 'play');
+    refresh(S);
+  },
+
+  frame(S, t) {
+    const st = S.state;
+    orientHalos(S);                                                       // attention rings face the viewer
+    if (!st.playing) return false;
+    if (st.t0 == null) st.t0 = t;
+    const u = Math.min(1, Math.max(0, (t - st.t0 - 0.35) / 1.5));
+    st.t = K.ease.inOut(u);
+    paintRight(S);
+    if (u >= 1) { st.playing = false; st.t = 1; paintRight(S); readouts(S); return false; }
+    return true;
+  },
+
+  onTier(S) { readouts(S); },
+
+  solids(S) {
+    const st = S.state, F = st.F, out = [];
+    const toJ = (p) => [p.x, -p.z, p.y];                          // three (x, y, z) -> JSCAD (x, -z, y)
+    const tube = (a, b, r) => K.tubeSolid([toJ(a), toJ(b)], r, 10);
+    const cone = (a, b, r, h) => {
+      const A = toJ(a), B = toJ(b), d = B.map((v, i) => v - A[i]), L = Math.hypot(...d);
+      const c = J.primitives.cylinderElliptic({ height: h, startRadius: [r, r], endRadius: [r * 0.05, r * 0.05], segments: 16, center: [0, 0, h / 2] });
+      const th = Math.acos(d[2] / L), ph = Math.atan2(d[1], d[0]);
+      return J.transforms.translate(B.map((v, i) => v - (d[i] / L) * h), J.transforms.rotateZ(ph, J.transforms.rotateY(th, c)));
+    };
+    const arrowJ = (a, b, r) => {
+      const L = a.distanceTo(b); if (L < 1e-3) return [];
+      const h = Math.min(r * 6.5, L * 0.5), mid = a.clone().lerp(b, (L - h) / L);
+      return [tube(a, mid, r), cone(a, b, r * 2.5, h)];
+    };
+    for (const c of [CL, CR]) {
+      out.push(J.primitives.cuboid({ size: [1.62, 1.62, 0.07], center: [c.x, -c.z, 0.035] }));
+      const P = (sx, sy, sz) => new THREE.Vector3(c.x + sx * HALF, c.y + sy * HALF, c.z + sz * HALF);
+      for (const a of [-1, 1]) for (const b of [-1, 1]) {
+        out.push(tube(P(-1, a, b), P(1, a, b), 0.02), tube(P(a, -1, b), P(a, 1, b), 0.02), tube(P(a, b, -1), P(a, b, 1), 0.02));
+      }
+    }
+    TOKENS.forEach((x, j) => out.push(...arrowJ(CL, at(CL, x), 0.022), ...arrowJ(CR, at(CR, F.messages[j]), 0.02)));
+    if (st.needleOn) out.push(...arrowJ(CL, at(CL, st.needleU, 0.64), 0.03));
+    out.push(...arrowJ(CR, at(CR, F.attn_out), 0.034));
+    out.push(J.primitives.cuboid({ size: [1.18, 0.3, 0.05], center: [0, 0, BEAM_Y + 0.025] }));
+    F.attn_pattern.forEach((A, j) => {
+      const h = Math.max(0.012, BAR_H * A);
+      out.push(J.primitives.cuboid({ size: [BAR_W, BAR_W, h], center: [BAR_X[j], 0, BAR_Y + h / 2] }));
+    });
+    return out.filter(Boolean);
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**A head is two machines.** The left one decides where to look: word 4 scores every word so far. The right one decides what to carry over. They share only the amber bars: the attention.',
+        2: '**One head, two machines.** Left, QK: token 4 scores every earlier token; softmax turns scores into the amber weights. Right, OV: each token becomes a message, and the weights mix the messages into what gets written. Toy stream: d_model = 3 (real: 768).',
+        3: 'Output at the destination: Σⱼ Aⱼ xⱼ W_V W_O with A = softmax(x₄ W_Q W_Kᵀ xⱼᵀ/√d_head). Two 3×3 maps of rank ≤ d_head: W_QK sets A (where), W_OV sets the message (what); they share only A. Toy head: d_model = 3, d_head = 2, hand-set weights.',
+      },
+      cam: CAM.whole,
+      set: { dhead: 2, dest: 3, sharp: 1, twist: 0, zeroOV: false, show: 'both' },
+      enter(S) { scene(S, { plane: 'faint', outTag: true, needleTag: true, tokenTags: 'dest', figure: 'point', figPoint: (S2) => at(CL, S2.state.needleU || [0, 1, 0], 0.62) }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The asking word becomes a searchlight.** The teal arrow is what word 4 looks for. Each word scores by how far it reaches along it. Twist the insides (Knobs): numbers inside change, scores never do.',
+        2: 'Score = q·k/√d_head, q = x₄W_Q, k = xⱼW_K. Regroup: (x₄W_QW_Kᵀ)·xⱼ. The teal arrow is x₄W_QK; each token scores by its reach along it (3Blue1Brown\'s picture: dot product = projection). Rotate W_Q and W_K together: q, k change, scores don\'t.',
+        3: 'xᵢW_Q(xⱼW_K)ᵀ = xᵢW_QKxⱼᵀ, and W_Q → W_QM, W_K → W_KM⁻ᵀ leaves W_QK fixed for any invertible M: only the bilinear form W_QK is identifiable, W_Q and W_K alone are a choice of basis. Hence ARENA\'s `FactoredMatrix(W_Q, W_K.T)` in week 7.',
+      },
+      cam: CAM.qk,
+      set: { dhead: 2, dest: 3, sharp: 1, twist: 0, zeroOV: false, show: 'both' },
+      enter(S) { scene(S, { plane: false, drops: 'reach', note: 'scores', needleTag: true, cubeTags: false }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**A head sees only a shadow.** This one reads 2 of the 3 directions: the teal plane. Height is invisible to it; it compares where the shadows fall. Real heads read 64 of 768 directions.',
+        2: '**Low rank.** W_K has d_head = 2 columns, so kⱼ depends only on xⱼ\'s shadow on the teal plane; the dropped part is invisible. Set d_head to 1 (Knobs): the plane becomes a rod, tokens 1 and 2 cast almost the same shadow, and attention splits.',
+        3: 'rank W_QK ≤ d_head. kⱼ = xⱼW_K sees only the projection of xⱼ onto col(W_K), and x₄W_QK always lands in col(W_K). ARENA\'s 2-layer model (like GPT-2 small): d_model 768, 12 heads of d_head 64, so each head reads a 64-dim subspace. Toy: 2 of 3.',
+      },
+      cam: CAM.qk,
+      set: { dhead: 2, dest: 3, sharp: 1, twist: 0, zeroOV: false, show: 'both' },
+      enter(S) { scene(S, { drops: 'shadow', note: 'shadow', cubeTags: false }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The right machine writes.** Watch the grid: it squashes all of space flat onto the violet plane (3Blue1Brown\'s way of picturing a matrix). Each word becomes a message there; attention mixes them.',
+        2: '3Blue1Brown\'s picture: a matrix moves the grid. W_OV = W_V W_O squashes the cube onto a plane: through a 2-number bottleneck nothing comes out 3-D. Written = Σⱼ Aⱼ·(xⱼW_OV): the thick violet arrow is the attention-weighted mix of the thin ones.',
+        3: '`attn_out` = z W_O, z = Σⱼ Aⱼ vⱼ, so attn_out = Σⱼ Aⱼ xⱼW_OV. rank W_OV ≤ d_head: the head writes into a d_head-dim subspace (row space of W_O). The grid shows x ↦ x((1−t)I + tW_OV), t: 0 → 1, as in 3Blue1Brown\'s Essence of Linear Algebra.',
+      },
+      cam: CAM.ov,
+      set: { dhead: 2, dest: 3, sharp: 1, twist: 0, zeroOV: false, show: 'both' },
+      enter(S) { scene(S, { grid: true, squash: 'play', note: 'write', tokenTags: false, barTag: false, cubeTags: false, outTag: true }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The machines don\'t check on each other.** Here the left one stares at a single word and the right one is switched off. Result: it looks very hard and moves nothing at all.',
+        2: '**Independent.** W_Q ×3 makes the pattern razor-sharp; W_OV = 0 silences the writer. The bars ignore OV, and OV ignores where QK looked, so you can study where a head looks and what it moves separately (ARENA: they act "semi-independently").',
+        3: 'A depends only on W_QK; attn_out = A·x·W_OV is linear in W_OV, so W_OV = 0 ⇒ attn_out = 0 for every A, and A never depends on W_OV. That is what licenses reading a head as (QK: where) × (OV: what). In training they couple: QK\'s gradient flows through OV.',
+      },
+      cam: CAM.wideR,
+      set: { dhead: 2, dest: 3, sharp: 3, twist: 0, zeroOV: true, show: 'both' },
+      enter(S) { scene(S, { plane: 'faint', note: 'indep', barTag: false, tokenTags: 'dest', figure: 'shrug', figAt: [2.2, 0, 0.75], face: [1.2, 0.6, 2.2] }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Saturday\'s code builds both machines.** In ARENA\'s `Attention` you first make the pattern (left and the bars), then use it to mix and write (right). The labels name the pieces you will write.',
+        2: 'ARENA [1.1] `Attention.forward`: q, k from `W_Q`, `W_K` → `attn_scores` → ÷√d_head, `apply_causal_mask`, softmax → `attn_pattern`. Then v from `W_V`, mixed by the pattern → `z` → `W_O` → `attn_out`. Test: tap token 2 to make it ask; it can\'t see 3 or 4.',
+        3: '`self.apply_causal_mask(attn_scores / self.cfg.d_head**0.5)` fills future keys with `self.IGNORE` (−inf), so `.softmax(-1)` gives them exactly 0. Then `z` = einsum(v, attn_pattern) and `attn_out` = einsum(z, W_O) + b_O.',
+      },
+      cam: CAM.whole,
+      set: { dhead: 2, dest: 3, sharp: 1, twist: 0, zeroOV: false, show: 'both' },
+      enter(S) { scene(S, { plane: 'faint', code: true, tokenTags: 'dest' }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Is one head the right unit?** For small tricks, yes: one head, one job. In big models one idea is often spread over many heads, so researchers now also trace ideas (features) instead.',
+        2: 'Current method: read heads one at a time via QK and OV (it cracked induction heads and IOI). Emerging: features spread over many heads and layers, traced with SAEs, transcoders and attribution graphs. For the exercise: heads are what you code.',
+        3: 'Head-level circuits work for small behaviours (induction, IOI name movers). Superposition spreads features across heads; attribution graphs over transcoders (2025) trace feature paths, but QK is still hard to decompose. For [1.1]: implement heads.',
+      },
+      cam: CAM.whole,
+      set: { dhead: 3, dest: 3, sharp: 1, twist: 0, zeroOV: false, show: 'both' },
+      enter(S) { useHead(S, 5); scene(S, { plane: 'faint', outTag: true, tokenTags: 'dest' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** A camera and a printer: one decides where to point, the other what to print. A good search does the same: first pick which pages match, then decide what to copy out of them.',
+        2: 'Anywhere "where" is split from "what": SQL\'s WHERE picks rows, SELECT picks columns; a search engine ranks pages, then shows snippets. In week 7 this split lets you read an induction head\'s job straight off its weights; in week 8 it finds IOI\'s name movers.',
+        3: 'Keys and values generally: soft dictionary lookup (Bahdanau attention), retrieval (score keys, read values), cross-attention in diffusion (text keys decide where, values what). In week 7: full circuits W_E W_QK W_Eᵀ and W_E W_OV W_U, read as FactoredMatrix.',
+      },
+      cam: CAM.whole,
+      set: { dhead: 2, dest: 3, sharp: 1, twist: 0, zeroOV: false, show: 'both' },
+      enter(S) { scene(S, { plane: 'faint', outTag: true, tokenTags: 'dest', figure: 'cheer', figAt: [0.1, 0, 1.3], face: [0.1, 0.6, 6] }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'Thin the head to one channel. What can the where-to-look machine still see?',
+        2: 'Set d_head = 1. What can the QK side still see of each token?',
+        3: 'd_head = 1 in a 3-dim stream: what does W_K read of each xⱼ?' },
+      options: [{ t: 'One direction: tokens that differ only across it look identical', ok: true }, { t: 'Everything, just blurrier' },
+        { t: 'Nothing: one channel is too few to attend' }, { t: 'Only the asking token itself' }],
+      why: { 1: 'One channel reads one direction: the rod. Words 1 and 2 cast almost the same shadow on it, so the head can\'t tell them apart and splits its attention between them.',
+        2: 'With one column, kⱼ = xⱼ·w is a single number: xⱼ\'s shadow on the rod. Tokens 1 and 2 land close together, so attention splits between them. With d_head = 2 the plane separates them and token 2 wins.',
+        3: 'W_K is 3×1: kⱼ = ⟨xⱼ, w_K⟩, the projection on a line; W_QK is rank 1, so scores are ∝ ⟨xⱼ, w_K⟩ and tokens are ranked on one axis only. Shown: the pattern splits between x₁ and x₂.' },
+      show(S) {
+        S.setKnobs({ dhead: 1, dest: 3, sharp: 1, twist: 0, zeroOV: false, show: 'both' });
+        scene(S, { drops: 'shadow', note: 'shadow', cubeTags: false }); S.fly(CAM.qk);
+        return wait(S, 1200);
+      } },
+    { q: { 1: 'Switch the writer off but make the looking razor-sharp. What gets written?',
+        2: 'Zero W_OV and scale W_Q ×3 (a near one-hot pattern). What does the head write?',
+        3: 'W_OV = 0, W_Q × 3. What is attn_out?' },
+      options: [{ t: 'Nothing: a zero vector', ok: true }, { t: 'A copy of the word it stares at' },
+        { t: 'A little, because the pattern is so sharp' }, { t: 'The pattern goes flat too' }],
+      why: { 1: 'Looking and carrying are separate machines. The looker can stare as hard as it likes; with the carrier off, nothing moves. The bars stay sharp.',
+        2: 'attn_out = Σⱼ Aⱼ xⱼ W_OV: every message is xⱼ·0 = 0, so the sum is 0 whatever A is. And A never depends on W_OV, so the pattern stays sharp.',
+        3: 'attn_out = A x W_OV is linear in W_OV and A = softmax(x W_QK xᵀ/√d_head) is independent of it: W_OV = 0 ⇒ attn_out ≡ 0 while A stays near one-hot.' },
+      show(S) {
+        S.setKnobs({ dhead: 2, dest: 3, sharp: 3, twist: 0, zeroOV: true, show: 'both' });
+        scene(S, { plane: 'faint', note: 'indep', barTag: false, tokenTags: 'dest' }); S.fly(CAM.wideR);
+        return wait(S, 1200);
+      } },
+    { q: { 1: 'Which pair of matrices decides where the head looks?',
+        2: 'Which product alone decides the attention pattern?',
+        3: 'Which object is identifiable from the attention scores?' },
+      options: [{ t: 'W_Q times W_Kᵀ (W_QK)', ok: true }, { t: 'W_V times W_O (W_OV)' }, { t: 'W_Q on its own' }, { t: 'W_K times W_V' }],
+      why: { 1: 'The query and key matrices only ever meet as a product. Watch: the knob twists both of them, the numbers inside change, and the bars don\'t move at all.',
+        2: 'score = x₄W_Q(xⱼW_K)ᵀ = x₄(W_QW_Kᵀ)xⱼᵀ. Rotating W_Q and W_K together (the twist) changes q and k but not their product, so the bars stay put.',
+        3: 'Scores are x W_QK xᵀ; (W_QM)(W_KM⁻ᵀ)ᵀ = W_QK for any invertible M, so only W_QK is identifiable. W_OV never enters A.' },
+      show(S) {
+        S.setKnobs({ dhead: 2, dest: 3, sharp: 1, twist: 0, zeroOV: false, show: 'both' });
+        scene(S, { plane: false, drops: 'reach', note: 'scores', needleTag: true, cubeTags: false }); S.fly(CAM.qk);
+        if (S.shot) { S.setKnob('twist', 120); return Promise.resolve(); }
+        return S.tween(2400, (e) => S.setKnob('twist', Math.round(120 * e)), K.ease.inOut);
+      } },
+    { q: { 1: 'A two-channel head in a 3-direction stream. How many directions can it write into?',
+        2: 'd_head = 2, d_model = 3. What is the largest rank W_OV = W_V W_O can have?',
+        3: 'rank(W_V W_O) with W_V ∈ ℝ^{3×2}, W_O ∈ ℝ^{2×3}: at most?' },
+      options: [{ t: '2', ok: true }, { t: '3' }, { t: '1' }, { t: '6' }],
+      why: { 1: 'Everything it writes squeezes through 2 numbers first, so it can only write into a flat plane. Watch the grid squash.',
+        2: 'x W_V has only 2 numbers; W_O turns 2 numbers into a vector in a fixed plane. So W_OV squashes the cube flat: rank ≤ d_head = 2, computed live from its singular values.',
+        3: 'rank(AB) ≤ min(rank A, rank B) ≤ 2. Live: singular values of W_OV, the third is 0. At real scale: rank ≤ 64 in a 768-dim stream.' },
+      show(S) {
+        S.setKnobs({ dhead: 2, dest: 3, sharp: 1, twist: 0, zeroOV: false, show: 'both' });
+        scene(S, { grid: true, squash: 'play', note: 'rank', tokenTags: false, barTag: false, cubeTags: false }); S.fly(CAM.ov);
+        return wait(S, 2200);
+      } },
+    { q: { 1: 'Make the looking 3× stronger. What happens to the attention?',
+        2: 'Scale W_Q by 3. What happens to the pattern?',
+        3: 'W_Q → 3W_Q (a softmax temperature of 1/3). Effect on A?' },
+      options: [{ t: 'Same favourite, much sharper', ok: true }, { t: 'A different favourite' }, { t: 'Nothing changes' }, { t: 'It spreads out evenly' }],
+      why: { 1: 'Every score is multiplied by 3, so the order stays the same but the gaps grow: the favourite takes almost everything.',
+        2: 'All scores scale by 3; softmax of bigger gaps is sharper, with the same order. This is why ARENA divides by √d_head: to keep scores from making softmax this sharp by accident.',
+        3: 'A = softmax(3s): argmax unchanged, entropy drops (temperature 1/3). ARENA\'s ÷√d_head keeps q·k at unit scale at init, so the pattern isn\'t near one-hot before training.' },
+      show(S) {
+        S.setKnobs({ dhead: 2, dest: 3, sharp: 1, twist: 0, zeroOV: false, show: 'both' });
+        scene(S, { plane: 'faint', note: 'indep', barTag: false, tokenTags: 'dest' }); S.fly(CAM.whole);
+        if (S.shot) { S.setKnob('sharp', 3); return Promise.resolve(); }
+        return S.tween(1800, (e) => S.setKnob('sharp', +(1 + 2 * e).toFixed(2)), K.ease.inOut);
+      } },
+  ],
+
+  where: {
+    1: 'Anywhere "where to look" is split from "what to take": a camera and a printer, a search that first picks pages and then copies lines out of them.',
+    2: 'SQL\'s WHERE (rows) and SELECT (columns); search ranking vs snippets; in week 7 you read an induction head\'s job straight from W_QK and W_OV, and in week 8 IOI\'s name movers.',
+    3: 'Soft key-value lookup in general: Bahdanau attention, retrieval (score keys, read values), cross-attention in diffusion models; weight-level circuit analysis via W_E W_QK W_Eᵀ and W_E W_OV W_U.',
+  },
+  links: [
+    { label: 'Film · attention, deep', href: '../../intuition/films/deep-w05-attention.html' },
+    { label: 'Film · induction, deep', href: '../../intuition/films/deep-w07-induction.html' },
+    { label: 'Week 5 pack', href: '../../index.html#week-05' },
+    { label: 'Week 7 pack', href: '../../index.html#week-07' },
+    { label: 'Case · QK and OV circuits', href: '../../index.html#cases/qk-ov-circuits' },
+    { label: 'Map · QK circuit', href: '../../index.html#map/node=qk-circuit' },
+    { label: 'Map · OV circuit', href: '../../index.html#map/node=ov-circuit' },
+    { label: 'Map · factored matrix', href: '../../index.html#map/node=factored-matrix' },
+    { label: 'Demo · transformer block', href: '../../index.html#demo/transformer-block' },
+  ],
+  remix: 'Build a single-file three.js scene of one attention head as two machines on a round plinth. Left: a brass wire cube (a toy residual stream, d_model = 3) with four blue token arrows x₁..x₄ from its centre; token 4 asks. Compute q = x₄W_Q, kⱼ = xⱼW_K, scores q·kⱼ/√d_head, softmax (mask later positions with −inf), and draw the search direction x₄W_QK as a teal needle with each token\'s projection onto it; a translucent teal disc shows col(W_K), what the key side can see. Middle: four amber bars = the attention weights. Right: a second cube where a 3×3×3 grid animates x ↦ x((1−t)I + tW_OV) so it flattens onto the violet image plane of W_OV = W_V W_O (rank ≤ d_head), the token arrows ride along to become messages, and a thick violet arrow shows attn_out = Σⱼ Aⱼ xⱼ W_OV. Knobs: d_head 1-3, scale W_Q, a rotation R applied to both W_Q and W_K (scores must not change), zero W_OV (pattern must not change).',
+  credit: 'Formulas: ARENA [1.1] `Attention.forward` (scores ÷ √d_head, `apply_causal_mask` with IGNORE = −inf, softmax, z, W_O) and the [1.2] QK / OV circuit notation, after Elhage et al., "A Mathematical Framework for Transformer Circuits" (2021). Pictures borrowed from 3Blue1Brown\'s Essence of Linear Algebra: a matrix as a moving grid, the dot product as a projection. Toy numbers: a hand-set head in a 3-dim stream (seeded random heads on request). Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

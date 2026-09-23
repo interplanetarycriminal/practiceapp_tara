@@ -1,0 +1,1173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Stencil · Object Lessons</title>
+<meta name="description" content="A 3 x 3 x 3 stencil slides through three colour sheets: every output number is 27 multiplies and a sum, computed live, with padding, stride, output channels, parameters and max pooling.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+.k-label.k-axis{text-transform:none;letter-spacing:.02em;font-size:11px}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   03 · w02-stencil: "The stencil" (W2, ARENA [0.2] CNNs & ResNets)
+   A toy picture (1, 3, 8, 8) as three glass sheets; a k x k x 3 stencil (the kernel)
+   slides over them; each stop multiplies the 3·k·k numbers under it by its weights and
+   sums them into one output number (F.conv2d: cross-correlation, no flip). Every number
+   on screen comes from the MATH block, which is extracted and checked in node against an
+   independent scatter-add convolution and against numpy (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+const IMG = { C: 3, H: 8, W: 8, lo: 2, hi: 5, rgb: [3, 2, 1] };   // toy data: a 4 x 4 square, (R, G, B) = (3, 2, 1)
+function makeImage() {                                           // x[c][i][j], shape (3, 8, 8)
+  const x = [];
+  for (let c = 0; c < IMG.C; c++) {
+    const sl = [];
+    for (let i = 0; i < IMG.H; i++) {
+      const row = [];
+      for (let j = 0; j < IMG.W; j++) row.push(i >= IMG.lo && i <= IMG.hi && j >= IMG.lo && j <= IMG.hi ? IMG.rgb[c] : 0);
+      sl.push(row);
+    }
+    x.push(sl);
+  }
+  return x;
+}
+const KERNELS = [
+  { id: 'vedge', name: { 1: 'vertical edges', 2: 'vertical edges', 3: 'vertical edge' } },
+  { id: 'hedge', name: { 1: 'horizontal edges', 2: 'horizontal edges', 3: 'horizontal edge' } },
+  { id: 'warm', name: { 1: 'warmth', 2: 'warmth (R − B)', 3: 'R − B' } },
+  { id: 'blur', name: { 1: 'blur', 2: 'blur', 3: 'box blur' } },
+];
+/* hand-set stencils, weight[c][i][j] of shape (C_in, k, k). vedge is Andrew Ng's vertical edge
+   detector (+1 left column, 0 centre, -1 right; the same slice on every channel), hedge its
+   transpose, warm a 1 x 1 channel mix (R - B) at the centre tap, blur a box average 1/k^2. */
+function handKernel(id, k, cin = 3) {
+  const m = (k - 1) / 2, w = [];
+  for (let c = 0; c < cin; c++) {
+    const sl = [];
+    for (let i = 0; i < k; i++) {
+      const row = [];
+      for (let j = 0; j < k; j++) {
+        let v = 0;
+        if (id === 'vedge') v = Math.sign(m - j);
+        else if (id === 'hedge') v = Math.sign(m - i);
+        else if (id === 'warm') v = i === m && j === m ? [1, 0, -1][c] : 0;
+        else if (id === 'blur') v = 1 / (k * k);
+        row.push(v);
+      }
+      sl.push(row);
+    }
+    w.push(sl);
+  }
+  return w;
+}
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+/* ARENA's Conv2d init: sf = 1/sqrt(in_channels·k·k); weight = sf·(2·rand(out, in, k, k) − 1); bias=False */
+function kaimingWeights(cout, cin, k, seed = 7) {
+  const sf = 1 / Math.sqrt(cin * k * k), r = mulberry32(seed), w = [];
+  for (let o = 0; o < cout; o++) {
+    const ker = [];
+    for (let c = 0; c < cin; c++) {
+      const sl = [];
+      for (let i = 0; i < k; i++) { const row = []; for (let j = 0; j < k; j++) row.push(sf * (2 * r() - 1)); sl.push(row); }
+      ker.push(sl);
+    }
+    w.push(ker);
+  }
+  return { w, bound: sf };
+}
+const outSize = (n, k, p, s) => Math.floor((n + 2 * p - k) / s) + 1;     // L_out = floor((L_in + 2p - k)/s) + 1
+function pad(x, p) {                                                      // zeros around every channel
+  return x.map((sl) => {
+    const H = sl.length, W = sl[0].length;
+    return Array.from({ length: H + 2 * p }, (_, i) => Array.from({ length: W + 2 * p }, (_, j) => {
+      const a = i - p, b = j - p;
+      return a >= 0 && a < H && b >= 0 && b < W ? sl[a][b] : 0;
+    }));
+  });
+}
+/* F.conv2d on one image: out[o][r][q] = bias[o] + sum_c sum_i sum_j w[o][c][i][j] · xp[c][s·r + i][s·q + j] */
+function conv2d(x, w, bias, s, p) {
+  const xp = pad(x, p), k = w[0][0].length;
+  const oh = outSize(x[0].length, k, p, s), ow = outSize(x[0][0].length, k, p, s);
+  const out = w.map((ker, o) => Array.from({ length: oh }, (_, r) => Array.from({ length: ow }, (_, q) => {
+    let acc = bias ? bias[o] : 0;
+    for (let c = 0; c < ker.length; c++) for (let i = 0; i < k; i++) for (let j = 0; j < k; j++) acc += ker[c][i][j] * xp[c][s * r + i][s * q + j];
+    return acc;
+  })));
+  return { out, oh, ow };
+}
+/* one stop of one stencil: each channel's partial sum (so the three sheets' shares can be shown) */
+function windowAt(x, ker, r, q, s, p) {
+  const xp = pad(x, p), k = ker[0].length;
+  const parts = ker.map((sl, c) => {
+    let a = 0;
+    for (let i = 0; i < k; i++) for (let j = 0; j < k; j++) a += sl[i][j] * xp[c][s * r + i][s * q + j];
+    return a;
+  });
+  return { parts, total: parts.reduce((a, b) => a + b, 0), top: s * r - p, left: s * q - p };
+}
+/* nn.MaxPool2d(kernel_size, stride = kernel_size, padding = 0), floor mode: max of each window, per channel */
+function maxPool(map, kp = 2, sp = kp) {
+  const oh = Math.floor((map.length - kp) / sp) + 1, ow = Math.floor((map[0].length - kp) / sp) + 1;
+  const out = [], arg = [];
+  for (let r = 0; r < oh; r++) {
+    const row = [], ar = [];
+    for (let q = 0; q < ow; q++) {
+      let best = -Infinity, bi = 0, bj = 0;
+      for (let i = 0; i < kp; i++) for (let j = 0; j < kp; j++) {
+        const v = map[sp * r + i][sp * q + j];
+        if (v > best) { best = v; bi = sp * r + i; bj = sp * q + j; }
+      }
+      row.push(best); ar.push([bi, bj]);
+    }
+    out.push(row); arg.push(ar);
+  }
+  return { out, arg, oh, ow };
+}
+const params = (cout, cin, k, bias = true) => cout * cin * k * k + (bias ? cout : 0);   // nn.Conv2d(cin, cout, k)
+const denseParams = (cin, H, W, cout, oh, ow) => cin * H * W * cout * oh * ow;          // a Linear doing the same map
+const MATH = { IMG, makeImage, KERNELS, handKernel, kaimingWeights, outSize, pad, conv2d, windowAt, maxPool, params, denseParams };
+// MATH-END
+
+const IMAGE = makeImage();
+
+/* ============================================================ shared helpers
+   (copied from o/w01-block.html; the kit is not edited)
+   makeAtlas: numbers painted into one canvas texture; each instance picks a cell.
+   makeCubes: instanced rounded bodies + instanced number decals (2 draw calls per set);
+              here with `top: true`, the number sits on the top face of a flat tile.
+   arcAt: a point on a smooth arc from a to b.                                  */
+
+function makeAtlas(renderer, cols = 8, px = 128) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = cols * px;
+  const g = cv.getContext('2d');
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  const map = new Map();
+  const font = (fs) => `700 ${fs}px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
+  function draw(i, s) {
+    const x0 = (i % cols) * px, y0 = Math.floor(i / cols) * px;
+    g.clearRect(x0, y0, px, px);
+    if (!s) return;
+    let fs = Math.round(px * (s.length <= 2 ? 0.6 : s.length === 3 ? 0.46 : 0.36));
+    g.font = font(fs);
+    while (g.measureText(s).width > px * 0.86 && fs > 8) { fs -= 2; g.font = font(fs); }
+    g.fillStyle = '#ffffff';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(s, x0 + px / 2, y0 + px / 2 + fs * 0.05);
+  }
+  return {
+    tex, cols,
+    cell(s) {
+      s = String(s);
+      if (!map.has(s)) {
+        if (map.size >= cols * cols) throw new Error('atlas full');
+        map.set(s, map.size);
+        draw(map.get(s), s);
+        tex.needsUpdate = true;
+      }
+      return map.get(s);
+    },
+    reset() { map.clear(); g.clearRect(0, 0, cv.width, cv.height); tex.needsUpdate = true; },
+  };
+}
+
+function numberMaterial(atlas, opacity = 1) {
+  const m = new THREE.MeshStandardMaterial({ map: atlas.tex, transparent: true, opacity, depthWrite: false,
+    roughness: 0.75, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const cc = atlas.cols.toFixed(1);
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aCell;')
+      .replace('#include <uv_vertex>', `#include <uv_vertex>
+#ifdef USE_MAP
+  { float cx = mod(aCell, ${cc}); float cy = floor(aCell / ${cc} + 0.001);
+    vMapUv = vec2((cx + vMapUv.x) / ${cc}, 1.0 - (cy + 1.0 - vMapUv.y) / ${cc}); }
+#endif`);
+  };
+  m.customProgramCacheKey = () => 'k-numbers-' + cc;
+  return m;
+}
+
+function makeCubes(n, atlas, o = {}) {
+  const w = o.w ?? 0.3, h = o.h ?? w, d = o.d ?? w;
+  const bodyGeo = new THREE.RoundedBoxGeometry(w, h, d, o.seg ?? 3, o.r ?? 0.045);
+  const bodyMat = o.bodyMat || new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.9, metalness: 0 });
+  const bodies = new THREE.InstancedMesh(bodyGeo, bodyMat, n);
+  const quads = [];
+  if (o.top) {                                             // number on the top face, reading upright from the front
+    const fw = (o.face ?? 0.82) * Math.min(w, d);
+    quads.push(new THREE.PlaneGeometry(fw, fw).rotateX(-Math.PI / 2).translate(0, h / 2 + 0.002, 0));
+  } else {
+    const fw = (o.face ?? 0.82) * Math.min(w, h);
+    quads.push(new THREE.PlaneGeometry(fw, fw).translate(0, 0, d / 2 + 0.002));
+    if (o.back !== false) quads.push(new THREE.PlaneGeometry(fw, fw).rotateY(Math.PI).translate(0, 0, -d / 2 - 0.002));
+  }
+  const decalGeo = quads.length > 1 ? THREE.mergeGeometries(quads) : quads[0];
+  const aCell = new THREE.InstancedBufferAttribute(new Float32Array(n), 1);
+  decalGeo.setAttribute('aCell', aCell);
+  const decals = new THREE.InstancedMesh(decalGeo, o.decalMat || numberMaterial(atlas), n);
+  bodies.castShadow = o.shadow ?? true;
+  bodies.receiveShadow = true;
+  decals.receiveShadow = true;
+  bodies.frustumCulled = decals.frustumCulled = false;
+  const set = {
+    n, bodies, decals,
+    pos: new Float32Array(3 * n), scl: new Float32Array(n), cell: new Float32Array(n),
+    col: new Float32Array(3 * n).fill(1), ink: new Float32Array(3 * n),
+    apply() {
+      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(), c = new THREE.Color();
+      for (let i = 0; i < n; i++) {
+        const k = Math.max(1e-5, set.scl[i]);
+        p.set(set.pos[3 * i], set.pos[3 * i + 1], set.pos[3 * i + 2]);
+        m.compose(p, q, s.set(k, k, k));
+        bodies.setMatrixAt(i, m);
+        decals.setMatrixAt(i, m);
+        bodies.setColorAt(i, c.setRGB(set.col[3 * i], set.col[3 * i + 1], set.col[3 * i + 2]));
+        decals.setColorAt(i, c.setRGB(set.ink[3 * i], set.ink[3 * i + 1], set.ink[3 * i + 2]));
+        aCell.array[i] = set.cell[i];
+      }
+      bodies.instanceMatrix.needsUpdate = decals.instanceMatrix.needsUpdate = true;
+      bodies.instanceColor.needsUpdate = decals.instanceColor.needsUpdate = true;
+      aCell.needsUpdate = true;
+    },
+    snap() { return { pos: set.pos.slice(), scl: set.scl.slice(), cell: set.cell.slice(), col: set.col.slice(), ink: set.ink.slice() }; },
+  };
+  for (let i = 0; i < n; i++) { bodies.setColorAt(i, new THREE.Color(1, 1, 1)); decals.setColorAt(i, new THREE.Color(0, 0, 0)); }
+  return set;
+}
+
+function arcAt(out, a, b, u, lift = 0.3, bulge = null) {
+  const w = 4 * u * (1 - u);
+  out[0] = a[0] + (b[0] - a[0]) * u + (bulge ? bulge[0] * w : 0);
+  out[1] = a[1] + (b[1] - a[1]) * u + lift * w + (bulge ? bulge[1] * w : 0);
+  out[2] = a[2] + (b[2] - a[2]) * u + (bulge ? bulge[2] * w : 0);
+  return out;
+}
+const smooth = (a, b, v) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+const easeIO = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const rgb = (hex) => { const c = new THREE.Color(hex); return [c.r, c.g, c.b]; };
+const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+
+/* plain instanced boxes (weight frames, rack tiles): per-instance position, size, colour */
+function makeBoxes(n, geo, mat) {
+  const mesh = new THREE.InstancedMesh(geo, mat, n);
+  mesh.frustumCulled = false;
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(), c = new THREE.Color();
+  for (let i = 0; i < n; i++) mesh.setColorAt(i, c.setRGB(1, 1, 1));
+  return {
+    mesh, n,
+    set(i, pos, size, col) {
+      m4.compose(p.set(pos[0], pos[1], pos[2]), q, s.set(size[0], size[1], size[2]));
+      mesh.setMatrixAt(i, m4);
+      if (col) mesh.setColorAt(i, c.setRGB(col[0], col[1], col[2]));
+    },
+    hide(i) { m4.compose(p.set(0, 0.5, 0), q, s.set(1e-5, 1e-5, 1e-5)); mesh.setMatrixAt(i, m4); },
+    done() { mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true; },
+  };
+}
+function frameGeometry(bar = 0.11) {                      // a unit square frame lying flat (y is its height)
+  const b = bar;
+  return THREE.mergeGeometries([
+    new THREE.BoxGeometry(1, 1, b).translate(0, 0, (1 - b) / 2),
+    new THREE.BoxGeometry(1, 1, b).translate(0, 0, -(1 - b) / 2),
+    new THREE.BoxGeometry(b, 1, 1 - 2 * b).translate((1 - b) / 2, 0, 0),
+    new THREE.BoxGeometry(b, 1, 1 - 2 * b).translate(-(1 - b) / 2, 0, 0),
+  ]);
+}
+
+/* ============================================================ display constants */
+
+const CELL = 0.25, TILE = 0.215, TH = 0.05, TRAY = 0.03;
+const GIN = 0.9, DROP = 1.15;
+const Y_B = TRAY + DROP;                          // top of the lowest glass sheet (B)
+const yFloor = (c) => Y_B + (2 - c) * GIN;        // c = 0 red (top), 1 green, 2 blue
+const TOP = yFloor(0);
+const PR = 1.6;
+const TINT = ['#e2786c', '#6aab78', '#6f93da'];   // channel glass: toy RGB tints (not the semantic colours)
+const CH = ['R', 'G', 'B'], CHNAME = ['red', 'green', 'blue'];
+const KCOL = [C.aux, C.dir, C.prob, '#6d7184'];   // the four stencils' strings: teal, violet, amber, slate
+const NOUT = 4 * 144, NPLATE = 3 * 25, NRACK = 4 * 3 * 25;
+const px = (j) => (j - 3.5) * CELL, pz = (i) => (i - 3.5) * CELL;   // input pixel (row i, col j) -> world x, z
+const COL = {
+  plaster: rgb('#f3eee5'), ink: rgb(C.ink), white: rgb('#fbf8f2'), slate: rgb('#3b3e4c'),
+  good: mix(rgb('#f3eee5'), rgb(C.good), 0.62), brass: rgb(C.brass),
+};
+const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+function fmtV(v) {
+  if (Math.abs(v) < 5e-10) return '0';
+  const r = Math.round(v);
+  let s = Math.abs(v - r) < 1e-9 ? String(r) : Math.abs(v) < 1 ? v.toFixed(2) : v.toFixed(1);
+  if (parseFloat(s) === 0) s = '0';
+  return s.replace('-', '−');
+}
+function sumStr(parts) {
+  return parts.map((v, i) => (i === 0 ? fmtV(v) : v < 0 ? ` − ${fmtV(-v)}` : ` + ${fmtV(v)}`)).join('');
+}
+const CAM = {
+  front: { pos: [2.1, 6.9, 7.3], target: [0, 1.45, 0] },
+  high: { pos: [1.9, 8.2, 6.4], target: [0, 1.3, 0] },
+  wide: { pos: [2.6, 6.6, 7.4], target: [0.25, 1.2, 0] },
+  low: { pos: [1.7, 5.4, 7.4], target: [0, 1.1, 0] },
+};
+
+/* ============================================================ layout + results */
+
+function layoutFor(S) {
+  const k = S.knobs.k, s = S.knobs.s, p = S.knobs.p, cout = S.knobs.cout;
+  const n = outSize(8, k, p, s), m = (k - 1) / 2, N8 = 8 + 2 * p;
+  const half = (N8 * CELL) / 2;
+  const centre = (r) => s * r - p + m;                     // window centre, in input pixel coordinates
+  const maps = [];
+  if (cout === 1) {                                         // one big map: each number lands right under its window
+    const cell = s * CELL, a = px(centre(0)) - cell / 2, b = px(centre(n - 1)) + cell / 2;
+    maps.push({ o: 0, cell, scale: s, numbers: true, box: [a, b, a, b],
+      pos: (r, q) => [px(centre(q)), TRAY, pz(centre(r))] });
+  } else {                                                  // C_out small maps, 2 per row
+    const cell = Math.min(0.16, 0.95 / n), w = n * cell, gap = 0.22;
+    for (let o = 0; o < cout; o++) {
+      const col = o % 2, row = Math.floor(o / 2);
+      const sx = (col - 0.5) * (w + gap), sz = cout <= 2 ? 0 : (row - 0.5) * (w + gap);
+      maps.push({ o, cell, scale: cell / CELL, numbers: false, box: [sx - w / 2, sx + w / 2, sz - w / 2, sz + w / 2],
+        pos: (r, q) => [sx + (q - (n - 1) / 2) * cell, TRAY, sz + (r - (n - 1) / 2) * cell] });
+    }
+  }
+  let mx0 = Infinity, mx1 = -Infinity;
+  for (const M of maps) { mx0 = Math.min(mx0, M.box[0]); mx1 = Math.max(mx1, M.box[1]); }
+  return { k, s, p, cout, n, m, N8, half, centre, maps, mx0, mx1, N: n * n, n2: Math.floor((n - 2) / 2) + 1 };
+}
+
+function compute(S, L) {
+  const init = S.knobs.w === 'init';
+  const K0 = init ? kaimingWeights(L.cout, 3, L.k, 7) : null;
+  const W = init ? K0.w : KERNELS.slice(0, L.cout).map((kk) => handKernel(kk.id, L.k));
+  const bias = new Array(L.cout).fill(0);
+  const { out } = conv2d(IMAGE, W, bias, L.s, L.p);
+  const pooled = out.map((mp) => maxPool(mp, 2));
+  const vmax = out.map((mp) => Math.max(1e-9, ...mp.flat().map(Math.abs)));
+  // focus stop: kernel 0's biggest output (first in reading order); if it is all zero, the stop nearest the square's right side
+  let best = -Infinity, focus = 0;
+  out[0].flat().forEach((v, i) => { if (v > best + 1e-9) { best = v; focus = i; } });
+  if (best <= 1e-9) {
+    let dmin = Infinity;
+    for (let r = 0; r < L.n; r++) for (let q = 0; q < L.n; q++) {
+      const d = (L.centre(r) - 3) ** 2 + (L.centre(q) - 5) ** 2;
+      if (d < dmin - 1e-9) { dmin = d; focus = r * L.n + q; }
+    }
+  }
+  // the pooling block to talk about: the one whose four values differ most (first in reading order)
+  let spread = -1, blk = [0, 0];
+  const P0 = pooled[0];
+  for (let r = 0; r < P0.oh; r++) for (let q = 0; q < P0.ow; q++) {
+    const v = [0, 1].flatMap((i) => [0, 1].map((j) => out[0][2 * r + i][2 * q + j]));
+    const sp = Math.max(...v) - Math.min(...v);
+    if (sp > spread + 1e-9) { spread = sp; blk = [r, q]; }
+  }
+  return { W, bias, out, pooled, vmax, focus, blk, init, bound: 1 / Math.sqrt(3 * L.k * L.k) };
+}
+
+/* ============================================================ targets for the output tiles */
+
+function tileLook(v, vmax, o) {
+  const t = Math.min(1, Math.abs(v) / vmax);
+  let col = COL.plaster;
+  if (v > 1e-9) col = mix(COL.plaster, rgb(KCOL[o]), 0.16 + 0.7 * t);
+  else if (v < -1e-9) col = mix(COL.plaster, COL.slate, 0.14 + 0.66 * t);
+  return [col, lum(col) < 0.36 ? COL.white : COL.ink];
+}
+function outCell(S, M, v) { return M.numbers ? S.state.atlas.cell(fmtV(v)) : 0; }
+function dropFrom(S, j) {                                  // where stop j's bead starts: under its window
+  const L = S.state.L, r = Math.floor(j / L.n), q = j % L.n;
+  return [px(L.centre(q)), Y_B - 0.2, pz(L.centre(r))];
+}
+function stopXZ(L, j) { const r = Math.floor(j / L.n), q = j % L.n; return [px(L.centre(q)), pz(L.centre(r))]; }
+
+/* the settled state of every output tile: vis[j] = stop j computed; pooled = MaxPool2d(2) applied */
+function tilesTarget(S, pooled) {
+  const st = S.state, L = st.L, R = st.R, n = L.n;
+  const T = { pos: new Float32Array(3 * NOUT), scl: new Float32Array(NOUT), cell: new Float32Array(NOUT),
+    col: new Float32Array(3 * NOUT).fill(1), ink: new Float32Array(3 * NOUT) };
+  for (const M of L.maps) {
+    const o = M.o;
+    for (let r = 0; r < n; r++) for (let q = 0; q < n; q++) {
+      const j = r * n + q, idx = o * L.N + j, v = R.out[o][r][q];
+      const [col, ink] = tileLook(v, R.vmax[o], o);
+      let p = M.pos(r, q), sc = M.scale * (st.vis[j] ? 1 : 0), cell = outCell(S, M, v);
+      if (pooled) {
+        const P = R.pooled[o], r2 = r >> 1, q2 = q >> 1;
+        if (r2 >= P.oh || q2 >= P.ow) sc = 0;                  // floor mode: the odd last row / column is dropped
+        else {
+          const a = M.pos(2 * r2, 2 * q2), b = M.pos(2 * r2 + 1, 2 * q2 + 1);
+          p = [(a[0] + b[0]) / 2, TRAY, (a[2] + b[2]) / 2];
+          const [ai, aj] = P.arg[r2][q2];
+          sc = ai === r && aj === q ? 2 * M.scale : 0;
+          cell = outCell(S, M, P.out[r2][q2]);
+        }
+      }
+      T.pos[3 * idx] = p[0]; T.pos[3 * idx + 1] = p[1] + (TH * Math.max(sc, 1e-3)) / 2; T.pos[3 * idx + 2] = p[2];
+      T.scl[idx] = sc; T.cell[idx] = cell;
+      T.col.set(col, 3 * idx); T.ink.set(ink, 3 * idx);
+    }
+  }
+  return T;
+}
+function snapTiles(S, T) {
+  const o = S.state.out;
+  o.pos.set(T.pos); o.scl.set(T.scl); o.cell.set(T.cell); o.col.set(T.col); o.ink.set(T.ink);
+  o.apply();
+}
+/* tween every tile from where it is to T (arcs for long moves) */
+function tilesTo(S, T, ms = 850, delay = null) {
+  const st = S.state, set = st.out, A = set.snap(), my = ++st.tid;
+  const D = Float32Array.from({ length: NOUT }, (_, i) => (delay ? delay(i) : 0)), maxD = Math.max(...D);
+  const tmp = [0, 0, 0];
+  return S.tween(ms + maxD, (k) => {
+    if (my !== st.tid) return;
+    const t = k * (ms + maxD);
+    for (let i = 0; i < NOUT; i++) {
+      const e = easeIO(Math.min(1, Math.max(0, (t - D[i]) / ms)));
+      const a = [A.pos[3 * i], A.pos[3 * i + 1], A.pos[3 * i + 2]], b = [T.pos[3 * i], T.pos[3 * i + 1], T.pos[3 * i + 2]];
+      const dist = Math.hypot(b[0] - a[0], b[2] - a[2]);
+      arcAt(tmp, a, b, e, dist < 1e-4 ? 0 : 0.1 + 0.25 * dist);
+      set.pos.set(tmp, 3 * i);
+      const s0 = A.scl[i], s1 = T.scl[i];
+      set.scl[i] = s1 < s0 ? s0 + (s1 - s0) * smooth(0.55, 1, e) : s0 + (s1 - s0) * smooth(0, 0.6, e);
+      set.cell[i] = e >= 0.5 ? T.cell[i] : A.cell[i];
+      for (let c = 0; c < 3; c++) {
+        set.col[3 * i + c] = A.col[3 * i + c] + (T.col[3 * i + c] - A.col[3 * i + c]) * smooth(0.3, 1, e);
+        set.ink[3 * i + c] = A.ink[3 * i + c] + (T.ink[3 * i + c] - A.ink[3 * i + c]) * smooth(0.3, 1, e);
+      }
+    }
+    set.apply();
+    S.invalidate();
+  }, (v) => v);
+}
+
+/* ============================================================ building (on knob change only) */
+
+function sheetTexture(c, p) {                              // one glass sheet: tint, grid, the padding ring's zeros
+  const N = 8 + 2 * p, cp = 56, cv = document.createElement('canvas');
+  cv.width = cv.height = N * cp;
+  const g = cv.getContext('2d');
+  const tint = new THREE.Color(TINT[c]);
+  const tr = Math.round(tint.r * 255), tg = Math.round(tint.g * 255), tb = Math.round(tint.b * 255);
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const inside = i >= p && i < p + 8 && j >= p && j < p + 8;
+    g.fillStyle = inside ? `rgba(${tr},${tg},${tb},0.30)` : 'rgba(255,255,255,0.42)';
+    g.fillRect(j * cp, i * cp, cp, cp);
+    if (!inside) {
+      g.fillStyle = 'rgba(70,70,82,0.62)';
+      g.font = `600 ${Math.round(cp * 0.42)}px ui-sans-serif, system-ui, sans-serif`;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('0', j * cp + cp / 2, i * cp + cp / 2 + 1);
+    }
+  }
+  g.strokeStyle = 'rgba(43,42,51,0.22)'; g.lineWidth = 2;
+  for (let i = 0; i <= N; i++) {
+    g.beginPath(); g.moveTo(0, i * cp); g.lineTo(N * cp, i * cp); g.stroke();
+    g.beginPath(); g.moveTo(i * cp, 0); g.lineTo(i * cp, N * cp); g.stroke();
+  }
+  if (p > 0) { g.strokeStyle = 'rgba(181,138,60,0.95)'; g.lineWidth = 5; g.strokeRect(p * cp, p * cp, 8 * cp, 8 * cp); }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+function chimneyGeometry(k) {                              // the stencil: brass posts + a ring on every sheet
+  const h = (k * CELL) / 2 + 0.016, e = 0.022, y0 = Y_B - 0.17, y1 = TOP + 0.24;
+  const parts = [];
+  const bar = (sx, sy, sz, x, y, z) => parts.push(new THREE.BoxGeometry(sx, sy, sz).translate(x, y, z));
+  for (const ax of [-1, 1]) for (const az of [-1, 1]) bar(e, y1 - y0, e, ax * h, (y0 + y1) / 2, az * h);
+  const ring = (y, t = e) => { bar(2 * h + t, t, t, 0, y, -h); bar(2 * h + t, t, t, 0, y, h); bar(t, t, 2 * h + t, -h, y, 0); bar(t, t, 2 * h + t, h, y, 0); };
+  ring(y0); ring(y1);
+  for (let c = 0; c < 3; c++) ring(yFloor(c) + TH + 0.03, 0.028);
+  return THREE.mergeGeometries(parts);
+}
+
+function weightLook(w, wmax) {
+  const t = Math.min(1, Math.abs(w) / wmax);
+  if (Math.abs(w) < 1e-12) return null;
+  return w > 0 ? mix(COL.white, COL.brass, 0.35 + 0.65 * t) : mix(COL.white, COL.slate, 0.4 + 0.6 * t);
+}
+
+function build(S) {
+  const st = S.state, L = layoutFor(S);
+  st.L = L;
+  st.R = compute(S, L);
+  st.vis = new Uint8Array(L.N).fill(1);
+  st.poolShown = !!S.knobs.pool;
+  st.stop = st.R.focus;
+  // numbers atlas: blank first, then the inputs 1, 2, 3, then this layout's outputs
+  const A = st.atlas;
+  A.reset(); A.cell(''); A.cell('1'); A.cell('2'); A.cell('3');
+  // glass sheets (texture only when p changes)
+  if (st.builtP !== L.p) {
+    st.builtP = L.p;
+    st.sheets.forEach((m, c) => {
+      if (m.material.map) m.material.map.dispose();
+      m.material.map = sheetTexture(c, L.p);
+      m.material.needsUpdate = true;
+      m.scale.set(L.N8 * CELL + 0.04, 1, L.N8 * CELL + 0.04);
+    });
+  }
+  // the stencil (geometry only when k changes)
+  if (st.builtK !== L.k) {
+    st.builtK = L.k;
+    st.frame.geometry.dispose();
+    st.frame.geometry = chimneyGeometry(L.k);
+  }
+  paintPlates(S);
+  const [x, z] = stopXZ(L, st.stop);
+  st.chim.position.set(x, 0, z);
+  // trays under the maps
+  st.trays.forEach((t, o) => {
+    const M = L.maps[o];
+    t.visible = !!M;
+    if (!M) return;
+    const w = M.box[1] - M.box[0] + 0.1, d = M.box[3] - M.box[2] + 0.1;
+    t.scale.set(w, TRAY, d);
+    t.position.set((M.box[0] + M.box[1]) / 2, TRAY / 2, (M.box[2] + M.box[3]) / 2);
+  });
+  buildRack(S);
+  snapTiles(S, tilesTarget(S, st.poolShown));
+  threads(S);
+  setProxy(S);
+  paint(S);
+}
+
+/* weight frames inside the stencil: gold = positive weight, slate = negative, none = 0 */
+function paintPlates(S) {
+  const st = S.state, L = st.L, W = st.R.W[st.showK || 0], k = L.k, m = L.m;
+  const wmax = Math.max(1e-12, ...W.flat(2).map(Math.abs));
+  let n = 0;
+  for (let c = 0; c < 3; c++) for (let i = 0; i < k; i++) for (let j = 0; j < k; j++) {
+    const look = weightLook(W[c][i][j], wmax);
+    if (!look) { st.plates.hide(n++); continue; }
+    st.plates.set(n++, [(j - m) * CELL, yFloor(c) + TH + 0.012, (i - m) * CELL], [CELL - 0.012, 0.024, CELL - 0.012], look);
+  }
+  for (; n < NPLATE; n++) st.plates.hide(n);
+  st.plates.done();
+}
+
+/* the weight rack: weight (C_out, C_in, k, k) as C_out rows of three k x k plates */
+function buildRack(S) {
+  const st = S.state, L = st.L, R = st.R, k = L.k, m = L.m;
+  const rt = Math.min(0.055, 0.21 / k), pitch = k * rt + 0.07;
+  const W = 3 * pitch + 0.1, H = L.cout * pitch + 0.1;
+  const g = st.rack.group;
+  const x0 = Math.max(1.02, L.mx1 + 0.22);
+  g.position.set(x0 + W / 2, 0, 0.35);
+  g.rotation.y = -0.32;
+  st.rack.panel.scale.set(W, H, 0.03);
+  st.rack.panel.position.set(0, 0.06 + H / 2, -0.02);
+  st.rack.base.scale.set(W + 0.06, 0.06, 0.16);
+  st.rack.base.position.set(0, 0.03, 0);
+  let n = 0;
+  for (let o = 0; o < L.cout; o++) {
+    const Wk = R.W[o], wmax = Math.max(1e-12, ...Wk.flat(2).map(Math.abs));
+    const yc = 0.06 + 0.05 + (L.cout - 1 - o) * pitch + pitch / 2;
+    for (let c = 0; c < 3; c++) {
+      const xc = (c - 1) * pitch;
+      for (let i = 0; i < k; i++) for (let j = 0; j < k; j++) {
+        const look = weightLook(Wk[c][i][j], wmax) || mix(COL.white, COL.plaster, 0.5);
+        st.rack.tiles.set(n++, [xc + (j - m) * rt, yc + (m - i) * rt, 0.012], [rt * 0.86, rt * 0.86, 0.02], look);
+      }
+    }
+    const b = st.rack.beads[o];
+    b.visible = true;
+    b.position.set(-W / 2 + 0.035, yc, 0.02);
+  }
+  for (let o = L.cout; o < 4; o++) st.rack.beads[o].visible = false;
+  for (; n < NRACK; n++) st.rack.tiles.hide(n);
+  st.rack.tiles.done();
+  st.rackRight = g.position.x + W / 2 + 0.05;
+  st.rackTop = new THREE.Vector3(g.position.x, 0.08 + H, g.position.z);
+}
+
+/* strings: from under the stencil down to where each stencil's number lands */
+function threads(S, j = S.state.stop) {
+  const st = S.state, L = st.L;
+  const on = st.chim.visible && !st.poolShown;
+  st.strings.forEach((t, o) => {
+    const M = L.maps[o];
+    t.mesh.visible = !!(on && M);
+    if (!t.mesh.visible) return;
+    const r = Math.floor(j / L.n), q = j % L.n, b = M.pos(r, q);
+    const a = [st.chim.position.x + (o - (L.cout - 1) / 2) * 0.03, Y_B - 0.17, st.chim.position.z];
+    t.set([new THREE.Vector3(...a), new THREE.Vector3(b[0], TRAY + 0.02, b[2])]);
+  });
+}
+
+function setProxy(S) {
+  const st = S.state, L = st.L;
+  let x0 = Math.min(-L.half, L.mx0), x1 = Math.max(L.half, L.mx1), z0 = -L.half, z1 = L.half;
+  for (const M of L.maps) { z0 = Math.min(z0, M.box[2]); z1 = Math.max(z1, M.box[3]); }
+  if (st.rack.group.visible) x1 = Math.max(x1, st.rackRight);
+  const y1 = TOP + 0.3;
+  st.proxy.scale.set(x1 - x0 + 0.1, y1, z1 - z0 + 0.1);
+  st.proxy.position.set((x0 + x1) / 2, y1 / 2, (z0 + z1) / 2);
+}
+function refit(S) { S.fly({ pos: S.camera.position.toArray(), target: S.controls.target.toArray() }, 650); }
+
+/* ============================================================ labels */
+
+function stopParts(S, j = S.state.stop) {
+  const st = S.state, L = st.L, r = Math.floor(j / L.n), q = j % L.n;
+  return Object.assign(windowAt(IMAGE, st.R.W[0], r, q, L.s, L.p), { r, q });
+}
+function readoutText(S) {
+  const st = S.state, L = st.L, T = S.tier, pool = st.poolShown, n = L.n, n2 = L.n2, sh = pool ? n2 : n;
+  if (T === 1) {
+    return `**3 colour sheets → ${L.cout} map${L.cout > 1 ? 's' : ''}**\n8 × 8 in, ${sh} × ${sh} out${pool ? ' (pooled)' : ''} · ${L.k} × ${L.k} stencil`;
+  }
+  const f = `⌊(8 + ${2 * L.p} − ${L.k}) / ${L.s}⌋ + 1 = ${n}`;
+  const shp = `(1, 3, 8, 8) → (1, ${L.cout}, ${n}, ${n})` + (pool ? ` → pool (${n2}, ${n2})` : '');
+  if (T === 2) return `**nn.Conv2d(3, ${L.cout}, ${L.k}, stride=${L.s}, padding=${L.p})**\nout = ${f}\n${shp}`;
+  return `**F.conv2d(x, weight, stride=${L.s}, padding=${L.p})**\nweight (${L.cout}, 3, ${L.k}, ${L.k}) · ${f}\n${shp}`;
+}
+
+function paint(S) {
+  const st = S.state, L = st.L, R = st.R, T = S.tier;
+  if (!L) return;
+  st.readout.move([0, TOP + 0.34, -L.half]).set(readoutText(S));
+  const showParts = st.parts && st.chim.visible && !st.poolShown;
+  const P = showParts ? stopParts(S) : null;
+  st.floorTags.forEach((tg, c) => {
+    tg.move([-L.half - 0.06, yFloor(c) + 0.02, 0.15]);
+    let t;
+    if (P) t = T === 1 ? `${CHNAME[c]}: ${fmtV(P.parts[c])}` : T === 2 ? `${CH[c]}: ${fmtV(P.parts[c])}` : `c = ${c}: ${fmtV(P.parts[c])}`;
+    else t = T === 1 ? CHNAME[c] : T === 2 ? `${CH[c]} · channel ${c}` : `x[0, ${c}]`;
+    tg.set(t);
+  });
+  st.mapTags.forEach((tg, o) => {
+    const M = L.maps[o];
+    if (!M || !st.outOn) { tg.show(false); return; }
+    tg.show(true);
+    if (L.cout === 1) {
+      tg.move([M.box[0] - 0.05, TRAY + 0.02, (M.box[2] + M.box[3]) / 2]).anchor('right');
+      tg.set(T === 1 ? 'the new map' : T === 2 ? 'output channel 0' : 'out[0, 0]');
+    } else {
+      tg.move([(M.box[0] + M.box[1]) / 2, TRAY + 0.02, M.box[3] + 0.03]).anchor('top');
+      const nm = R.init ? (T === 3 ? `out[0, ${o}]` : `random ${o}`) : T === 3 ? `out[0, ${o}]` : S.tr(KERNELS[o].name);
+      tg.set(nm);
+    }
+  });
+  if (st.rack.group.visible) {
+    st.rackTag.show(true);
+    st.rackTag.move(st.rackTop.clone());
+    const nw = L.cout * 3 * L.k * L.k;
+    st.rackTag.set(T === 1 ? (R.init ? 'random stencils' : 'the stencils') : T === 2 ? `weight (${L.cout}, 3, ${L.k}, ${L.k})` : `weight: ${nw} numbers`);
+  } else st.rackTag.show(false);
+  paintNote(S, P);
+  S.invalidate();
+}
+
+const beside = () => new THREE.Vector3(0, -0.12, PR + 0.02);
+function paintNote(S, P) {
+  const st = S.state, L = st.L, R = st.R, T = S.tier, N = st.note;
+  const mode = st.noteMode;
+  if (!mode || !L) { N.show(false); return; }
+  if (mode === 'sum') {
+    if (!P || !st.chim.visible) { N.show(false); return; }
+    N.show(true);
+    const s = sumStr(P.parts), tot = fmtV(P.total);
+    N.move(beside()).set(T === 1 ? `this stop: ${s} = ${tot}` : T === 2 ? `stop (${P.r}, ${P.q}): ${s} + bias 0 = ${tot}` : `out[0, 0, ${P.r}, ${P.q}] = ${s} + 0 = ${tot}`);
+  } else if (mode === 'pool') {
+    if (!st.poolShown) { N.show(false); return; }
+    const [r2, q2] = R.blk, M0 = R.out[0];
+    const v = [0, 1].flatMap((i) => [0, 1].map((j) => M0[2 * r2 + i][2 * q2 + j]));
+    N.show(true);
+    N.move(beside()).set(T === 1 ? `keep the biggest: max(${v.map(fmtV).join(', ')}) = ${fmtV(Math.max(...v))}`
+      : `pooled [${r2}, ${q2}] = max(${v.map(fmtV).join(', ')}) = ${fmtV(Math.max(...v))}`);
+  } else if (mode === 'params') {
+    N.show(true);
+    const pr = params(L.cout, 3, L.k), pa = params(L.cout, 3, L.k, false);
+    N.move(beside()).set(T === 1 ? `${L.cout} stencils × ${3 * L.k * L.k} weights + ${L.cout} = ${pr} numbers`
+      : T === 2 ? `${L.cout}·3·${L.k}·${L.k} + ${L.cout} = ${pr} params (ARENA's bias=False: ${pa})`
+        : `C_out·C_in·k² + C_out = ${pr}; bias=False → ${pa}`);
+  } else if (mode === 'init') {
+    N.show(true);
+    const b = R.bound;
+    N.move(beside()).set(T === 1 ? `random start: each weight between −${b.toFixed(2)} and ${b.toFixed(2)}`
+      : `uniform(−1/√${3 * L.k * L.k}, 1/√${3 * L.k * L.k}) = ±${b.toFixed(3)}`);
+  } else N.show(false);
+}
+
+/* ============================================================ behaviour */
+
+function wait(S, ms) { return S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)); }
+
+/* clear the map and slide the stencil over every stop; each stop drops its number(s) */
+function play(S) {
+  const st = S.state, L = st.L, set = st.out, my = ++st.tid;
+  st.chim.visible = true;
+  st.outOn = true;
+  st.poolShown = false;
+  st.vis.fill(1);
+  const F = tilesTarget(S, false);
+  const N = L.N, dt = Math.min(240, Math.max(26, 3400 / N)), D = 430, total = N * dt + D;
+  const tmp = [0, 0, 0];
+  let last = -1;
+  const run_ = S.tween(total, (kk) => {
+    if (my !== st.tid) return;
+    const t = kk * total, i = Math.min(N - 1, Math.floor(t / dt));
+    const a = stopXZ(L, Math.max(0, i - 1)), b = stopXZ(L, i);
+    const e = easeIO(Math.min(1, (t - i * dt) / (0.5 * dt)));
+    st.chim.position.set(a[0] + (b[0] - a[0]) * e, 0, a[1] + (b[1] - a[1]) * e);
+    for (const M of L.maps) {
+      for (let j = 0; j < N; j++) {
+        const idx = M.o * N + j, u = Math.min(1, Math.max(0, (t - (j * dt + 0.45 * dt)) / D));
+        if (u <= 0) { set.scl[idx] = 0; continue; }
+        const src = dropFrom(S, j), dst = [F.pos[3 * idx], F.pos[3 * idx + 1], F.pos[3 * idx + 2]];
+        const eu = u * u * (3 - 2 * u);
+        arcAt(tmp, src, dst, eu, L.cout === 1 ? 0 : 0.22);
+        set.pos.set(tmp, 3 * idx);
+        set.scl[idx] = F.scl[idx] * (0.4 + 0.6 * smooth(0, 0.7, u));
+        set.cell[idx] = F.cell[idx];
+        set.col.set(F.col.subarray(3 * idx, 3 * idx + 3), 3 * idx);
+        set.ink.set(F.ink.subarray(3 * idx, 3 * idx + 3), 3 * idx);
+      }
+    }
+    set.apply();
+    if (i !== last) { last = i; st.stop = i; paint(S); }
+    threads(S, i);
+    S.invalidate();
+  }, (v) => v);
+  return run_.then(() => {
+    if (my !== st.tid) return null;
+    st.stop = N - 1;
+    snapTiles(S, F);
+    paint(S);
+    return S.knobs.pool ? wait(S, 250).then(() => (my === st.tid ? poolTo(S, true) : null)) : null;
+  });
+}
+
+/* one stop at a time; after the last stop the map is complete (and pooled if the toggle is on) */
+function step(S) {
+  const st = S.state, L = st.L, set = st.out;
+  st.chim.visible = true;
+  st.outOn = true;
+  if (st.poolShown) { st.poolShown = false; st.vis.fill(0); snapTiles(S, tilesTarget(S, false)); st.next = 0; }
+  if (st.next == null || st.next >= L.N || st.vis.every((v) => v === 1)) {
+    if (st.vis.every((v) => v === 1) || st.next >= L.N || st.next == null) { st.vis.fill(0); snapTiles(S, tilesTarget(S, false)); st.next = 0; }
+  }
+  const j = st.next, my = ++st.tid;
+  st.next = j + 1;
+  st.vis[j] = 1;
+  const F = tilesTarget(S, false);
+  const a = [st.chim.position.x, st.chim.position.z], b = stopXZ(L, j);
+  st.stop = j;
+  paint(S);
+  const tmp = [0, 0, 0];
+  return S.tween(760, (kk) => {
+    if (my !== st.tid) return;
+    const e = easeIO(Math.min(1, kk / 0.38));
+    st.chim.position.set(a[0] + (b[0] - a[0]) * e, 0, a[1] + (b[1] - a[1]) * e);
+    const u = Math.max(0, (kk - 0.36) / 0.64), eu = u * u * (3 - 2 * u);
+    for (const M of L.maps) {
+      const idx = M.o * L.N + j;
+      const dst = [F.pos[3 * idx], F.pos[3 * idx + 1], F.pos[3 * idx + 2]];
+      arcAt(tmp, dropFrom(S, j), dst, eu, L.cout === 1 ? 0 : 0.22);
+      set.pos.set(tmp, 3 * idx);
+      set.scl[idx] = u <= 0 ? 0 : F.scl[idx] * (0.4 + 0.6 * smooth(0, 0.7, u));
+      set.cell[idx] = F.cell[idx];
+      set.col.set(F.col.subarray(3 * idx, 3 * idx + 3), 3 * idx);
+      set.ink.set(F.ink.subarray(3 * idx, 3 * idx + 3), 3 * idx);
+    }
+    set.apply();
+    threads(S, j);
+    S.invalidate();
+    if (kk >= 1 && st.next >= L.N && S.knobs.pool) poolTo(S, true);
+  }, (v) => v);
+}
+
+/* show only the focus stop's number (beat 2) */
+function oneStop(S) {
+  const st = S.state;
+  st.vis.fill(0);
+  st.next = 0;
+  snapTiles(S, tilesTarget(S, false));
+  const j = st.R.focus;
+  st.next = j;
+  return step(S).then(() => { st.next = 0; });
+}
+
+function poolTo(S, on) {
+  const st = S.state;
+  if (!st.vis.every((v) => v === 1)) { st.poolShown = false; paint(S); return Promise.resolve(); }
+  st.poolShown = on;
+  threads(S);
+  paint(S);
+  const L = st.L;
+  return tilesTo(S, tilesTarget(S, on), 900, (i) => (i % L.N) * (on ? 6 : 3)).then(() => { highlightPool(S); paint(S); });
+}
+function highlightPool(S) {
+  const st = S.state, R = st.R;
+  if (!st.poolShown || st.noteMode !== 'pool') return;
+  const [r2, q2] = R.blk, [ai, aj] = R.pooled[0].arg[r2][q2], idx = ai * st.L.n + aj;
+  st.out.col.set(COL.good, 3 * idx);
+  st.out.ink.set(COL.ink, 3 * idx);
+  st.out.apply();
+  S.invalidate();
+}
+
+/* beat / prediction dressing */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.noteMode = o.note === undefined ? 'sum' : o.note;
+  st.parts = o.parts ?? true;
+  st.chim.visible = o.chimney !== false;
+  st.outOn = o.outputs !== false;
+  st.rack.group.visible = o.rack !== false;
+  if (!st.outOn) { st.vis.fill(0); snapTiles(S, tilesTarget(S, false)); }
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || [-1.25, 0, 1.0], o.face || [0, 0.8, 0]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.at && (typeof o.at === 'function' ? o.at(S) : o.at) });
+    if (S.shot) doPose(); else setTimeout(doPose, 600);
+  } else st.fig.group.visible = false;
+  threads(S);
+  setProxy(S);
+  paint(S);
+}
+
+/* ============================================================ STL (printable) */
+
+function solidsOf(S) {
+  const st = S.state, L = st.L, R = st.R, out = [];
+  const w = L.N8 * CELL + 0.1, t = 0.04;
+  // three input plates (JSCAD is z-up: three (x, y, z) -> (x, -z, y)) with the square raised by its value
+  for (let c = 0; c < 3; c++) {
+    const y = yFloor(c);
+    out.push(J.primitives.cuboid({ size: [w, w, t], center: [0, 0, y - t / 2] }));
+    const hgt = 0.04 * IMG.rgb[c];
+    out.push(J.primitives.cuboid({ size: [4 * CELL, 4 * CELL, hgt], center: [0, 0, y + hgt / 2] }));
+  }
+  // four posts through the corners
+  for (const ax of [-1, 1]) for (const az of [-1, 1]) {
+    out.push(J.primitives.cuboid({ size: [0.08, 0.08, TOP], center: [ax * (w / 2 - 0.04), az * (w / 2 - 0.04), TOP / 2] }));
+  }
+  // the first output map as a relief: height from the value (lowest value = thinnest)
+  const M = L.maps[0], mp = R.out[0], lo = Math.min(...mp.flat()), hi = Math.max(...mp.flat());
+  const bw = M.box[1] - M.box[0] + 0.1, bd = M.box[3] - M.box[2] + 0.1;
+  out.push(J.primitives.cuboid({ size: [Math.max(bw, w), Math.max(bd, w), t], center: [0, 0, t / 2] }));
+  for (let r = 0; r < L.n; r++) for (let q = 0; q < L.n; q++) {
+    const p = M.pos(r, q), v = mp[r][q], hgt = 0.03 + (hi > lo ? (0.35 * (v - lo)) / (hi - lo) : 0);
+    out.push(J.primitives.cuboid({ size: [M.cell * 0.92, M.cell * 0.92, hgt], center: [p[0], -p[2], t + hgt / 2] }));
+  }
+  return out;
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'w02-stencil', num: '03', week: 2, kind: 'weekly',
+  title: 'The stencil',
+  subtitle: 'A small window slides over a stack of colour channels; four windows make a layer.',
+  back2d: '#week-02',
+  film: 'w2-cnns',
+  plinth: { r: PR, h: 0.12 },
+
+  knobs: [
+    { id: 'k', type: 'select', label: { 1: 'Stencil size', 2: 'Kernel size k', 3: 'kernel_size' }, value: 3,
+      options: [[1, '1 × 1'], [3, '3 × 3'], [5, '5 × 5']] },
+    { id: 's', type: 'select', label: { 1: 'Step', 2: 'Stride s', 3: 'stride' }, value: 1, options: [[1, '1'], [2, '2']] },
+    { id: 'p', type: 'select', label: { 1: 'Border of zeros', 2: 'Padding p', 3: 'padding' }, value: 0, options: [[0, '0'], [1, '1'], [2, '2']] },
+    { id: 'cout', type: 'select', label: { 1: 'Stencils', 2: 'Output channels', 3: 'out_channels' }, value: 1,
+      options: [[1, '1'], [2, '2'], [3, '3'], [4, '4']] },
+    { id: 'w', type: 'select', wide: true, label: { 1: 'Stencil weights', 2: 'Weights', 3: 'weight' }, value: 'hand',
+      options: [['hand', { 1: 'hand-made: edges, warmth, blur', 2: 'hand-set: edges, warmth, blur', 3: 'hand-set (Ng edge, R − B, box blur)' }],
+        ['init', { 1: 'random, like a fresh layer', 2: 'fresh Conv2d init (random)', 3: 'ARENA init: U(±1/√(C_in·k²))' }]] },
+    { id: 'pool', type: 'toggle', label: { 1: 'Keep the biggest (pool)', 2: 'MaxPool2d(2) after', 3: 'F.max_pool2d(·, 2)' }, value: false },
+    { id: 'play', type: 'button', label: { 1: 'Slide it', 2: 'Play: slide the stencil', 3: 'Play all stops' }, onClick: (S) => { scene(S, { note: 'sum' }); play(S); } },
+    { id: 'step', type: 'button', label: { 1: 'One step', 2: 'Step one stop', 3: 'Step' }, onClick: (S) => { if (!S.state.chim.visible || S.state.noteMode !== 'sum') scene(S, { note: 'sum' }); step(S); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.tid = 0;
+    st.atlas = makeAtlas(S.renderer, 16, 64);
+    // glass sheets (texture set in build)
+    st.sheets = [0, 1, 2].map((c) => {
+      const mat = new THREE.MeshStandardMaterial({ color: '#ffffff', transparent: true, roughness: 0.25, metalness: 0, depthWrite: false });
+      const m = new THREE.Mesh(new THREE.BoxGeometry(1, 0.022, 1), mat);
+      m.position.set(0, yFloor(c) - 0.011, 0);
+      m.receiveShadow = true;
+      S.root.add(m);
+      return m;
+    });
+    // the picture's non-zero pixels: 3 sheets x 16 numbered tiles (fixed toy data)
+    st.inp = makeCubes(48, st.atlas, { w: TILE, h: TH, d: TILE, top: true, r: 0.018 });
+    let n = 0;
+    for (let c = 0; c < 3; c++) for (let i = IMG.lo; i <= IMG.hi; i++) for (let j = IMG.lo; j <= IMG.hi; j++) {
+      st.inp.pos.set([px(j), yFloor(c) + TH / 2, pz(i)], 3 * n);
+      st.inp.scl[n] = 1;
+      st.inp.cell[n] = IMG.rgb[c];                        // atlas cells 1, 2, 3 hold '1', '2', '3'
+      st.inp.col.set(mix(COL.plaster, rgb(TINT[c]), 0.78), 3 * n);
+      st.inp.ink.set(COL.ink, 3 * n);
+      n++;
+    }
+    st.inp.apply();
+    // output tiles
+    st.out = makeCubes(NOUT, st.atlas, { w: TILE, h: TH, d: TILE, top: true, r: 0.018 });
+    S.root.add(st.inp.bodies, st.inp.decals, st.out.bodies, st.out.decals);
+    // the stencil: brass frame + weight frames on each sheet
+    st.chim = new THREE.Group();
+    st.frame = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01), K.mat.brass());
+    st.frame.castShadow = true;
+    st.plates = makeBoxes(NPLATE, frameGeometry(0.12), new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.45, metalness: 0.25 }));
+    st.chim.add(st.frame, st.plates.mesh);
+    S.root.add(st.chim);
+    // trays under the output maps
+    st.trays = [0, 1, 2, 3].map(() => { const t = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), K.mat.plaster()); t.receiveShadow = true; S.root.add(t); return t; });
+    // strings, one per stencil
+    st.strings = KCOL.map((c) => { const t = K.tube([new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0)], c, 0.009, { sides: 6 }); S.root.add(t.mesh); return t; });
+    // the weight rack
+    const g = new THREE.Group();
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), K.mat.plaster());
+    const base = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), K.mat.brass());
+    panel.castShadow = true; base.castShadow = true;
+    const tiles = makeBoxes(NRACK, new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.6, metalness: 0.1 }));
+    const beads = KCOL.map((c) => K.bead([0, 0, 0], c, 0.026));
+    g.add(panel, base, tiles.mesh, ...beads);
+    S.root.add(g);
+    st.rack = { group: g, panel, base, tiles, beads };
+    // labels
+    st.readout = K.label([0, TOP + 0.3, 0], '', { cls: 'readout', anchor: 'bottom', dy: -6 });
+    st.floorTags = [0, 1, 2].map(() => K.label([0, 0, 0], '', { cls: 'tag axis', anchor: 'right', dx: -4 }));
+    st.mapTags = [0, 1, 2, 3].map(() => K.label([0, 0, 0], '', { cls: 'tag axis', anchor: 'right', dx: -4 }));
+    st.rackTag = K.label([0, 0, 0], '', { cls: 'tag axis', anchor: 'bottom', dy: -4 });
+    st.note = K.label([0, 0, 0], '', { cls: 'note', anchor: 'top', dy: 10 });
+    st.note.show(false);
+    st.fig = K.figure();
+    st.fig.group.visible = false;
+    S.root.add(st.fig.group);
+    st.proxy = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+    S.root.add(st.proxy);
+    st.noteMode = 'sum'; st.parts = true; st.outOn = true;
+  },
+
+  rebuild(S, id) {
+    const st = S.state;
+    if (id === 'pool') { if (st.L) poolTo(S, !!S.knobs.pool); return; }
+    ++st.tid;
+    build(S);
+    if (id !== '*') {                                    // a knob moved: keep the dressing, re-frame
+      st.chim.visible = true; st.outOn = true;
+      threads(S); setProxy(S); paint(S);
+      refit(S);
+    }
+  },
+
+  onTier(S) { paint(S); },
+
+  solids(S) { return solidsOf(S); },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**A colour picture is three sheets of numbers.** Red, green and blue brightness, one 8 × 8 sheet each. This toy picture is dark (empty glass = 0) with a warm square: red 3, green 2, blue 1.',
+        2: '**A picture is a stack of channels.** PyTorch stores images as (batch, channels, height, width): this toy one is (1, 3, 8, 8), dark with a 4 × 4 square of (R, G, B) = (3, 2, 1); empty glass is 0. A conv layer\'s job is to read all three sheets at once.',
+        3: '`x: Float[Tensor, "batch channels height width"]` = (1, 3, 8, 8), NCHW, the layout `nn.Conv2d` expects (NHWC arrays need a permute first). Toy data: zeros with a centred 4 × 4 square (3, 2, 1). ARENA [0.2] feeds MNIST (1, 28, 28) and ImageNet (3, 224, 224) the same way.',
+      },
+      cam: CAM.high,
+      set: { k: 3, s: 1, p: 0, cout: 1, w: 'hand', pool: false },
+      enter(S) {
+        scene(S, { note: null, parts: false, chimney: false, outputs: false, rack: false, figure: 'point', figAt: [-1.2, 0, 1.05], face: [0, 0.8, 0],
+          at: (S2) => S2.root.localToWorld(new THREE.Vector3(0, yFloor(0) + 0.05, 0)) });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The stencil goes through all three sheets.** It covers 3 × 3 pixels on each: 27 numbers. Each is multiplied by its weight and all are added: 9 + 6 + 3 = 18, one number that drops.',
+        2: '**One output number = 27 multiplies + a sum.** The 3 × 3 × 3 kernel spans every input channel. This one is Andrew Ng\'s vertical-edge stencil: +1, 0, −1 across each row (gold, none, dark). Red gives 9, green 6, blue 3; plus bias 0 → 18.',
+        3: 'out[o, r, q] = b[o] + Σ_c Σ_i Σ_j w[o, c, i, j] · x[c, r·s + i, q·s + j]: cross-correlation (no kernel flip), what `F.conv2d` computes. Stop (2, 4): R 9 + G 6 + B 3 = 18. ARENA: the sumproduct runs over in_channels × kernel_height × kernel_width.',
+      },
+      cam: CAM.front,
+      set: { k: 3, s: 1, p: 0, cout: 1, w: 'hand', pool: false },
+      enter(S) { scene(S, { note: 'sum', rack: false }); oneStop(S); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Slide it everywhere, same stencil.** Each stop drops one number. Bright-to-dark edges come out +18, dark-to-bright −18, flat areas 0: the square\'s two side edges light up.',
+        2: '**Weight sharing: the same 27 weights at every stop.** An edge is an edge wherever it is, so one detector serves the whole picture. The map lights up at the square\'s sides: +18 where bright turns dark, −18 the other way. A Linear layer making this map would need 6,912 weights.',
+        3: 'Translation equivariance: shift the picture and the map shifts. 27 weights vs 192 × 36 = 6,912 for a dense (3·8·8) → (6·6) map (ARENA: fewer weights, less overfitting; permute the pixels and the locality prior is gone). Stripes taper where the window only half-covers the square.',
+      },
+      cam: CAM.front,
+      set: { k: 3, s: 1, p: 0, cout: 1, w: 'hand', pool: false },
+      enter(S) { scene(S, { note: 'sum', rack: false }); play(S); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Two dials: a border and a step.** A border of zeros (padding 1) lets the stencil reach the edge pixels. Stepping 2 pixels at a time halves the output: 8 × 8 in, 4 × 4 out.',
+        2: '**Output size = ⌊(H + 2p − k)/s⌋ + 1.** Padding p adds a ring of zeros; stride s moves s pixels per stop. Here ⌊(8 + 2 − 3)/2⌋ + 1 = 4. With k = 3, p = 1, s = 1 the size is kept (8 → 8): ARENA\'s shape-preserving convolution.',
+        3: 'L_out = ⌊(L_in + 2·padding − kernel_size)/stride⌋ + 1 per spatial axis. ARENA\'s check: 28 × 28 with k 3, s 2, p 1 → 14 × 14; stacking p 1, s 2 convs halves the size each time. The floor drops a window that would hang off the edge.',
+      },
+      cam: CAM.front,
+      set: { k: 3, s: 2, p: 1, cout: 1, w: 'hand', pool: false },
+      enter(S) { scene(S, { note: 'sum', rack: false }); play(S); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Four stencils, four output sheets.** Vertical edges, horizontal edges, warmth (red minus blue) and blur each make their own map. Stacked, they are the layer\'s output: 4 channels.',
+        2: '**C_out stencils → C_out channels.** Each output channel has its own 3 × 3 × 3 kernel (one row of the rack): weight (4, 3, 3, 3) = 108 numbers, + 4 biases = 112 parameters in `nn.Conv2d(3, 4, 3)`. The output (1, 4, 6, 6) is the next layer\'s input.',
+        3: 'params = C_out·C_in·k² + C_out = 4·3·9 + 4 = 112 (`bias=True`, torch\'s default); ARENA\'s Conv2d has bias=False → 108. No H or W in it: weight sharing again. The next layer\'s kernels are (C_out\', 4, k, k), each reading all four maps.',
+      },
+      cam: CAM.wide,
+      set: { k: 3, s: 1, p: 0, cout: 4, w: 'hand', pool: false },
+      enter(S) { scene(S, { note: 'params' }); play(S); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Your exercise: build this layer.** In ARENA you write Conv2d yourself. A fresh one starts with random stencils (shown); training slowly turns them into detectors like the edge stencil.',
+        2: 'ARENA [0.2]: write `Conv2d(in_channels, out_channels, kernel_size, stride, padding)`: one `nn.Parameter` weight of shape (out, in, k, k), uniform in ±1/√(in·k·k) = ±0.19 here, forward = `F.conv2d`. ARENA sets bias=False. The random maps are live.',
+        3: '`sf = 1 / np.sqrt(in_channels * kernel_width * kernel_height)`; `self.weight = nn.Parameter(sf * (2 * t.rand(out_channels, in_channels, kernel_height, kernel_width) - 1))`; forward: `t.nn.functional.conv2d(x, self.weight, stride=self.stride, padding=self.padding)`.',
+      },
+      cam: CAM.wide,
+      set: { k: 3, s: 1, p: 0, cout: 4, w: 'init', pool: false },
+      enter(S) {
+        scene(S, { note: 'init', figure: 'think', figAt: [0.55, 0, 1.25], face: [1.4, 0.5, 0.3] });
+      } },
+
+    { tag: 'library',
+      cap: {
+        1: '**Max pooling keeps the loudest.** Split the map into 2 × 2 blocks and keep only the biggest number in each. The map shrinks to a quarter, but the strong edges survive.',
+        2: '**`nn.MaxPool2d(2)`: the max of each 2 × 2 block.** No weights, and each channel pools on its own: 6 × 6 → 3 × 3, edge stripes intact. ARENA gives you MaxPool2d as a wrapper of `F.max_pool2d`; writing `maxpool2d` is a bonus exercise.',
+        3: '`F.max_pool2d(x, kernel_size=2)`: stride defaults to kernel_size, padding 0, floor mode (a 5-wide map loses its last column). ARENA\'s MaxPool2d wrapper defaults to padding=1, so MaxPool2d(2) there gives 4 × 4 here; ResNet34 uses (3, 2, 1).',
+      },
+      cam: CAM.low,
+      set: { k: 3, s: 1, p: 0, cout: 1, w: 'hand', pool: false },
+      enter(S) {
+        scene(S, { note: 'pool', rack: false, parts: false });
+        return wait(S, 500).then(() => { if (S.beat === 6) S.setKnob('pool', true); });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Photo filters are hand-made stencils (blur, sharpen). Sound uses 1D stencils sliding along time. Attention is a stencil whose weights change with the content.',
+        2: 'Every photo filter (blur, sharpen, edges) is a hand-set stencil; 1D convs slide along audio and text; ResNets stack dozens of these layers (this week\'s ResNet34). Attention, in week 5, is a window whose weights are computed from the content itself.',
+        3: 'Conv1d over time (WaveNet, speech), 1 × 1 convs that only mix channels, depthwise convs, ResNet34 in ARENA [0.2]. A conv is a Linear layer with locality and weight sharing built in; attention drops both: its weights come from query-key content, not position.',
+      },
+      cam: CAM.wide,
+      set: { k: 3, s: 1, p: 1, cout: 4, w: 'hand', pool: false },
+      enter(S) { scene(S, { note: null, parts: false, figure: 'cheer', figAt: [-1.25, 0, 1.1], face: [0, 0.8, 0] }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'An 8-pixel-wide picture, a 3-wide stencil, a border of 1 and steps of 2. How wide is the output?',
+        2: 'H = 8, k = 3, p = 1, s = 2: output width?',
+        3: '`nn.Conv2d(3, 1, 3, stride=2, padding=1)` on (1, 3, 8, 8): output width?' },
+      options: [{ t: '4', ok: true }, { t: '3' }, { t: '5' }, { t: '8' }],
+      why: { 1: 'With the border the picture is 10 wide; a 3-wide stencil fits at 8 starting places, and stepping by 2 visits 4 of them.',
+        2: '⌊(8 + 2·1 − 3)/2⌋ + 1 = ⌊3.5⌋ + 1 = 4. The floor throws away the half step.',
+        3: 'L_out = ⌊(L_in + 2p − k)/s⌋ + 1 = ⌊7/2⌋ + 1 = 4, so (1, 1, 4, 4); a (3, 1) conv with p 1, s 2 maps L to ⌈L/2⌉.' },
+      show(S) {
+        S.setKnobs({ k: 3, s: 2, p: 1, cout: 1, w: 'hand', pool: false });
+        scene(S, { note: 'sum', rack: false }); S.fly(CAM.front);
+        return play(S);
+      } },
+    { q: { 1: 'A layer with 4 stencils, each 3 × 3 over 3 colour sheets, plus one extra number per stencil. How many numbers does it learn?',
+        2: 'How many parameters in `nn.Conv2d(3, 4, 3)`?',
+        3: '`sum(p.numel() for p in nn.Conv2d(3, 4, 3).parameters())` = ?' },
+      options: [{ t: '112', ok: true }, { t: '108' }, { t: '36' }, { t: '27' }],
+      why: { 1: 'Each stencil has 3 × 3 × 3 = 27 weights; 4 stencils make 108, plus 4 biases: 112.',
+        2: 'weight (4, 3, 3, 3) = 108, bias (4,) = 4 → 112. ARENA\'s own Conv2d has bias=False, giving 108.',
+        3: '4·3·3·3 + 4 = 112 with torch\'s default bias=True; 108 without (ARENA). Independent of the input\'s height and width.' },
+      show(S) {
+        S.setKnobs({ k: 3, s: 1, p: 0, cout: 4, w: 'hand', pool: false });
+        scene(S, { note: 'params' }); S.fly(CAM.wide);
+        return wait(S, 500);
+      } },
+    { q: { 1: 'A stencil only 1 pixel wide still goes through all three colour sheets. What can it do?',
+        2: 'What does a 1 × 1 convolution do?',
+        3: 'A 1 × 1 conv (C_in → C_out) is equivalent to…' },
+      options: [{ t: 'Mix the channels of each pixel, nothing more', ok: true }, { t: 'Nothing: it copies the input' },
+        { t: 'Blur the picture' }, { t: 'Find edges' }],
+      why: { 1: 'It sees one pixel at a time, so it can\'t compare neighbours: the edge maps go blank. It can still weigh red against blue (warmth) or add them up.',
+        2: 'Each output is a weighted sum of one pixel\'s 3 channels: here the edge stencils give all zeros, warmth gives R − B = 2 on the square, blur gives R + G + B = 6.',
+        3: 'A per-pixel Linear over channels: `einsum(\'c h w, o c -> o h w\')`. Used to change channel counts cheaply (ResNet bottlenecks, the 1 × 1 downsampling shortcut).' },
+      show(S) {
+        S.setKnobs({ k: 1, s: 1, p: 0, cout: 4, w: 'hand', pool: false });
+        scene(S, { note: null, parts: false }); S.fly(CAM.wide);
+        return wait(S, 500);
+      } },
+    { q: { 1: 'Does one output number look at one colour sheet, or all three?',
+        2: 'One output number of a 3 × 3 conv on an RGB image reads…',
+        3: 'Receptive field of out[0, o, r, q] for Conv2d(3, C_out, 3)?' },
+      options: [{ t: 'All three sheets: 27 numbers', ok: true }, { t: 'Just one sheet: 9 numbers' }, { t: 'Only the red sheet' }, { t: 'It depends on the stride' }],
+      why: { 1: 'The stencil pierces all three sheets. Red adds 9, green 6, blue 3, and the sum 18 is one number.',
+        2: 'All input channels: 3 × 3 × 3 = 27 multiplies, then one sum. Here R 9 + G 6 + B 3 = 18.',
+        3: 'x[0, :, r·s : r·s + 3, q·s : q·s + 3], all C_in channels: a (3, 3, 3) window. Only depthwise convs (groups = C_in) read one channel each.' },
+      show(S) {
+        S.setKnobs({ k: 3, s: 1, p: 0, cout: 1, w: 'hand', pool: false });
+        scene(S, { note: 'sum', rack: false }); S.fly(CAM.front);
+        return oneStop(S);
+      } },
+    { q: { 1: 'The same stencil is used at every position. What is that idea called?',
+        2: 'Using the same kernel weights at every position is called…',
+        3: 'The inductive bias that makes conv parameter counts independent of H × W:' },
+      options: [{ t: 'Weight sharing', ok: true }, { t: 'Dropout' }, { t: 'Pooling' }, { t: 'Padding' }],
+      why: { 1: 'Weight sharing: one set of 27 weights, reused at every stop. An edge detector that works here works everywhere.',
+        2: 'Weight sharing: 27 weights serve all 36 stops, instead of 6,912 for a dense layer. It is why the map shifts when the picture shifts.',
+        3: 'Weight sharing (with locality): the output is translation-equivariant and the weight is (C_out, C_in, k, k), whatever the image size.' },
+      show(S) {
+        S.setKnobs({ k: 3, s: 1, p: 0, cout: 1, w: 'hand', pool: false });
+        scene(S, { note: 'sum', rack: false }); S.fly(CAM.front);
+        return play(S);
+      } },
+    { q: { 1: 'The vertical-edge stencil is +1 on its left column and −1 on its right. Where does it give negative numbers?',
+        2: 'Ng\'s vertical-edge kernel (+1, 0, −1 per row): where is its output negative?',
+        3: 'For w[:, :, j] = (1, 0, −1), sign of the response at a dark → bright (left to right) edge?' },
+      options: [{ t: 'The square\'s left side, where dark turns bright', ok: true }, { t: 'The square\'s right side, where bright turns dark' },
+        { t: 'Inside the square' }, { t: 'Nowhere: it only makes positives' }],
+      why: { 1: 'On the left side the bright pixels sit under the −1 column and dark ones under +1: 0 − 18 = −18. On the right side it flips to +18.',
+        2: 'Left of the square the window sees 0 under +1 and bright under −1: −18. The right side gives +18; flat regions 0. The sign says which way the edge goes.',
+        3: 'Negative: the response is (left mean − right mean) × rows, so dark → bright gives −18 and bright → dark +18. A ReLU after it would keep only one direction.' },
+      show(S) {
+        S.setKnobs({ k: 3, s: 1, p: 0, cout: 1, w: 'hand', pool: false });
+        scene(S, { note: 'sum', rack: false }); S.fly(CAM.front);
+        return play(S);
+      } },
+  ],
+
+  where: { 1: 'Every photo filter, the first layers of every image recogniser, and sound models that slide small windows along time.',
+    2: 'CNN classifiers (this week\'s ResNet34), photo filters, 1D convs over audio and text; week 5\'s attention is the content-dependent cousin.',
+    3: 'Conv1d/2d/3d across vision, audio and video; 1 × 1 channel mixers; the unfold / `as_strided` window view underneath; attention as a kernel computed from content.' },
+  links: [
+    { label: 'Film · W2 CNNs', href: '../../intuition/films/w2-cnns.html' },
+    { label: 'Film · convolution, deep', href: '../../intuition/films/deep-w02-conv.html' },
+    { label: 'Week 2 pack', href: '../../index.html#week-02' },
+    { label: 'Demo · convolutions & CNNs', href: '../../index.html#demo/convolutions-cnn' },
+    { label: 'Case · convolutions', href: '../../index.html#cases/convolutions' },
+    { label: 'Case · as_strided & stride tricks', href: '../../index.html#cases/as-strided-and-stride-tricks' },
+    { label: 'Case · ResNets', href: '../../index.html#cases/resnets' },
+    { label: 'Map · convolution', href: '../../index.html#map/node=convolution' },
+    { label: 'Map · padding', href: '../../index.html#map/node=padding' },
+    { label: 'Map · max pooling', href: '../../index.html#map/node=max-pooling' },
+    { label: 'Map · ResNet34', href: '../../index.html#map/node=resnet34' },
+  ],
+  remix: 'Build a single-file three.js scene: a toy picture (1, 3, 8, 8) as three tinted glass sheets stacked like floors (red on top), dark with a 4 x 4 square of values (3, 2, 1) shown as numbered tiles (numbers painted from one canvas-texture atlas, instanced). A brass-framed stencil k x k x 3 pierces all three sheets; gold frames mark +1 weights, slate frames -1. Knobs: k (1, 3, 5), stride (1, 2), padding (0, 1, 2: a ring of printed zeros), out channels (1-4: Ng vertical edge, horizontal edge, R - B, box blur, or random Kaiming-uniform init), MaxPool2d(2). Play slides the stencil over every stop; each stop drops its number down a coloured string onto a plaster tray under the window centre, so stride 2 gives bigger, spaced tiles. Label each sheet with its partial sum (R 9, G 6, B 3) and show out = floor((H + 2p - k)/s) + 1 and the parameter count live; a small rack shows weight (C_out, 3, k, k).',
+  credit: 'The vertical edge detector and the dark-to-bright sign convention are Andrew Ng\'s (Deep Learning Specialization, CNN course). Names, the output-size formula and its 28 × 28 check, the Kaiming-uniform init, the bias=False convention and the MaxPool2d wrapper (padding=1) are ARENA [0.2]. The picture is toy data. Every number is verified against numpy (sliding_window_view + einsum) and an independent scatter-add convolution. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

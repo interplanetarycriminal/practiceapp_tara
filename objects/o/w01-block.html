@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Block · Object Lessons</title>
+<meta name="description" content="x = arange(24).reshape(2, 3, 4) as 24 numbered cubes: rearrange, reduce, broadcasting, the attention-head split and strides, every result computed live.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+.k-label.k-axis{text-transform:none;letter-spacing:.02em;font-size:11px}
+.k-label.k-stride{text-transform:none;letter-spacing:0;font:700 12.5px/1.1 var(--font);color:color-mix(in srgb, var(--k-brass) 78%, var(--ink))}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   01 · w01-block: "The block" (W1, ARENA [0.0] Einops, Einsum & Tensor Manipulation)
+   Every number on a cube is computed below by a small row-major einops (rearrange, reduce,
+   broadcasting) on x = arange(24).reshape(2, 3, 4). Because x = arange(24), a cube's number
+   IS its offset in x's memory, so the memory string threads the cubes 0 -> 23.
+   The MATH block is extracted and checked in node against an independent index formula
+   and against numpy + einops 0.8 (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+const prod = (a) => a.reduce((p, v) => p * v, 1);
+function contiguousStrides(shape) {                     // row-major: last axis fastest
+  const s = new Array(shape.length);
+  let acc = 1;
+  for (let i = shape.length - 1; i >= 0; i--) { s[i] = acc; acc *= shape[i]; }
+  return s;
+}
+function parseSide(side) {                              // 'h (b w)' -> [['h'], ['b', 'w']]
+  const groups = [];
+  let cur = null;
+  for (const tok of side.trim().match(/\(|\)|[A-Za-z_][A-Za-z0-9_]*/g) || []) {
+    if (tok === '(') cur = [];
+    else if (tok === ')') { groups.push(cur); cur = null; }
+    else if (cur) cur.push(tok);
+    else groups.push([tok]);
+  }
+  return groups;
+}
+const REDUCE = {
+  sum: (v) => v.reduce((a, b) => a + b, 0),
+  mean: (v) => v.reduce((a, b) => a + b, 0) / v.length,
+  max: (v) => Math.max(...v),
+};
+/* einops.rearrange / einops.reduce on a strided view {shape, strides, offset, storage}.
+   Returns the result's shape and row-major values, which storage offsets fed each value,
+   and whether the result can be a view (every output axis walks memory with ONE stride). */
+function einops(src, pattern, { reduction = null, sizes = {} } = {}) {
+  const [L, R] = pattern.split('->').map(parseSide);
+  if (L.length !== src.shape.length) throw new Error(`pattern has ${L.length} axes, tensor has ${src.shape.length}`);
+  const size = { ...sizes }, stride = {};
+  L.forEach((g, i) => {
+    const unknown = g.filter((n) => size[n] == null);
+    if (unknown.length > 1) throw new Error('cannot infer ' + unknown.join(', '));
+    if (unknown.length === 1) size[unknown[0]] = src.shape[i] / prod(g.filter((n) => size[n] != null).map((n) => size[n]));
+    if (prod(g.map((n) => size[n])) !== src.shape[i]) throw new Error('shape mismatch on axis ' + i);
+    let s = src.strides[i];                             // split: inside a bracket the last name runs fastest
+    for (let k = g.length - 1; k >= 0; k--) { stride[g[k]] = s; s *= size[g[k]]; }
+  });
+  const inNames = L.flat(), outNames = R.flat();
+  const reduced = inNames.filter((n) => !outNames.includes(n));
+  if (reduced.length && !reduction) throw new Error('names missing on the right need a reduction');
+  const shape = R.map((g) => prod(g.map((n) => size[n])));
+  const idx = Object.fromEntries(inNames.map((n) => [n, 0]));
+  const loop = (names, fn, d = 0) => {
+    if (d === names.length) { fn(); return; }
+    for (let v = 0; v < size[names[d]]; v++) { idx[names[d]] = v; loop(names, fn, d + 1); }
+  };
+  const data = [], src_ = [];
+  loop(outNames, () => {                                // output in row-major order
+    const offs = [];
+    loop(reduced, () => { let o = src.offset; for (const n of inNames) o += idx[n] * stride[n]; offs.push(o); });
+    src_.push(offs);
+    const vals = offs.map((o) => src.storage[o]);
+    data.push(reduction ? REDUCE[reduction](vals) : vals[0]);
+  });
+  let view = !reduction;
+  const strides = [];
+  if (view) for (const g of R) {                        // merge (a b) is free iff stride_a = size_b * stride_b
+    for (let k = 0; k < g.length - 1; k++) if (stride[g[k]] !== stride[g[k + 1]] * size[g[k + 1]]) view = false;
+    strides.push(stride[g[g.length - 1]]);
+  }
+  return { shape, data, src: src_, view, strides: view ? strides : null, groups: R, size };
+}
+/* numpy / torch broadcasting: align shapes from the right; a 1 stretches (stride 0); else error.
+   Operands carry their row-major values (data) and, optionally, their memory strides; the
+   reported expanded strides are what `a.expand(shape).stride()` would print. */
+function broadcastAdd(a, b) {
+  const n = Math.max(a.shape.length, b.shape.length);
+  const pad = (t) => [...Array(n - t.length).fill(1), ...t];
+  const A = pad(a.shape), B = pad(b.shape);
+  const shape = A.map((d, i) => {
+    if (d === B[i]) return d;
+    if (d === 1) return B[i];
+    if (B[i] === 1) return d;
+    throw new Error(`shapes (${a.shape.join(', ')}) and (${b.shape.join(', ')}) do not broadcast`);
+  });
+  const stretch = (D, st) => st.map((s, i) => (D[i] === 1 && shape[i] !== 1 ? 0 : s));
+  const lA = stretch(A, contiguousStrides(A)), lB = stretch(B, contiguousStrides(B));   // index into data
+  const memA = pad(a.strides || contiguousStrides(a.shape)), memB = pad(b.strides || contiguousStrides(b.shape));
+  const data = [], pairs = [];
+  const total = prod(shape), cs = contiguousStrides(shape);
+  for (let f = 0; f < total; f++) {
+    let oa = 0, ob = 0;
+    for (let i = 0; i < n; i++) { const k = Math.floor(f / cs[i]) % shape[i]; oa += k * lA[i]; ob += k * lB[i]; }
+    data.push(a.data[oa] + b.data[ob]);
+    pairs.push([oa, ob]);
+  }
+  return { shape, data, pairs, stridesA: stretch(A, memA), stridesB: stretch(B, memB) };
+}
+
+const x = { shape: [2, 3, 4], strides: contiguousStrides([2, 3, 4]), offset: 0, storage: Array.from({ length: 24 }, (_, i) => i) };
+const offsetOf = (b, h, w) => x.offset + b * x.strides[0] + h * x.strides[1] + w * x.strides[2];
+const MOVES = {
+  home: { kind: 'home' },
+  b_hw: { kind: 'rearrange', pattern: 'b h w -> b (h w)' },
+  bh_w: { kind: 'rearrange', pattern: 'b h w -> (b h) w' },
+  h_bw: { kind: 'rearrange', pattern: 'b h w -> h (b w)' },
+  h_wb: { kind: 'rearrange', pattern: 'b h w -> h (w b)' },
+  whb: { kind: 'rearrange', pattern: 'b h w -> w h b' },
+  wb_h: { kind: 'rearrange', pattern: 'b h w -> (w b) h' },
+  sum: { kind: 'reduce', pattern: 'b h w -> h w', reduction: 'sum' },
+  mean: { kind: 'reduce', pattern: 'b h w -> h w', reduction: 'mean' },
+  max: { kind: 'reduce', pattern: 'b h w -> h w', reduction: 'max' },
+  bcast: { kind: 'bcast' },
+  heads: { kind: 'heads', pattern: 'b s (h d) -> b h s d', sizes: { h: 2 } },
+};
+function computeMove(id) {
+  const M = MOVES[id];
+  if (M.kind === 'home') return { shape: x.shape, data: x.storage.slice(), view: true, strides: x.strides.slice(), groups: [['b'], ['h'], ['w']] };
+  if (M.kind === 'rearrange' || M.kind === 'reduce') return einops(x, M.pattern, { reduction: M.reduction || null });
+  if (M.kind === 'bcast') {
+    // a (3, 1) column and a (1, 4) row, sliced out of x (views: they keep x's strides (4, 1))
+    const col = { shape: [3, 1], strides: [x.strides[1], x.strides[2]], data: [0, 1, 2].map((h) => x.storage[offsetOf(0, h, 0)]) };
+    const row = { shape: [1, 4], strides: [x.strides[1], x.strides[2]], data: [0, 1, 2, 3].map((w) => x.storage[offsetOf(0, 0, w)]) };
+    return Object.assign(broadcastAdd(col, row), { col, row, groups: [['h'], ['w']] });
+  }
+  if (M.kind === 'heads') {
+    // the same 24 numbers read as 1 sequence of 3 tokens with d_model = 8: x.reshape(1, 3, 8), a view
+    const tokens = { shape: [1, 3, 8], strides: contiguousStrides([1, 3, 8]), offset: 0, storage: x.storage };
+    const r = einops(tokens, M.pattern, { sizes: M.sizes });
+    return Object.assign(r, { tokens });
+  }
+  throw new Error('unknown move ' + id);
+}
+const MATH = { contiguousStrides, parseSide, einops, broadcastAdd, x, MOVES, computeMove, offsetOf };
+// MATH-END
+
+/* ============================================================ shared helpers
+   (the same helpers are copied into o/w02-stencil.html; the kit is not edited)
+   makeAtlas: numbers painted into one canvas texture; each instance picks a cell.
+   makeCubes: instanced rounded bodies + instanced number decals (2 draw calls per set).
+   arcAt: a point on a smooth arc from a to b.                                  */
+
+function makeAtlas(renderer, cols = 8, px = 128) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = cols * px;
+  const g = cv.getContext('2d');
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  const map = new Map();
+  const font = (fs) => `700 ${fs}px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
+  function draw(i, s) {
+    const x0 = (i % cols) * px, y0 = Math.floor(i / cols) * px;
+    g.clearRect(x0, y0, px, px);
+    let fs = Math.round(px * (s.length <= 2 ? 0.6 : s.length === 3 ? 0.46 : 0.36));
+    g.font = font(fs);
+    while (g.measureText(s).width > px * 0.86 && fs > 8) { fs -= 2; g.font = font(fs); }
+    g.fillStyle = '#ffffff';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(s, x0 + px / 2, y0 + px / 2 + fs * 0.05);
+  }
+  return {
+    tex, cols,
+    cell(s) {
+      s = String(s);
+      if (!map.has(s)) {
+        if (map.size >= cols * cols) throw new Error('atlas full');
+        map.set(s, map.size);
+        draw(map.get(s), s);
+        tex.needsUpdate = true;
+      }
+      return map.get(s);
+    },
+    reset() { map.clear(); g.clearRect(0, 0, cv.width, cv.height); tex.needsUpdate = true; },
+  };
+}
+
+function numberMaterial(atlas, opacity = 1) {
+  const m = new THREE.MeshStandardMaterial({ map: atlas.tex, transparent: true, opacity, depthWrite: false,
+    roughness: 0.75, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const cc = atlas.cols.toFixed(1);
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aCell;')
+      .replace('#include <uv_vertex>', `#include <uv_vertex>
+#ifdef USE_MAP
+  { float cx = mod(aCell, ${cc}); float cy = floor(aCell / ${cc} + 0.001);
+    vMapUv = vec2((cx + vMapUv.x) / ${cc}, 1.0 - (cy + 1.0 - vMapUv.y) / ${cc}); }
+#endif`);
+  };
+  m.customProgramCacheKey = () => 'k-numbers-' + cc;
+  return m;
+}
+
+/* A set of n numbered cubes (or tiles). Per instance: pos, scale, cell (atlas index), body
+   colour, number colour. set.apply() pushes the arrays to the GPU. */
+function makeCubes(n, atlas, o = {}) {
+  const w = o.w ?? 0.3, h = o.h ?? w, d = o.d ?? w;
+  const bodyGeo = new THREE.RoundedBoxGeometry(w, h, d, o.seg ?? 3, o.r ?? 0.045);
+  const bodyMat = o.bodyMat || new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.9, metalness: 0 });
+  const bodies = new THREE.InstancedMesh(bodyGeo, bodyMat, n);
+  const fw = (o.face ?? 0.82) * Math.min(w, h);
+  const quads = [new THREE.PlaneGeometry(fw, fw).translate(0, 0, d / 2 + 0.002)];
+  if (o.back !== false) quads.push(new THREE.PlaneGeometry(fw, fw).rotateY(Math.PI).translate(0, 0, -d / 2 - 0.002));
+  const decalGeo = quads.length > 1 ? THREE.mergeGeometries(quads) : quads[0];
+  const aCell = new THREE.InstancedBufferAttribute(new Float32Array(n), 1);
+  decalGeo.setAttribute('aCell', aCell);
+  const decals = new THREE.InstancedMesh(decalGeo, o.decalMat || numberMaterial(atlas), n);
+  bodies.castShadow = o.shadow ?? true;
+  bodies.receiveShadow = true;
+  decals.receiveShadow = true;
+  bodies.frustumCulled = decals.frustumCulled = false;
+  const set = {
+    n, bodies, decals,
+    pos: new Float32Array(3 * n), scl: new Float32Array(n), cell: new Float32Array(n),
+    col: new Float32Array(3 * n).fill(1), ink: new Float32Array(3 * n),
+    apply() {
+      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(), c = new THREE.Color();
+      for (let i = 0; i < n; i++) {
+        const k = Math.max(1e-5, set.scl[i]);
+        p.set(set.pos[3 * i], set.pos[3 * i + 1], set.pos[3 * i + 2]);
+        m.compose(p, q, s.set(k, k, k));
+        bodies.setMatrixAt(i, m);
+        decals.setMatrixAt(i, m);
+        bodies.setColorAt(i, c.setRGB(set.col[3 * i], set.col[3 * i + 1], set.col[3 * i + 2]));
+        decals.setColorAt(i, c.setRGB(set.ink[3 * i], set.ink[3 * i + 1], set.ink[3 * i + 2]));
+        aCell.array[i] = set.cell[i];
+      }
+      bodies.instanceMatrix.needsUpdate = decals.instanceMatrix.needsUpdate = true;
+      bodies.instanceColor.needsUpdate = decals.instanceColor.needsUpdate = true;
+      aCell.needsUpdate = true;
+    },
+    snap() { return { pos: set.pos.slice(), scl: set.scl.slice(), cell: set.cell.slice(), col: set.col.slice(), ink: set.ink.slice() }; },
+  };
+  // instanceColor buffers exist only after the first setColorAt
+  for (let i = 0; i < n; i++) { bodies.setColorAt(i, new THREE.Color(1, 1, 1)); decals.setColorAt(i, new THREE.Color(0, 0, 0)); }
+  return set;
+}
+
+function arcAt(out, a, b, u, lift = 0.3, bulge = null) {
+  const w = 4 * u * (1 - u);
+  out[0] = a[0] + (b[0] - a[0]) * u + (bulge ? bulge[0] * w : 0);
+  out[1] = a[1] + (b[1] - a[1]) * u + lift * w + (bulge ? bulge[1] * w : 0);
+  out[2] = a[2] + (b[2] - a[2]) * u + (bulge ? bulge[2] * w : 0);
+  return out;
+}
+const smooth = (a, b, v) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+const easeIO = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const rgb = (hex) => { const c = new THREE.Color(hex); return [c.r, c.g, c.b]; };
+const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+
+/* ============================================================ display setup */
+
+const CUBE = 0.3, P = 0.37, DEP = 0.8, RISE = 0.8, Y0 = CUBE / 2 + 0.012;
+const NX = 24, NOP = 7, NGH = 17;               // x's cubes, broadcast operands, ghost copies
+const COL = {
+  plaster: rgb('#f3eee5'), ink: rgb(C.ink), white: rgb('#fbf8f2'),
+  result: mix(rgb('#f3eee5'), rgb(C.data), 0.2), good: mix(rgb('#f3eee5'), rgb(C.good), 0.5),
+  colOp: mix(rgb('#ffffff'), rgb(C.aux), 0.62), rowOp: mix(rgb('#ffffff'), rgb(C.data), 0.5),
+};
+const fmtV = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1)).replace('-', '−');
+const tup = (a) => `(${a.join(', ')}${a.length === 1 ? ',' : ''})`;
+
+/* positions of a row-major tensor on the plinth: last axis -> columns (x), second-last -> rows
+   (down), third-last -> slabs stepping back and up (a staircase, so every face stays readable) */
+function layout(shape) {
+  const s = shape.slice();
+  while (s.length > 1 && s[0] === 1) s.shift();
+  const nd = s.length, S = nd >= 3 ? s[nd - 3] : 1, R = nd >= 2 ? s[nd - 2] : 1, Cn = s[nd - 1];
+  const pos = [];
+  for (let k = 0; k < S; k++) for (let i = 0; i < R; i++) for (let j = 0; j < Cn; j++) {
+    pos.push([(j - (Cn - 1) / 2) * P, Y0 + (R - 1 - i) * P + k * RISE, ((S - 1) / 2 - k) * DEP]);
+  }
+  return { pos, S, R, C: Cn, nd: Math.min(3, nd) };
+}
+
+const LABEL = {
+  home: 'x = arange(24).reshape(2, 3, 4)',
+  b_hw: "rearrange 'b h w -> b (h w)'",
+  bh_w: "rearrange 'b h w -> (b h) w'",
+  h_bw: "rearrange 'b h w -> h (b w)'",
+  h_wb: "rearrange 'b h w -> h (w b)'",
+  whb: "rearrange 'b h w -> w h b'",
+  wb_h: "rearrange 'b h w -> (w b) h'",
+  sum: "reduce 'b h w -> h w', sum",
+  mean: "reduce 'b h w -> h w', mean",
+  max: "reduce 'b h w -> h w', max",
+  bcast: 'x[0, :, :1] + x[0, :1, :]',
+  heads: "rearrange 'b s (h d) -> b h s d', h=2",
+};
+const CAM = {
+  front: { pos: [2.3, 3.7, 7.6], target: [0, 1.0, 0] },
+  wide: { pos: [2.0, 3.2, 8.4], target: [0, 0.7, 0] },
+  tall: { pos: [2.5, 4.4, 7.8], target: [0, 1.5, -0.2] },
+  low: { pos: [1.8, 2.8, 7.6], target: [0, 0.6, 0] },
+  heads: { pos: [2.6, 3.9, 7.4], target: [0, 1.0, 0] },
+  stride: { pos: [3.0, 3.3, 6.6], target: [0, 1.0, 0] },
+  side: { pos: [4.6, 3.6, 6.2], target: [0, 1.0, 0] },
+};
+
+/* ======================================================== target states */
+
+function groupName(g, size) {
+  const n = g.join(' ');
+  return (g.length > 1 ? `(${n})` : n) + ' = ' + prod(g.map((k) => size[k] ?? 1));
+}
+
+/* Build the per-instance targets for a displayed tensor. Returns {main, ghost, lay, names, info} */
+function targetFor(S, id, stage = 1) {
+  const st = S.state, A = st.atlas;
+  const main = blank(NX + NOP), ghost = blank(NGH);
+  const R = computeMove(id);
+  let shape = R.shape, names = R.groups.map((g) => groupName(g, R.size || { b: 2, h: 3, w: 4 }));
+  if (id === 'home') names = ['b = 2', 'h = 3', 'w = 4'];
+  const info = { id, R, view: R.view, strides: R.strides, shape };
+  if (id === 'heads' && stage === 0) {                    // stage 0: x.reshape(1, 3, 8), 3 tokens x 8 features
+    shape = [1, 3, 8];
+    names = ['b = 1', 's = 3', '(h d) = 8'];
+    Object.assign(info, { shape, view: true, strides: [24, 8, 1], tokens: true });
+  }
+  const lay = layout(shape);
+  if (id === 'bcast') {
+    const L3 = layout([3, 3, 4]);                          // slab 0: result, 1: column (3,1), 2: row (1,4)
+    for (let v = 0; v < NX; v++) {                         // x's cubes: 0..11 become the result, 12..23 sink
+      if (v < 12) setI(main, v, L3.pos[v], 1, A.cell(fmtV(R.data[v])), COL.plaster, COL.ink);
+      else { const p = layout(x.shape).pos[v]; setI(main, v, [p[0], p[1] - 0.2, p[2]], 0, A.cell(v), COL.plaster, COL.ink); }
+    }
+    let g = 0;
+    for (let h = 0; h < 3; h++) for (let w = 0; w < 4; w++) {
+      const pc = L3.pos[12 + h * 4 + w], pr = L3.pos[24 + h * 4 + w];
+      if (w === 0) setI(main, NX + h, pc, 1, A.cell(R.col.data[h]), COL.colOp, COL.ink);
+      else setI(ghost, g++, pc, 1, A.cell(R.col.data[h]), COL.colOp, COL.ink);
+      if (h === 0) setI(main, NX + 3 + w, pr, 1, A.cell(R.row.data[w]), COL.rowOp, COL.ink);
+      else setI(ghost, g++, pr, 1, A.cell(R.row.data[w]), COL.rowOp, COL.ink);
+    }
+    return { main, ghost, lay: L3, names: ['', 'h = 3', 'w = 4'], info, slabs: 3 };
+  }
+  // operands and ghosts parked (hidden) at their broadcast spots
+  parkExtras(S, main, ghost);
+  if (id === 'heads' && stage === 0) {
+    for (let v = 0; v < NX; v++) setI(main, v, lay.pos[v], 1, A.cell(v), COL.plaster, COL.ink);
+  } else if (R.src && info.shape === R.shape && MOVES[id].kind !== 'home') {
+    const reduce = MOVES[id].kind === 'reduce';
+    R.src.forEach((offs, f) => {
+      offs.forEach((o, j) => {
+        const v = x.storage[o];                            // the cube that carries this value
+        if (!reduce) setI(main, v, lay.pos[f], 1, A.cell(v), COL.plaster, COL.ink);
+        else if (j === 0) setI(main, v, lay.pos[f], 1, A.cell(fmtV(R.data[f])), COL.result, COL.ink, 0.9);
+        else setI(main, v, lay.pos[f], 0, A.cell(v), COL.plaster, COL.ink);
+      });
+    });
+  } else {
+    for (let v = 0; v < NX; v++) setI(main, v, lay.pos[v], 1, A.cell(v), COL.plaster, COL.ink);
+  }
+  return { main, ghost, lay, names, info, slabs: lay.S };
+}
+function blank(n) {
+  return { pos: new Float32Array(3 * n), scl: new Float32Array(n), cell: new Float32Array(n),
+    col: new Float32Array(3 * n).fill(1), ink: new Float32Array(3 * n), sw: new Float32Array(n).fill(0.5) };
+}
+function setI(T, i, p, s, cell, col, ink, sw = 0.5) {
+  T.pos[3 * i] = p[0]; T.pos[3 * i + 1] = p[1]; T.pos[3 * i + 2] = p[2];
+  T.scl[i] = s; T.cell[i] = cell; T.sw[i] = sw;
+  T.col.set(col, 3 * i); T.ink.set(ink, 3 * i);
+}
+function parkExtras(S, main, ghost) {
+  const A = S.state.atlas, L3 = layout([3, 3, 4]);
+  const R = computeMove('bcast');
+  let g = 0;
+  for (let h = 0; h < 3; h++) for (let w = 0; w < 4; w++) {
+    const pc = L3.pos[12 + h * 4 + w], pr = L3.pos[24 + h * 4 + w];
+    if (w === 0) setI(main, NX + h, pc, 0, A.cell(R.col.data[h]), COL.colOp, COL.ink);
+    else setI(ghost, g++, pc, 0, A.cell(R.col.data[h]), COL.colOp, COL.ink);
+    if (h === 0) setI(main, NX + 3 + w, pr, 0, A.cell(R.row.data[w]), COL.rowOp, COL.ink);
+    else setI(ghost, g++, pr, 0, A.cell(R.row.data[w]), COL.rowOp, COL.ink);
+  }
+}
+
+/* ======================================================== transitions */
+
+function goTo(S, T, o = {}) {
+  const st = S.state, sets = [st.cubes, st.ghosts], tg = [T.main, T.ghost];
+  const my = ++st.tid;
+  st.ribbonOk = st.ribbonOk && stringable(T.info.id);
+  const from = sets.map((s) => s.snap());
+  const ms = o.ms ?? 900;
+  setProxy(S, T.lay);
+  if (o.refit) refit(S);
+  const delays = tg.map((t, si) => Float32Array.from({ length: sets[si].n }, (_, i) => (o.delay ? o.delay(si, i) : 0)));
+  const maxD = Math.max(...delays.map((d) => Math.max(...d)));
+  st.moving = true;
+  st.rails.forEach((r) => r.show(false));
+  st.tags.forEach((t) => t.show(false));
+  const tmp = [0, 0, 0];
+  return S.tween(ms + maxD, (k) => {
+    if (my !== st.tid) return;
+    const t = k * (ms + maxD);
+    sets.forEach((set, si) => {
+      const A = from[si], B = tg[si];
+      for (let i = 0; i < set.n; i++) {
+        const u = Math.min(1, Math.max(0, (t - delays[si][i]) / ms)), e = easeIO(u);
+        const a = [A.pos[3 * i], A.pos[3 * i + 1], A.pos[3 * i + 2]], b = [B.pos[3 * i], B.pos[3 * i + 1], B.pos[3 * i + 2]];
+        const dist = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+        arcAt(tmp, a, b, e, dist < 1e-4 ? 0 : 0.12 + 0.22 * dist, [0, 0, 0.18 * dist]);
+        set.pos[3 * i] = tmp[0]; set.pos[3 * i + 1] = tmp[1]; set.pos[3 * i + 2] = tmp[2];
+        const s0 = A.scl[i], s1 = B.scl[i];
+        set.scl[i] = s1 < s0 ? s0 + (s1 - s0) * smooth(0.7, 1, e) : s0 + (s1 - s0) * smooth(0, 0.35, e);
+        set.cell[i] = e >= B.sw[i] ? B.cell[i] : A.cell[i];
+        for (let c = 0; c < 3; c++) {
+          set.col[3 * i + c] = A.col[3 * i + c] + (B.col[3 * i + c] - A.col[3 * i + c]) * smooth(0.4, 1, e);
+          set.ink[3 * i + c] = A.ink[3 * i + c] + (B.ink[3 * i + c] - A.ink[3 * i + c]) * smooth(0.4, 1, e);
+        }
+      }
+      set.apply();
+    });
+    if (k >= 1) { st.moving = false; settle(S, T); }
+    ribbon(S);
+  }, (v) => v);
+}
+
+const stringable = (id) => id !== 'bcast' && MOVES[id].kind !== 'reduce';
+/* the memory string: threads x's cubes in storage order 0 -> 23; long jumps loop out toward you */
+function ribbon(S) {
+  const st = S.state, c = st.cubes;
+  const on = S.knobs.ribbon && st.ribbonOk;
+  st.string.mesh.visible = !!on;
+  if (!on) return;
+  const pts = [];
+  const at = (v) => new THREE.Vector3(c.pos[3 * v], c.pos[3 * v + 1], c.pos[3 * v + 2]);
+  for (let v = 0; v < NX; v++) {
+    const b = at(v);
+    if (v > 0) {
+      const a = at(v - 1), d = a.distanceTo(b);
+      if (d > 1.25 * P) {
+        const m = a.clone().add(b).multiplyScalar(0.5).add(new THREE.Vector3(0, 0.1 * d, 0.2 + 0.28 * d));
+        for (let k = 1; k < 10; k++) {
+          const u = k / 10, w0 = (1 - u) * (1 - u), w1 = 2 * u * (1 - u), w2 = u * u;
+          pts.push(new THREE.Vector3(a.x * w0 + m.x * w1 + b.x * w2, a.y * w0 + m.y * w1 + b.y * w2, a.z * w0 + m.z * w1 + b.z * w2));
+        }
+      }
+    }
+    pts.push(b);
+  }
+  st.string.set(pts);
+}
+
+/* after a move lands: axis rails + tags, the readout, the fit proxy */
+function settle(S, T) {
+  const st = S.state, lay = T.lay;
+  st.cur = T;
+  st.ribbonOk = stringable(T.info.id);
+  const L = lay.pos, S0 = lay.S, Rn = lay.R, Cn = lay.C;
+  const idx = (k, i, j) => (k * Rn + i) * Cn + j;
+  const left = L[idx(0, 0, 0)][0] - CUBE / 2, right = L[idx(0, 0, Cn - 1)][0] + CUBE / 2;
+  const zf = L[idx(0, 0, 0)][2];
+  const top0 = L[idx(0, 0, 0)][1] + CUBE / 2, bot0 = L[idx(0, Rn - 1, 0)][1] - CUBE / 2;
+  const names = T.names, nd = T.slabs > 1 ? 3 : (Rn > 1 ? 2 : 1);
+  // columns: a brass rod on the plinth in front of the front slab, pointing along +x
+  const cA = [left, 0.03, zf + CUBE / 2 + 0.16], cB = [right + 0.12, 0.03, zf + CUBE / 2 + 0.16];
+  st.rails[0].set(cA, cB); st.rails[0].show(true);
+  st.tags[0].move(cB).set(names[names.length - 1]); st.tags[0].show(true);   // under the arrow tip, right-aligned
+  // rows: down the left edge of the front slab
+  if (nd >= 2) {
+    const rA = [left - 0.16, top0, zf], rB = [left - 0.16, bot0 - 0.02, zf];
+    st.rails[1].set(rA, rB); st.rails[1].show(true);
+    st.tags[1].move([left - 0.2, (top0 + bot0) / 2, zf]).set(names[names.length - 2]); st.tags[1].show(true);
+  } else { st.rails[1].show(false); st.tags[1].show(false); }
+  // slabs: from the front slab's top-left corner back up the staircase
+  if (nd >= 3 && names[names.length - 3]) {
+    const last = L[idx(S0 - 1, 0, 0)];
+    const sA = [left - 0.16, top0 + 0.1, zf], sB = [left - 0.16, last[1] + CUBE / 2 + 0.1, last[2] - 0.1];
+    st.rails[2].set(sA, sB); st.rails[2].show(true);
+    st.tags[2].move(sB).set(names[names.length - 3]); st.tags[2].show(true);
+  } else { st.rails[2].show(false); st.tags[2].show(false); }
+  // readout above the highest cube
+  let hi = -1, hz = 0;
+  for (const p of L) if (p[1] > hi) { hi = p[1]; hz = p[2]; }
+  st.readoutAt.set(0, hi + CUBE / 2 + 0.1, hz);
+  st.readout.move(st.readoutAt.clone());
+  readout(S);
+  S.invalidate();
+}
+
+/* fit proxy = the target layout's box (the kit frames S.root, and instanced cubes don't report
+   their spread); a knob-driven move then re-frames the current view */
+function setProxy(S, lay) {
+  const st = S.state, L = lay.pos;
+  let x0 = Infinity, x1 = -Infinity, y1 = 0, z0 = Infinity, z1 = -Infinity;
+  for (const p of L) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); z0 = Math.min(z0, p[2]); z1 = Math.max(z1, p[2]); }
+  st.proxy.scale.set(x1 - x0 + CUBE + 0.3, y1 + CUBE / 2 + 0.3, z1 - z0 + CUBE + 0.3);
+  st.proxy.position.set((x0 + x1) / 2, (y1 + CUBE / 2 + 0.3) / 2, (z0 + z1) / 2);
+}
+function refit(S) {
+  S.fly({ pos: S.camera.position.toArray(), target: S.controls.target.toArray() }, 650);
+}
+
+function readout(S) {
+  const st = S.state, T = st.cur;
+  if (!T) return;
+  const I = T.info, id = I.id;
+  let code = LABEL[id];
+  if (id === 'heads' && I.tokens) code = 'x.reshape(1, 3, 8): 3 tokens × 8';
+  if (id === 'mean') code = "reduce x.float() 'b h w -> h w', mean";
+  const shape = tup(I.shape);
+  let tail;
+  if (id === 'bcast') tail = S.tier === 3 ? `expanded strides ${tup(I.R.stridesA)}, ${tup(I.R.stridesB)}` : S.tier === 1 ? 'the faint cubes cost nothing' : 'ghosts: stride 0, no copy';
+  else if (MOVES[id].kind === 'reduce') tail = S.tier === 3 ? 'new contiguous tensor' : 'a new tensor';
+  else if (I.view) tail = S.tier === 3 ? `view · strides ${tup(I.strides)}` : S.tier === 1 ? 'nothing copied' : 'a view: no copy';
+  else tail = S.tier === 3 ? 'copy: no single stride fits' : S.tier === 1 ? 'had to be copied' : 'a copy';
+  st.readout.set(`**${code}**\nshape ${shape} · ${tail}`);
+}
+
+/* ============================================================ behaviour */
+
+async function play(S, id, refitNow = false) {
+  const st = S.state;
+  if (st.cur && st.cur.info.id !== 'home') {
+    await goTo(S, targetFor(S, 'home'), { ms: 520, delay: (si, i) => (si === 0 ? (i % NX) * 6 : 0) });
+  }
+  if (id === 'home') { if (refitNow) refit(S); return; }
+  if (id === 'heads') {
+    await goTo(S, targetFor(S, 'heads', 0), { ms: 800, refit: refitNow, delay: (si, i) => (si === 0 ? (i % NX) * 14 : 0) });
+    await wait(S, 450);
+  }
+  const T = targetFor(S, id);
+  const kind = MOVES[id].kind;
+  const delay = id === 'bcast'
+    ? (si, i) => (si === 1 ? 420 + i * 22 : i < 12 ? 900 + i * 30 : i < NX ? 0 : 120 + (i - NX) * 40)
+    : kind === 'reduce' ? (si, i) => (si === 0 ? (i % 12) * 34 : 0)
+      : (si, i) => (si === 0 ? (i % NX) * 22 : 0);
+  await goTo(S, T, { ms: kind === 'reduce' ? 1000 : 900, delay, refit: refitNow && id !== 'heads' });
+}
+
+function snapTo(S, id) {
+  const st = S.state;
+  const T = targetFor(S, id);
+  ++st.tid;
+  for (const [set, t] of [[st.cubes, T.main], [st.ghosts, T.ghost]]) {
+    set.pos.set(t.pos); set.scl.set(t.scl); set.cell.set(t.cell); set.col.set(t.col); set.ink.set(t.ink);
+    set.apply();
+  }
+  setProxy(S, T.lay);
+  settle(S, T);
+  ribbon(S);
+}
+
+function wait(S, ms) { return S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)); }
+
+/* beat and prediction dressing: note, stride arrows, highlight, figure */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.noteMode = o.note || null;
+  st.hl = o.hl ?? null;
+  for (const a of st.strideArrows) a.show(false);
+  st.strideTags.forEach((t) => t.show(false));
+  if (o.strides) {
+    const L = layout(x.shape).pos, h = CUBE / 2;
+    const add = (v, d) => [L[v][0] + d[0], L[v][1] + d[1], L[v][2] + d[2]];
+    const ends = [
+      [add(8, [0, -h + 0.02, h + 0.05]), add(9, [0, -h + 0.02, h + 0.05]), [0, -0.06, 0.1], 'top', '+1 (w)'],
+      [add(0, [-h - 0.07, 0, h]), add(4, [-h - 0.07, 0, h]), [-0.08, 0, 0], 'right', '+4 (h)'],
+      [add(0, [-h - 0.07, h, 0]), add(12, [-h - 0.07, h, 0]), [-0.08, 0, 0], 'right', '+12 (b)'],
+    ];
+    ends.forEach(([a, b, off, anc, t], i) => {
+      st.strideArrows[i].set(a, b); st.strideArrows[i].show(true);
+      const m = [(a[0] + b[0]) / 2 + off[0], (a[1] + b[1]) / 2 + off[1], (a[2] + b[2]) / 2 + off[2]];
+      st.strideTags[i].move(m).anchor(anc).set(t); st.strideTags[i].show(true);
+    });
+    st.rails.forEach((r) => r.show(false));
+    st.tags.forEach((t) => t.show(false));
+  }
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || [1.95, 0, 1.15], o.face || [0, 0.8, 0]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.at && (typeof o.at === 'function' ? o.at(S) : o.at) });
+    if (S.shot) doPose(); else setTimeout(doPose, 600);
+  } else st.fig.group.visible = false;
+  paintNote(S);
+}
+function setNote(S, m) { S.state.noteMode = m; paintNote(S); }
+function highlight(S, v, on = true) {
+  const c = S.state.cubes;
+  c.col.set(on ? COL.good : COL.plaster, 3 * v);
+  c.apply();
+  S.invalidate();
+}
+function cubeAt(S, v) { const c = S.state.cubes; return new THREE.Vector3(c.pos[3 * v], c.pos[3 * v + 1], c.pos[3 * v + 2]); }
+/* notes hang under the plinth's front rim (empty space on a phone), so they never cover a cube;
+   the cube they talk about is tinted green */
+const PR = 1.75;
+function beside(S) { return new THREE.Vector3(0, -0.12, PR + 0.02); }
+
+function paintNote(S) {
+  const st = S.state, m = st.noteMode, N = st.note;
+  if (!m) { N.show(false); return; }
+  N.show(true);
+  if (m === 'index') {
+    N.move(beside(S, 23)).set(S.tier === 1
+      ? 'x[1, 2, 3]: drawer 1, folder 2, page 3'
+      : S.tier === 2 ? 'x[1, 2, 3] = 23\n(b, h, w) = (1, 2, 3)' : 'x[1, 2, 3] = storage[12·1 + 4·2 + 3] = 23');
+  } else if (m === 'offset') {
+    const o = offsetOf(1, 2, 3);
+    N.move(beside(S, 23)).set(S.tier === 1
+      ? `x[1, 2, 3]: 12 + 8 + 3 = ${o}`
+      : `offset = 12·1 + 4·2 + 1·3 = ${o}`);
+  } else if (m === 'pick') {
+    const R = computeMove('b_hw'), f = 1 * 12 + 5;
+    N.move(beside(S, R.data[f])).set(S.tier === 1
+      ? `row 1, place 5: ${R.data[f]}`
+      : `[1, 5] = ${R.data[f]} = 12·1 + 5`);
+  } else if (m === 'merge') {
+    const id = S.knobs.move, R = computeMove(id);
+    const op = MOVES[id].reduction;
+    const sym = { sum: (a, b) => `${a} + ${b}`, mean: (a, b) => `(${a} + ${b}) / 2`, max: (a, b) => `max(${a}, ${b})` }[op];
+    const v = R.data[5], o = R.src[5].map((q) => x.storage[q]);
+    highlight(S, o[0]);
+    N.move(beside(S, o[0])).set(`[1, 1] = ${sym(o[0], o[1])} = ${fmtV(v)}`);
+  } else if (m === 'bcast') {
+    const R = computeMove('bcast');
+    highlight(S, 6);
+    N.move(beside(S, 6)).set(`[1, 2] = ${R.col.data[1]} + ${R.row.data[2]} = ${R.data[6]}`);
+  } else if (m === 'heads') {
+    N.move(beside(S, 4)).set(S.tier === 1
+      ? 'head 1: the second half of every word'
+      : S.tier === 2 ? 'head 1 = features 4-7 of each token' : 'q[0, 1, s, :] = x.view(3, 8)[s, 4:8]');
+  }
+}
+
+/* ============================================================ STL (printable) */
+
+function digitSolids(txt, cx, cy, cz, hgt) {          // raised numbers on the front face (JSCAD z-up coords)
+  const segs = J.text.vectorText({ height: hgt, input: txt });
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const s of segs) for (const [px, py] of s) { x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py); }
+  const out = [];
+  for (const s of segs) {
+    if (s.length < 2) continue;
+    const pts = s.map(([px, py]) => [px - (x0 + x1) / 2, py - (y0 + y1) / 2]);
+    const g2 = J.expansions.expand({ delta: hgt * 0.07, corners: 'round', segments: 8 }, J.geometries.path2.fromPoints({}, pts));
+    let g3 = J.extrusions.extrudeLinear({ height: 0.02 }, g2);
+    g3 = J.transforms.rotateX(Math.PI / 2, g3);          // text plane -> facing -y (the viewer)
+    out.push(J.transforms.translate([cx, cy, cz], g3));
+  }
+  return out;
+}
+
+/* ================================================================== run() */
+
+const MOVE_OPTIONS = [
+  ['home', { 1: 'x: the block (2, 3, 4)', 2: 'x = arange(24).reshape(2, 3, 4)', 3: 'x = t.arange(24).reshape(2, 3, 4)' }],
+  ['b_hw', "'b h w -> b (h w)'  (2, 12)"],
+  ['bh_w', "'b h w -> (b h) w'  (6, 4)"],
+  ['h_bw', "'b h w -> h (b w)'  (3, 8)"],
+  ['h_wb', "'b h w -> h (w b)'  (3, 8)"],
+  ['whb', "'b h w -> w h b'  (4, 3, 2)"],
+  ['wb_h', "'b h w -> (w b) h'  (8, 3)"],
+  ['sum', "reduce 'b h w -> h w', sum"],
+  ['mean', "reduce 'b h w -> h w', mean"],
+  ['max', "reduce 'b h w -> h w', max"],
+  ['bcast', 'broadcast (3, 1) + (1, 4)'],
+  ['heads', "heads 'b s (h d) -> b h s d'"],
+];
+
+run({
+  id: 'w01-block', num: '01', week: 1, kind: 'weekly',
+  title: 'The block',
+  subtitle: '24 numbered cubes and every einops move you\'ll type this year.',
+  back2d: '#week-01',
+  film: 'w1-tensors',
+  plinth: { r: PR, h: 0.12 },
+
+  knobs: [
+    { id: 'move', type: 'select', wide: true, label: { 1: 'Move', 2: 'einops move (from x)', 3: 'pattern applied to x' }, value: 'home', options: MOVE_OPTIONS },
+    { id: 'ribbon', type: 'toggle', label: { 1: 'Show the memory string', 2: 'Memory string', 3: 'storage order' }, value: false },
+    { id: 'play', type: 'button', label: { 1: 'Play it again', 2: 'Replay from x', 3: 'Replay from x' }, onClick: (S) => play(S, S.knobs.move) },
+    { id: 'back', type: 'button', label: { 1: 'Back to the block', 2: 'Back to x', 3: 'Back to x' }, onClick: (S) => { if (S.knobs.move === 'home') play(S, 'home'); else S.setKnob('move', 'home'); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.tid = 0;
+    st.atlas = makeAtlas(S.renderer, 8, 128);
+    for (let v = 0; v <= 40; v++) st.atlas.cell(v);
+    st.cubes = makeCubes(NX + NOP, st.atlas, { w: CUBE });
+    st.ghosts = makeCubes(NGH, st.atlas, {
+      w: CUBE, shadow: false,
+      bodyMat: new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.3, metalness: 0, transparent: true, opacity: 0.2, depthWrite: false }),
+      decalMat: numberMaterial(st.atlas, 0.4),
+    });
+    S.root.add(st.cubes.bodies, st.cubes.decals, st.ghosts.bodies, st.ghosts.decals);
+    st.string = K.tube([], C.data, 0.014, { sides: 6 });
+    st.string.mesh.visible = false;
+    S.root.add(st.string.mesh);
+    // axis rails (brass) and their tags
+    st.rails = [0, 1, 2].map(() => {
+      const a = K.arrow([0, 0, 0], [1, 0, 0], C.brass, { r: 0.012 });
+      a.group.traverse((m) => { if (m.isMesh) m.material = K.mat.brass(); });
+      S.root.add(a.group);
+      return a;
+    });
+    st.tags = [
+      K.label([0, 0, 0], '', { cls: 'tag axis', anchor: 'right', dx: 2, dy: 15 }),
+      K.label([0, 0, 0], '', { cls: 'tag axis', anchor: 'right', dx: -4, dy: 0 }),
+      K.label([0, 0, 0], '', { cls: 'tag axis', anchor: 'right', dx: -6, dy: 0 }),
+    ];
+    // stride arrows (beat 8)
+    st.strideArrows = [0, 1, 2].map(() => { const a = K.arrow([0, 0, 0], [1, 0, 0], C.brass, { r: 0.016 }); a.show(false); S.root.add(a.group); return a; });
+    st.strideTags = [0, 1, 2].map(() => K.label([0, 0, 0], '', { cls: 'tag stride', anchor: 'bottom', dy: -4, prio: 1 }));
+    st.strideTags.forEach((t) => t.show(false));
+    st.readoutAt = new THREE.Vector3(0, 2, 0);
+    st.readout = K.label(st.readoutAt, '', { cls: 'readout', anchor: 'bottom', dy: -6 });
+    st.note = K.label([0, 0, 0], '', { cls: 'note', anchor: 'top', dy: 10 });
+    st.note.show(false);
+    st.fig = K.figure();
+    st.fig.group.visible = false;
+    S.root.add(st.fig.group);
+    // invisible fit proxy (see settle)
+    st.proxy = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+    st.proxy.castShadow = false;
+    S.root.add(st.proxy);
+  },
+
+  rebuild(S, id) {
+    const st = S.state;
+    if (id === '*') {                     // a beat or prediction: start from x, enter() plays the move
+      snapTo(S, 'home');
+      return;
+    }
+    if (id === 'move') { scene(S, {}); play(S, S.knobs.move, true); return; }
+    if (id === 'ribbon') { ribbon(S); S.invalidate(); }
+  },
+
+  onTier(S) { readout(S); paintNote(S); },
+
+  solids(S) {
+    const c = S.state.cubes, out = [], live = [];
+    for (let i = 0; i < c.n; i++) if (c.scl[i] > 0.5) live.push([i, c.pos[3 * i], c.pos[3 * i + 1], c.pos[3 * i + 2]]);
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [i, X, Y, Z] of live) {
+      // printed cubes are one pitch wide, so each slab fuses into one piece (JSCAD is z-up: (x, -z, y))
+      out.push(J.primitives.roundedCuboid({ size: [P, P, P], roundRadius: 0.035, segments: 8, center: [X, -Z, Y] }));
+      const below = live.some(([j, X2, Y2, Z2]) => j !== i && Math.abs(X2 - X) < 1e-3 && Math.abs(Z2 - Z) < 1e-3 && Math.abs(Y2 - (Y - P)) < 1e-3);
+      if (!below && Y > Y0 + 0.05) {
+        const hgt = Y - P / 2 + 0.02;
+        out.push(J.primitives.cuboid({ size: [0.07, 0.07, hgt], center: [X, -Z, hgt / 2] }));
+      }
+      try { out.push(...digitSolids(labelOf(S, i), X, -Z - P / 2, Y, CUBE * 0.42)); } catch (e) { /* plain cube */ }
+      x0 = Math.min(x0, X); x1 = Math.max(x1, X); y0 = Math.min(y0, -Z); y1 = Math.max(y1, -Z);
+    }
+    out.push(J.primitives.cuboid({ size: [x1 - x0 + P + 0.3, y1 - y0 + P + 0.3, 0.04], center: [(x0 + x1) / 2, (y0 + y1) / 2, -0.02] }));
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**A tensor is a filing cabinet.** 24 numbers in 2 drawers (b), 3 folders per drawer (h), 4 pages per folder (w). x[1, 2, 3] = drawer 1, folder 2, page 3: the cube marked 23.',
+        2: '**24 numbers, three named axes.** `t.arange(24).reshape(2, 3, 4)`: b = 2 slabs, h = 3 rows, w = 4 columns. einops\' whole trick is naming axes: you write what goes where, it does the index bookkeeping. `x[1, 2, 3]` = slab 1, row 2, column 3 = 23.',
+        3: '`x = t.arange(24).reshape(2, 3, 4)`: shape (b, h, w) = (2, 3, 4), strides (12, 4, 1). einops names axes instead of numbering them (`\'b h w\'`, not dims 0, 1, 2), so `rearrange`, `reduce` and `repeat` read like a spec and raise on a shape mismatch.',
+      },
+      cam: CAM.front,
+      set: { move: 'home', ribbon: false },
+      enter(S) { scene(S, { note: 'index', figure: 'point', figAt: [1.2, 0, 0.95], face: [0, 0.8, -0.2], at: (S2) => S2.root.localToWorld(cubeAt(S2, 23)) }); highlight(S, 23); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Memory is one long line.** The computer keeps the 24 numbers in a single row: the blue string. It runs pages fastest, then folders, then drawers. That order decides which moves are free.',
+        2: '**Memory is one line; the string shows it.** Row-major (C order): the last axis runs fastest, so x sits in memory as 0, 1, …, 23. Gluing axes that already run in that order costs nothing (a view). An order the string can\'t walk in fixed steps needs a copy.',
+        3: 'Row-major storage: offset = 12b + 4h + w. `view`/`reshape` reinterpret shape and strides; merging (a b) is free iff stride_a = size_b · stride_b. `rearrange` = reshape → permute → reshape, and copies only when that final merge fails (like `.contiguous()`).',
+      },
+      cam: CAM.front,
+      set: { move: 'home', ribbon: true },
+      enter(S) { scene(S, {}); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Brackets glue axes.** `(b h)` stacks both drawers\' folders into one pile of 6. The string still runs straight through, row after row: nothing had to move in memory.',
+        2: '**Brackets merge axes.** `\'b h w -> (b h) w\'` gives (6, 4): b and h become one axis of 2 × 3. Inside a bracket the right-hand name runs fastest (row = 3b + h), memory\'s own order, so it\'s a free view. `\'b (h w)\'` (2, 12) is free too.',
+        3: '`rearrange(x, \'b h w -> (b h) w\')`: shape (6, 4), strides (4, 1), shares x\'s memory. A group (a b) indexes as a·|b| + b, the same row-major rule as the whole tensor. Splitting inverts it: `\'(b h) w -> b h w\', b=2` infers h = 3.',
+      },
+      cam: CAM.tall,
+      set: { move: 'bh_w', ribbon: true },
+      enter(S) { scene(S, {}); play(S, 'bh_w'); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Your first exercise move.** ARENA lines up six digit pictures with `(b w)`. Here the two drawers sit side by side, each still in one piece. Write `(w b)` instead and they shuffle together.',
+        2: 'ARENA\'s warm-up: `rearrange(arr, \'b c h w -> c h (b w)\')` puts six digits in a row. Same move here without c: `\'b h w -> h (b w)\'`, the film\'s VHS tape unrolled. b outside w keeps each frame whole; `(w b)` is legal but interleaves the frames column by column.',
+        3: '`(b w)` → column = 4b + w; `(w b)` → column = 2w + b. Neither is a view of x: along the merged axis the offsets step +1, +1, +1, +9, so no single stride exists and einops copies. ARENA\'s column-stacking and `(b1 b2)` grid images are all this rule.',
+      },
+      cam: CAM.front,
+      set: { move: 'h_bw', ribbon: true },
+      enter(S) { scene(S, {}); play(S, 'h_bw'); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**A letter that vanishes gets squashed.** `\'b h w -> h w\'` has no b on the right, so the two drawers are added together: 0 + 12 = 12, 5 + 17 = 22. Try mean or max in Knobs.',
+        2: '**A name missing on the right is reduced over.** `reduce(x, \'b h w -> h w\', \'sum\')`: each result is x[0, h, w] + x[1, h, w]. \'max\' keeps the bigger; \'mean\' halves the sum, on floats only (`x.float()`). ARENA\'s first reduce: weekly averages, `\'(h 7) -> h\', \'mean\'`.',
+        3: '`einops.reduce(x, \'b h w -> h w\', \'sum\')` ≡ `x.sum(0)`: a fresh contiguous (3, 4). Also \'max\', \'min\', \'prod\' or a callable (ARENA passes `t.std`); \'mean\' raises on arange\'s int64, so `x.float()` first. einsum\'s rule is the same: indices absent from the output are summed.',
+      },
+      cam: CAM.front,
+      set: { move: 'sum', ribbon: false },
+      enter(S) { scene(S, {}); play(S, 'sum').then(() => { if (S.beat === 4) setNote(S, 'merge'); }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**A size-1 axis stretches for free.** Column (0, 4, 8) plus row (0, 1, 2, 3) makes a 3×4 grid. The faint cubes aren\'t copies, just the same number read again. Result: 0 to 11.',
+        2: 'Shapes line up from the right; a size-1 axis stretches to match (the faint ghosts). Column x[0, :, :1] (3, 1) + row x[0, :1, :] (1, 4) → (3, 4): 4h + w rebuilds x[0]. Karpathy\'s warning: silent broadcasts are classic bugs, so use `keepdim=True`. ARENA\'s trap: (4, 1) + (4,) → (4, 4).',
+        3: 'Left-pad shapes with 1s; each axis must match or be 1. `expand` gives the stretched axis stride 0: col → (4, 0), row → (0, 1) (slices keep x\'s strides), zero bytes copied; `einops.repeat` does copy. (3,) + (4,) raises. `keepdim=True` keeps the 1 so results broadcast back as meant.',
+      },
+      cam: CAM.wide,
+      set: { move: 'bcast', ribbon: false },
+      enter(S) { scene(S, { figure: 'shrug', figAt: [1.3, 0, 1.15], face: [0, 0.8, 0.3] }); play(S, 'bcast').then(() => { if (S.beat === 5) setNote(S, 'bcast'); }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Splitting a bracket: attention heads.** Read the 24 numbers as 3 words of 8 numbers. Cut each word in half: head 0 gets the first 4, head 1 the last 4. Nothing is copied.',
+        2: 'Transformers do this all the time: 3 tokens × d_model 8 → 2 heads × d_head 4, `\'b s (h d) -> b h s d\', h=2`. Each token\'s 8 features split into two blocks of 4 and each head reads only its block. A view: the string tangles, yet nothing was copied.',
+        3: '`rearrange(q, \'b s (h d) -> b h s d\', h=2)`: strides (24, 4, 8, 1), a non-contiguous view. ARENA [1.1] stores W_Q as (n_heads, d_model, d_head), so its einsum yields `batch posn nheads d_head` directly; the (h d) bracket reappears in [1.2] as `(head d_head)`.',
+      },
+      cam: CAM.heads,
+      set: { move: 'heads', ribbon: true },
+      enter(S) { scene(S, {}); play(S, 'heads').then(() => { if (S.beat === 6) setNote(S, 'heads'); }); } },
+
+    { tag: 'library',
+      cap: {
+        1: '**Strides are the step sizes.** One page over: +1 in memory. One folder: +4. One drawer: +12. So x[1, 2, 3] sits at 12 + 8 + 3 = 23. Good to know; you\'ll rarely touch it.',
+        2: 'A tensor = memory + shape + strides. x has strides (12, 4, 1): offset = 12b + 4h + w. Transposes, slices, `expand` and most rearranges only change strides, which is why they\'re instant. ARENA\'s stride exercises are a week 2 bonus.',
+        3: '`x.stride()` = (12, 4, 1); `x.permute(2, 1, 0).stride()` = (1, 4, 12), non-contiguous, so `.view(-1)` raises and `.reshape(-1)` copies. `x.as_strided((3,), (5,))` walks the diagonal 0, 5, 10: ARENA [0.2] bonus (`as_strided_trace`, `conv2d_minimal`).',
+      },
+      cam: CAM.stride,
+      set: { move: 'home', ribbon: false },
+      enter(S) { scene(S, { strides: true, note: 'offset' }); highlight(S, 23); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** A batch of photos is (batch, colour, height, width); video adds time. Libraries swap axes like this full flip (w h b) all day. A spreadsheet pivot is a rearrange too.',
+        2: 'Image batches (b c h w), video (b t c h w), audio (b channel time), attention heads (b h s d); a spreadsheet pivot is a rearrange. Shown: `\'b h w -> w h b\'`, a pure permute, still a view. Next: einsum (the matmul cube), then CNNs, where stride returns.',
+        3: 'Anything with axes: NCHW ↔ NHWC is a permute like `\'b h w -> w h b\'` (a view, strides (1, 4, 12)); video, spectrograms, batched attention, TransformerLens caches (`batch pos head_index d_head`). Named axes now live in `einops.einsum`, jaxtyping and ARENA\'s type hints.',
+      },
+      cam: CAM.side,
+      set: { move: 'whb', ribbon: false },
+      enter(S) { scene(S, { figure: 'cheer', figAt: [1.0, 0, 1.25], face: [0, 0.8, 0] }); play(S, 'whb'); } },
+  ],
+
+  predict: [
+    { q: { 1: 'Glue the last two axes: \'b h w -> b (h w)\'. Which number lands at row 1, place 5?',
+        2: 'After `\'b h w -> b (h w)\'`, which number is at [1, 5]?',
+        3: '`rearrange(x, \'b h w -> b (h w)\')[1, 5]` = ?' },
+      options: [{ t: '17', ok: true }, { t: '5' }, { t: '21' }, { t: '9' }],
+      why: { 1: 'Row 1 is the second drawer laid flat: 12 to 23. Place 5 in it is 12 + 5 = 17.',
+        2: '(h w) gives column = 4h + w, so [1, 5] is b = 1, h = 1, w = 1: offset 12 + 4 + 1 = 17. A free view: same memory, new shape.',
+        3: 'Shape (2, 12), strides (12, 1): offset = 12·1 + 1·5 = 17. Merging adjacent axes in memory order is always a view (`np.shares_memory` → True).' },
+      show(S) {
+        S.setKnobs({ move: 'home', ribbon: true });
+        scene(S, {}); S.fly(CAM.low);
+        return play(S, 'b_hw').then(() => { highlight(S, 17); setNote(S, 'pick'); return wait(S, 400); });
+      } },
+    { q: { 1: '\'h (b w)\' and \'h (w b)\': same arrangement?',
+        2: 'Do `\'b h w -> h (b w)\'` and `\'b h w -> h (w b)\'` give the same tensor?',
+        3: '`rearrange(x, \'b h w -> h (b w)\')` vs `\'b h w -> h (w b)\'`: equal?' },
+      options: [{ t: 'No: (w b) interleaves the two drawers column by column', ok: true }, { t: 'Yes: brackets only group, order inside doesn\'t matter' },
+        { t: 'Same numbers, just flipped left to right' }, { t: '(w b) raises an error' }],
+      why: { 1: 'Inside a bracket, the right-hand letter changes fastest. (w b) alternates drawers: 0, 12, 1, 13… The drawers get shuffled together.',
+        2: 'Same shape (3, 8), different contents: (b w) puts column = 4b + w (frames side by side), (w b) puts column = 2w + b, so row 0 reads 0, 12, 1, 13, 2, 14, 3, 15. Legal, and usually a silent bug.',
+        3: 'Bracket order sets the mixed-radix digits: (w b) → index 2w + b. Both are copies (no single stride along the merged axis), and both pass any shape check, which is why only the pixels look wrong.' },
+      show(S) {
+        S.setKnobs({ move: 'home', ribbon: true });
+        scene(S, {}); S.fly(CAM.front);
+        return play(S, 'h_wb');
+      } },
+    { q: { 1: 'Squash the drawers: reduce \'b h w -> h w\' with sum. What shape comes out?',
+        2: 'Shape of `reduce(x, \'b h w -> h w\', \'sum\')`?',
+        3: '`einops.reduce(x, \'b h w -> h w\', \'sum\').shape` = ?' },
+      options: [{ t: '(3, 4)', ok: true }, { t: '(2,)' }, { t: '(2, 3, 4)' }, { t: '(12,)' }],
+      why: { 1: 'Whatever letters stay on the right make the shape: h and w, so 3 by 4. The b axis is added away.',
+        2: 'Names on the right survive: (h, w) = (3, 4). b vanished, so its 2 entries were summed: [h, w] = x[0, h, w] + x[1, h, w].',
+        3: 'Output axes are exactly the right-hand names; the rest are reduced (`x.sum(0)` here, shape (3, 4)). einsum uses the identical convention.' },
+      show(S) {
+        S.setKnobs({ move: 'home', ribbon: false });
+        scene(S, {}); S.fly(CAM.front);
+        return play(S, 'sum').then(() => setNote(S, 'merge'));
+      } },
+    { q: { 1: 'A column of 3 plus a row of 4: t.ones(3, 1) + t.ones(1, 4). What comes out?',
+        2: '`t.ones(3, 1) + t.ones(1, 4)` has shape…',
+        3: 'Broadcast shape of (3, 1) + (1, 4)? And of (3,) + (4,)?' },
+      options: [{ t: '(3, 4)', ok: true }, { t: 'An error: the shapes differ' }, { t: '(3, 1)' }, { t: '(4, 3)' }],
+      why: { 1: 'Each 1 stretches to meet the other side: the column spreads across 4, the row down 3. (3,) + (4,) would fail: 3 and 4 can\'t stretch.',
+        2: 'Align from the right: (3, 1) vs (1, 4); each 1 stretches, giving (3, 4). By the same rule (3,) + (4,) is an error: 3 ≠ 4 and neither is 1.',
+        3: '(3, 4) via stride-0 expansion of both operands; (3,) + (4,) raises a RuntimeError (3 vs 4, no 1). The dangerous case is the one that works: (4, 1) + (4,) → (4, 4).' },
+      show(S) {
+        S.setKnobs({ move: 'home', ribbon: false });
+        scene(S, {}); S.fly(CAM.wide);
+        return play(S, 'bcast').then(() => setNote(S, 'bcast'));
+      } },
+    { q: { 1: 'In memory, how far is one step along each axis of the block (drawer, folder, page)?',
+        2: 'Strides of the contiguous x = arange(24).reshape(2, 3, 4)?',
+        3: '`x.stride()` for `t.arange(24).reshape(2, 3, 4)`?' },
+      options: [{ t: '(12, 4, 1)', ok: true }, { t: '(1, 4, 12)' }, { t: '(2, 3, 4)' }, { t: '(1, 1, 1)' }],
+      why: { 1: 'Next page: 1 step. Next folder: skip a folder\'s 4 pages. Next drawer: skip 3 × 4 = 12.',
+        2: 'Stride of an axis = product of the sizes to its right: (3·4, 4, 1) = (12, 4, 1), so offset = 12b + 4h + w.',
+        3: 'Row-major: stride_i = Π_{j>i} size_j → (12, 4, 1). Reversed (1, 4, 12) is what `x.permute(2, 1, 0)` reports: same memory, non-contiguous.' },
+      show(S) {
+        S.setKnobs({ move: 'home', ribbon: false });
+        scene(S, { strides: true, note: 'offset' }); highlight(S, 23); S.fly(CAM.stride);
+        return wait(S, 600);
+      } },
+    { q: { 1: 'Which move can reuse the block\'s memory as it is, with no copying?',
+        2: 'Which is a free view of x (no copy)?',
+        3: 'Which result shares storage with x?' },
+      options: [{ t: '\'b h w -> b (h w)\'', ok: true }, { t: '\'b h w -> (w b) h\'' }, { t: 'Both' }, { t: 'Neither: einops always copies' }],
+      why: { 1: '(h w) glues neighbours that already sit in memory order, so the string runs straight. (w b) h scrambles the order: the numbers must be rewritten.',
+        2: '(h w) merges adjacent axes in order: strides (12, 1), a view. (w b) needs offsets 0, 12, 1, 13…: no single stride, so einops copies. Watch the string tangle.',
+        3: 'b (h w): stride_h = 4 = |w| · stride_w, mergeable → view (12, 1). (w b) h: stride_w = 1 ≠ |b| · stride_b = 24 → reshape must copy.' },
+      show(S) {
+        S.setKnobs({ move: 'home', ribbon: true });
+        scene(S, {}); S.fly(CAM.tall);
+        return play(S, 'wb_h');
+      } },
+  ],
+
+  where: { 1: 'Every batch of pictures, video frames, sound clips and attention heads is a block like this one; a spreadsheet pivot is the same rearrange.',
+    2: 'Image batches (b c h w), video, audio, attention heads (b h s d), TransformerLens caches; and in week 2 strides return as the step of a sliding window.',
+    3: 'Any named-axis data: NCHW/NHWC vision, video, spectrograms, batched attention, activation caches; strides and `as_strided` underlie conv, pooling and unfold.' },
+  links: [
+    { label: 'Film · W1 tensors', href: '../../intuition/films/w1-tensors.html' },
+    { label: 'Film · einsum, deep', href: '../../intuition/films/deep-w01-einsum.html' },
+    { label: 'Week 1 pack', href: '../../index.html#week-01' },
+    { label: 'Demo · tensors & einops', href: '../../index.html#demo/tensors-einops' },
+    { label: 'Case · einops rearrange', href: '../../index.html#cases/einops-rearrange' },
+    { label: 'Case · broadcasting', href: '../../index.html#cases/broadcasting' },
+    { label: 'Case · as_strided & stride tricks', href: '../../index.html#cases/as-strided-and-stride-tricks' },
+    { label: 'Map · einops rearrange', href: '../../index.html#map/node=einops-rearrange' },
+    { label: 'Map · einops reduce', href: '../../index.html#map/node=einops-reduce' },
+    { label: 'Map · einops repeat', href: '../../index.html#map/node=einops-repeat' },
+    { label: 'Map · broadcasting', href: '../../index.html#map/node=broadcasting' },
+    { label: 'Map · tensor strides', href: '../../index.html#map/node=tensor-strides' },
+    { label: 'Sprint · day 1', href: '../../index.html#sprint/day-1' },
+  ],
+  remix: 'Build a single-file three.js scene: x = arange(24).reshape(2, 3, 4) as 24 plaster cubes with their numbers painted on (one canvas-texture atlas, instanced), laid out row-major: last axis across, second-last down, first axis as slabs stepping back and up so every face stays readable. A thin blue string threads the cubes 0 -> 23 (memory order), looping outward wherever consecutive numbers are not neighbours. A select plays einops moves, each cube flying on an arc to its new place: b (h w), (b h) w, h (b w), h (w b), w h b, (w b) h, reduce sum/mean/max over b (pairs merge), broadcasting (3,1) + (1,4) with translucent stride-0 ghosts, and the head split b s (h d) -> b h s d. Compute every result with a tiny row-major einops, and show the shape plus "view, strides (...)" or "copy" for each.',
+  credit: 'Moves and exercise patterns from ARENA [0.0] (Einops, Einsum & Tensor Manipulation: the digit-stacking warm-ups, weekly temperature reduce, broadcasting rules and the (4, 1) + (4,) trap); the head split and ARENA [1.1]\'s W_Q layout from ARENA [1.1]-[1.2]; strides and as_strided from ARENA [0.2]\'s bonus. einops by Alex Rogozhnikov. Andrej Karpathy\'s broadcasting / keepdim warning from "Building makemore". The VHS tape is the W1 film\'s picture. Every result is verified against numpy + einops 0.8. Built with three.js and JSCAD.',
+});
+
+function labelOf(S, i) {                                 // the printed text of cube i (for STL)
+  const st = S.state, T = st.cur;
+  if (!T) return String(i);
+  const id = T.info.id, R = T.info.R;
+  if (i >= NX) { const B = computeMove('bcast'); return String(i < NX + 3 ? B.col.data[i - NX] : B.row.data[i - NX - 3]); }
+  if (id === 'bcast') return fmtV(R.data[i]);
+  if (MOVES[id].kind === 'reduce') { const f = R.src.findIndex((o) => x.storage[o[0]] === i); return f >= 0 ? fmtV(R.data[f]) : String(i); }
+  return String(i);
+}
+</script>
+</body>
+</html>
