@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Which part matters</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+  var ph = function (W) { return W < 500; };
+
+  /* ---------------- a real toy IOI circuit: 3 layers x 4 heads, recomputed for every patch ----------------
+     s = +1 for the clean prompt (answer Mary), -1 for the name-swapped prompt (answer John).
+     Each head reads earlier heads; name movers write the answer. logit diff = logit(Mary) - logit(John). */
+  var NAMES = [['DT', 'dup-token'], ['·', 'bystander'], ['·', 'weak'], ['PT', 'prev-token'],
+               ['·', 'bystander'], ['SI', 'S-inhibition'], ['si', 'S-inhib 2'], ['·', 'bystander'],
+               ['NM', 'name mover'], ['NM', 'name mover 2'], ['BK', 'backup'], ['NN', 'neg. mover']];
+  function run(s, patch, ablate) {
+    var h = new Array(12).fill(0);
+    function set(k, v) { h[k] = patch && patch[k] != null ? patch[k] : ablate && ablate[k] ? 0 : v; }
+    set(0, Math.tanh(2 * s)); set(1, .3); set(2, .15 * s); set(3, .2);
+    set(4, .5 * h[1]); set(5, Math.tanh(1.5 * (h[0] + .3 * h[2]))); set(6, .25 * Math.tanh(1.5 * h[0])); set(7, .4 * h[3]);
+    var g = Math.tanh(2 * (h[5] + .6 * h[6]));
+    set(8, .75 * g); set(9, .45 * g); set(10, .7 * g * Math.max(0, 1 - Math.abs(h[8]) / .75)); set(11, -.22 * g + .05 * h[7]);
+    return { h: h, ld: h[8] + h[9] + h[10] + h[11] + .05 * s };
+  }
+  var CL = run(1), CO = run(-1);
+  function patched(keys) { var p = {}; keys.forEach(function (k) { p[k] = CL.h[k]; }); return run(-1, p); }
+  function recovery(ld) { return (ld - CO.ld) / (CL.ld - CO.ld); }
+  var REC = []; for (var k = 0; k < 12; k++) REC.push(recovery(patched([k]).ld));
+
+  /* ---------------- toy superposition: 5 features, 2 dims, x' = ReLU(W^T W x + b) ---------------- */
+  var NF = 5, WP = []; for (k = 0; k < NF; k++) WP.push([Math.cos(k * 6.2832 / NF + 1.5708), Math.sin(k * 6.2832 / NF + 1.5708)]);
+  function sup(x, b, W) { W = W || WP; var h = [0, 0]; for (var i = 0; i < NF; i++) { h[0] += W[i][0] * x[i]; h[1] += W[i][1] * x[i]; }
+    var out = []; for (i = 0; i < NF; i++) out.push(Math.max(0, W[i][0] * h[0] + W[i][1] * h[1] + b)); return { h: h, out: out }; }
+  var WD = [[1, 0], [0, 1], [0, 0], [0, 0], [0, 0]]; // "one lodger per room": 2 dedicated features, 3 dropped
+  var SAMP = (function () { var r = F.rng('sup8'), a = []; for (var i = 0; i < 2000; i++) { var row = []; for (var j = 0; j < NF; j++) row.push([r(), r()]); a.push(row); } return a; })();
+  function lossAt(p) {
+    var best = { L: 1e9, b: 0 }, Ld = 0, bs = [0, -.1, -.2, -.3, -.4, -.5, -.6, -.8];
+    bs.forEach(function (b) { var L = 0; SAMP.forEach(function (row) { var x = row.map(function (q) { return q[0] < p ? q[1] : 0; }), o = sup(x, b).out; for (var j = 0; j < NF; j++) L += (x[j] - o[j]) * (x[j] - o[j]); }); L /= SAMP.length; if (L < best.L) best = { L: L, b: b }; });
+    SAMP.forEach(function (row) { var x = row.map(function (q) { return q[0] < p ? q[1] : 0; }), o = sup(x, 0, WD).out; for (var j = 0; j < NF; j++) Ld += (x[j] - o[j]) * (x[j] - o[j]); }); Ld /= SAMP.length;
+    return { pent: best.L, b: best.b, ded: Ld };
+  }
+  window.__w8 = { CL: CL, CO: CO, REC: REC, run: run, patched: patched, recovery: recovery, sup: sup, lossAt: lossAt };
+
+  /* ---------------- scenery ---------------- */
+  function bg(ctx, W, H, t) { F.sky(ctx, W, H, P.night, '#2b2f5c'); F.stars(ctx, W, H, t, 'w8', 50); }
+  function readout(ctx, x, y, lines, W, right) {
+    var sz = W < 500 ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    if (right) x = x - w - 22;
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.9)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+  }
+  function lbl(ctx, text, x, y, color, sz, o) { o = o || {}; F.hand(ctx, text, x, y, sz || 15, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: text, align: o.align, reveal: o.reveal, rot: o.rot }); }
+
+  /* dollhouses: rooms = heads (floor = layer, room = head) */
+  var HS = {};
+  function houseLayout(W, H, y0) {
+    var hw = Math.min(ph(W) ? 176 : 360, (W - 36) / 2), rw = (hw - 16) / 4, rh = ph(W) ? 34 : 54;
+    HS = { hw: hw, rw: rw, rh: rh, xs: [W / 2 - hw / 2 - 8 - hw / 2 + hw / 2 - hw / 2 + 0, 0], y0: y0 };
+    HS.xs = [W / 2 - 9 - hw, W / 2 + 9]; HS.bodyY = y0 + (ph(W) ? 34 : 44); HS.bodyH = rh * 3 + 16;
+    return HS;
+  }
+  function roomRect(house, k) { var L = Math.floor(k / 4), c = k % 4; return [HS.xs[house] + 8 + c * HS.rw, HS.bodyY + 8 + (2 - L) * HS.rh, HS.rw - 3, HS.rh - 3]; }
+  function house(ctx, idx, title, tint, o) {
+    o = o || {}; var x = HS.xs[idx], hw = HS.hw;
+    ctx.save(); ctx.fillStyle = idx ? '#b86a6e' : '#6a8fb8'; ctx.beginPath(); ctx.moveTo(x - 6, HS.bodyY + 2); ctx.lineTo(x + hw / 2, HS.y0 - 4); ctx.lineTo(x + hw + 6, HS.bodyY + 2); ctx.closePath();
+    ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3; ctx.fill(); ctx.restore();
+    F.hand(ctx, title, x + hw / 2, HS.bodyY - (ph(ctx.canvas.width / 2.5) ? 11 : 14), ph(HS.hw * 2) ? 12 : 15, P.cream, { seed: title });
+    F.paper(ctx, x + hw / 2, HS.bodyY + HS.bodyH / 2, hw, HS.bodyH, idx ? '#f3d6c8' : '#d6e4f0', { seed: 'house' + idx });
+    for (var k = 0; k < 12; k++) {
+      var r = roomRect(idx, k), v = tint ? tint[k] : null;
+      ctx.fillStyle = v == null ? 'rgba(42,41,52,.12)' : v >= 0 ? 'rgba(125,181,138,' + (.15 + .85 * clamp(v, 0, 1)) + ')' : 'rgba(232,116,124,' + (.15 + .85 * clamp(-v, 0, 1)) + ')';
+      ctx.fillRect(r[0], r[1], r[2], r[3]);
+      if (o.hi === k) { ctx.strokeStyle = P.butter; ctx.lineWidth = 3; ctx.strokeRect(r[0] - 1, r[1] - 1, r[2] + 2, r[3] + 2); }
+      ctx.fillStyle = P.ink; ctx.font = '600 ' + (ph(HS.hw * 2) ? 9 : 11) + 'px ' + F.MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      var txt = o.nums && v != null ? v.toFixed(2) : Math.floor(k / 4) + '.' + (k % 4);
+      ctx.fillText(txt, r[0] + r[2] / 2, r[1] + r[3] / 2 - (o.names ? 6 : 0));
+      if (o.names && NAMES[k][0] !== '·') { ctx.fillStyle = '#6b2f3a'; ctx.fillText(NAMES[k][0], r[0] + r[2] / 2, r[1] + r[3] / 2 + 8); }
+    }
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+  }
+  function seesaw(ctx, cx, cy, w, ld, t) {
+    var ang = -Math.atan(ld) * .35;
+    ctx.save(); ctx.fillStyle = '#8a7a6a'; ctx.beginPath(); ctx.moveTo(cx - 12, cy + 18); ctx.lineTo(cx + 12, cy + 18); ctx.lineTo(cx, cy); ctx.fill();
+    ctx.translate(cx, cy); ctx.rotate(ang); F.paper(ctx, 0, -3, w, 8, '#e9d7b0', { seed: 'plank', shadow: false });
+    F.blob(ctx, -w * .38, -16, 11, P.sky, { seed: 'm' }); F.blob(ctx, w * .38, -16, 11, P.pink, { seed: 'j' });
+    ctx.fillStyle = P.chalk; ctx.font = '700 12px ' + F.HAND; ctx.textAlign = 'center'; ctx.fillText('Mary', -w * .38, -32); ctx.fillText('John', w * .38, -32); ctx.restore();
+  }
+  function sentences(ctx, W, a) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; var sz = ph(W) ? 11 : 14;
+    F.note(ctx, 'Mary and John went out;\nJohn gave a drink to…', HS.xs[0] + HS.hw / 2, HS.y0 - (ph(W) ? 30 : 40), sz, { color: P.cream, seed: 'sc', rot: -.02, tape: false });
+    F.note(ctx, 'John and Mary went out;\nMary gave a drink to…', HS.xs[1] + HS.hw / 2, HS.y0 - (ph(W) ? 30 : 40), sz, { color: P.cream, seed: 'sx', rot: .02, tape: false });
+    ctx.restore();
+  }
+  function toolbox(ctx, x, y, s, a) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+    F.paper(ctx, x, y, s * 2.3, s * .9, P.red, { seed: 'tb' }); ctx.strokeStyle = P.ink; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y - s * .45, s * .3, 3.14, 0); ctx.stroke();
+    F.paper(ctx, x, y + 2, s * 2, s * .45, P.cream, { seed: 'tbl', shadow: false }); F.hand(ctx, 'which part matters?', x, y + 2, s * .22, P.ink, { seed: 'q8' });
+    ctx.restore();
+  }
+  function cable(ctx, a, b, t, p) {
+    ctx.save(); ctx.strokeStyle = '#5b5f73'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.bezierCurveTo(a[0], a[1] + 60, b[0], b[1] + 60, b[0], b[1]); ctx.stroke();
+    ctx.fillStyle = '#cfcbd8'; ctx.fillRect(a[0] - 4, a[1] - 3, 8, 8); ctx.fillRect(b[0] - 4, b[1] - 3, 8, 8);
+    if (p != null) { var q = p, u = 1 - q, x = u * u * u * a[0] + 3 * u * u * q * a[0] + 3 * u * q * q * b[0] + q * q * q * b[0], y = u * u * u * a[1] + 3 * u * u * q * (a[1] + 60) + 3 * u * q * q * (b[1] + 60) + q * q * q * b[1]; F.glow(ctx, x, y, 14, 'rgba(255,220,120,.9)', 1); }
+    ctx.restore();
+  }
+  function bottomY(W, H) { return HS.bodyY + HS.bodyH; }
+
+  /* superposition drawing: pentagon of arrows in the 2-room plane */
+  var COLS = [P.pink, P.butter, P.mint, P.sky, P.lav];
+  function pentagon(ctx, cx, cy, R, x, t, b) {
+    F.blob(ctx, cx, cy, R * 1.25, 'rgba(247,240,225,.12)', { seed: 'pent', shadow: false });
+    ctx.save(); ctx.strokeStyle = 'rgba(253,250,240,.25)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx - R * 1.2, cy); ctx.lineTo(cx + R * 1.2, cy); ctx.moveTo(cx, cy - R * 1.2); ctx.lineTo(cx, cy + R * 1.2); ctx.stroke(); ctx.restore();
+    for (var i = 0; i < NF; i++) F.arrow(ctx, cx, cy, cx + WP[i][0] * R, cy - WP[i][1] * R, COLS[i], 2.5, 'pa' + i);
+    var r = sup(x, b); F.glow(ctx, cx + r.h[0] * R, cy - r.h[1] * R, 18, 'rgba(255,255,255,.9)', 1);
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(cx + r.h[0] * R, cy - r.h[1] * R, 4, 0, 6.283); ctx.fill();
+    return r;
+  }
+  function bars(ctx, x, y, w, h, x0, out) {
+    var bw = w / NF;
+    for (var i = 0; i < NF; i++) { ctx.fillStyle = 'rgba(247,240,225,.18)'; ctx.fillRect(x + i * bw + 3, y, bw - 6, h);
+      ctx.fillStyle = COLS[i]; var v = clamp(out[i], 0, 1.2); ctx.fillRect(x + i * bw + 3, y + h - v / 1.2 * h, bw - 6, v / 1.2 * h);
+      ctx.strokeStyle = P.chalk; ctx.lineWidth = 2; var tv = clamp(x0[i], 0, 1.2); ctx.beginPath(); ctx.moveTo(x + i * bw + 1, y + h - tv / 1.2 * h); ctx.lineTo(x + (i + 1) * bw - 1, y + h - tv / 1.2 * h); ctx.stroke(); }
+  }
+
+  var ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  var chapters = [
+    { name: 'two houses', start: 0, dur: 6, cap: {
+        1: 'Two paper dollhouses, identical except the <b>names are swapped</b> in the story. A repair person wants to find which room holds the answer.',
+        2: 'The <b>IOI</b> task: "Mary and John… John gave a drink to" → Mary. The corrupted copy swaps names so the answer flips. Each room is one attention head.',
+        3: 'Toy model: 3 layers × 4 heads (floor = layer, room = head). In GPT-2 small the real IOI circuit spans 26 heads across 12 layers.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 104 : 110);
+        ctx.save(); ctx.globalAlpha = ramp(l, 0, .8); house(ctx, 0, 'clean'); ctx.restore();
+        ctx.save(); ctx.globalAlpha = ramp(l, .5, 1.3); house(ctx, 1, 'corrupted'); ctx.restore();
+        sentences(ctx, W, ramp(l, 1.2, 2.2));
+        var by = bottomY(W, H); toolbox(ctx, W / 2, by + (ph(W) ? 150 : 130), ph(W) ? 64 : 76, ramp(l, 2.2, 3));
+        F.person(ctx, W / 2 - (ph(W) ? 110 : 150), by + (ph(W) ? 200 : 190), ph(W) ? 64 : 76, t, { walk: l < 3, lantern: true });
+        F.plane(ctx, lerp(-30, W + 30, l / 6), by + 40 + Math.sin(l * 2) * 10, 11, .1, P.cream);
+      } },
+    { name: 'the seesaw', start: 6, dur: 6, cap: {
+        1: 'How do we score an answer? A <b>seesaw</b>: Mary on one end, John on the other. The clean house tips to Mary, the swapped house tips to John.',
+        2: 'The metric is the <b>logit difference</b>: logit(Mary) − logit(John). Clean ≈ +1.03, corrupted ≈ −1.02, both computed from the toy circuit.',
+        3: 'ld = Σ name-mover outputs + a tiny direct path. ARENA\'s ioi_metric rescales it: 0 = corrupted performance, 1 = clean performance.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 104 : 110); sentences(ctx, W, 1); house(ctx, 0, 'clean'); house(ctx, 1, 'corrupted');
+        var by = bottomY(W, H) + 58, a = ramp(l, .5, 2);
+        seesaw(ctx, HS.xs[0] + HS.hw / 2, by, HS.hw * .85, CL.ld * a, t); seesaw(ctx, HS.xs[1] + HS.hw / 2, by, HS.hw * .85, CO.ld * a, t);
+        readout(ctx, 12, by + 50, [['logit(Mary) − logit(John)', P.butter], ['clean     = ' + (CL.ld >= 0 ? '+' : '') + CL.ld.toFixed(3), P.sky], ['corrupted = ' + CO.ld.toFixed(3), P.pink]], W);
+        toolbox(ctx, W - (ph(W) ? 80 : 160), by + (ph(W) ? 190 : 120), ph(W) ? 56 : 70, 1);
+      } },
+    { name: 'activation patching', start: 12, dur: 14, cap: {
+        1: 'The repair person copies <b>one room</b> from the clean house into the swapped house, and watches the seesaw. If it swings back to Mary, that room mattered.',
+        2: '<b>Activation patching</b>: run the corrupted prompt, but paste in one head\'s clean output, recompute everything downstream. Recovery = how far the seesaw swings back.',
+        3: 'recovery = (ld_patched − ld_corrupt) / (ld_clean − ld_corrupt), one real forward pass per room. Upstream heads (dup-token, S-inhibition) and name movers score high.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 104 : 110); sentences(ctx, W, 1);
+        var per = 13 / 12, k = Math.min(11, Math.floor(l / per)), fr = (l % per) / per, tint = []; for (var i = 0; i < 12; i++) tint.push(i < k || (i === k && fr > .6) ? REC[i] : null);
+        house(ctx, 0, 'clean', null, { hi: k }); house(ctx, 1, 'corrupted', tint, { hi: k });
+        var a = roomRect(0, k), b = roomRect(1, k);
+        cable(ctx, [a[0] + a[2] / 2, a[1] + a[3]], [b[0] + b[2] / 2, b[1] + b[3]], t, fr < .6 ? fr / .6 : null);
+        var ld = fr > .6 ? patched([k]).ld : CO.ld, by = bottomY(W, H) + 58;
+        seesaw(ctx, HS.xs[1] + HS.hw / 2, by, HS.hw * .85, ld, t);
+        F.person(ctx, HS.xs[0] + HS.hw / 2, by + 30, ph(W) ? 52 : 64, t, { walk: true });
+        if (ph(W)) toolbox(ctx, W / 2, H - 70, 60, 1);
+        readout(ctx, 12, by + (ph(W) ? 60 : 50), [['patch room ' + Math.floor(k / 4) + '.' + (k % 4) + ' (' + NAMES[k][1] + ')', P.butter], ['ld = ' + ld.toFixed(3), P.chalk], ['recovery = (' + ld.toFixed(2) + ' − ' + CO.ld.toFixed(2) + ')/(' + CL.ld.toFixed(2) + ' − ' + CO.ld.toFixed(2) + ')', P.mint], ['         = ' + (fr > .6 ? REC[k].toFixed(3) : '…'), P.mint]], W);
+      } },
+    { name: 'name movers', start: 26, dur: 5, cap: {
+        1: 'The heatmap is filled in. The bright rooms form a <b>chain</b>: spot the repeated name, tell the movers to ignore it, move the other name to the answer.',
+        2: 'The circuit, read from recovery scores: <b>duplicate-token</b> → <b>S-inhibition</b> → <b>name mover</b> heads. Patching finds <i>where</i> the answer lives.',
+        3: 'Upstream heads score ≈1 because everything downstream reads them; each name mover alone recovers only its own share. Real GPT-2: name movers 9.6, 9.9, 10.0; S-inhibition 7.3, 7.9, 8.6, 8.10.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 104 : 110); sentences(ctx, W, 1);
+        house(ctx, 0, 'clean', null, { names: true }); house(ctx, 1, 'recovery', REC, { nums: true });
+        var by = bottomY(W, H), cx = W / 2, chain = [0, 5, 8], a = ramp(l, .5, 2);
+        ctx.save(); ctx.globalAlpha = a; for (var i = 0; i < 2; i++) { var r1 = roomRect(0, chain[i]), r2 = roomRect(0, chain[i + 1]); F.arrow(ctx, r1[0] + r1[2] / 2, r1[1], r2[0] + r2[2] / 2, r2[1] + r2[3], P.butter, 3, 'ch' + i); } ctx.restore();
+        var sz = ph(W) ? 15 : 19;
+        ctx.save(); ctx.globalAlpha = ramp(l, 1.5, 2.3);
+        F.note(ctx, 'dup-token → S-inhibition → name mover', cx, by + 60, sz, { color: P.butter, seed: 'chain' });
+        for (i = 0; i < 5; i++) F.lantern(ctx, cx - 120 + i * 60, by + 150 + Math.sin(t * 2 + i) * 6, 14, i === 2 ? 1 : .6, t + i);
+        ctx.restore();
+      } },
+    { name: 'superposition', start: 31, dur: 9, cap: {
+        1: 'Next door, a stranger puzzle: <b>five lodgers share two rooms</b>. Each lodger gets a direction. As long as only one is home at a time, you can still tell who it is.',
+        2: '<b>Superposition</b>: 5 features squeezed into 2 dimensions as a pentagon. Alone, a feature reconstructs well; two at once and they <b>interfere</b>: both vanish and a ghost lights up. That is why single neurons look confusing.',
+        3: 'x′ = ReLU(Wᵀ W x + b), W = 5 unit vectors at 72°, b = −0.31 cancels the cos 72° ≈ 0.31 leak. Bars: x′ (colour) vs x (chalk line), computed each frame.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t);
+        var R = Math.min(W * .32, H * .22), cx = W / 2, cy = (ph(W) ? 40 : 30) + R * 1.3, x = [0, 0, 0, 0, 0], k = Math.floor(l / 1.4) % NF, two = l > 6.2;
+        x[k] = .9; if (two) { x[(k + 2) % NF] = .8; }
+        lbl(ctx, two ? 'two lodgers home: ghosts appear' : 'one lodger home', cx, 18, P.butter, ph(W) ? 15 : 18);
+        var r = pentagon(ctx, cx, cy, R, x, t, -.31);
+        lbl(ctx, 'room 1', cx + R * 1.15, cy + 14, P.chalk, 12); lbl(ctx, 'room 2', cx + 30, cy - R * 1.2, P.chalk, 12);
+        var bw = Math.min(W - 60, 360), by = cy + R * 1.35 + 20;
+        F.paper(ctx, cx, by + 50, bw + 20, 110, 'rgba(22,26,53,.9)', { seed: 'bars', shadow: false });
+        bars(ctx, cx - bw / 2, by + 6, bw, 88, x, r.out);
+        var err = 0; for (var i = 0; i < NF; i++) err += (x[i] - r.out[i]) * (x[i] - r.out[i]);
+        readout(ctx, 12, by + 116, [['h = W x = (' + r.h[0].toFixed(2) + ', ' + r.h[1].toFixed(2) + ')', P.chalk], ['‖x − x′‖² = ' + err.toFixed(3), two ? P.pink : P.mint]], W);
+      } },
+    { name: 'lantern festival', start: 40, dur: 5, cap: {
+        1: 'So we hang <b>one lantern per lodger</b>. A tidy helper watches the two rooms and lights exactly the lantern of whoever is home.',
+        2: 'A <b>sparse autoencoder</b> learns an overcomplete dictionary: more lanterns than rooms, most dark at any moment. Each lantern is (hopefully) one clean idea.',
+        3: 'SAE: a = ReLU(W_enc h + b_enc), h ≈ W_dec a, trained with reconstruction + L1 sparsity. Here W_enc = Wᵀ of the pentagon, b = −0.31, so a_i = the toy\'s x′_i.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t);
+        var x = [0, 0, 0, 0, 0], k = Math.floor(l / 1) % NF; x[k] = .95; var r = sup(x, -.31);
+        var R = Math.min(W * .22, H * .14), cx = W / 2, cy = R * 1.5 + 10; pentagon(ctx, cx, cy, R, x, t, -.31);
+        lbl(ctx, 'busy neuron (room 1) = ' + r.h[0].toFixed(2), cx, cy + R * 1.45, P.butter, ph(W) ? 13 : 16);
+        var ly = cy + R * 1.45 + (ph(W) ? 110 : 90), sp = Math.min(70, (W - 40) / 5);
+        for (var i = 0; i < NF; i++) { var lx = W / 2 + (i - 2) * sp; F.lantern(ctx, lx, ly + Math.sin(t * 2 + i) * 5, ph(W) ? 16 : 20, clamp(r.out[i] * 1.6, 0, 1), t + i);
+          ctx.save(); ctx.font = '600 11px ' + F.MONO; ctx.fillStyle = COLS[i]; ctx.textAlign = 'center'; ctx.fillText('a' + (i + 1) + '=' + r.out[i].toFixed(2), lx, ly + 44); ctx.restore(); }
+        readout(ctx, 12, ly + 64, [['2 rooms, 5 lanterns', P.chalk], ['lit: lodger ' + (k + 1), COLS[k]]], W);
+      } },
+    { name: 'where it stops being true', start: 45, dur: 6, cap: {
+        1: 'Honest bit: some houses have <b>spare repair crews</b>. Knock out a key room and a backup quietly takes over, so the room looks less important than it is.',
+        2: '<b>Backup heads</b>: ablate the main name mover and a backup head activates, so the output barely drops. Single-component tests can hide importance.',
+        3: 'Ablating head 2.0 removes its direct contribution but head 2.2 (backup) compensates. In GPT-2 small, backup name movers in layers 10-11 do exactly this (Wang et al. 2022).' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 60 : 70);
+        var ab = l > 1.2, R = run(1, null, ab ? { 8: 1 } : null), tint = R.h.map(function (v) { return v / 1.3; });
+        house(ctx, 0, ab ? 'clean, room 2.0 knocked out' : 'clean', tint, { hi: ab ? 10 : null });
+        var r8 = roomRect(0, 8); if (ab) { ctx.save(); ctx.strokeStyle = P.red; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(r8[0], r8[1]); ctx.lineTo(r8[0] + r8[2], r8[1] + r8[3]); ctx.moveTo(r8[0] + r8[2], r8[1]); ctx.lineTo(r8[0], r8[1] + r8[3]); ctx.stroke(); ctx.restore(); }
+        var by = bottomY(W, H) + 58; seesaw(ctx, HS.xs[0] + HS.hw / 2, by, HS.hw * .85, R.ld, t);
+        readout(ctx, HS.xs[1] + 4, HS.bodyY, [['head 2.0 wrote ' + CL.h[8].toFixed(2), P.chalk], ['ld clean   ' + CL.ld.toFixed(2), P.sky], ['expected   ' + (CL.ld - CL.h[8]).toFixed(2), P.pink], ['actual     ' + R.ld.toFixed(2), P.mint], ['backup 2.2 ' + CL.h[10].toFixed(2) + '→' + R.h[10].toFixed(2), P.butter]], W);
+        var p = ramp(l, 2.6, 3.6); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 3.3, 4); var sz = ph(W) ? 14 : 18, cx = W - Math.min(W, H) * .3, cy = H - Math.min(W, H) * .22;
+          F.hand(ctx, 'backup heads can', cx, cy - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'hide importance', cx + sz * .8, cy, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
+      } },
+    { name: 'the code', start: 51, dur: 6, cap: {
+        1: 'The repair person\'s trick is one function call: run the swapped story, with one clean room pasted in.',
+        2: 'Rooms become hook names, copying becomes a hook function, the seesaw becomes ioi_metric. The lodgers become ARENA\'s toy model of superposition.',
+        3: 'ARENA [1.4.1]: model.run_with_hooks(corrupted_tokens, fwd_hooks=[(utils.get_act_name("z", layer), hook_fn)]) then ioi_metric; [1.3.1] toy model: ReLU(W.T @ W @ x + b_final).' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t);
+        var sz = ph(W) ? 12 : 17, lines = [
+          ['copy a room', ['model.run_with_hooks(', '  corrupted_tokens,', '  fwd_hooks=[(name, patch_fn)])'], P.butter, 0],
+          ['read the seesaw', ['ioi_metric(patched_logits)', '# 0 = corrupted, 1 = clean'], P.teal, 2],
+          ['five lodgers, two rooms', ['# x -> ReLU(W.T @ W @ x + b_final)'], P.lav, 3.6]];
+        var y = H * .05;
+        lines.forEach(function (L, j) {
+          var a = ramp(l, L[3] * .9, L[3] * .9 + .8); if (a <= 0) return;
+          ctx.save(); ctx.globalAlpha = a; var h = L[1].length * sz * 1.5 + sz * 2.2;
+          var w = Math.min(W - 16, Math.max.apply(null, L[1].map(function (s) { return F.textW(ctx, s, sz, F.MONO); })) + 36);
+          F.paper(ctx, W / 2, y + h / 2, w, h, P.cream, { seed: 'code' + j, rot: (j - 1) * .012 });
+          F.hand(ctx, L[0], W / 2 - w / 2 + 12, y + sz, sz * .95, '#6b5a9a', { align: 'left', seed: L[0] });
+          L[1].forEach(function (s, i) { F.hand(ctx, s, W / 2 - w / 2 + 12, y + sz * 2.3 + i * sz * 1.5, sz, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: s, reveal: ramp(l, L[3] * .9 + .2 + i * .3, L[3] * .9 + 1 + i * .3) }); });
+          ctx.restore(); y += h + 14;
+        });
+      } },
+    { name: 'where to steer', start: 57, dur: 4, cap: {
+        1: 'Why bother? Because to steer a mind safely you need to know <b>which room</b> the decision actually lives in.',
+        2: 'Causal tests tell us where steering will work: intervene on the components that patching shows are necessary and sufficient.',
+        3: 'Patching localises; steering intervenes. A steering vector added where recovery is ≈0 does nothing; added at the name movers\' input it moves the answer.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 150 : 160); house(ctx, 1, 'recovery', REC, {});
+        F.egg(ctx, HS.xs[0] + HS.hw / 2, HS.bodyY + HS.bodyH / 2, Math.min(60, HS.hw * .3), t, { clear: .8, features: [{ x: 0, y: 0 }] });
+        var r = roomRect(1, 5); F.arrow(ctx, HS.xs[0] + HS.hw * .8, HS.bodyY + 10, r[0] + r[2] / 2, r[1] + r[3] / 2, P.butter, 3.5, 'st');
+        ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'causal tests tell us\nwhere steering will work', W / 2, ph(W) ? 60 : 64, ph(W) ? 18 : 24, { color: P.pink, seed: 'steer8', rot: -.02 }); ctx.restore();
+      } }
+  ];
+
+  /* ---------------- coda: now you drive ---------------- */
+  var C = { set: {}, p: .05, L: null };
+  function codaLoss() { C.L = lossAt(C.p); }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:13px">' +
+        '<span>Tap rooms in the swapped house to patch them in.</span><button class="rs">clear patches</button></div>' +
+        '<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:4px">feature density <input type="range" min="-2.3" max="0" step="0.05" value="' + Math.log10(C.p) + '" style="flex:1" aria-label="Feature probability"> <b class="pv"></b></label>';
+      var rg = panel.querySelector('input'), pv = panel.querySelector('.pv');
+      var upd = function () { C.p = Math.pow(10, +rg.value); pv.textContent = C.p.toFixed(C.p < .1 ? 3 : 2); codaLoss(); };
+      rg.oninput = upd; upd(); panel.querySelector('.rs').onclick = function () { C.set = {}; };
+    },
+    down: function (x, y, api) { for (var k = 0; k < 12; k++) { var r = roomRect(1, k); if (x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]) { C.set[k] = !C.set[k]; api.audio.blip(C.set[k] ? 880 : 440); } } },
+    draw: function (ctx, t, W, H, api) {
+      bg(ctx, W, H, t); houseLayout(W, H, 40);
+      var keys = Object.keys(C.set).filter(function (k) { return C.set[k]; }).map(Number), R = patched(keys), rec = recovery(R.ld), tint = [];
+      for (var i = 0; i < 12; i++) tint.push(C.set[i] ? REC[i] : null);
+      house(ctx, 0, 'clean', null, { names: true }); house(ctx, 1, 'tap to patch', tint, {});
+      keys.forEach(function (k) { var r = roomRect(1, k); ctx.strokeStyle = P.butter; ctx.lineWidth = 3; ctx.strokeRect(r[0] - 1, r[1] - 1, r[2] + 2, r[3] + 2); });
+      var by = bottomY(W, H) + 72; seesaw(ctx, W / 2, by, Math.min(220, W * .5), R.ld, t);
+      readout(ctx, 12, by + 26, [['patched: ' + (keys.length ? keys.map(function (k) { return Math.floor(k / 4) + '.' + k % 4; }).join(' ') : 'none'), P.butter], ['recovery = ' + rec.toFixed(3), P.mint]], W);
+      // superposition corner
+      var R2 = Math.min(W * .16, (H - by - 90) * .38, 90), cx = 20 + R2 * 1.25, cy = H - R2 * 1.3 - 12, k2 = Math.floor(t / 1.2) % NF, x = [0, 0, 0, 0, 0], r2 = F.rng('cx' + Math.floor(t / 1.2));
+      for (i = 0; i < NF; i++) if (r2() < C.p) x[i] = .5 + .5 * r2();
+      if (R2 > 20) pentagon(ctx, cx, cy, R2, x, t, C.L.b);
+      var L = C.L, rx = cx + R2 * 1.4 + 6, bw = Math.min(W - rx - 16, 260), mx = Math.max(L.pent, L.ded) * 1.1 + 1e-6;
+      lbl(ctx, 'loss: pentagon wins ' + (L.ded / L.pent).toFixed(1) + '×', rx + bw / 2, cy - 44, P.chalk, 13);
+      [['pentagon', L.pent, P.lav], ['2 dedicated', L.ded, P.teal]].forEach(function (q, j) { var y = cy - 22 + j * 34; ctx.fillStyle = 'rgba(247,240,225,.18)'; ctx.fillRect(rx, y, bw, 22); ctx.fillStyle = q[2]; ctx.globalAlpha = .55; ctx.fillRect(rx, y, bw * q[1] / mx, 22); ctx.globalAlpha = 1;
+        ctx.fillStyle = P.chalk; ctx.font = '700 11px ' + F.MONO; ctx.fillText(q[0] + ' ' + q[1].toFixed(3), rx + 6, y + 15); });
+    }
+  };
+
+  F.play({
+    title: 'W8 · Which part matters?',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: induction heads & patching', href: '../../index.html#demo/induction-heads-patching' },
+      { label: 'Demo: superposition & SAEs', href: '../../index.html#demo/superposition-sae' },
+      { label: 'Week 8 pack', href: '../../index.html#week-08' },
+      { label: 'Map: activation patching', href: '../../index.html#map/node=activation-patching' },
+      { label: 'Map: superposition', href: '../../index.html#map/node=superposition' },
+      { label: 'Case: IOI task', href: '../../index.html#cases/ioi-task' },
+      { label: 'Case: activation patching', href: '../../index.html#cases/activation-patching' },
+      { label: 'Case: superposition', href: '../../index.html#cases/superposition' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
