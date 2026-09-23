@@ -1,0 +1,783 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The threshold wall · Object Lessons</title>
+<meta name="description" content="AI control as a track of suspicion scores: honest and attack outputs pile into two overlapping toy hills, a brass audit wall set by the budget catches what lies past it, a lower defer-to-trusted wall trades usefulness for safety, and a ribbon traces the exact safety-usefulness frontier.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+  .k-label.k-tag{min-width:0; text-transform:none; letter-spacing:.02em; font-size:10.5px}   /* kit note: .k-tag (the beat chip) sets min-width:52px */
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   23 · d11-threshold: "The threshold wall" (W11 deep, ARENA [3.5] AI Control)
+   A track of suspicion scores. Two TOY hills of beads (honest ~ N(0, 1),
+   attacks ~ N(d', 1)); a brass audit wall at the honest (1 - budget)
+   quantile; a lower teal defer-to-trusted wall; a ribbon for the safety-
+   usefulness frontier. Every number is exact for the toy: the MATH block is
+   extracted and verified in node (verify-d11.js, see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* Every number the threshold wall shows comes from here. Verified in node (verify-d11.js).
+   TOY MODEL (labelled as toy on the page): the trusted monitor T gives each output of U a
+   suspicion score. Honest outputs score ~ N(0, 1); attacks (backdoored code) score ~ N(d', 1):
+   the same bell shifted right by d' standard deviations. A wall is a threshold on that score. */
+const SQ2PI = 2.5066282746310002;                          // sqrt(2 pi)
+const pdf = (x) => Math.exp(-0.5 * x * x) / SQ2PI;
+
+/* Standard normal CDF to double precision: Hart (1968) algorithm 5666, as given by West (2005). */
+function Phi(x) {
+  const z = Math.abs(x);
+  let c = 0;
+  if (z <= 37) {
+    const e = Math.exp(-0.5 * z * z);
+    if (z < 7.07106781186547) {
+      let n = 0.0352624965998911 * z + 0.700383064443688;
+      n = n * z + 6.37396220353165; n = n * z + 33.912866078383; n = n * z + 112.079291497871;
+      n = n * z + 221.213596169931; n = n * z + 220.206867912376;
+      let d = 0.0883883476483184 * z + 1.75566716318264;
+      d = d * z + 16.064177579207; d = d * z + 86.7807322029461; d = d * z + 296.564248779674;
+      d = d * z + 637.333633378831; d = d * z + 793.826512519948; d = d * z + 440.413735824752;
+      c = e * n / d;
+    } else {
+      let q = z + 0.65; q = z + 4 / q; q = z + 3 / q; q = z + 2 / q; q = z + 1 / q;
+      c = e / q / SQ2PI;
+    }
+  }
+  return x > 0 ? 1 - c : c;
+}
+/* Its inverse: Acklam's rational approximation, polished by one Halley step (full precision).
+   Above 1/2 it uses the mirror image, PhiInv(p) = -PhiInv(1 - p), which keeps every digit. */
+function PhiInv(p) {
+  if (!(p > 0)) return -Infinity;
+  if (!(p < 1)) return Infinity;
+  if (p > 0.5) return -PhiInv(1 - p);
+  let x;
+  if (p < 0.02425) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    x = (((((-7.784894002430293e-3 * q - 3.223964580411365e-1) * q - 2.400758277161838) * q - 2.549732539343734) * q + 4.374664141464968) * q + 2.938163982698783)
+      / ((((7.784695709041462e-3 * q + 3.224671290700398e-1) * q + 2.445134137142996) * q + 3.754408661907416) * q + 1);
+  } else {
+    const q = p - 0.5, r = q * q;
+    x = (((((-3.969683028665376e1 * r + 2.209460984245205e2) * r - 2.759285104469687e2) * r + 1.383577518672690e2) * r - 3.066479806614716e1) * r + 2.506628277459239) * q
+      / (((((-5.447609879822406e1 * r + 1.615858368580409e2) * r - 1.556989798598866e2) * r + 6.680131188771972e1) * r - 1.328068155288572e1) * r + 1);
+  }
+  const e = Phi(x) - p, u = e * SQ2PI * Math.exp(0.5 * x * x);
+  return x - u / (1 + 0.5 * x * u);
+}
+
+/* A wall at score tau. Beyond it lie a share fpr(tau) of honest outputs (false alarms) and a share
+   tpr(tau) of attacks (caught attacks). The audit wall goes where exactly a share b of honest
+   outputs lies beyond it: b is the budget (ARENA: the 98th percentile of clean scores for 2%). */
+const wallFor = (share) => (share <= 0 ? Infinity : share >= 1 ? -Infinity : -PhiInv(share));
+const fpr = (tau) => Phi(-tau);
+const tpr = (tau, dp) => Phi(dp - tau);
+const auc = (dp) => Phi(dp / Math.SQRT2);                          // P(an attack outscores an honest output)
+const dpFor = (tprAt, fprAt) => PhiInv(1 - fprAt) + PhiInv(tprAt);   // the d' whose curve passes this point
+const budgetFor = (catchShare, dp) => Phi(PhiInv(catchShare) - dp);  // budget needed to catch that share
+
+/* A protocol = walls on the score (ARENA [3.5]). The top b of honest outputs go to the human H
+   (audit); from there up to the top f, U's answer is swapped for T's (defer to trusted; f <= b
+   means no band, i.e. plain trusted monitoring); below, U's answer is submitted as it is.
+   Toy game: U attacks again and again. Each attack is caught (audited: U is shut down, blue wins),
+   deferred (T's answer is used instead: nothing happens, U tries again) or submitted (a backdoor
+   ships: red wins). Safety = P(caught before anything ships) = c / (c + u).
+   Usefulness in the paper's units (T alone = 0, U alone = 1): only honest problems handed to T lose
+   U's answer (an audited honest answer is checked, then used), so usefulness = 1 - (f - b).
+   editKeep (trusted editing): T edits U's answer instead of replacing it; an edit misses the
+   backdoor with this probability (ARENA's simulate_safety: 1 - edit_removes_backdoor_rate = 0.3).
+   Its usefulness depends on how edits change honest code, which the toy does not model (null). */
+function protocol(dp, b, f = 0, editKeep = null) {
+  const fd = Math.max(b, f), ta = wallFor(b), td = wallFor(fd);
+  const caught = tpr(ta, dp);
+  const under = Phi(td - dp);                                          // attacks left of the defer wall
+  const band = fd > b ? Math.max(0, Phi(ta - dp) - under) : 0;         // attacks between the walls
+  const ships = under + (editKeep == null ? 0 : editKeep * band);
+  const safety = caught + ships > 0 ? caught / (caught + ships) : 1;
+  return { dp, b, f: fd, ta, td, falseAlarms: fpr(ta), caught, band, under, ships,
+    blocked: editKeep == null ? band : (1 - editKeep) * band, honestToT: fd - b, safety,
+    usefulness: editKeep == null ? 1 - (fd - b) : null };
+}
+/* The frontier: slide the defer wall from the audit wall (f = b: trusted monitoring) all the way
+   left (f = 1: T's answer wherever H does not audit). Points are [safety, usefulness]. */
+function frontier(dp, b, K = 120) {
+  const out = [];
+  for (let i = 0; i <= K; i++) { const m = protocol(dp, b, b + (1 - b) * (i / K)); out.push([m.safety, m.usefulness]); }
+  return out;
+}
+/* P1 upfront auditing (no monitor): H audits the first share b of all problems. A patient attacker
+   attacks each problem with a small probability; over a long run let x = P(no attack at all).
+   Red wins iff no attack falls in the audited start and at least one comes later: x^b - x, which
+   is largest at x = b^(1/(1-b)). Safety = 1 - (x^b - x); expected attempts in the run = -ln x. */
+function upfront(b) {
+  if (b <= 0) return { safety: 0, attempts: Infinity };
+  if (b >= 1) return { safety: 1, attempts: 0 };
+  const x = Math.pow(b, 1 / (1 - b));
+  return { safety: 1 - (Math.pow(x, b) - x), attempts: -Math.log(x) };
+}
+/* The beads: n equal slices of each toy distribution (bead i sits at its (i + 1/2)/n quantile), so
+   the share of beads past any wall matches the exact share to within one bead. Not random draws. */
+function quantileBeads(n, shift = 0) {
+  const s = new Float64Array(n);
+  for (let i = 0; i < n; i++) s[i] = shift + PhiInv((i + 0.5) / n);
+  return s;
+}
+const MATH = { SQ2PI, pdf, Phi, PhiInv, wallFor, fpr, tpr, auc, dpFor, budgetFor, protocol, frontier, upfront, quantileBeads };
+// MATH-END
+
+/* ================================================================ layout */
+const NB = 200;                         // beads per hill: bead i is the (i + 1/2)/200 quantile (0.5% each)
+const SMIN = -3.145, SMAX = 7.955;      // suspicion axis on the track (toy units: honest SD = 1)
+const BIN = 0.37, NBIN = 30;            // columns 0.37 wide, centred on multiples of 0.37 (at most 30 beads high)
+const W = 3.6, X0 = -W / 2, XU = W / (SMAX - SMIN);
+const DB = BIN * XU * 0.9;              // bead diameter
+const DEEP = 3;                         // beads side by side (in depth) per column
+const OFFS = [0, 1, -1];                // fill order across the depth: middle, front, back
+const FLOOR_Y = 0.1, SHELF_Y = 1.23;    // honest lane floor (track top); attack shelf (step top)
+const ZH = 0.2, ZA = -0.2, LANE = 0.38; // lane centres and depth
+const WALL_H = 2.42, DEFER_H = 2.08, WZ = 0.44;
+const BOARD = { x0: -1.42, x1: 1.42, y0: 2.62, y1: 3.86, z: -0.58 };
+const CH = { x0: -1.1, x1: 1.18, y0: 2.78, y1: 3.68 };   // chart: safety 0..1 across, usefulness 0..1 up
+const ZF = BOARD.z + 0.021;             // the board's front face
+const U_AT = [-1.7, 0, 0.8];            // U's box (front left)
+const T_AT = [-1.7, 0.6, 0.8];          // T's ring above it: every output passes through
+const H_AT = [1.62, 0, 0.74];           // the human auditor H (front right)
+const PALE = '#d9d2c4';
+const TINT = { aud: '#e6d3a4', def: '#c3e2df' };
+const CAM = {
+  cast: { pos: [-2.4, 2.6, 9.2], target: [-0.4, 1.0, 0.2] },
+  front: { pos: [2.5, 2.9, 9.3], target: [0, 1.25, 0] },
+  full: { pos: [2.1, 3.7, 9.5], target: [0, 1.95, 0] },
+  side: { pos: [6.3, 3.5, 6.9], target: [0, 1.3, 0] },
+};
+
+const pct = (x, d = 1) => `${(100 * x).toFixed(d)}%`;
+const d3 = (x) => x.toFixed(3);
+const xOf = (s) => X0 + (Math.min(SMAX, Math.max(SMIN, s)) - SMIN) * XU;
+const binOf = (s) => Math.min(NBIN - 1, Math.max(0, Math.floor((s - SMIN) / BIN)));
+const colX = (j) => X0 + (j + 0.5) * BIN * XU;
+const bx = (s) => CH.x0 + s * (CH.x1 - CH.x0);
+const by = (u) => CH.y0 + u * (CH.y1 - CH.y0);
+const mix = (a, b, t) => new THREE.Color(a).lerp(new THREE.Color(b), t);
+const CC = { h: new THREE.Color(C.good), a: new THREE.Color(C.grad), aud: new THREE.Color(C.brass),
+  hT: mix(C.good, PALE, 0.72), aT: mix(C.grad, PALE, 0.72) };
+const ease = (u) => (u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2);
+const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
+function setBead(mesh, i, x, y, z, d) { mesh.setMatrixAt(i, _m4.compose(_p.set(x, y, z), _q, _s.set(d, d, d))); }
+
+/* one hill: bead i goes to the column of its score, stacked DEEP across and then upward */
+function layoutHill(sc, y0, zc, out) {
+  const cnt = new Int32Array(NBIN);
+  for (let i = 0; i < sc.length; i++) {
+    const j = binOf(sc[i]), m = cnt[j]++;
+    out[3 * i] = colX(j);
+    out[3 * i + 1] = y0 + DB / 2 + Math.floor(m / DEEP) * DB;
+    out[3 * i + 2] = zc + OFFS[m % DEEP] * DB;
+  }
+  return cnt;
+}
+
+/* ============================================================ the object */
+function buildStatic(S) {
+  const st = S.state, g = new THREE.Group(), brass = K.mat.brass(), plaster = K.mat.plaster('#efe8dc');
+  const box = (sx, sy, sz, x, y, z, mat, o = {}) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
+    m.position.set(x, y, z); m.castShadow = o.shadow !== false; m.receiveShadow = true; g.add(m); return m;
+  };
+  const len = W + 0.12;
+  box(len, FLOOR_Y, LANE, 0, FLOOR_Y / 2, ZH, plaster);                              // the track: honest lane
+  box(len, SHELF_Y, LANE, 0, SHELF_Y / 2, ZA, plaster);                              // the step: attack shelf
+  box(len, 0.03, 0.03, 0, FLOOR_Y - 0.012, ZH + LANE / 2 + 0.015, brass, { shadow: false });   // brass ruler (the score axis)
+  box(len, 0.022, 0.026, 0, SHELF_Y - 0.009, ZA + LANE / 2 + 0.013, brass, { shadow: false }); // brass lip of the shelf
+  for (let s = -3; s <= 7; s++) box(0.012, 0.02, 0.034, xOf(s), FLOOR_Y + 0.012, ZH + LANE / 2 + 0.015, brass, { shadow: false });
+  // U (the strong, untrusted model): a plaster block with an output slot; T (the trusted monitor): a brass ring
+  box(0.3, 0.42, 0.26, U_AT[0], 0.21, U_AT[2], plaster);
+  box(0.16, 0.012, 0.05, U_AT[0], 0.426, U_AT[2], K.mat.ink(), { shadow: false });
+  box(0.022, T_AT[1] - 0.1 - 0.42, 0.022, T_AT[0], (0.42 + T_AT[1] - 0.1) / 2, T_AT[2], brass);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.017, 12, 40), brass);
+  ring.position.set(...T_AT); ring.rotation.y = Math.PI / 2; ring.castShadow = true; g.add(ring);
+  g.add(K.bead([T_AT[0], T_AT[1] + 0.135, T_AT[2]], C.prob, 0.026));                // T's eye
+  S.root.add(g);
+  // zones on the lanes: brass = audited by H, teal = handed to T
+  st.zone = {};
+  for (const k of ['aud', 'def']) for (const lane of ['h', 'a']) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(1, 0.006, LANE - 0.03), K.mat.paint(TINT[k]));
+    m.receiveShadow = true; m.userData.noFit = true;
+    m.position.set(0, (lane === 'h' ? FLOOR_Y : SHELF_Y) + 0.003, lane === 'h' ? ZH : ZA);
+    S.root.add(m); st.zone[k + lane] = m;
+  }
+  // the walls: glass panes in a frame; the audit wall is brass, the lower defer wall teal
+  const wall = (h, glass, frame) => {
+    const w = new THREE.Group();
+    const pane = new THREE.Mesh(new THREE.BoxGeometry(0.016, h, 2 * WZ), K.mat.glass(glass, 0.34));
+    pane.position.y = h / 2; pane.renderOrder = 2; w.add(pane);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 2 * WZ + 0.07), frame);
+    top.position.y = h; top.castShadow = true; w.add(top);
+    for (const z of [-WZ, WZ]) { const p = new THREE.Mesh(new THREE.BoxGeometry(0.04, h, 0.04), frame); p.position.set(0, h / 2, z); p.castShadow = true; w.add(p); }
+    w.userData.top = new THREE.Object3D(); w.userData.top.position.set(0, h + 0.03, 0); w.add(w.userData.top);
+    S.root.add(w);
+    return w;
+  };
+  st.wallA = wall(WALL_H, '#e8d29a', brass);
+  st.wallD = wall(DEFER_H, '#9fd6d2', K.mat.paint(C.aux));
+  // the beads: one instanced mesh per hill, coloured per bead by its fate
+  const bg = new THREE.SphereGeometry(0.5, 12, 9);
+  st.bm = {};
+  for (const H of ['h', 'a']) {
+    const m = new THREE.InstancedMesh(bg, K.mat.paint('#ffffff'), NB);
+    m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; m.userData.noFit = true;
+    m.setColorAt(0, CC[H]);
+    S.root.add(m); st.bm[H] = m;
+  }
+  // H, the human auditor
+  st.fig = K.figure();
+  st.fig.group.traverse((m) => { m.userData.noFit = true; });
+  S.root.add(st.fig.group);
+  st.fig.place(H_AT, [0.2, 0.9, -0.2]);
+}
+
+function buildBoard(S) {               // the safety-usefulness frontier, on a plaster board behind
+  const st = S.state, g = new THREE.Group(), brass = K.mat.brass();
+  const add = (geo, mat, x, y, z, shadow = true) => {
+    const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = shadow; m.receiveShadow = true; g.add(m); return m;
+  };
+  const B = BOARD;
+  add(new THREE.BoxGeometry(B.x1 - B.x0, B.y1 - B.y0, 0.04), K.mat.plaster('#f6f1e8'), (B.x0 + B.x1) / 2, (B.y0 + B.y1) / 2, B.z);
+  for (const x of [B.x0 + 0.24, B.x1 - 0.24]) add(new THREE.CylinderGeometry(0.018, 0.018, B.y0, 12).translate(0, B.y0 / 2, 0), brass, x, 0, B.z - 0.035);
+  const line = K.mat.plaster('#ddd3c3');
+  for (const u of [0.5, 1]) add(new THREE.BoxGeometry(CH.x1 - CH.x0, 0.006, 0.004), line, (CH.x0 + CH.x1) / 2, by(u), ZF + 0.002, false);
+  for (const s of [0.5, 1]) add(new THREE.BoxGeometry(0.006, CH.y1 - CH.y0, 0.004), line, bx(s), (CH.y0 + CH.y1) / 2, ZF + 0.002, false);
+  add(new THREE.BoxGeometry(CH.x1 - CH.x0 + 0.03, 0.016, 0.016), brass, (CH.x0 + CH.x1) / 2 + 0.005, CH.y0, ZF + 0.008, false);   // safety axis
+  add(new THREE.BoxGeometry(0.016, CH.y1 - CH.y0 + 0.03, 0.016), brass, CH.x0, (CH.y0 + CH.y1) / 2 + 0.005, ZF + 0.008, false);   // usefulness axis
+  st.ribbon = K.tube([], C.prob, 0.021, { shadow: false, sides: 10 });
+  st.ribbon.mesh.userData.noFit = true;
+  g.add(st.ribbon.mesh);
+  st.dot = add(new THREE.SphereGeometry(0.052, 20, 14), K.mat.ink(), 0, 0, ZF + 0.06);
+  const sg = new THREE.CylinderGeometry(0.034, 0.034, 0.02, 24).rotateX(Math.PI / 2);
+  st.studs = {};
+  for (const k of ['up', 'tm', 'dtt', 't0']) st.studs[k] = add(sg, brass, 0, 0, ZF + 0.03, false);
+  st.board = g;
+  S.root.add(g);
+}
+
+/* ============================================================ the state */
+function moveAttack(S) {               // d' moved: every attack bead slides to its new column
+  const st = S.state;
+  for (let i = 0; i < NB; i++) st.sc.a[i] = st.q[i] + S.knobs.dp;
+  layoutHill(st.sc.a, SHELF_Y, ZA, st.tgt.a);
+  if (st.pour.a) return;                                   // mid-pour: beads fly to the new spots
+  if (S.shot || S.first || !st.shown.a) { placeHill(S, 'a'); return; }
+  st.morph = { t: 0, from: Float32Array.from(st.pos.a) };
+  S.invalidate();
+}
+function placeHill(S, H) {
+  const st = S.state, mesh = st.bm[H], tg = st.tgt[H];
+  st.pos[H].set(tg);
+  for (let i = 0; i < NB; i++) setBead(mesh, i, tg[3 * i], tg[3 * i + 1], tg[3 * i + 2], DB);
+  mesh.instanceMatrix.needsUpdate = true;
+}
+function pour(S, H, o = {}) {         // beads leave U, pass through T's ring and land at their score
+  const st = S.state;
+  st.shown[H] = true;
+  if (H === 'a') st.morph = null;
+  if (S.shot || o.instant) { st.pour[H] = null; placeHill(S, H); }
+  else {
+    st.pour[H] = { t0: st.clock + (o.delay || 0), gap: o.gap ?? 0.01, dur: 0.7 };
+    const mesh = st.bm[H];
+    for (let i = 0; i < NB; i++) setBead(mesh, i, T_AT[0], T_AT[1], T_AT[2], 0);
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+  applyView(S);
+  S.invalidate();
+}
+function stepPour(S, H) {
+  const st = S.state, P = st.pour[H], mesh = st.bm[H], tg = st.tgt[H], pos = st.pos[H], ord = st.ord[H];
+  let done = true;
+  for (let i = 0; i < NB; i++) {
+    const tau = st.clock - (P.t0 + ord[i] * P.gap), j = 3 * i;
+    if (tau >= P.dur) { pos[j] = tg[j]; pos[j + 1] = tg[j + 1]; pos[j + 2] = tg[j + 2]; setBead(mesh, i, pos[j], pos[j + 1], pos[j + 2], DB); continue; }
+    done = false;
+    if (tau < 0) { setBead(mesh, i, T_AT[0], T_AT[1], T_AT[2], 0); continue; }
+    const u = tau / P.dur, a = (1 - u) * (1 - u), b = 2 * u * (1 - u), c = u * u;
+    const apex = Math.max(T_AT[1], tg[j + 1]) + 0.32, my = 2 * apex - (T_AT[1] + tg[j + 1]) / 2;
+    pos[j] = a * T_AT[0] + b * (T_AT[0] + tg[j]) / 2 + c * tg[j];
+    pos[j + 1] = a * T_AT[1] + b * my + c * tg[j + 1];
+    pos[j + 2] = a * T_AT[2] + b * (T_AT[2] + tg[j + 2]) / 2 + c * tg[j + 2];
+    setBead(mesh, i, pos[j], pos[j + 1], pos[j + 2], DB * (0.55 + 0.45 * u));
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  if (done) st.pour[H] = null;
+  return !done;
+}
+function ensureHills(S) { const st = S.state; if (!st.shown.h) pour(S, 'h', { instant: true }); if (!st.shown.a) pour(S, 'a', { instant: true }); }
+
+/* walls follow the model; during a slide the thresholds glide in score space */
+function setWalls(S, animate) {
+  const st = S.state, m = st.m, defer = m.f > m.b;
+  const to = { ta: m.ta, td: defer ? m.td : m.ta };
+  if (!animate || S.shot || !st.view.walls) { st.wt = null; st.cur.ta = to.ta; st.cur.td = to.td; st.cur.defer = defer; placeWalls(S); return; }
+  if (Math.abs(to.ta - st.cur.ta) < 1e-9 && Math.abs(to.td - st.cur.td) < 1e-9 && defer === st.cur.defer) return;
+  st.wt = { t: 0, from: { ta: st.cur.ta, td: st.cur.td }, to, defer };
+  if (defer) st.cur.defer = true;
+  S.invalidate();
+}
+function placeWalls(S) {
+  const st = S.state, xa = xOf(st.cur.ta), xd = xOf(st.cur.td), xr = X0 + W;
+  st.wallA.position.x = xa;
+  st.wallD.position.x = xd;
+  const size = (m, a, b) => { const w = Math.max(1e-4, b - a); m.scale.x = w; m.position.x = (a + b) / 2; };
+  size(st.zone.audh, xa, xr); size(st.zone.auda, xa, xr);
+  size(st.zone.defh, xd, xa); size(st.zone.defa, xd, xa);
+}
+function paintBeads(S) {
+  const st = S.state, cur = st.cur, walls = st.view.walls;
+  for (const H of ['h', 'a']) {
+    const mesh = st.bm[H], sc = st.sc[H], base = CC[H], pale = CC[H + 'T'];
+    for (let i = 0; i < NB; i++) {
+      const s = sc[i];
+      mesh.setColorAt(i, !walls ? base : s > cur.ta ? CC.aud : cur.defer && s > cur.td ? pale : base);
+    }
+    mesh.instanceColor.needsUpdate = true;
+  }
+}
+function paintBoard(S) {
+  const st = S.state, k = S.knobs, m = st.m, z = ZF + 0.06;
+  st.ribbon.set(MATH.frontier(k.dp, k.b, 140).map(([s, u]) => [bx(s), by(u), z]));
+  st.dot.position.set(bx(m.safety), by(m.usefulness), z);
+  const up = MATH.upfront(k.b), tm = MATH.protocol(k.dp, k.b, 0), dt = MATH.protocol(k.dp, k.b, 0.10);
+  st.studs.up.position.set(bx(up.safety), by(1), ZF + 0.03);
+  st.studs.tm.position.set(bx(tm.safety), by(1), ZF + 0.03);
+  st.studs.dtt.position.set(bx(dt.safety), by(dt.usefulness), ZF + 0.03);
+  st.studs.t0.position.set(bx(1), by(0), ZF + 0.03);
+}
+
+/* what is on show: hills, walls, board, tags, chips, readout */
+function applyView(S) {
+  const st = S.state, v = st.view, walls = v.walls, board = !!S.knobs.fr;
+  st.bm.h.visible = st.shown.h;
+  st.bm.a.visible = st.shown.a && v.attack;
+  st.wallA.visible = walls;
+  st.wallD.visible = walls && st.cur.defer;
+  st.zone.audh.visible = st.zone.auda.visible = walls;
+  st.zone.defh.visible = st.zone.defa.visible = walls && st.cur.defer;
+  st.board.visible = board;
+  const studs = board && v.studs, dttOn = S.knobs.b < 0.10;
+  for (const k in st.studs) st.studs[k].visible = studs && (k !== 'dtt' || dttOn);
+  for (const k in st.studTag) st.studTag[k].show(studs && (k !== 'dtt' || dttOn));
+  st.tagA.show(walls);
+  st.tagD.show(walls && st.cur.defer);
+  st.tagSafe.show(board); st.tagUse.show(board);
+  for (const t of st.cast) t.show(v.cast);
+  st.readAt.position.set(0, board ? BOARD.y1 + 0.06 : WALL_H + 0.22, 0);
+  paintBeads(S);
+  legend(S);
+  refresh(S);
+  S.invalidate();
+}
+function legend(S) {
+  const st = S.state, v = st.view;
+  const items = [{ id: 'h', label: 'honest', color: C.good }];
+  if (v.attack) items.push({ id: 'a', label: 'attack', color: C.grad });
+  if (v.walls) items.push({ id: 'aud', label: 'audited', color: C.brass });
+  if (v.walls && st.cur.defer) items.push({ id: 't', label: 'to T', color: PALE });
+  const key = items.map((x) => x.id).join();
+  if (key !== st.legendKey) { st.legendKey = key; K.legend(items, null); }
+}
+function refresh(S) {                   // readout and wall tags, per tier
+  const st = S.state, m = st.m, v = st.view, t = S.tier, board = !!S.knobs.fr, defer = m.f > m.b;
+  const p0 = (x) => pct(x, 0), p1 = (x) => pct(x, 1);
+  let s;
+  if (!v.attack) s = { 1: 'Each bead is one output of U,\nplaced at T\'s suspicion score',
+    2: '200 honest outputs (toy):\na bell curve of suspicion scores',
+    3: 'honest scores ~ N(0, 1) (toy)\n200 beads = 0.5% quantile slices' }[t];
+  else if (!v.walls) s = { 1: 'Attacks score higher on average,\nbut the two hills overlap',
+    2: `Attack hill shifted right by d′ = ${m.dp.toFixed(2)}\nAn attack outscores honest work ${p0(MATH.auc(m.dp))} of the time`,
+    3: `d′ = ${m.dp.toFixed(2)} · AUC = Φ(d′/√2) = ${d3(MATH.auc(m.dp))}` }[t];
+  else if (!defer && !board) s = { 1: `**${p0(m.caught)}** of attacks caught\n**${p1(m.b)}** of honest work checked`,
+    2: `Audit wall: top ${p1(m.b)} of honest work\ncatches **${p1(m.caught)}** of attacks`,
+    3: `τ = ${d3(m.ta)} · FPR ${d3(m.falseAlarms)} · TPR **${d3(m.caught)}**\nsafety = TPR = ${d3(m.safety)} (no deferral)` }[t];
+  else s = { 1: `Caught **${p0(m.caught)}** · to T ${p0(m.band)} · slip ${p0(m.under)}\nSafety **${p0(m.safety)}** · useful **${p0(m.usefulness)}** (toy)`,
+    2: `Attacks: ${p1(m.caught)} caught · ${p1(m.band)} to T · ${p1(m.under)} ship\nSafety **${p1(m.safety)}** · usefulness **${p1(m.usefulness)}** (toy)`,
+    3: `c ${d3(m.caught)} · g ${d3(m.band)} · u ${d3(m.under)} · τd ${d3(m.td)}\nsafety c/(c+u) **${d3(m.safety)}** · use 1−(f−b) **${d3(m.usefulness)}**` }[t];
+  st.read.set(s);
+  st.tagA.set({ 1: `human checks · top ${p1(m.b)}`, 2: `audit · top ${p1(m.b)}`, 3: `audit τ = ${m.ta.toFixed(2)}` }[t]);
+  st.tagD.set({ 1: `T answers · top ${p1(m.f)}`, 2: `defer · top ${p1(m.f)}`, 3: `defer τ = ${m.td.toFixed(2)}` }[t]);
+}
+
+function scene(S, o = {}) {             // a beat or prediction sets what is on show
+  const st = S.state;
+  st.view = { attack: o.attack !== false, walls: !!o.walls, studs: !!o.studs, cast: !!o.cast };
+  setWalls(S, false);
+  st.fig.pose('stand', { ms: 0 });
+  if (o.pose) {
+    const doPose = () => st.fig.pose(o.pose, { at: typeof o.at === 'function' ? o.at(S) : o.at });
+    if (S.shot) doPose(); else later(S, 420, doPose);
+  }
+  applyView(S);
+}
+const auditZone = (S) => [Math.min(X0 + W - 0.2, xOf(S.state.m.ta) + 0.45), SHELF_Y + 0.35, ZA];
+function wait(S, ms) { return S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)); }
+function later(S, ms, fn) {             // run fn after ms, unless the learner has left this beat
+  if (S.shot) { fn(); return; }
+  const b = S.beat, tok = (S.state.tok = (S.state.tok || 0) + 1);
+  setTimeout(() => { if (S.beat === b && S.state.tok === tok) fn(); }, ms);
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'd11-threshold', num: '23', week: 11, kind: 'deep',
+  title: 'The threshold wall',
+  subtitle: 'A monitor scores suspicion; where you put the wall trades caught attacks against false alarms.',
+  back2d: '#week-11',
+  film: 'deep-w11-evals',
+  plinth: { r: 2.1, h: 0.14 },
+
+  knobs: [
+    { id: 'dp', type: 'range', label: { 1: 'How well T spots attacks', 2: 'Monitor quality d′', 3: 'd′ (hill separation, SDs)' },
+      min: 0, max: 5, step: 0.01, value: 1.64, fmt: (v) => v.toFixed(2) },
+    { id: 'b', type: 'range', label: { 1: 'Human checks (budget)', 2: 'Audit budget', 3: 'AUDIT_BUDGET_FRACTION' },
+      min: 0.005, max: 0.2, step: 0.005, value: 0.02, fmt: (v) => pct(v, 1) },
+    { id: 'f', type: 'range', label: { 1: 'Hand the most suspicious to T', 2: 'Defer to trusted: top', 3: 'DEFER_TO_TRUSTED_FRACTION' },
+      min: 0, max: 0.6, step: 0.005, value: 0, fmt: (v) => (v <= 0 ? 'off' : pct(v, 1)) },
+    { id: 'fr', type: 'toggle', label: { 1: 'Show the trade-off curve', 2: 'Show the frontier', 3: 'safety–usefulness frontier' }, value: false },
+    { id: 'again', type: 'button', label: { 1: 'Pour the beads again', 2: 'Pour again', 3: 'Re-pour' },
+      onClick: (S) => { const st = S.state; st.view.attack = true; pour(S, 'h', { delay: 0.1 }); pour(S, 'a', { delay: 0.5 }); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.q = MATH.quantileBeads(NB, 0);                        // N(0, 1) slices; attacks are the same shifted by d'
+    st.sc = { h: Float64Array.from(st.q), a: new Float64Array(NB) };
+    st.tgt = { h: new Float32Array(3 * NB), a: new Float32Array(3 * NB) };
+    st.pos = { h: new Float32Array(3 * NB), a: new Float32Array(3 * NB) };
+    st.pour = { h: null, a: null };
+    st.shown = { h: false, a: false };
+    st.cur = { ta: 2, td: 2, defer: false };
+    st.view = { attack: true, walls: true, studs: false, cast: false };
+    st.clock = 0; st.morph = null; st.wt = null;
+    const rng = K.rng(1123);
+    st.ord = {};
+    for (const H of ['h', 'a']) {                            // pour order: shuffled, seeded
+      const o = Array.from({ length: NB }, (_, i) => i);
+      for (let i = NB - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [o[i], o[j]] = [o[j], o[i]]; }
+      st.ord[H] = new Int32Array(NB);
+      o.forEach((bead, k) => { st.ord[H][bead] = k; });
+    }
+    buildStatic(S);
+    buildBoard(S);
+    layoutHill(st.sc.h, FLOOR_Y, ZH, st.tgt.h);
+    st.readAt = new THREE.Object3D(); S.root.add(st.readAt);
+    st.read = K.label(st.readAt, '', { cls: 'readout', anchor: 'bottom', dy: -6 });
+    st.tagA = K.label(st.wallA.userData.top, '', { cls: 'tag brass', anchor: 'left', dx: 6, dy: 0 });
+    st.tagD = K.label(st.wallD.userData.top, '', { cls: 'tag', anchor: 'right', dx: -6, dy: 0 });
+    st.tagAxis = K.label([0.75, FLOOR_Y - 0.03, ZH + LANE / 2 + 0.03], { 1: 'more suspicious →', 2: 'suspicion score →', 3: 'suspicion (toy units) →' }, { cls: 'tag', anchor: 'top', dy: 6 });
+    st.tagSafe = K.label([CH.x1, CH.y0, ZF], { 1: 'safer →', 2: 'safety →', 3: 'safety →' }, { cls: 'tag', anchor: 'top', dy: 5 });
+    st.tagUse = K.label([CH.x0, CH.y1, ZF], { 1: 'more useful ↑', 2: 'usefulness ↑', 3: 'usefulness (T = 0, U = 1)' }, { cls: 'tag', anchor: 'bottom', dy: -5 });
+    st.studTag = {
+      up: K.label(st.studs.up, { 1: 'check the first 2%', 2: 'upfront auditing', 3: 'P1 upfront' }, { cls: 'tag brass', anchor: 'right', dx: -7, dy: 0 }),
+      tm: K.label(st.studs.tm, { 1: 'watch + audit', 2: 'trusted monitoring', 3: 'P2 monitoring' }, { cls: 'tag brass', anchor: 'bottom', dy: -7 }),
+      dtt: K.label(st.studs.dtt, { 1: 'defer 10%', 2: 'defer to trusted 10%', 3: 'P3 defer 10%' }, { cls: 'tag brass', anchor: 'left', dx: 8, dy: 0 }),
+      t0: K.label(st.studs.t0, { 1: 'T does everything', 2: 'T only', 3: 'P0 T only' }, { cls: 'tag brass', anchor: 'right', dx: -8, dy: -6 }),
+    };
+    st.cast = [
+      K.label([U_AT[0], 0.02, U_AT[2] + 0.15], { 1: 'U: strong, untrusted', 2: 'U · untrusted model', 3: 'U · claude-sonnet-4.5' }, { cls: 'tag', anchor: 'top', dy: 5 }),
+      K.label([T_AT[0], T_AT[1] + 0.18, T_AT[2]], { 1: 'T: weaker, trusted', 2: 'T · trusted monitor', 3: 'T · gemini-2.5-flash' }, { cls: 'tag', anchor: 'bottom', dy: -4 }),
+      K.label([H_AT[0], 1.0, H_AT[2]], { 1: 'H: a human checker', 2: 'H · human auditor', 3: 'H · 2% audit budget' }, { cls: 'tag', anchor: 'bottom', dy: -4 }),
+    ];
+  },
+
+  rebuild(S, id) {
+    const st = S.state, k = S.knobs, prevDp = st.m ? st.m.dp : null, prevFr = st.board.visible;
+    st.m = MATH.protocol(k.dp, k.b, k.f);
+    if (S.first) {
+      moveAttack(S); placeHill(S, 'h');
+      setWalls(S, false); paintBoard(S); applyView(S);
+      return;
+    }
+    if (id !== '*') {                                        // a learner's knob: reveal what it acts on
+      if (id === 'dp' && !st.view.attack) st.view.attack = true;
+      if ((id === 'b' || id === 'f') && !st.view.walls) { st.view.walls = true; st.view.attack = true; }
+      if (id !== 'fr') ensureHills(S);
+      st.view.cast = false;
+    }
+    if (prevDp !== k.dp) moveAttack(S);
+    setWalls(S, true);
+    paintBoard(S);
+    applyView(S);
+    if (id === 'fr' && prevFr !== !!k.fr && S.stage && S.stage.refit) S.stage.refit();
+  },
+
+  frame(S, t, dt) {
+    const st = S.state;
+    st.clock += dt;
+    let busy = false;
+    for (const H of ['h', 'a']) if (st.pour[H] && stepPour(S, H)) busy = true;
+    if (st.morph) {
+      st.morph.t += dt;
+      const u = Math.min(1, st.morph.t / 0.6), e = ease(u), f = st.morph.from, tg = st.tgt.a, pos = st.pos.a, mesh = st.bm.a;
+      for (let j = 0; j < 3 * NB; j++) pos[j] = f[j] + (tg[j] - f[j]) * e;
+      for (let i = 0; i < NB; i++) setBead(mesh, i, pos[3 * i], pos[3 * i + 1], pos[3 * i + 2], DB);
+      mesh.instanceMatrix.needsUpdate = true;
+      if (u >= 1) st.morph = null; else busy = true;
+    }
+    if (st.wt) {
+      st.wt.t += dt;
+      const u = Math.min(1, st.wt.t / 0.45), e = ease(u), w = st.wt;
+      st.cur.ta = w.from.ta + (w.to.ta - w.from.ta) * e;
+      st.cur.td = w.from.td + (w.to.td - w.from.td) * e;
+      placeWalls(S);
+      if (u >= 1) { st.cur.defer = w.defer; st.wt = null; applyView(S); } else { paintBeads(S); busy = true; }
+    }
+    return busy;
+  },
+
+  onTier(S) { refresh(S); },
+
+  solids(S) {
+    const st = S.state, out = [];
+    const cub = (x, y, z, sx, sy, sz) => J.primitives.cuboid({ size: [sx, sz, sy], center: [x, -z, y] });   // three (x, y, z) -> JSCAD (x, -z, y)
+    const len = W + 0.12;
+    out.push(cub(0, FLOOR_Y / 2, ZH, len, FLOOR_Y, LANE), cub(0, SHELF_Y / 2, ZA, len, SHELF_Y, LANE));
+    for (const [H, y0, zc] of [['h', FLOOR_Y, ZH], ['a', SHELF_Y, ZA]]) {       // each hill as printable columns
+      if (!st.bm[H].visible) continue;
+      const cnt = new Int32Array(NBIN);
+      for (const s of st.sc[H]) cnt[binOf(s)]++;
+      for (let j = 0; j < NBIN; j++) if (cnt[j]) { const h = Math.ceil(cnt[j] / DEEP) * DB; out.push(cub(colX(j), y0 + h / 2, zc, BIN * XU * 0.92, h, DEEP * DB)); }
+    }
+    if (st.wallA.visible) out.push(cub(xOf(st.cur.ta), WALL_H / 2, 0, 0.03, WALL_H, 2 * WZ));
+    if (st.wallD.visible) out.push(cub(xOf(st.cur.td), DEFER_H / 2, 0, 0.03, DEFER_H, 2 * WZ));
+    out.push(cub(U_AT[0], 0.21, U_AT[2], 0.3, 0.42, 0.26));
+    out.push(cub(T_AT[0], (0.42 + T_AT[1] - 0.1) / 2 + 0.005, T_AT[2], 0.022, T_AT[1] - 0.1 - 0.42 + 0.02, 0.022));
+    const ring = J.primitives.torus({ innerRadius: 0.017, outerRadius: 0.1, innerSegments: 12, outerSegments: 40 });
+    out.push(J.transforms.translate([T_AT[0], -T_AT[2], T_AT[1]], J.transforms.rotateY(Math.PI / 2, ring)));
+    if (st.board.visible) {
+      out.push(cub((BOARD.x0 + BOARD.x1) / 2, (BOARD.y0 + BOARD.y1) / 2, BOARD.z, BOARD.x1 - BOARD.x0, BOARD.y1 - BOARD.y0, 0.04));
+      for (const x of [BOARD.x0 + 0.24, BOARD.x1 - 0.24]) out.push(cub(x, BOARD.y0 / 2, BOARD.z - 0.035, 0.036, BOARD.y0, 0.036));
+      const F = MATH.frontier(S.knobs.dp, S.knobs.b, 60).map(([s, u]) => [bx(s), -(ZF + 0.02), by(u)]);
+      const tube = K.tubeSolid(F, 0.024, 8);
+      if (tube) out.push(tube);
+    }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**AI control:** plan as if the strong model U might be secretly scheming. A weaker model T, which you trust, scores every output for suspicion. Each bead is one output.',
+        2: '**AI control** (Greenblatt et al. 2023): assume the capable model U may be scheming, and build safeguards that work anyway. T, a weaker model we trust, reads each output and scores its suspicion; the bead lands at that score. A human, H, can check only a few.',
+        3: 'Control, not alignment: stay safe even if U (ARENA: claude-sonnet-4.5) runs an attack policy. T (gemini-2.5-flash) rates each solution 1–100 (sus_scorer: N/100); H is trusted human labour, 2% of problems. Beads sit at their score (toy scale).',
+      },
+      cam: CAM.cast,
+      set: { dp: 1.64, b: 0.02, f: 0, fr: false },
+      enter(S) {
+        const st = S.state;
+        st.shown.a = false;
+        scene(S, { attack: false, walls: false, cast: true, pose: 'think' });
+        pour(S, 'h', { delay: 0.35 });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: 'When U slips in an attack, T usually finds it more suspicious, but not always. So the attack hill sits to the right of the honest one, and they overlap. (Toy hills.)',
+        2: '**Two hills (toy model):** honest outputs score like a bell curve; attacks like the same bell shifted right by d′ = 1.64 widths. d′ measures how well T tells them apart. Where the hills overlap, no threshold can separate them.',
+        3: 'Toy binormal model: honest ~ N(0, 1), attack ~ N(d′, 1). d′ = Φ⁻¹(0.98) + Φ⁻¹(0.34) ≈ 1.64 reproduces the TPR ≈ 34% at 2% FPR ARENA [3.5] cites (paper Fig. 4). AUC = Φ(d′/√2) = 0.877. Each bead is a 0.5% quantile slice, not a draw.',
+      },
+      cam: CAM.front,
+      set: { dp: 1.64, b: 0.02, f: 0, fr: false },
+      enter(S) {
+        scene(S, { attack: true, walls: false });
+        if (!S.state.shown.h) pour(S, 'h', { instant: true });
+        pour(S, 'a', { delay: 0.25 });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: 'The human can check 2% of outputs, so the wall goes where only 2% of honest work lies past it: 4 of these 200 beads. It catches 34% of attacks. The rest slip by.',
+        2: '**The budget sets the wall.** Put the audit wall at the honest hill\'s 98th percentile, so false alarms use exactly the 2% budget. Everything past it goes to H (brass), and every attack there is caught: 34.0% of them. The other 66% get through.',
+        3: 'Calibrate on clean scores: τ = 98th percentile (threshold_2pct_fpr), so FPR = 1 − Φ(τ) = 0.02 and TPR = Φ(d′ − τ) = 0.340. With no deferral the first attack decides the run, so toy safety = TPR = 34.0%.',
+      },
+      cam: CAM.front,
+      set: { dp: 1.64, b: 0.02, f: 0, fr: false },
+      enter(S) {
+        ensureHills(S);
+        scene(S, { walls: true, pose: 'point', at: auditZone });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: 'A better monitor pushes the hills apart. Same 2% budget, same wall, but now 83% of attacks land past it. Improving T helps every protocol at once.',
+        2: '**Better monitor = bigger d′.** The attack hill slides right; the honest hill, and so the 2% wall, stay put. At d′ = 3 the same budget catches 82.8% of attacks instead of 34.0%. ARENA: improving the monitor improves all the later protocols.',
+        3: 'At a fixed FPR α, TPR = Φ(d′ − Φ⁻¹(1−α)): in the binormal toy the whole ROC curve is one number, d′. From 1.64 to 3, TPR at 2% goes 0.340 → 0.828 and AUC 0.877 → 0.983. Every protocol routes on this one score.',
+      },
+      cam: CAM.front,
+      set: { dp: 1.64, b: 0.02, f: 0, fr: false },
+      enter(S) {
+        ensureHills(S);
+        scene(S, { walls: true });
+        later(S, 900, () => S.setKnob('dp', 3));
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: 'A second, lower wall: outputs that look fairly suspicious get T\'s own answer instead of U\'s. Fewer attacks get through, but you lose some of U\'s good work. The curve shows the trade.',
+        2: '**Defer to trusted:** between the walls (top 10%, minus the audited 2%) T\'s code is used. Attacks there are blocked, not caught, so safety = caught ÷ (caught + shipped) rises from 34.0% to 48.5% while usefulness falls to 92.0%.',
+        3: 'Toy game: U attacks until one is audited (c = 0.340, blue wins) or one ships (u = 0.360, red wins); deferral (g = 0.300) just resets. Safety = c/(c+u) = 0.485. Usefulness, scaled so T = 0 and U = 1: 1 − (0.10 − 0.02) = 0.920.',
+      },
+      cam: CAM.full,
+      set: { dp: 1.64, b: 0.02, f: 0.10, fr: true },
+      enter(S) {
+        ensureHills(S);
+        scene(S, { walls: true });
+      } },
+
+    { tag: 'exercise',
+      cap: {
+        1: 'In ARENA you write each protocol as a router: audit the output, submit U\'s answer, or swap in T\'s. The brass studs mark the ones you build. Top-right is best.',
+        2: 'ARENA [3.5]: protocol_upfront_auditing, protocol_trusted_monitoring, protocol_defer_to_trusted (top 10%), protocol_trusted_editing (top 20%) each send a problem to audit, U, T or T\'s edit by suspicion rank. Toy safety: upfront 9.5% < monitoring 34.0% < defer 48.5%.',
+        3: 'AUDIT_BUDGET_FRACTION 0.02, DEFER_TO_TRUSTED_FRACTION 0.10, TRUSTED_EDITING_DEFER 0.20; with edit_removes_backdoor_rate 0.7, editing is 49.5% safe here. simulate_safety audits the top 2% after the run at a fixed attack rate, so its numbers run higher.',
+      },
+      cam: CAM.full,
+      set: { dp: 1.64, b: 0.02, f: 0.10, fr: true },
+      enter(S) {
+        ensureHills(S);
+        scene(S, { walls: true, studs: true });
+      } },
+
+    { tag: 'contested',
+      cap: {
+        1: 'These numbers assume we know how the attacker behaves, and that the weak model stays good enough to watch the strong one. Both are open questions.',
+        2: 'Current method: fix the attack hill, set the walls, compute safety. But a smart red team attacks only when its backdoor looks innocent, sliding its hill left (d′ = 1: safety 19.3%), and T must keep up as U improves. Open research.',
+        3: 'The paper optimises the attack policy per protocol (ARENA\'s simulate_safety fixes one): its red team attacks only on good opportunities. Open: monitors U can game, collusion in untrusted monitoring, trusted models keeping pace. Toy numbers show shape, not the paper\'s values.',
+      },
+      cam: CAM.full,
+      set: { dp: 1.64, b: 0.02, f: 0.10, fr: true },
+      enter(S) {
+        ensureHills(S);
+        scene(S, { walls: true, pose: 'shrug' });
+        later(S, 900, () => S.setKnob('dp', 1));
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: 'The same wall is everywhere: spam filters, airport bag checks, cancer screening. A score, a limited number of checks, and two overlapping hills.',
+        2: 'Spam filters, airport security, medical screening and fraud alerts all set a threshold on a score under a checking budget; their ROC curves are this trade-off. So are linear probes: ARENA [1.3.1]\'s deception probe catches 95–99% at 1% false alarms.',
+        3: 'Neyman–Pearson: fix the false-alarm rate, maximise detection; in the equal-variance toy a single threshold is optimal (the likelihood ratio rises with the score). Same maths: ROC/AUC in screening, alert triage, moderation queues, probe monitors.',
+      },
+      cam: CAM.side,
+      set: { dp: 1.64, b: 0.02, f: 0, fr: false },
+      enter(S) {
+        ensureHills(S);
+        scene(S, { walls: true, pose: 'cheer' });
+      } },
+  ],
+
+  predict: [
+    { q: { 1: 'The human gets more time: the budget goes from 2% to 5%, so the audit wall moves left. What happens?',
+        2: 'Audit budget 2% → 5%: the wall moves left. Audits and caught attacks?',
+        3: 'b: 0.02 → 0.05 at d′ = 1.64, no deferral. FPR and TPR?' },
+      options: [{ t: 'More checks, and more attacks caught', ok: true }, { t: 'More checks, same catches' }, { t: 'Fewer false alarms' }, { t: 'Nothing: the hills did not move' }],
+      why: { 1: 'Two and a half times the checks, and the share of attacks caught rises from 34% to 50%. Every step left buys catches with human time.',
+        2: 'False alarms go 2% → 5% (2.5× the audits) and caught attacks 34.0% → 49.8%. Sliding along the ROC curve always trades false alarms for catches.',
+        3: 'τ 2.054 → 1.645; TPR = Φ(d′ − τ): 0.340 → 0.498. The ROC is concave: its slope, the likelihood ratio e^(d′τ − d′²/2), falls from 7.6 to 3.9, so each extra audit buys fewer catches.' },
+      show(S) {
+        S.setKnobs({ dp: 1.64, b: 0.02, f: 0, fr: false });
+        ensureHills(S); scene(S, { walls: true }); S.fly(CAM.front);
+        return wait(S, 700).then(() => { S.setKnob('b', 0.05); return wait(S, 600); });
+      } },
+    { q: { 1: 'A superb monitor: the hills barely overlap (d′ = 5). How much must the human check to catch 99% of attacks?',
+        2: 'd′ = 5. The audit budget needed to catch 99% of attacks?',
+        3: 'd′ = 5: the FPR needed for TPR = 0.99?' },
+      options: [{ t: 'Tiny: under half a percent', ok: true }, { t: 'Still about 2%' }, { t: 'About half of everything' }, { t: 'All of it: attacks can hide anywhere' }],
+      why: { 1: 'Just 0.38% of honest work. With the default toy monitor (d′ = 1.64), catching even 95% would mean checking half of everything.',
+        2: 'Budget = Φ(Φ⁻¹(0.99) − d′) = 0.38%; the 0.5% wall shown catches 99.2%. At d′ = 1.64, catching 95% needs a 50% budget: monitor quality beats budget.',
+        3: 'α = Φ(z₀.₉₉ − d′) = Φ(2.326 − 5) = 0.0038. At d′ = 1.64, TPR 0.95 needs α = Φ(1.645 − 1.64) ≈ 0.50. The binormal ROC hugs the corner as d′ grows.' },
+      show(S) {
+        S.setKnobs({ dp: 1.64, b: 0.02, f: 0, fr: false });
+        ensureHills(S); scene(S, { walls: true }); S.fly(CAM.front);
+        return wait(S, 600).then(() => { S.setKnob('dp', 5); return wait(S, 800); })
+          .then(() => { S.setKnob('b', 0.005); return wait(S, 600); });
+      } },
+    { q: { 1: 'Five times the human time: budget 2% → 10%, no deferral. What happens to safety?',
+        2: 'Trusted monitoring, budget 2% → 10%. Safety, and the cost?',
+        3: 'b: 0.02 → 0.10, f = b, d′ = 1.64. Safety and audits?' },
+      options: [{ t: 'Safety 34% → 64%, for 5× the audits', ok: true }, { t: 'Safety 34% → 100%' }, { t: 'Safety barely moves' }, { t: 'Safety five times higher' }],
+      why: { 1: 'Safety nearly doubles, from 34% to 64%, but the human now checks five times as much work. Human time is the scarce thing this whole setup rations.',
+        2: 'With no deferral, safety = caught = Φ(1.64 − 1.282) = 64.0%, up from 34.0%. Audits per 1,000 problems: 20 → 100. ARENA warns a bigger budget means much more human labour.',
+        3: 'τ 2.054 → 1.282; TPR = safety 0.340 → 0.640 for 5× the audits. Concave ROC: the first 2% of budget bought 34 points, the next 8% only 30 more.' },
+      show(S) {
+        S.setKnobs({ dp: 1.64, b: 0.02, f: 0, fr: false });
+        ensureHills(S); scene(S, { walls: true }); S.fly(CAM.front);
+        return wait(S, 700).then(() => { S.setKnob('b', 0.10); return wait(S, 600); });
+      } },
+    { q: { 1: 'You add a defer wall: the top 10% most suspicious get T\'s answer. Does that catch more attacks?',
+        2: 'Add defer-to-trusted at 10% (the audit stays at 2%). Caught attacks?',
+        3: 'f: 0.02 → 0.10. TPR, and safety?' },
+      options: [{ t: 'No, but safety still rises', ok: true }, { t: 'Yes: deferred attacks count as caught' }, { t: 'No, and safety falls' }, { t: 'It only changes honest work' }],
+      why: { 1: 'Catches stay at 34%: only the human catches. But 30% of attacks now get T\'s answer instead, so fewer ship, and safety rises to 48.5%.',
+        2: 'Caught stays 34.0%; 30.0% of attacks are blocked (swapped, not caught) and 36.0% ship. Safety = 34.0 ÷ (34.0 + 36.0) = 48.5%, for 8% of honest work handed to T.',
+        3: 'c fixed at 0.340; u: 0.660 → 0.360; safety c/(c+u): 0.340 → 0.485; usefulness 1 → 0.920. Deferral raises safety only through u, never through c.' },
+      show(S) {
+        S.setKnobs({ dp: 1.64, b: 0.02, f: 0, fr: true });
+        ensureHills(S); scene(S, { walls: true }); S.fly(CAM.full);
+        return wait(S, 700).then(() => { S.setKnob('f', 0.10); return wait(S, 600); });
+      } },
+    { q: { 1: 'T is useless (d′ = 0): the two hills sit on top of each other. With the 2% budget, how many attacks get caught?',
+        2: 'd′ = 0, audit budget 2%. The catch rate of trusted monitoring?',
+        3: 'd′ = 0: TPR at FPR 0.02, and the AUC?' },
+      options: [{ t: '2%: no better than random checks', ok: true }, { t: '0%' }, { t: '34%, as before' }, { t: '50%: a coin flip' }],
+      why: { 1: 'If T can\'t tell attacks from honest work, the wall catches the same 2% of both. Checking the first 2% of problems would do better here: 9.5% in the toy.',
+        2: 'Caught = false alarms = 2%: the ROC diagonal. A persistent attacker wins 98% of the time. Upfront auditing does better (9.5%), because it forces the attacker to wait.',
+        3: 'TPR = Φ(−τ) = α = 0.02 and AUC = Φ(0) = 0.5. Upfront auditing (9.5%) then beats monitoring (2.0%): random audits let the attacker try at once; upfront ones make it wait.' },
+      show(S) {
+        S.setKnobs({ dp: 1.64, b: 0.02, f: 0, fr: false });
+        ensureHills(S); scene(S, { walls: true }); S.fly(CAM.front);
+        return wait(S, 600).then(() => { S.setKnob('dp', 0); return wait(S, 800); });
+      } },
+    { q: { 1: 'Upfront auditing: the human checks the first 2% of all problems, then nothing. What does a smart attacker do?',
+        2: 'Audit only the first 2% of problems (no monitor). The attacker\'s best play?',
+        3: 'protocol_upfront_auditing, b = 0.02, a long run. Red\'s best attack rate, and safety?' },
+      options: [{ t: 'Attack rarely, so the first try comes after the checks', ok: true }, { t: 'Attack at once, before the checks begin' }, { t: 'Attack every problem' }, { t: 'Give up: 2% of checks is enough' }],
+      why: { 1: 'About 4 tries in the whole run, spread out, so the first one probably lands after the checked start. Toy safety: 9.5%. Watching every output with T does much better.',
+        2: 'Red picks a rate so that P(no attack at all) = x = b^(1/(1−b)): about 4.0 tries. It wins x^b − x = 90.5% of runs: safety 9.5%, against 34.0% for trusted monitoring.',
+        3: 'Red wins iff no attack falls in the first b and one comes later: x^b − x, maximised at x = b^(1/(1−b)) = 0.0185 (−ln x = 3.99 tries). Safety 9.5%; a finite run of 5,000 agrees.' },
+      show(S) {
+        S.setKnobs({ dp: 1.64, b: 0.02, f: 0, fr: true });
+        ensureHills(S); scene(S, { walls: true, studs: true }); S.fly(CAM.full);
+        return wait(S, 900);
+      } },
+  ],
+
+  where: { 1: 'Spam filters, airport bag checks, cancer screening and fraud alerts: each sets a line on a score, and each check costs time. Your own probes work the same way.',
+    2: 'Anywhere a score meets a checking budget: spam, airport security, medical screening, fraud and content moderation. ROC curves draw the trade. In this course: probe-based and LLM monitors.',
+    3: 'Signal detection and Neyman–Pearson testing: ROC/AUC, screening programmes, alert triage, moderation queues. In this course: linear-probe monitors ([1.3.1]), LLM scorers, and every AI control protocol.' },
+  links: [
+    { label: 'Film · evals, deep', href: '../../intuition/films/deep-w11-evals.html' },
+    { label: 'Film · W11 evals', href: '../../intuition/films/w11-evals.html' },
+    { label: 'Week 11 pack', href: '../../index.html#week-11' },
+    { label: 'Demo · evals pipeline', href: '../../index.html#demo/evals-pipeline' },
+    { label: 'Case · AI control', href: '../../index.html#cases/ai-control' },
+    { label: 'Case · trusted monitoring', href: '../../index.html#cases/trusted-monitoring' },
+    { label: 'Case · the safety–usefulness Pareto', href: '../../index.html#cases/safety-usefulness-pareto' },
+    { label: 'Case · trusted editing', href: '../../index.html#cases/trusted-editing' },
+    { label: 'Case · backdoor generation', href: '../../index.html#cases/backdoor-generation' },
+    { label: 'Map · AI control', href: '../../index.html#map/node=ai-control' },
+    { label: 'Map · trusted monitoring', href: '../../index.html#map/node=trusted-monitoring' },
+    { label: 'Map · suspiciousness score', href: '../../index.html#map/node=suspiciousness-score' },
+    { label: 'Map · defer to trusted', href: '../../index.html#map/node=defer-to-trusted' },
+    { label: 'Map · safety–usefulness frontier', href: '../../index.html#map/node=safety-usefulness-frontier' },
+    { label: 'Map · upfront auditing', href: '../../index.html#map/node=upfront-auditing' },
+    { label: 'Object · The bean machine', href: 'w11-beans.html' },
+  ],
+  remix: 'Build a single-file three.js "threshold wall" for AI control on a round plinth: a plaster track whose length is a suspicion-score axis, with two hills of stacked beads built from exact quantiles of a toy model (200 honest outputs at the quantiles of N(0,1) in a front lane, 200 attack outputs at the quantiles of N(d\',1) on a raised shelf behind). A glass-and-brass audit wall stands at the honest (1 - b) quantile, so exactly a share b of honest beads lies past it; beads past it turn brass (audited). A lower teal defer-to-trusted wall at the (1 - f) quantile fades the beads between the walls (T\'s answer is used). Compute everything exactly with the normal CDF: caught c = Phi(d\' - tau_a), shipped u = Phi(tau_d - d\'), safety c/(c+u), usefulness 1 - (f - b) with T = 0 and U = 1. On a plaster board behind, draw the safety-usefulness frontier as an amber tube with a dot at the current setting and brass studs for upfront auditing, trusted monitoring, defer 10% and T-only. Sliders for d\' (0-5), audit budget (0.5-20%) and defer share (0-60%), a frontier toggle, a stick-figure human auditor, and a box and ring for the untrusted and trusted models that pour the beads.',
+  credit: 'AI control framing, protocols and the safety and usefulness definitions: Greenblatt et al., "AI Control: Improving Safety Despite Intentional Subversion" (2023), as taught in ARENA [3.5] (protocol names, AUDIT_BUDGET_FRACTION, DEFER_TO_TRUSTED_FRACTION, TRUSTED_EDITING_DEFER, edit_removes_backdoor_rate, TPR ≈ 34% at 2% FPR). The two hills are the page\'s own toy (equal-variance signal detection, d′); every number is exact for it (Φ: Hart 1968 via West 2005; Φ⁻¹: Acklam). Deception-probe figures: Goldowsky-Dill et al. (2025) via ARENA [1.3.1]. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

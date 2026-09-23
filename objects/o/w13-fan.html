@@ -1,0 +1,1019 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Fan · Object Lessons</title>
+<meta name="description" content="Resample a chain of thought from each sentence and see which one the answer hangs on: ARENA [4.3]'s forced-answer, resampling and counterfactual importance, computed live from seeded rollouts of a stated toy model, with 95% error bars.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+/* .k-tag (the beat pill) sets min-width:52px, which leaks into K.label({cls:'tag'}) labels */
+.k-label.k-tag{min-width:0}
+.k-label.k-beadnum{color:#fff; font:800 10px/1 var(--font); letter-spacing:0; text-transform:none; text-shadow:0 1px 1px rgba(0,0,0,.35)}
+.k-label.k-pad{font:700 12px/1.15 var(--font); padding:2px 7px; font-variant-numeric:tabular-nums}
+.k-label.k-pad.k-ok{border-color:color-mix(in srgb, #2f9e6b 55%, var(--rule)); color:color-mix(in srgb, #2f9e6b 75%, var(--ink))}
+.k-label.k-pad.k-no{border-color:color-mix(in srgb, #d64545 50%, var(--rule)); color:color-mix(in srgb, #d64545 72%, var(--ink))}
+.k-label.k-cat{color:var(--k-brass, #b58a3c)}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   26 · w13-fan: "The fan" (W13, ARENA [4.3] Interpreting Reasoning: Thought Anchors)
+   A toy chain of thought (stated menus of rewrites below) is resampled from every
+   sentence with seeded draws. The importance metrics are ARENA's own functions,
+   line for line; the error bars are 95% Wilson/Newcombe intervals. The MATH block
+   is extracted and verified in node + an independent Python check (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* The toy (stated, not a real model): a 9-sentence chain of thought for ARENA's case-study
+   problem "66666 (base 16) written in base 2: how many bits?" (answer 19). When the model
+   rewrites from sentence i it keeps sentences 1..i-1 and draws a new sentence i from a small
+   menu; each menu item is one of:
+     para   = the same idea in other words (toy cosine similarity >= 0.8): the story goes on
+              exactly as the original would, so sentence i+1 is then rewritten the same way;
+     detour = different words (cosine < 0.8) but the story rejoins the original ideas;
+     fork   = a genuinely different idea: the rollout leaves the original path and ends at an
+              answer drawn from that fork's own distribution q = [P(19), P(20), P(other)].
+   A rollout that never forks reaches the end and answers 19, like the original trace.
+   The cosine numbers are made up for the toy (ARENA embeds with all-MiniLM-L6-v2). */
+const ANSWERS = ['19', '20', 'other'];
+const CORRECT = 0;
+const SENTS = [
+  { n: 1, cat: 'problem_setup', text: 'I need the bit length of 66666₁₆.', v: [
+    { kind: 'para', p: 0.70, cos: 0.91, text: 'So: how many bits is 66666₁₆?' },
+    { kind: 'detour', p: 0.26, cos: 0.62, text: 'Hex is base 16, binary base 2.' },
+    { kind: 'fork', p: 0.04, cos: 0.34, text: 'Read 66666 as a decimal number.', q: [0.05, 0.02, 0.93] }] },
+  { n: 2, cat: 'fact_retrieval', text: 'Each hex digit is exactly 4 bits.', v: [
+    { kind: 'para', p: 0.70, cos: 0.93, text: 'One hex digit = 4 binary digits.' },
+    { kind: 'detour', p: 0.30, cos: 0.66, text: '16 = 2⁴, so hex maps onto binary.' }] },
+  { n: 3, cat: 'plan_generation', text: "I'll write each digit in binary.", v: [
+    { kind: 'para', p: 0.15, cos: 0.89, text: 'Let me spell it out in binary.' },
+    { kind: 'fork', p: 0.65, cos: 0.41, text: 'So 5 digits × 4 = 20 bits.', q: [0.05, 0.90, 0.05] },
+    { kind: 'fork', p: 0.20, cos: 0.36, text: 'Or go via decimal: 419,430.', q: [0.75, 0.05, 0.20] }] },
+  { n: 4, cat: 'active_computation', text: '6 = 0110: 0110 0110 0110 0110 0110.', v: [
+    { kind: 'para', p: 0.90, cos: 0.95, text: 'That gives 0110 0110 0110 0110 0110.' },
+    { kind: 'detour', p: 0.10, cos: 0.68, text: 'Each 6 becomes 0110.' }] },
+  { n: 5, cat: 'uncertainty_management', text: 'Wait: that first 0 is a leading zero.', v: [
+    { kind: 'para', p: 0.20, cos: 0.85, text: "Hmm, leading zeros don't count." },
+    { kind: 'detour', p: 0.10, cos: 0.64, text: 'Hold on, let me recount.' },
+    { kind: 'fork', p: 0.45, cos: 0.24, text: "That's 20 digits: 20 bits.", q: [0.04, 0.94, 0.02] },
+    { kind: 'fork', p: 0.25, cos: 0.42, text: 'Let me check with powers of 2.', q: [0.85, 0.07, 0.08] }] },
+  { n: 6, cat: 'active_computation', text: 'Drop it: 110 0110 0110 0110 0110.', v: [
+    { kind: 'para', p: 0.80, cos: 0.93, text: 'So: 110 0110 0110 0110 0110.' },
+    { kind: 'detour', p: 0.20, cos: 0.71, text: 'The top digit needs only 3 bits.' }] },
+  { n: 7, cat: 'result_consolidation', text: "That's 3 + 4 × 4 = 19 bits.", v: [
+    { kind: 'para', p: 0.85, cos: 0.90, text: '3 + 16 = 19 bits in total.' },
+    { kind: 'detour', p: 0.15, cos: 0.66, text: "That's 20 − 1 = 19." }] },
+  { n: 8, cat: 'self_checking', text: 'Check: 2¹⁸ ≤ 419,430 < 2¹⁹ ✓', v: [
+    { kind: 'para', p: 0.40, cos: 0.88, text: 'Check: 419,430 < 524,288 = 2¹⁹ ✓' },
+    { kind: 'detour', p: 0.50, cos: 0.52, text: 'No need to check further.' },
+    { kind: 'fork', p: 0.10, cos: 0.35, text: 'Hmm, but 5 × 4 is 20…', q: [0.60, 0.35, 0.05] }] },
+  { n: 9, cat: 'final_answer_emission', text: 'The answer is 19.', v: [
+    { kind: 'para', p: 0.97, cos: 0.93, text: 'Final answer: 19 bits.' },
+    { kind: 'detour', p: 0.03, cos: 0.79, text: 'So we get 19.' }] },
+];
+const N = SENTS.length;
+/* Forced answer (ARENA metric 1): interrupt right before sentence c+1 and force
+   "Therefore, the final answer is \boxed{...}". FORCED[c] = [P(19), P(20), P(other)]. Toy numbers. */
+const FORCED = [[0.10, 0.35, 0.55], [0.10, 0.40, 0.50], [0.08, 0.75, 0.17], [0.09, 0.73, 0.18],
+  [0.03, 0.95, 0.02], [0.30, 0.66, 0.04], [0.90, 0.07, 0.03], [0.97, 0.02, 0.01], [0.99, 0.01, 0.00]];
+const SIMILARITY_THRESHOLD = 0.8;           // ARENA [4.3]: discard rewrites with cosine >= 0.8
+const MIN_SAMPLES = 5;                      // ARENA: calculate_counterfactual_importance(min_samples=5)
+const Z95 = 1.959963984540054;
+
+/* seeded uniform RNG (mulberry32, the same generator as K.rng) */
+function mulberry32(seed) {
+  let a = (seed >>> 0) || 1;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+/* one independent stream per (seed, cut, kind) */
+const streamSeed = (seed, cut, kind) => (Math.imul(seed + 1, 2654435761) ^ Math.imul(cut + 1, 40503) ^ (kind === 'forced' ? 0x5bd1e995 : 0x1b873593)) >>> 0;
+function pickIndex(probs, u) {
+  let c = 0;
+  for (let i = 0; i < probs.length; i++) { c += probs[i]; if (u < c) return i; }
+  return probs.length - 1;
+}
+
+/* One rollout: keep sentences before cut c (0-based: rewrite from sentence c+1). Returns the
+   menu item drawn at each rewritten position until it forks, where it forked (N = never) and
+   the final answer (index into ANSWERS). */
+function rollout(c, rnd) {
+  const path = [];
+  for (let pos = c; pos < N; pos++) {
+    const menu = SENTS[pos].v;
+    const vi = pickIndex(menu.map((m) => m.p), rnd());
+    path.push(vi);
+    if (menu[vi].kind === 'fork') {
+      const a = pickIndex(menu[vi].q, rnd());
+      return { cut: c, path, depart: pos, answer: a, cos: SENTS[c].v[path[0]].cos };
+    }
+  }
+  return { cut: c, path, depart: N, answer: CORRECT, cos: SENTS[c].v[path[0]].cos };
+}
+function rolloutsAt(c, K, seed) {
+  const rnd = mulberry32(streamSeed(seed, c, 'resample'));
+  const out = [];
+  for (let j = 0; j < K; j++) out.push(rollout(c, rnd));
+  return out;
+}
+function forcedAt(c, K, seed) {
+  const rnd = mulberry32(streamSeed(seed, c, 'forced'));
+  const out = [];
+  for (let j = 0; j < K; j++) out.push({ cut: c, answer: pickIndex(FORCED[c], rnd()) });
+  return out;
+}
+
+/* Exact answer distribution when rewriting from cut c (what infinitely many rollouts give). */
+function exactDist(c) {
+  if (c >= N) return [1, 0, 0];
+  const next = exactDist(c + 1), out = [0, 0, 0];
+  for (const m of SENTS[c].v) {
+    const d = m.kind === 'fork' ? m.q : next;
+    for (let a = 0; a < 3; a++) out[a] += m.p * d[a];
+  }
+  return out;
+}
+/* Exact P(correct | the first rewritten sentence has cosine < threshold): the K -> infinity
+   value of the filtered rate at cut c (null if nothing passes the filter). */
+function exactFiltered(c, threshold = SIMILARITY_THRESHOLD) {
+  const next = exactDist(c + 1);
+  let num = 0, den = 0;
+  for (const m of SENTS[c].v) {
+    if (m.cos >= threshold) continue;
+    den += m.p;
+    num += m.p * (m.kind === 'fork' ? m.q[CORRECT] : next[CORRECT]);
+  }
+  return den > 0 ? num / den : null;
+}
+const diff = (a) => a.slice(1).map((x, i) => x - a[i]);                    // np.diff
+
+/* ARENA [4.3] calculate_answer_importance, line for line:
+   probabilities[i] = P(correct) over the rollouts at position i; return np.diff(probabilities).
+   Used on forced rollouts (forced answer importance) and on resampled ones (resampling importance). */
+function calculate_answer_importance(answerLists, answer = CORRECT) {
+  const probabilities = answerLists.map((list) => list.filter((a) => a === answer).length / list.length);
+  return diff(probabilities);
+}
+/* ARENA [4.3] calculate_counterfactual_importance, line for line: keep the rollouts whose first
+   resampled chunk has cosine < threshold (get_filtered_indices); P(success) over those if at
+   least min_samples survive, else None; pd.Series(probabilities).ffill().bfill(); np.diff. */
+function calculate_counterfactual_importance(cosLists, answerLists, threshold = SIMILARITY_THRESHOLD, min_samples = MIN_SAMPLES, answer = CORRECT) {
+  const probabilities = [], n = [], k = [];
+  for (let i = 0; i < cosLists.length; i++) {
+    const idx = [];
+    cosLists[i].forEach((cs, j) => { if (cs < threshold) idx.push(j); });
+    const kk = idx.filter((j) => answerLists[i][j] === answer).length;
+    n.push(idx.length); k.push(kk);
+    probabilities.push(idx.length >= min_samples ? kk / idx.length : null);
+  }
+  const filled = probabilities.map((p) => p == null);
+  const ff = probabilities.slice();
+  for (let i = 1; i < ff.length; i++) if (ff[i] == null) ff[i] = ff[i - 1];      // .ffill()
+  for (let i = ff.length - 2; i >= 0; i--) if (ff[i] == null) ff[i] = ff[i + 1]; // .bfill()
+  return { importance: diff(ff), probabilities: ff, filled, n, k };
+}
+
+/* Wilson score interval for k successes in n (ARENA [4.2] plots 95% Wilson intervals). */
+function wilson(k, n, z = Z95) {
+  if (n <= 0) return [0, 1];
+  const p = k / n, z2 = z * z, den = 1 + z2 / n;
+  const centre = (p + z2 / (2 * n)) / den;
+  const half = (z / den) * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n));
+  return [Math.max(0, centre - half), Math.min(1, centre + half)];
+}
+/* Newcombe (1998) hybrid score interval for p1 - p0 from two independent samples. */
+function newcombe(k1, n1, k0, n0, z = Z95) {
+  const p1 = k1 / n1, p0 = k0 / n0, d = p1 - p0;
+  const [l1, u1] = wilson(k1, n1, z), [l0, u0] = wilson(k0, n0, z);
+  return [d - Math.sqrt((p1 - l1) ** 2 + (u0 - p0) ** 2), d + Math.sqrt((u1 - p1) ** 2 + (p0 - l0) ** 2)];
+}
+
+/* Everything the page shows, for one (K, seed): per metric, per cut: k correct of n, and per
+   sentence (1..8): importance, its 95% interval, and the exact toy value. */
+function analyse(K, seed) {
+  const R = [], F = [];
+  for (let c = 0; c < N; c++) { R.push(rolloutsAt(c, K, seed)); F.push(forcedAt(c, K, seed)); }
+  const ansR = R.map((l) => l.map((r) => r.answer)), ansF = F.map((l) => l.map((r) => r.answer));
+  const cosR = R.map((l) => l.map((r) => r.cos));
+  const kOf = (l) => l.filter((a) => a === CORRECT).length;
+  const exactR = []; for (let c = 0; c <= N; c++) exactR.push(exactDist(c)[CORRECT]);
+  const exactC = []; for (let c = 0; c < N; c++) exactC.push(exactFiltered(c));
+  const out = { K, seed, R, F };
+  // forced answer importance and resampling importance: same function, different rollouts
+  for (const [id, ans, ex] of [['forced', ansF, FORCED.map((f) => f[CORRECT])], ['resample', ansR, exactR.slice(0, N)]]) {
+    const imp = calculate_answer_importance(ans);
+    const k = ans.map(kOf), n = ans.map((l) => l.length);
+    out[id] = { k, n, p: k.map((x, i) => x / n[i]), filled: k.map(() => false), imp,
+      ci: imp.map((_, i) => newcombe(k[i + 1], n[i + 1], k[i], n[i])), exact: diff(ex) };
+  }
+  const cf = calculate_counterfactual_importance(cosR, ansR);
+  out.cf = { k: cf.k, n: cf.n, p: cf.probabilities, filled: cf.filled, imp: cf.importance,
+    ci: cf.importance.map((_, i) => (cf.filled[i] || cf.filled[i + 1]) ? null : newcombe(cf.k[i + 1], cf.n[i + 1], cf.k[i], cf.n[i])),
+    exact: diff(exactC) };
+  return out;
+}
+const MATH = { ANSWERS, CORRECT, SENTS, N, FORCED, SIMILARITY_THRESHOLD, MIN_SAMPLES, Z95, mulberry32, streamSeed,
+  pickIndex, rollout, rolloutsAt, forcedAt, exactDist, exactFiltered, diff, calculate_answer_importance,
+  calculate_counterfactual_importance, wilson, newcombe, analyse };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const DEFAULT_SEED = 56;               // a typical draw: at K = 100 every 95% whisker covers its exact value
+const BEAD_R = 0.095;
+const SCALE = 1.5;                     // world height of a bar per unit of importance
+const STR_R = 0.0052;                  // fan string radius
+const LAND_R = 0.019, SLOT = 0.05;     // landing beads on the answer tiles (10 x 10 waffle)
+const PAD_H = 0.05;
+const ANS_COL = [C.good, C.grad, '#978f82'];
+const CAT = {                          // ARENA's taxonomy names, plus plain words for tiers 1-2
+  problem_setup: { 1: 'setting up', 2: 'problem setup' }, fact_retrieval: { 1: 'a fact', 2: 'fact retrieval' },
+  plan_generation: { 1: 'a plan', 2: 'plan generation' }, active_computation: { 1: 'working it out', 2: 'computation' },
+  uncertainty_management: { 1: 'a doubt', 2: 'uncertainty management' }, result_consolidation: { 1: 'summing up', 2: 'result consolidation' },
+  self_checking: { 1: 'a check', 2: 'self-checking' }, final_answer_emission: { 1: 'the answer', 2: 'final answer' },
+};
+const catName = (cat) => ({ 1: CAT[cat][1], 2: CAT[cat][2], 3: cat });
+const CAT_BEADS = [2, 4];               // the two anchors (0-based): the plan and the doubt
+
+/* the chain lies on an elliptic arc at the back of the plinth; the answer tiles sit in front */
+const ARC = { ax: 1.95, bz: 1.02, zc: -0.22, phi0: 196, phi1: 344, y0: 1.08, dy: 0.03 };
+const arcXZ = (deg) => { const p = deg * Math.PI / 180; return [ARC.ax * Math.cos(p), ARC.zc + ARC.bz * Math.sin(p)]; };
+const BEADS = SENTS.map((_, j) => {
+  const [x, z] = arcXZ(ARC.phi0 + (ARC.phi1 - ARC.phi0) * j / (N - 1));
+  return new THREE.Vector3(x, ARC.y0 + ARC.dy * j, z);
+});
+const Q_POS = (() => { const [x, z] = arcXZ(ARC.phi0 - 17); return new THREE.Vector3(x, 0, z); })();
+const Q_TOP = new THREE.Vector3(Q_POS.x, ARC.y0 - 0.04, Q_POS.z);
+const END = (() => { const [x, z] = arcXZ(ARC.phi1 + 13); return new THREE.Vector3(x, ARC.y0 + ARC.dy * N, z); })();
+const CURVE = new THREE.CatmullRomCurve3([Q_TOP, ...BEADS, END], false, 'centripetal');
+const NP = N + 2;                                            // control points: question, 9 beads, end
+const tBead = (j) => (j + 1) / (NP - 1);                     // CatmullRom getPoint is uniform per segment
+const tCut = (c) => (c + 0.5) / (NP - 1);                    // the gap just before bead c
+const radial = (p) => new THREE.Vector3(p.x, 0, p.z - ARC.zc).normalize();
+const PADS = [
+  { pos: new THREE.Vector3(0, 0, 1.22) },
+  { pos: new THREE.Vector3(-1.0, 0, 0.97) },
+  { pos: new THREE.Vector3(1.0, 0, 0.97) },
+].map((P) => {
+  const back = new THREE.Vector3(-P.pos.x, 0, ARC.zc - P.pos.z).normalize();
+  const right = new THREE.Vector3(-back.z, 0, back.x);
+  return { ...P, back, right, yaw: Math.atan2(-back.x, -back.z) };
+});
+const FIG_AT = [-1.72, 0, 1.18];
+const CAM = {
+  front: { pos: [0.3, 4.3, 7.6], target: [0, 0.75, -0.05] },
+  fan: { pos: [3.2, 4.6, 6.6], target: [0.15, 0.7, -0.1] },
+  bars: { pos: [-0.9, 3.2, 6.8], target: [0, 1.05, -0.4] },
+  high: { pos: [0.2, 6.9, 5.2], target: [0, 0.6, 0] },
+  left: { pos: [-4.2, 4.0, 6.0], target: [-0.1, 0.75, -0.1] },
+  wide: { pos: [2.4, 4.8, 7.4], target: [0, 0.7, 0] },
+};
+const f2 = (v) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(2);
+const pct = (k, n) => (n ? Math.round(100 * k / n) : 0) + '%';
+const smooth = (x) => x * x * (3 - 2 * x);
+const wait = (S, ms) => (S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)));
+
+/* ======================================================== tube batching */
+
+/* Many thin strings in one geometry per colour (a few draw calls, rebuilt only on knob change). */
+class TubeBatch {
+  constructor() { this.pos = []; this.nor = []; this.idx = []; this.nv = 0; }
+  get count() { return this.idx.length; }
+  add(pts, r, sides = 4) {
+    const n = pts.length;
+    if (n < 2) return;
+    const T = pts.map((_, k) => new THREE.Vector3().subVectors(pts[Math.min(n - 1, k + 1)], pts[Math.max(0, k - 1)]).normalize());
+    const nr = Math.abs(T[0].y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    nr.addScaledVector(T[0], -nr.dot(T[0])).normalize();
+    const bn = new THREE.Vector3();
+    for (let k = 0; k < n; k++) {
+      if (k > 0) {                                            // parallel transport of the normal
+        nr.addScaledVector(T[k], -nr.dot(T[k]));
+        if (nr.lengthSq() < 1e-10) nr.set(0, 1, 0).addScaledVector(T[k], -T[k].y);
+        nr.normalize();
+      }
+      bn.crossVectors(T[k], nr);
+      for (let s = 0; s < sides; s++) {
+        const a = (s / sides) * Math.PI * 2, cs = Math.cos(a), sn = Math.sin(a);
+        const dx = nr.x * cs + bn.x * sn, dy = nr.y * cs + bn.y * sn, dz = nr.z * cs + bn.z * sn;
+        this.pos.push(pts[k].x + r * dx, pts[k].y + r * dy, pts[k].z + r * dz);
+        this.nor.push(dx, dy, dz);
+      }
+    }
+    const b0 = this.nv;
+    for (let k = 0; k < n - 1; k++) for (let s = 0; s < sides; s++) {
+      const a = b0 + k * sides + s, b = b0 + k * sides + ((s + 1) % sides);
+      this.idx.push(a, b, a + sides, b, b + sides, a + sides);
+    }
+    this.nv += n * sides;
+  }
+  geometry() {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.nor, 3));
+    g.setIndex(this.idx);
+    g.computeBoundingSphere();
+    return g;
+  }
+}
+
+/* ======================================================== object behaviour */
+
+function slotPos(a, m) {                         // m-th landing on tile a: a 10 x 10 waffle, back row first
+  const P = PADS[a], col = m % 10, row = Math.floor(m / 10) % 10;
+  return P.pos.clone().addScaledVector(P.right, (col - 4.5) * SLOT).addScaledVector(P.back, (4.5 - row) * SLOT)
+    .setY(PAD_H + LAND_R * 0.8);
+}
+
+/* A resampled rollout's string: it hugs the chain while its sentences keep the original ideas
+   (a detour loops outward at that bead), leaves just before the bead where it forks, and flies
+   to its landing spot. Never forking = running to the end = the original answer, 19. */
+function rolloutPath(r, c, L, rnd) {
+  const t0 = tCut(c), forked = r.depart < N;
+  const t1 = forked ? tBead(r.depart) - 0.034 : 1;
+  const ang = rnd() * Math.PI * 2, rad = 0.008 + 0.03 * Math.sqrt(rnd());
+  const ox = Math.cos(ang) * rad, oy = Math.sin(ang) * rad;
+  const pts = [];
+  const steps = Math.max(2, Math.ceil((t1 - t0) / 0.008));
+  for (let s = 0; s <= steps; s++) {
+    const t = t0 + (t1 - t0) * s / steps;
+    const p = CURVE.getPoint(t), out = radial(p);
+    const ramp = smooth(Math.min(1, (t - t0) / 0.035));
+    let bump = 0;
+    for (let k = c; k < Math.min(r.depart, N); k++) {
+      if (SENTS[k].v[r.path[k - c]].kind === 'detour') bump += 0.11 * Math.exp(-(((t - tBead(k)) / 0.02) ** 2));
+    }
+    p.addScaledVector(out, ox * ramp + bump);
+    p.y += oy * ramp;
+    pts.push(p);
+  }
+  flyTo(pts, L, rnd, 0.5);
+  return pts;
+}
+function forcedPath(c, L, rnd) {                 // a forced answer: straight from the cut to its tile
+  const p = CURVE.getPoint(tCut(c));
+  const pts = [p];
+  flyTo(pts, L, rnd, 0.32);
+  return pts;
+}
+function flyTo(pts, L, rnd, reach) {
+  const H = pts[pts.length - 1];
+  const dir = new THREE.Vector3(L.x - H.x, 0, L.z - H.z).normalize();
+  const P1 = H.clone().addScaledVector(dir, reach).add(new THREE.Vector3(0, 0.12, 0));
+  const P2 = L.clone().add(new THREE.Vector3(0, 0.45 + 0.3 * rnd(), 0));
+  const bez = new THREE.CubicBezierCurve3(H.clone(), P1, P2, L.clone());
+  for (let s = 1; s <= 22; s++) pts.push(bez.getPoint(s / 22));
+}
+
+function compute(S) {
+  const st = S.state;
+  st.A = MATH.analyse(S.knobs.K, st.seed);
+}
+
+/* the fan for the current cut: every rollout of that cut, one string each */
+function buildFan(S) {
+  const st = S.state, k = S.knobs, metric = k.metric;
+  const i = k.sent, keep = k.keep && i < N;
+  const c = keep ? i : i - 1;                   // 0-based cut: the model rewrites from sentence c + 1
+  st.cut = c; st.keepOn = keep;
+  for (const m of st.fanMeshes) m.geometry.dispose();
+  const rolls = metric === 'forced' ? st.A.F[c] : st.A.R[c];
+  const rnd = MATH.mulberry32(7919 + 131 * c + 17 * st.seed + (metric === 'forced' ? 5 : 0));   // display jitter only
+  const B = [new TubeBatch(), new TubeBatch(), new TubeBatch(), new TubeBatch()];               // 19, 20, other, filtered
+  const cum = [[0], [0], [0], [0]], slot = [0, 0, 0];
+  st.landings = []; st.cumLand = [0]; st.rollAns = [];
+  rolls.forEach((r) => {
+    const ghost = metric === 'cf' && r.cos >= SIMILARITY_THRESHOLD;
+    let L;
+    if (ghost) {
+      const P = PADS[r.answer];
+      L = P.pos.clone().addScaledVector(P.right, (rnd() - 0.5) * 0.4).addScaledVector(P.back, (rnd() - 0.5) * 0.4).setY(PAD_H + 0.01);
+    } else {
+      L = slotPos(r.answer, slot[r.answer]++);
+      st.landings.push({ pos: L, a: r.answer });
+    }
+    const pts = metric === 'forced' ? forcedPath(c, L, rnd) : rolloutPath(r, c, L, rnd);
+    B[ghost ? 3 : r.answer].add(pts, ghost ? STR_R * 0.8 : STR_R);
+    for (let g = 0; g < 4; g++) cum[g].push(B[g].count);
+    st.cumLand.push(st.landings.length);
+    st.rollAns.push(ghost ? -1 : r.answer);
+  });
+  st.fanMeshes.forEach((m, g) => { m.geometry = B[g].geometry(); });
+  st.fanCum = cum;
+  // landing beads (instanced, in rollout order)
+  const im = st.land, col = new THREE.Color(), M4 = new THREE.Matrix4();
+  st.landings.forEach((L, j) => {
+    M4.makeScale(LAND_R, LAND_R, LAND_R).setPosition(L.pos);
+    im.setMatrixAt(j, M4);
+    im.setColorAt(j, col.set(ANS_COL[L.a]));
+  });
+  im.instanceMatrix.needsUpdate = true;
+  if (im.instanceColor) im.instanceColor.needsUpdate = true;
+  // cut ring on the wire, kept prefix solid, the rewritten part glassy
+  const pc = CURVE.getPoint(tCut(c)), tg = CURVE.getTangent(tCut(c));
+  st.cutRing.position.copy(pc);
+  st.cutRing.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tg);
+  st.cutRing.visible = st.fanOn;
+  paintBeads(S);
+  startReveal(S, rolls.length);
+}
+
+function startReveal(S, n) {
+  const st = S.state;
+  st.revN = n;
+  if (S.shot || !st.fanOn) { st.rev = n; st.revealing = false; applyReveal(S); return; }
+  st.rev = 0; st.revT0 = null; st.revealing = true;
+  applyReveal(S);
+}
+function applyReveal(S) {
+  const st = S.state, r = Math.max(0, Math.min(st.revN, Math.floor(st.rev)));
+  st.fanMeshes.forEach((m, g) => { m.geometry.setDrawRange(0, st.fanCum[g][r]); m.visible = st.fanOn; });
+  st.land.count = st.cumLand[r];
+  st.land.visible = st.fanOn;
+  const cnt = [0, 0, 0];
+  for (let j = 0; j < r; j++) if (st.rollAns[j] >= 0) cnt[st.rollAns[j]]++;
+  st.padCount = cnt; st.padShown = r;
+  paintPads(S);
+}
+
+/* the importance bars: one per sentence 1..8, green up / red down, ink 95% whisker, teal ring = exact */
+function drawBars(S, animate) {
+  const st = S.state, X = st.A[S.knobs.metric];
+  const on = S.knobs.bars;
+  const from = st.barVal.slice();
+  const to = X.imp.map((v) => v);
+  st.barTo = to; st.barCI = X.ci; st.barExact = X.exact;
+  st.barCopied = X.imp.map((_, j) => !!(X.filled[j] || X.filled[j + 1]));
+  const apply = (e) => {
+    for (let j = 0; j < N - 1; j++) {
+      const v = from[j] + (to[j] - from[j]) * e;
+      st.barVal[j] = v;
+      const b = st.bars[j], h = Math.max(0.006, Math.abs(v) * SCALE), y0 = BEADS[j].y;
+      b.bar.scale.set(1, h, 1);
+      b.bar.position.y = v >= 0 ? y0 + h / 2 : y0 - h / 2;
+      b.bar.material = st.barCopied[j] ? st.mat.copied : (v >= 0 ? st.mat.up : st.mat.down);
+      b.group.visible = on;
+    }
+  };
+  for (let j = 0; j < N - 1; j++) {
+    const b = st.bars[j], ci = st.barCI[j], y0 = BEADS[j].y;
+    const showW = on && !!ci;
+    b.whisker.visible = b.capLo.visible = b.capHi.visible = showW;
+    if (ci) {
+      const lo = y0 + ci[0] * SCALE, hi = y0 + ci[1] * SCALE;
+      b.whisker.scale.set(1, Math.max(0.004, hi - lo), 1);
+      b.whisker.position.y = (lo + hi) / 2;
+      b.capLo.position.y = lo; b.capHi.position.y = hi;
+    }
+    b.ring.visible = on && S.knobs.truth && st.barExact[j] != null;
+    if (st.barExact[j] != null) b.ring.position.y = y0 + st.barExact[j] * SCALE;
+  }
+  if (animate && !S.shot && on) S.tween(460, apply, K.ease.out);
+  else apply(1);
+}
+
+function paintBeads(S) {
+  const st = S.state, i = S.knobs.sent;
+  BEADS.forEach((_, j) => {
+    const rewritten = st.fanOn && j >= st.cut;
+    st.beads[j].material = rewritten ? st.mat.beadGlass : st.mat.bead;
+    st.beads[j].scale.setScalar(BEAD_R * (j === i - 1 ? 1.32 : 1));
+  });
+  st.halo.position.copy(BEADS[i - 1]);
+  st.halo.visible = true;
+}
+
+/* ---------------------------------------------------------------- labels */
+function paintPads(S) {
+  const st = S.state, n = st.padCount || [0, 0, 0];
+  if (!st.fanOn) {             // the original trace alone: just name the tiles
+    st.padTags[0].set({ 1: '**19** right', 2: '**19** ✓', 3: '**19** ✓' }).show(true);
+    st.padTags[1].set({ 1: '**20** wrong', 2: '**20** ✗', 3: '**20** ✗' }).show(true);
+    st.padTags[2].set('other').show(true);
+    return;
+  }
+  const cf = S.knobs.metric === 'cf';
+  const tot = n[0] + n[1] + n[2];
+  st.padTags[0].set({ 1: `**19** right · ${n[0]}`, 2: `**19** ✓ · ${n[0]}`, 3: `**19** ✓ ${n[0]}${cf ? '/' + tot : ''}` }).show(st.fanOn);
+  st.padTags[1].set({ 1: `**20** wrong · ${n[1]}`, 2: `**20** ✗ · ${n[1]}`, 3: `**20** ✗ ${n[1]}` }).show(st.fanOn);
+  st.padTags[2].set({ 1: `other · ${n[2]}`, 2: `other · ${n[2]}`, 3: `other ${n[2]}` }).show(st.fanOn);
+  if (st.noteMode) paintNote(S);
+}
+
+function paintNote(S) {
+  const st = S.state, k = S.knobs, mode = st.noteMode, i = k.sent, s = SENTS[i - 1];
+  const X = st.A[k.metric];
+  paintCats(S);
+  if (!mode) { st.note.show(false); return; }
+  st.note.show(true);
+  if (mode === 'chain') {
+    st.note.move(st.noteAt).set({
+      1: '**The model\'s own reasoning** (a toy)\n9 sentences, then the answer: 19, right',
+      2: '**One chain of thought** (toy)\n9 sentences → final answer 19 ✓',
+      3: '**Base trace** (toy): 9 chunks S₁…S₉\nfinal_answer_emission: 19 ✓',
+    });
+    return;
+  }
+  const head = `**${i} · ${s.text}**`;
+  const c = st.cut, nShown = st.padShown || 0, cnt = st.padCount || [0, 0, 0];
+  let line2;
+  if (mode === 'rewrites') {                     // what the model wrote instead of sentence i (this cut's first rewrites)
+    const R = st.A.R[i - 1], tally = new Map();
+    for (const r of R) { const t = s.v[r.path[0]].text; tally.set(t, (tally.get(t) || 0) + 1); }
+    const top = [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const lines = top.map(([t, m]) => `“${t}” ×${m}`).join('\n');
+    if (tightView()) { st.note.move(noteAnchor(S)).set(`**${i}** · rewritten as:\n${lines.split('\n')[0]}`); return; }
+    st.note.move(noteAnchor(S)).set({ 1: `${head}\nwhat the model wrote instead (${R.length}):\n${lines}`,
+      2: `${head}\nits ${R.length} rewrites, most common:\n${lines}`, 3: `${head}\nfirst resampled chunk T₅ (top 3 of ${R.length}):\n${lines}`.replace('T₅', `T${sub(i)}`) });
+    return;
+  }
+  const kept = st.keepOn;
+  if (k.metric === 'forced') {
+    line2 = { 1: `forced to answer ${kept ? 'after' : 'before'} it: ${cnt[0]} of ${nShown} say 19`,
+      2: `forced answer ${kept ? 'after' : 'before'} ${i}: ${cnt[0]}/${nShown} → 19`,
+      3: `forced after S${sub(c)}: ${cnt[0]}/${nShown} correct` };
+  } else if (k.metric === 'cf') {
+    const kept2 = cnt[0] + cnt[1] + cnt[2];
+    line2 = { 1: `${kept2} of ${nShown} rewrites really differ: ${cnt[0]} reach 19`,
+      2: `cos < 0.8: ${kept2} of ${nShown} kept; ${cnt[0]}/${kept2} → 19`,
+      3: `filtered (cos < 0.8): ${cnt[0]}/${kept2} correct of ${nShown}` };
+  } else {
+    line2 = kept
+      ? { 1: `kept, the rest rewritten ${nShown}×: ${cnt[0]} reach 19`, 2: `keep ${i}, rewrite the rest ${nShown}×: ${cnt[0]} → 19`, 3: `resample from S${sub(i + 1)}: ${cnt[0]}/${nShown} correct` }
+      : { 1: `rewritten ${nShown}× from here: ${cnt[0]} reach 19`, 2: `rewrite from ${i}, ${nShown}×: ${cnt[0]} → 19`, 3: `resample from S${sub(i)}: ${cnt[0]}/${nShown} correct` };
+  }
+  let line3 = null, short = line2;             // short: the one fact a squeezed phone view keeps
+  if (!k.bars) line3 = null;
+  else if (i === N) short = line3 = { 1: 'the last sentence gets no score', 2: 'last sentence: no score (N − 1 differences)', 3: 'np.diff over N chunks → N − 1 scores' };
+  else if (st.barCopied[i - 1]) short = line3 = { 1: 'too few real rewrites: score copied', 2: 'fewer than 5 kept rewrites: value copied (ffill)', 3: 'n < min_samples: P ffilled, Δ copied' };
+  else {
+    const v = X.imp[i - 1], ci = X.ci[i - 1];
+    const both = `${X.k[i]}/${X.n[i]} − ${X.k[i - 1]}/${X.n[i - 1]}`;
+    const ex = S.knobs.truth ? ` · exact ${f2(X.exact[i - 1])}` : '';
+    line3 = mode === 'imp'
+      ? { 1: `matters: ${f2(v)} (between ${f2(ci[0])} and ${f2(ci[1])})${ex}`,
+        2: `importance = ${both} = ${f2(v)}\n95%: ${f2(ci[0])} to ${f2(ci[1])}${ex}`,
+        3: `Δ = ${both} = ${f2(v)} [${f2(ci[0])}, ${f2(ci[1])}]${ex}` }
+      : { 1: `matters: ${f2(v)} (between ${f2(ci[0])} and ${f2(ci[1])})${ex}`,
+        2: `importance ${f2(v)} · 95%: ${f2(ci[0])} to ${f2(ci[1])}${ex}`,
+        3: `Δ = ${f2(v)} [${f2(ci[0])}, ${f2(ci[1])}]${ex}` };
+    short = { 1: `matters: ${f2(v)} (${f2(ci[0])} to ${f2(ci[1])})`, 2: `importance ${f2(v)} [${f2(ci[0])}, ${f2(ci[1])}]`, 3: `Δ ${f2(v)} [${f2(ci[0])}, ${f2(ci[1])}]` };
+  }
+  const cat = catName(s.cat);
+  const tight = tightView();
+  const T = (t) => (tight ? [`**${i}** · ${cat[t]}`, short[t]] : [head, `${cat[t]}`, line2[t], line3 && line3[t]]).filter(Boolean).join('\n');
+  st.note.move(noteAnchor(S)).set({ 1: T(1), 2: T(2), 3: T(3) });
+}
+const SUBS = '₀₁₂₃₄₅₆₇₈₉';
+const sub = (n) => String(n).split('').map((d) => SUBS[+d]).join('');
+function barTop(S, j) {        // free height above bead j (0-based): clear of its bar and whisker (target values)
+  const st = S.state;
+  if (!S.knobs.bars || j >= N - 1) return 0.3;
+  const v = st.barTo ? st.barTo[j] : 0, ci = st.barCI && st.barCI[j];
+  return Math.max(0.3, v * SCALE + 0.16, ci ? ci[1] * SCALE + 0.14 : 0);
+}
+function noteAnchor(S) {
+  const i = S.knobs.sent, b = BEADS[i - 1];
+  S.state.noteAt2.set(b.x * 0.9, b.y + barTop(S, i - 1), b.z);
+  return S.state.noteAt2;
+}
+function paintCats(S) {        // the two anchors' category tags, above their bars (the selected bead's note says it already)
+  const st = S.state;
+  st.catTags.forEach((t, m) => {
+    const j = CAT_BEADS[m], on = !!st.showCats && S.knobs.sent !== j + 1;
+    t.show(on);
+    if (on) t.move(st.catAt[m].set(BEADS[j].x, BEADS[j].y + barTop(S, j) - 0.12, BEADS[j].z));
+  });
+}
+function tightView() {         // phone with a sheet open: the view is a strip, so the note shrinks to one fact
+  const app = document.querySelector('.k-app');
+  return !!(app && app.dataset.sheet) && window.innerWidth < 700;
+}
+
+/* scene configuration shared by beats and predictions */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.fanOn = o.fan !== false;
+  st.noteMode = o.note === undefined ? 'sent' : o.note;
+  st.showCats = !!o.cats;
+  st.qTag.show(!!o.q);
+  st.origDrop.visible = !st.fanOn || !!o.orig;
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(FIG_AT, o.face || [0, 0.7, -0.4]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.at });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  buildFan(S);
+  paintNote(S);
+  const i = S.knobs.sent;                     // headroom for the note over the selected bar (the camera fits it next)
+  const top = st.noteMode && st.noteMode !== 'chain' ? BEADS[i - 1].y + barTop(S, i - 1) : st.noteAt.y;
+  st.headroom.position.y = Math.max(2.0, top + 0.72);
+  S.invalidate();
+}
+function resetSeed(S) {
+  const st = S.state;
+  if (st.seed === DEFAULT_SEED) return;
+  st.seed = DEFAULT_SEED; compute(S); drawBars(S, false); buildFan(S);
+}
+function reseed(S) {
+  const st = S.state;
+  st.seed += 1; compute(S); drawBars(S, true); buildFan(S); paintNote(S);
+  K.toast(`New seed ${st.seed}: every rewrite redrawn`);
+}
+
+function dimKnobs(S) {        // the kit cannot dim knobs; grey the ones that do nothing right now
+  const dim = (id, on) => { const el = document.getElementById('k-' + id); const row = el && el.closest('.k-knob'); if (row) row.style.opacity = on ? '0.42' : ''; };
+  dim('keep', S.knobs.sent === N);
+  dim('truth', !S.knobs.bars);
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'w13-fan', num: '26', week: 13, kind: 'weekly',
+  title: 'The fan',
+  subtitle: 'Resample a chain of thought from each sentence and see which one the answer hangs on.',
+  back2d: '#week-13',
+  film: 'w13-inside',
+  plinth: { r: 2.45, h: 0.14 },
+
+  knobs: [
+    { id: 'sent', type: 'range', label: { 1: 'Sentence (or tap a bead)', 2: 'Sentence i (tap a bead)', 3: 'sentence i (chunk i − 1)' },
+      min: 1, max: 9, step: 1, value: 5, fmt: (v) => String(v) },
+    { id: 'keep', type: 'toggle', label: { 1: 'Keep this sentence', 2: 'Keep sentence i', 3: 'keep Sᵢ (resample from i + 1)' }, value: false },
+    { id: 'K', type: 'range', label: { 1: 'Rewrites per sentence', 2: 'Rewrites per cut, K', 3: 'rollouts per chunk, K' },
+      min: 10, max: 100, step: 10, value: 100, fmt: (v) => String(v) },
+    { id: 'metric', type: 'select', wide: true, label: { 1: 'How to score a sentence', 2: 'Importance metric', 3: 'importance metric' }, value: 'resample',
+      options: [['forced', { 1: 'Make it answer now (forced)', 2: 'Forced answer', 3: 'forced answer importance' }],
+        ['resample', { 1: 'Rewrite the rest (resampling)', 2: 'Resampling', 3: 'resampling importance' }],
+        ['cf', { 1: 'Only real changes (counterfactual)', 2: 'Counterfactual (cosine < 0.8)', 3: 'counterfactual importance' }]] },
+    { id: 'bars', type: 'toggle', label: { 1: 'Importance bars', 2: 'Importance bars', 3: 'importance bars' }, value: true },
+    { id: 'truth', type: 'toggle', label: { 1: 'Show the toy\'s true values', 2: 'Exact toy values (rings)', 3: 'exact values (K → ∞)' }, value: false },
+    { id: 'again', type: 'button', wide: true, label: { 1: 'Rewrite everything again', 2: 'New seed: redraw every rollout', 3: 'reseed all rollouts' }, onClick: (S) => reseed(S) },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.seed = DEFAULT_SEED;
+    st.fanOn = true; st.noteMode = 'sent';
+    st.mat = {
+      bead: K.mat.paint(C.data), beadGlass: K.mat.glass(C.data, 0.34),
+      up: K.mat.paint(C.good), down: K.mat.paint(C.grad), copied: K.mat.plaster('#d3ccbf'),
+    };
+    // posts + beads + wire: the original chain of thought
+    const postGeos = BEADS.map((b) => new THREE.CylinderGeometry(0.011, 0.011, b.y - BEAD_R * 0.6, 8).translate(b.x, (b.y - BEAD_R * 0.6) / 2, b.z));
+    const posts = new THREE.Mesh(THREE.mergeGeometries(postGeos), K.mat.brass());
+    posts.castShadow = true;
+    S.root.add(posts);
+    st.beads = BEADS.map((b, j) => {
+      const m = K.bead(b, C.data, BEAD_R);
+      m.material = st.mat.bead;
+      const hit = new THREE.Mesh(new THREE.SphereGeometry(2.4, 8, 6), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+      hit.userData.noFit = true;
+      m.add(hit);
+      K.pick(m, () => { S.setKnob('sent', j + 1); });
+      S.root.add(m);
+      return m;
+    });
+    const wirePts = [];
+    for (let s = 0; s <= 200; s++) wirePts.push(CURVE.getPoint(s / 200));
+    st.wire = K.tube(wirePts, C.brass, 0.012, { material: K.mat.brass() });
+    S.root.add(st.wire.mesh);
+    // the question lectern and the trace's own answer (a brass drop from the end of the chain to 19)
+    const lect = new THREE.Mesh(new THREE.RoundedBoxGeometry(0.32, Q_TOP.y, 0.32, 2, 0.03), K.mat.plaster());
+    lect.position.set(Q_POS.x, Q_TOP.y / 2, Q_POS.z);
+    lect.castShadow = lect.receiveShadow = true;
+    S.root.add(lect);
+    const dropPts = [END.clone()];
+    flyTo(dropPts, PADS[0].pos.clone().setY(PAD_H + 0.01), () => 0.5, 0.5);
+    st.origDrop = K.tube(dropPts, C.brass, 0.012, { material: K.mat.brass() }).mesh;
+    S.root.add(st.origDrop);
+    // answer tiles
+    PADS.forEach((P, a) => {
+      const m = new THREE.Mesh(new THREE.RoundedBoxGeometry(0.6, PAD_H, 0.6, 2, 0.018), a === 2 ? K.mat.plaster('#cfc7b8') : K.mat.paint(ANS_COL[a]));
+      m.position.copy(P.pos).setY(PAD_H / 2);
+      m.rotation.y = P.yaw;
+      m.receiveShadow = true; m.castShadow = true;
+      S.root.add(m);
+    });
+    // the fan: 4 batched string meshes (19, 20, other, filtered-out) + instanced landing beads
+    const smat = (hex) => new THREE.MeshStandardMaterial({ color: hex, roughness: 0.6, metalness: 0, emissive: hex, emissiveIntensity: 0.14, side: THREE.DoubleSide });
+    const ghost = new THREE.MeshBasicMaterial({ color: '#a79f90', transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide });
+    st.fanMeshes = [smat(C.good), smat(C.grad), smat('#8a8275'), ghost].map((mat) => {
+      const m = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+      m.userData.noFit = true; m.frustumCulled = false;
+      S.root.add(m);
+      return m;
+    });
+    st.land = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 10, 8), new THREE.MeshStandardMaterial({ roughness: 0.45, metalness: 0 }), 100);
+    st.land.count = 0; st.land.castShadow = true; st.land.userData.noFit = true;
+    st.land.setColorAt(0, new THREE.Color(C.good));
+    S.root.add(st.land);
+    st.cutRing = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.011, 8, 28), K.mat.brass());
+    st.cutRing.castShadow = true;
+    S.root.add(st.cutRing);
+    // headroom: an invisible point high above the chain, so the kit's auto-fit leaves room for the note over tall bars
+    st.headroom = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+    st.headroom.position.set(0, 2.2, -0.3);          // raised per beat in scene()
+    S.root.add(st.headroom);
+    st.halo = new THREE.Mesh(new THREE.TorusGeometry(BEAD_R * 1.75, 0.008, 8, 36), K.mat.brass());
+    st.halo.rotation.x = Math.PI / 2;
+    S.root.add(st.halo);
+    // bars (sentences 1..8): bar, brass whisker with caps, ink ring at the exact value
+    const barGeo = new THREE.BoxGeometry(0.15, 1, 0.15);
+    const wGeo = new THREE.CylinderGeometry(0.011, 0.011, 1, 8);
+    const capGeo = new THREE.BoxGeometry(0.1, 0.016, 0.016);
+    const ringGeo = new THREE.TorusGeometry(0.122, 0.014, 8, 32);
+    const ink = K.mat.ink(), teal = K.mat.paint(C.aux);
+    st.bars = []; st.barVal = new Array(N - 1).fill(0); st.barCopied = new Array(N - 1).fill(false);
+    for (let j = 0; j < N - 1; j++) {
+      const b = BEADS[j], group = new THREE.Group();
+      const bar = new THREE.Mesh(barGeo, st.mat.up);
+      bar.position.set(b.x, b.y, b.z); bar.castShadow = true;
+      bar.rotation.y = Math.atan2(b.x, b.z - ARC.zc);
+      const toFront = new THREE.Vector3(-b.x, 0, 1.6 - b.z).normalize().multiplyScalar(0.1);
+      const whisker = new THREE.Mesh(wGeo, ink);
+      whisker.position.set(b.x + toFront.x, b.y, b.z + toFront.z);
+      const capLo = new THREE.Mesh(capGeo, ink), capHi = new THREE.Mesh(capGeo, ink);
+      for (const cp of [capLo, capHi]) { cp.position.copy(whisker.position); cp.rotation.y = Math.atan2(toFront.x, toFront.z) + Math.PI / 2; }
+      const ring = new THREE.Mesh(ringGeo, teal);
+      ring.rotation.x = Math.PI / 2; ring.position.set(b.x, b.y, b.z);
+      for (const m of [whisker, capLo, capHi, ring]) m.userData.noFit = true;
+      group.add(bar, whisker, capLo, capHi, ring);
+      S.root.add(group);
+      st.bars.push({ group, bar, whisker, capLo, capHi, ring });
+    }
+    // labels
+    st.qTag = K.label(new THREE.Vector3(Q_TOP.x, Q_TOP.y + 0.06, Q_TOP.z),
+      { 1: '66666 in hex: how many bits?', 2: '66666₁₆ → how many bits?', 3: 'bit length of 0x66666?' }, { cls: 'brass', anchor: 'bottom', dy: -6 });
+    st.nums = BEADS.map((b, j) => K.label(st.beads[j], String(j + 1), { cls: 'tag beadnum', anchor: 'center', dy: 0, prio: 0.5 }));
+    st.padTags = PADS.map((P, a) => K.label(P.pos.clone().addScaledVector(P.back, -0.33).setY(0.02), '', { cls: 'pad ' + (a === 0 ? 'ok' : a === 1 ? 'no' : ''), anchor: 'top', dy: 4 }));
+    st.catAt = CAT_BEADS.map((j) => BEADS[j].clone());
+    const catText = [{ 1: 'a plan', 2: 'plan', 3: 'plan_generation' }, { 1: 'a doubt', 2: 'uncertainty', 3: 'uncertainty_management' }];
+    st.catTags = CAT_BEADS.map((j, m) => K.label(st.catAt[m], catText[m], { cls: 'tag cat', anchor: 'left', dx: 9 }));
+    st.catTags.forEach((t) => t.show(false));
+    const app = document.querySelector('.k-app');   // a sheet opening on a phone squeezes the view: compact note
+    if (app) new MutationObserver(() => paintNote(S)).observe(app, { attributes: true, attributeFilter: ['data-sheet'] });
+    st.noteAt = new THREE.Vector3(-0.7, 1.55, -0.9);
+    st.noteAt2 = new THREE.Vector3();
+    st.note = K.label(st.noteAt, '', { cls: 'note', anchor: 'bottom', dy: -4 });
+    st.fig = K.figure();
+    st.fig.group.visible = false;
+    S.root.add(st.fig.group);
+    st.cut = 4; st.keepOn = false;
+  },
+
+  rebuild(S, id) {
+    const st = S.state;
+    if (id === '*' || id === 'K' || id === 'metric') {
+      compute(S); drawBars(S, id !== '*'); buildFan(S);
+    } else if (id === 'sent' || id === 'keep') {
+      buildFan(S);
+    } else if (id === 'bars' || id === 'truth') {
+      drawBars(S, id === 'bars');
+    }
+    paintNote(S);
+    dimKnobs(S);
+  },
+
+  frame(S, t) {
+    const st = S.state;
+    if (!st.revealing) return false;
+    if (st.revT0 == null) st.revT0 = t;
+    const rate = st.revN / 1.25;                          // the whole fan arrives in 1.25 s
+    st.rev = Math.min(st.revN, Math.max(0, (t - st.revT0 - 0.15) * rate));
+    applyReveal(S);
+    if (st.rev >= st.revN) { st.revealing = false; paintNote(S); return false; }
+    return true;
+  },
+
+  onTier(S) { paintNote(S); paintPads(S); },
+
+  solids(S) {
+    const st = S.state;
+    const toJ = (p) => [p.x, -p.z, p.y];                   // three (x, y, z) -> JSCAD (x, -z, y), z up
+    const out = [J.primitives.cylinder({ radius: 2.3, height: 0.08, center: [0, 0, -0.04], segments: 64 })];
+    BEADS.forEach((b) => {
+      out.push(J.primitives.sphere({ radius: BEAD_R, center: toJ(b), segments: 20 }));
+      out.push(J.primitives.cylinder({ radius: 0.022, height: b.y, center: [b.x, -b.z, b.y / 2], segments: 12 }));
+    });
+    const wire = [];
+    for (let s = 0; s <= 60; s++) wire.push(toJ(CURVE.getPoint(s / 60)));
+    out.push(K.tubeSolid(wire, 0.022, 8));
+    out.push(J.primitives.cuboid({ size: [0.32, 0.32, Q_TOP.y], center: [Q_POS.x, -Q_POS.z, Q_TOP.y / 2] }));
+    PADS.forEach((P) => out.push(J.primitives.cuboid({ size: [0.6, 0.6, PAD_H], center: [P.pos.x, -P.pos.z, PAD_H / 2] })));
+    if (S.knobs.bars) st.barVal.forEach((v, j) => {
+      if (Math.abs(v) < 0.01) return;
+      const b = BEADS[j], h = Math.abs(v) * SCALE;
+      out.push(J.primitives.cuboid({ size: [0.15, 0.15, h], center: [b.x, -b.z, v >= 0 ? b.y + h / 2 : b.y - h / 2] }));
+    });
+    return out.filter(Boolean);
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**Nine beads, one train of thought.** A reasoning model writes sentences before it answers. This one (a toy) writes 9 and answers 19, which is right. Which sentence does the answer hang on?',
+        2: '**A chain of thought, bead by bead.** A toy trace for ARENA\'s case-study problem: how many bits is 66666 in base 16? Nine sentences, then the answer 19 ✓ (brass drop). Reasoning models think in sentences first; which ones does the answer hang on?',
+        3: '**Sentences as the unit.** Bogdan et al. (2025) split a chain of thought into sentence chunks S₁…S₉ and ask which ones steer the final answer. The trace is a toy for ARENA [4.3]\'s case study (66666₁₆ has 19 bits); a stated menu of rewrites sits behind every number.',
+      },
+      cam: CAM.front,
+      set: { sent: 5, keep: false, K: 100, metric: 'resample', bars: false, truth: false },
+      enter(S) { resetSeed(S); scene(S, { fan: false, note: 'chain', q: true, figure: 'point', face: [0.2, 0.7, -0.6], at: [-0.9, 1.1, -0.9] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Rewrite from sentence 5, 100 times.** Keep sentences 1-4 and let the model write the rest again. Each string is one rewrite: it follows the old ideas until it changes its mind. About half reach 19.',
+        2: '**Resampling.** Keep sentences 1-4 and let the model regenerate from sentence 5 on, 100 times (ARENA\'s data also has 100). Each string is one rollout: it hugs the old ideas, peels off where it writes something new and lands on its answer. About half reach 19.',
+        3: 'Resample from S₅: prefix S₁…S₄ fixed, K = 100 rollouts (ARENA\'s rollouts: T = 0.6, top-p 0.95). A string leaves the chain at its first genuinely new idea (a fork in this toy\'s menus); detours loop out and rejoin. P̂(correct | resample from S₅) = tile count / K.',
+      },
+      cam: CAM.fan,
+      set: { sent: 5, keep: false, K: 100, metric: 'resample', bars: false, truth: false },
+      enter(S) { resetSeed(S); scene(S, {}); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Now keep sentence 5.** Rewrite only what comes after it: almost every rewrite reaches 19. That jump is how much sentence 5 matters. Every bead gets a bar like that: up means it helps.',
+        2: '**Importance = keep minus rewrite.** Sentence 5 kept: nearly all rollouts reach 19. Rewritten: about half. P(✓ | keep) − P(✓ | rewrite) is its resampling importance, the bar. Green up helps the right answer, red down hurts. Sentence 9 has nothing after it: no bar.',
+        3: 'importance_r(i) = P(correct | resample after Sᵢ) − P(correct | resample from Sᵢ). ARENA\'s `calculate_answer_importance` is np.diff of accuracy per position, so 9 chunks give 8 scores. S₅: exact +0.44 in this toy. Whisker: 95% interval.',
+      },
+      cam: CAM.fan,
+      set: { sent: 5, keep: true, K: 100, metric: 'resample', bars: true, truth: false },
+      enter(S) { resetSeed(S); scene(S, { note: 'imp' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Two anchors.** Only two bars stand tall: the plan (3) and the doubt (5). Rewrite the plan and most rewrites take a shortcut to the wrong 20. Plans and doubts are where answers turn.',
+        2: '**Thought anchors.** Two bars stand out: the plan (3: write it in binary) and the doubt (5: wait, a leading zero). Rewrite the plan and most rollouts take the 5 × 4 = 20 shortcut. Bogdan et al. (2025) found plans and uncertainty management are the anchors.',
+        3: 'Bogdan, Macar, Nanda & Conmy (2025): plan_generation and uncertainty_management chunks carry the most counterfactual importance; active_computation is pinned by context (its resamples are near-copies). Toy, exact: S₃ +0.26, S₅ +0.44; S₂, S₄, S₆, S₇ exactly 0.',
+      },
+      cam: CAM.bars,
+      set: { sent: 3, keep: false, K: 100, metric: 'resample', bars: true, truth: false },
+      enter(S) { resetSeed(S); scene(S, { cats: true }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Ten rewrites is not enough.** With 10 rewrites per sentence the bars jump about: here the plan\'s bar vanishes. Black whiskers show the doubt; teal rings show the toy\'s true values.',
+        2: '**Every bar is a count, so it wobbles.** At K = 10 the plan\'s bar drops to 0 and sentence 2 grows one from nothing (true value 0). Whiskers are 95% intervals; they shrink like 1/√K, so 4× the rewrites halves them. Teal rings: the toy\'s exact values, which a real study never sees.',
+        3: 'Each P̂ = Binomial(K, p)/K, so a difference of two has SE √(p₁q₁/K + p₀q₀/K). Whiskers: Wilson intervals (ARENA [4.2] plots them for rates) combined by Newcombe\'s method; at K = 100 they covered the exact toy value in 95.8% of 16,000 checks. Rings: K → ∞.',
+      },
+      cam: CAM.bars,
+      set: { sent: 5, keep: false, K: 10, metric: 'resample', bars: true, truth: true },
+      enter(S) { resetSeed(S); scene(S, { figure: 'shrug', face: [0.2, 0.7, -0.6] }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Another score: make it answer now.** Stop after each sentence and demand an answer. The credit lands on sentence 6, just before 19 comes out. The plan and the doubt that set it up get little.',
+        2: '**Forced answer importance** (ARENA\'s metric 1): cut after each sentence and force "the final answer is…". Credit piles onto sentence 6, the last brick before 19 is said; the plan scores about 0. Only the sentence that tips the answer counts: the flaw ARENA points out.',
+        3: 'importance_f(i) = P(A^f_i correct) − P(A^f_(i−1) correct) on `chunk_solutions_forced`: the same `calculate_answer_importance`, different rollouts. Toy, exact: S₆ +0.60, S₅ +0.27, S₃ +0.01. ARENA\'s analogy: finding the components that write the answer to the residual stream.',
+      },
+      cam: CAM.fan,
+      set: { sent: 6, keep: false, K: 100, metric: 'forced', bars: true, truth: false },
+      enter(S) { resetSeed(S); scene(S, {}); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Only count real changes.** Many rewrites say the same thing in new words. Those (the faint strings) are dropped, keeping rewrites that took a different idea. The two anchors stand taller.',
+        2: '**Counterfactual importance** (metric 3): drop rollouts whose new sentence is a near-copy (embedding cosine ≥ 0.8: faint strings), then diff the rates over the rest. Anchors grow (sentence 5: exact +0.55, not +0.44); sentence 4 picks up an echo. Grey bar: fewer than 5 left.',
+        3: '`calculate_counterfactual_importance(threshold=0.8, min_samples=5)`: `get_filtered_indices` keeps cosine < 0.8; P = None under 5 survivors, then `.ffill().bfill()` and np.diff. Both rates are filtered, so S₄ inherits −0.11 (exact) from S₅\'s alternatives. Toy cosines are stated.',
+      },
+      cam: CAM.fan,
+      set: { sent: 5, keep: false, K: 100, metric: 'cf', bars: true, truth: false },
+      enter(S) { resetSeed(S); scene(S, {}); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Does the text show the real thinking?** Nobody knows yet. Rewriting shows how much a sentence steers the answer, not whether it is the true reason inside the model. Still open research.',
+        2: '**Open question: is the text faithful?** Resampling measures how hard a sentence pulls on the answer, not whether the text is the real computation. Current method: black-box resampling plus white-box receiver heads and attention suppression. Emerging: resilience (Thought Branches).',
+        3: 'Current: black-box resampling + white-box receiver heads (high-kurtosis vertical attention) and attention suppression scored by KL (ARENA [4.3] §3). Emerging (Thought Branches, 2025): resilience, since models regenerate deleted ideas and off-policy edits misbehave. Faithfulness: open.',
+      },
+      cam: CAM.left,
+      set: { sent: 5, keep: false, K: 100, metric: 'resample', bars: true, truth: false },
+      enter(S) { resetSeed(S); scene(S, { note: 'rewrites' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Knock one piece out, rerun many times, compare: that is an ablation. Which domino mattered, which ingredient made the cake, which scene a story\'s ending needs.',
+        2: '**Where else: ablation.** Remove one piece, rerun many times, compare outcome rates with error bars. It is activation patching (week 8) done on sentences, an A/B test, a gene knockout, or changing one plot point to see if the ending survives.',
+        3: 'The pattern: intervene on one unit, resample everything downstream, compare outcome distributions. The same estimator drives activation patching (week 8), causal mediation, A/B tests, leave-one-out attribution, and Kroiz et al.\'s action-level resampling of agents (MATS 9.0).',
+      },
+      cam: CAM.wide,
+      set: { sent: 5, keep: true, K: 100, metric: 'resample', bars: true, truth: false },
+      enter(S) { resetSeed(S); scene(S, { figure: 'cheer', face: [0.3, 0.7, -0.6] }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'Sentence 4 writes out 0110 0110 0110 0110 0110. Rewrite it: how much does the answer mix change?',
+        2: 'Sentence 4 spells out all twenty binary digits. What is its resampling importance?',
+        3: 'S₄ (active_computation, the 0110 expansion): importance_r(4) ≈ ?' },
+      options: [{ t: 'About zero: any rewrite says the same thing', ok: true }, { t: 'Big and negative: it sets up the wrong 20' },
+        { t: 'Big and positive: it does the real work' }, { t: 'It flips the answer to 20 every time' }],
+      why: { 1: 'Once the plan is set, sentence 4 has no freedom: rewrites say the same thing in other words, so the rest unfolds the same way. Same ideas, same answers: it barely matters.',
+        2: 'After the plan (3) the expansion is forced: 90% of rewrites are paraphrases and the rest rejoin the path, so keep and rewrite give the same answer mix. Exact importance 0 in this toy; the small bar is sampling noise.',
+        3: 'Its menu has no fork: para (0.9) and a detour that rejoins (0.1), so P(correct | from S₄) = P(correct | from S₅) exactly and importance_r = 0. Active computation is pinned by its prefix, as in the paper.' },
+      show(S) {
+        S.setKnobs({ sent: 4, keep: false, K: 100, metric: 'resample', bars: true, truth: true });
+        scene(S, {}); S.fly(CAM.fan);
+        return wait(S, 1700);
+      } },
+    { q: { 1: 'Why rewrite a sentence instead of simply deleting it?',
+        2: 'Why does the method resample a sentence rather than just delete it?',
+        3: 'Why on-policy resampling rather than deleting Sᵢ?' },
+      options: [{ t: 'A deleted gap is text the model would never write; a rewrite stays natural', ok: true },
+        { t: 'Deleting is slower to compute' }, { t: 'Rewrites are always shorter' }, { t: 'There is no real difference' }],
+      why: { 1: 'A hole in the middle is something the model never wrote, so it may notice and act oddly. A rewrite is the model\'s own words, so what follows stays normal. The note lists what it wrote instead.',
+        2: 'Deleting leaves an off-policy trace the model never produced: it may "notice" the edit and react. Resampling lets the model fill the slot its own way, so the rollout stays on-policy. Thought Branches found off-policy edits less stable.',
+        3: 'On-policy counterfactuals keep the continuation in-distribution; deletions or hand edits (off-policy) shift it, and Thought Branches (2025) reports they are less stable. Resampling also yields a distribution of Tᵢ to filter by similarity.' },
+      show(S) {
+        S.setKnobs({ sent: 5, keep: false, K: 100, metric: 'resample', bars: true, truth: false });
+        scene(S, { note: 'rewrites' }); S.fly(CAM.fan);
+        return wait(S, 1700);
+      } },
+    { q: { 1: 'Go from 10 rewrites per sentence to 40. The black whiskers get…',
+        2: 'K goes from 10 to 40 rewrites per cut. The 95% whiskers become…',
+        3: 'K: 10 → 40. Interval half-width scales by…' },
+      options: [{ t: 'About half as long', ok: true }, { t: 'A quarter as long' }, { t: 'Unchanged: the toy is the same' }, { t: 'Longer: more rewrites, more spread' }],
+      why: { 1: 'Four times the rewrites only halves the doubt: the error shrinks with the square root. Measured here: about ±0.32 at 10 rewrites, ±0.17 at 40.',
+        2: 'SE ∝ 1/√K, and √(40/10) = 2. Averaged over 400 seeds, sentence 5\'s half-width is 0.32 at K = 10 and 0.17 at K = 40. Halving an error bar costs 4× the rollouts: the same rule as the bean machine.',
+        3: 'Var(P̂₁ − P̂₀) = (p₁q₁ + p₀q₀)/K, so the half-width is O(K^−½): 0.323 → 0.166 (mean over 400 seeds, S₅), ratio 1.95. Budget rollouts where p(1 − p) is largest.' },
+      show(S) {
+        S.setKnobs({ sent: 5, keep: false, K: 10, metric: 'resample', bars: true, truth: true });
+        scene(S, {}); S.fly(CAM.bars);
+        return wait(S, 1500).then(() => { S.setKnob('K', 40); return wait(S, 1500); });
+      } },
+    { q: { 1: 'Score sentences by stopping after each one and demanding the answer. Which sentence gets the most credit?',
+        2: 'Forced answer importance: which sentence scores highest?',
+        3: 'argmaxᵢ importance_f(i) in this toy?' },
+      options: [{ t: 'Sentence 6 ("Drop it: 110 0110…"), just before 19 is said', ok: true }, { t: 'Sentence 3, the plan' },
+        { t: 'Sentence 5, the doubt' }, { t: 'Sentence 1, the setup' }],
+      why: { 1: 'A forced answer only switches to 19 once the fix is written down, in sentence 6. The plan and the doubt set that up but get little credit: forcing sees only the last step.',
+        2: 'Forced answers flip to 19 only after the fix (sentence 6: from 30% to 90%). The plan scores about 0 and the doubt +0.27, though resampling ranks them as the anchors. This is why ARENA moves on to resampling.',
+        3: 'importance_f: S₆ +0.60, S₅ +0.27, S₃ +0.01 (exact). Forcing measures when the answer becomes decodable, like direct logit attribution; it misses steps whose effect runs through later sentences.' },
+      show(S) {
+        S.setKnobs({ sent: 6, keep: false, K: 100, metric: 'forced', bars: true, truth: false });
+        scene(S, {}); S.fly(CAM.fan);
+        return wait(S, 1700);
+      } },
+    { q: { 1: 'Which kinds of sentences tend to be the ones an answer hangs on?',
+        2: 'Which sentence types are usually thought anchors?',
+        3: 'Which chunk categories carry the highest counterfactual importance (paper Fig. 3b)?' },
+      options: [{ t: 'Plans, and "wait, let me check" doubts', ok: true }, { t: 'Arithmetic steps' },
+        { t: 'Restating the question' }, { t: 'The final answer sentence' }],
+      why: { 1: 'Plans and doubts decide which road the reasoning takes. Arithmetic just follows the road it is on, so rewriting it changes little.',
+        2: 'Bogdan et al. (2025), and ARENA\'s Figure 3b replication: plan generation and uncertainty management come out on top; computation is pinned by what came before. In this toy: the plan (3) and the doubt (5).',
+        3: 'plan_generation and uncertainty_management (ARENA\'s sanity check: plan_generation has positive mean counterfactual importance). active_computation resamples are near-duplicates; result_consolidation sits late.' },
+      show(S) {
+        S.setKnobs({ sent: 3, keep: false, K: 100, metric: 'resample', bars: true, truth: false });
+        scene(S, { cats: true }); S.fly(CAM.bars);
+        return wait(S, 1700);
+      } },
+    { q: { 1: 'The "only real changes" score throws some rewrites away. Which ones?',
+        2: 'Counterfactual importance discards some rollouts. Which?',
+        3: 'Which rollouts does `get_filtered_indices` drop?' },
+      options: [{ t: 'Those whose new sentence says the same thing in other words', ok: true }, { t: 'Those that reach a wrong answer' },
+        { t: 'The longest ones' }, { t: 'A random half, to save compute' }],
+      why: { 1: 'A rewrite that says the same thing never really took the sentence away, so it cannot show what the sentence did. Only rewrites with a different idea count.',
+        2: 'Rollouts whose first new sentence is a near-copy (cosine ≥ 0.8 to the original) are dropped: they never removed the idea. ARENA also needs at least 5 survivors per position, else it copies the neighbour\'s value.',
+        3: 'Rollouts with cos(emb(Sᵢ), emb(Tᵢ)) ≥ 0.8 (all-MiniLM-L6-v2 in ARENA; stated toy cosines here). Positions with < min_samples = 5 survivors get None → ffill/bfill, so their Δ is a copy, not a measurement.' },
+      show(S) {
+        S.setKnobs({ sent: 5, keep: false, K: 100, metric: 'cf', bars: true, truth: false });
+        scene(S, {}); S.fly(CAM.fan);
+        return wait(S, 1700);
+      } },
+  ],
+
+  where: { 1: 'Anywhere you knock one piece out and rerun many times to see if the outcome changes: experiments, A/B tests, which domino mattered, which scene a story needs.',
+    2: 'Ablation everywhere: activation patching (week 8) on sentences, A/B tests, gene knockouts, leave-one-out data attribution, and resampling an agent\'s actions instead of sentences (MATS work on reward hacking).',
+    3: 'Interventional attribution with resampled counterfactuals: activation patching, causal mediation, A/B testing, leave-one-out and influence functions, Shapley values, and action-level resampling of agent trajectories (Kroiz, Singh, Rajamanoharan & Nanda).' },
+  links: [
+    { label: 'Film · W13 inside the model', href: '../../intuition/films/w13-inside.html' },
+    { label: 'Week 13 pack', href: '../../index.html#week-13' },
+    { label: 'Case · resampling importance', href: '../../index.html#cases/resampling-importance' },
+    { label: 'Case · counterfactual importance', href: '../../index.html#cases/counterfactual-importance' },
+    { label: 'Case · sentence taxonomy', href: '../../index.html#cases/cot-sentence-taxonomy' },
+    { label: 'Case · receiver heads', href: '../../index.html#cases/receiver-heads' },
+    { label: 'Case · Thought Branches', href: '../../index.html#cases/thought-branches' },
+    { label: 'Map · thought anchor', href: '../../index.html#map/node=thought-anchor' },
+    { label: 'Map · resampling importance', href: '../../index.html#map/node=resampling-importance' },
+    { label: 'Map · counterfactual importance', href: '../../index.html#map/node=counterfactual-importance' },
+    { label: 'Map · receiver head', href: '../../index.html#map/node=receiver-head' },
+    { label: 'Map · CoT faithfulness', href: '../../index.html#map/node=cot-faithfulness' },
+    { label: 'Object · the bean machine (error bars)', href: 'w11-beans.html' },
+  ],
+  remix: 'Build a single-file three.js scene: nine blue beads on a brass wire arcing across the back of a round plinth, one per sentence of a chain of thought for "how many bits is 66666 in base 16?" (answer 19). Give each sentence a small menu of rewrites with probabilities and a cosine similarity: paraphrase (cos ≥ 0.8, same idea), detour (cos < 0.8, rejoins the path) or fork (a new idea with its own answer distribution over 19 / 20 / other). Tapping a bead resamples K = 100 seeded rollouts from that sentence: draw each as a thin string that hugs the wire until it forks, then flies to a green, red or grey answer tile where it lands as a bead in a 10 × 10 waffle. Above each bead stand a bar for its importance, np.diff of the accuracy per cut (ARENA\'s calculate_answer_importance), with a 95% Newcombe whisker; add a switch for forced-answer and counterfactual importance (drop cos ≥ 0.8, min 5 survivors, ffill) and a K slider from 10 to 100.',
+  credit: 'Method and metric names: ARENA [4.3] Interpreting Reasoning: Thought Anchors (calculate_answer_importance and calculate_counterfactual_importance, mirrored line for line), and Bogdan, Macar, Nanda & Conmy (2025), "Thought Anchors: Which LLM Reasoning Steps Matter?"; Thought Branches (2025) for resilience and on- vs off-policy edits. The problem is ARENA\'s case study (paper appendix C.1); the 9-sentence trace, its rewrite menus, cosines and forced answers are a toy written for this page. Intervals: Wilson (1927) combined by Newcombe (1998). Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

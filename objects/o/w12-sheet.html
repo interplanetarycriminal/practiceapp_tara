@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>One thin sheet · Object Lessons</title>
+<meta name="description" content="A LoRA fine-tune as one thin sheet on a frozen slab: ΔW = (lora_alpha/r)·B·A computed live, a rank you can check, and ARENA's rank-1 emergent-misalignment organisms.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+/* kit note: .k-tag (the beat pill) sets min-width:52px, which leaks into K.label({cls:'tag'}) labels */
+.k-label.k-tag{min-width:0; text-transform:none; letter-spacing:.01em; font-size:11px; padding:1px 5px; border-radius:5px;
+  background:color-mix(in srgb, var(--wash) 82%, transparent)}   /* tags sit on the violet sheet: give them a wash */
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   24 · w12-sheet: "One thin sheet" (W12 capstone, ARENA [4.1] + [2.4] LoRA)
+   Every sheet, fin, bar and number is computed below: ΔW = (lora_alpha/r)·B·A,
+   its singular values (Jacobi SVD), the best rank-r copy of a toy full-rank
+   change (Eckart–Young), parameter counts at toy and real sizes (ARENA's
+   printed 170,496 / 137,625,600 are reproduced from Qwen2.5-14B's shapes), and
+   a d = 3 room where inputs move by (α/r)·b·(a·x). The MATH block is extracted
+   and checked in node against independent computations (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* ---- tiny linear algebra (plain arrays; d is 12 or 3, so no typed arrays needed) ---- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function gauss(rnd) { let u = 0; while (u === 0) u = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd()); }
+const zeros = (n, m) => Array.from({ length: n }, () => new Array(m).fill(0));
+const dot = (x, y) => { let s = 0; for (let i = 0; i < x.length; i++) s += x[i] * y[i]; return s; };
+const norm = (x) => Math.sqrt(dot(x, x));
+function matmul(X, Y) {                                   // (n x k) @ (k x m)
+  const n = X.length, k = Y.length, m = Y[0].length, Z = zeros(n, m);
+  for (let i = 0; i < n; i++) for (let p = 0; p < k; p++) { const x = X[i][p]; for (let j = 0; j < m; j++) Z[i][j] += x * Y[p][j]; }
+  return Z;
+}
+const matvec = (M, x) => M.map((row) => dot(row, x));
+const frob = (M) => Math.sqrt(M.reduce((s, row) => s + dot(row, row), 0));
+const msub = (X, Y) => X.map((row, i) => row.map((x, j) => x - Y[i][j]));
+const mscale = (X, c) => X.map((row) => row.map((x) => x * c));
+function gramSchmidt(vs) {
+  const out = [];
+  for (const v0 of vs) {
+    let v = v0.slice();
+    for (let pass = 0; pass < 2; pass++) for (const q of out) { const c = dot(v, q); v = v.map((x, i) => x - c * q[i]); }
+    const n = norm(v); out.push(v.map((x) => x / n));
+  }
+  return out;
+}
+
+/* ---- the slab: d = 12 shown ---- */
+const D = 12;
+/* smooth orthonormal directions (slow waves first) so a sheet reads as a sheet, not noise */
+function smoothBasis(d, rnd) {
+  const vs = [];
+  for (let k = 0; k < d; k++) {
+    const f = 0.8 + k + 0.4 * rnd(), ph = 2 * Math.PI * rnd();
+    vs.push(Array.from({ length: d }, (_, i) => Math.cos((Math.PI * f * (i + 0.5)) / d + ph) + 0.05 * gauss(rnd)));
+  }
+  return gramSchmidt(vs);
+}
+/* TOY "full fine-tune" change ΔW* = Σ_k σ_k u_k v_kᵀ: full rank (all 12 σ > 0), but most of it in a
+   few directions, as Hu et al. 2021 argue real fine-tuning updates are ("low intrinsic rank"). */
+const SIGMA = [2.6, 1.5, 0.95, 0.62, 0.42, 0.3, 0.22, 0.16, 0.12, 0.09, 0.07, 0.05];
+function makeTarget(seed = 41) {
+  const rnd = mulberry32(seed);
+  const U = smoothBasis(D, rnd), V = smoothBasis(D, rnd);          // U[k] = u_k (output side), V[k] = v_k (input side)
+  const T = zeros(D, D);
+  for (let k = 0; k < D; k++) for (let i = 0; i < D; i++) for (let j = 0; j < D; j++) T[i][j] += SIGMA[k] * U[k][i] * V[k][j];
+  return { U, V, sigma: SIGMA.slice(), T };
+}
+/* TOY trained factors. They were "fitted" at lora_alpha / r = 8, ARENA's Lora defaults (rank 4,
+   lora_alpha 32): b_k = √(σ_k/8)·u_k, a_k = √(σ_k/8)·v_k, so at α/r = 8 the sheet is the best
+   rank-r copy of ΔW*. Any other α just turns the finished adapter up or down. */
+const FIT_SCALE = 8;
+function loraFactors(tg, r) {                                        // B: d x r (columns b_k), A: r x d (rows a_k)
+  const B = zeros(D, r), A = zeros(r, D);
+  for (let k = 0; k < r; k++) {
+    const c = Math.sqrt(tg.sigma[k] / FIT_SCALE);
+    for (let i = 0; i < D; i++) { B[i][k] = c * tg.U[k][i]; A[k][i] = c * tg.V[k][i]; }
+  }
+  return { B, A };
+}
+/* step 0 of training, as peft and ARENA's Lora initialise it: A ~ kaiming_uniform_(a=√5) = U(±1/√d_in), B = 0 */
+function initFactors(r, seed = 7) {
+  const rnd = mulberry32(seed), bound = 1 / Math.sqrt(D);
+  const A = Array.from({ length: r }, () => Array.from({ length: D }, () => (2 * rnd() - 1) * bound));
+  return { B: zeros(D, r), A };
+}
+const scaling = (lora_alpha, r) => lora_alpha / r;                  // peft: self.scaling = lora_alpha / r
+function deltaW(B, A, lora_alpha, r) { return mscale(matmul(B, A), scaling(lora_alpha, r)); }   // ΔW = (α/r)·B·A
+/* sheet k: column k of B times row k of A ('i, j -> i j'), times the same α/r */
+function sheetK(B, A, lora_alpha, r, k) { const s = scaling(lora_alpha, r); return B.map((row) => A[k].map((a) => s * row[k] * a)); }
+
+/* one-sided Jacobi SVD (Hestenes): M = U diag(S) Vᵀ, S sorted descending. U[k], V[k] = k-th vectors. */
+function svd(M) {
+  const n = M.length, m = M[0].length;
+  const Ac = Array.from({ length: m }, (_, j) => M.map((row) => row[j]));
+  const Vc = Array.from({ length: m }, (_, j) => Array.from({ length: m }, (_, i) => (i === j ? 1 : 0)));
+  for (let sweep = 0; sweep < 80; sweep++) {
+    let off = 0;
+    for (let p = 0; p < m - 1; p++) for (let q = p + 1; q < m; q++) {
+      const ap = Ac[p], aq = Ac[q];
+      const al = dot(ap, ap), be = dot(aq, aq), ga = dot(ap, aq);
+      if (ga === 0 || Math.abs(ga) <= 1e-15 * Math.sqrt(al * be)) continue;
+      off = Math.max(off, Math.abs(ga) / Math.sqrt(al * be));
+      const zeta = (be - al) / (2 * ga);
+      const t = (zeta >= 0 ? 1 : -1) / (Math.abs(zeta) + Math.sqrt(1 + zeta * zeta));
+      const c = 1 / Math.sqrt(1 + t * t), s = c * t;
+      for (let i = 0; i < n; i++) { const x = ap[i], y = aq[i]; ap[i] = c * x - s * y; aq[i] = s * x + c * y; }
+      const vp = Vc[p], vq = Vc[q];
+      for (let i = 0; i < m; i++) { const x = vp[i], y = vq[i]; vp[i] = c * x - s * y; vq[i] = s * x + c * y; }
+    }
+    if (off < 1e-15) break;
+  }
+  const S0 = Ac.map(norm);
+  const order = S0.map((_, i) => i).sort((i, j) => S0[j] - S0[i]);
+  return { S: order.map((i) => S0[i]), U: order.map((i) => Ac[i].map((x) => (S0[i] > 0 ? x / S0[i] : 0))), V: order.map((i) => Vc[i]) };
+}
+const RANK_TOL = 1e-10;                                              // σ below 1e-10·σ₁ counts as zero
+const numericRank = (S) => S.filter((s) => s > RANK_TOL * (S[0] || 1)).length;
+/* Eckart–Young: the best rank-r copy of T keeps its top r singular pairs; nothing of rank r is closer */
+function bestRankR(T, r) {
+  const { U, S, V } = svd(T), M = zeros(T.length, T[0].length);
+  for (let k = 0; k < r; k++) for (let i = 0; i < M.length; i++) for (let j = 0; j < M[0].length; j++) M[i][j] += S[k] * U[k][i] * V[k][j];
+  return M;
+}
+const relErr = (T, M) => frob(msub(T, M)) / frob(T);
+function eckartYoung(S, r) { let tot = 0, tail = 0; S.forEach((s, k) => { tot += s * s; if (k >= r) tail += s * s; }); return Math.sqrt(tail / tot); }
+
+/* parameter counts: W is (d_out, d_in); LoRA trains A (r, d_in) and B (d_out, r) */
+const fullParams = (d_in, d_out) => d_in * d_out;
+const loraParams = (d_in, d_out, r) => r * (d_in + d_out);
+/* ARENA [4.1]'s organisms sit on Qwen2.5-14B: d_model 5120, MLP 13824, 48 layers, k/v width 8 heads x 128 */
+const QWEN14 = { d_model: 5120, d_mlp: 13824, n_layers: 48, d_kv: 1024 };
+const R1_3_3_3_LAYERS = [15, 16, 17, 21, 22, 23, 27, 28, 29];
+function organismParams(which) {
+  const q = QWEN14;
+  if (which === 'rank1') return R1_3_3_3_LAYERS.length * loraParams(q.d_mlp, q.d_model, 1);   // down_proj only: A (1, 13824), B (5120, 1)
+  const mods = [[q.d_model, q.d_model], [q.d_model, q.d_kv], [q.d_model, q.d_kv], [q.d_model, q.d_model],   // q k v o
+    [q.d_model, q.d_mlp], [q.d_model, q.d_mlp], [q.d_mlp, q.d_model]];                                 // gate up down
+  return q.n_layers * mods.reduce((s, [i, o]) => s + loraParams(i, o, 32), 0);                         // rank 32 everywhere
+}
+
+/* ---- the effect room: the same maths at d = 3 (toy), W = identity so each input moves by ΔW·x ---- */
+const E3 = {
+  a: [[0.27, 0, 0.1], [-0.07, 0.08, 0.24], [0.05, -0.22, 0.06]],       // rows of A3: what each sheet reads
+  b: [[0.03, 0.3, -0.05], [0.24, 0.02, 0.06], [-0.03, 0.07, 0.22]],     // columns of B3: where each sheet writes
+};
+function effectFactors(r) {
+  const rnd = mulberry32(303);
+  const B = zeros(3, r), A = zeros(r, 3);
+  for (let k = 0; k < r; k++) {
+    const a = k < 3 ? E3.a[k] : [0, 1, 2].map(() => 0.1 * gauss(rnd)), b = k < 3 ? E3.b[k] : [0, 1, 2].map(() => 0.1 * gauss(rnd));
+    for (let i = 0; i < 3; i++) { A[k][i] = a[i]; B[i][k] = b[i]; }
+  }
+  return { B, A };
+}
+/* inputs: a 3 x 3 x 3 lattice (spacing 0.6). a₁ has no y part, so the middle column (0, y, 0) lies on
+   sheet 1's blind plane a₁·x = 0: the hinge the lattice tilts about. */
+const LAT = [-0.6, 0, 0.6];
+function effectInputs() {
+  const pts = [];
+  for (const x of LAT) for (const y of LAT) for (const z of LAT) pts.push([x, y, z]);
+  return pts;
+}
+const LATTICE_EDGES = (() => {                       // neighbour pairs, for drawing the lattice
+  const e = [], id = (i, j, k) => 9 * i + 3 * j + k;
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) for (let k = 0; k < 3; k++) {
+    if (i < 2) e.push([id(i, j, k), id(i + 1, j, k)]);
+    if (j < 2) e.push([id(i, j, k), id(i, j + 1, k)]);
+    if (k < 2) e.push([id(i, j, k), id(i, j, k + 1)]);
+  }
+  return e;
+})();
+const PLANE_POINT = 9 * 1 + 3 * 2 + 1;              // (0, 0.6, 0): on the blind plane of sheet 1
+function effectMove(x, B, A, lora_alpha, r) {        // y = W x + ΔW x with W = I
+  const s = scaling(lora_alpha, r), ax = A.map((row) => dot(row, x));   // ax[k] = a_k · x: what sheet k reads
+  return x.map((xi, i) => xi + s * B[i].reduce((acc, bik, k) => acc + bik * ax[k], 0));
+}
+const MATH = { mulberry32, gauss, zeros, dot, norm, matmul, matvec, frob, msub, mscale, gramSchmidt, D, SIGMA, makeTarget,
+  FIT_SCALE, loraFactors, initFactors, scaling, deltaW, sheetK, svd, RANK_TOL, numericRank, bestRankR, relErr, eckartYoung,
+  fullParams, loraParams, QWEN14, R1_3_3_3_LAYERS, organismParams, E3, effectFactors, effectInputs, LAT, LATTICE_EDGES, PLANE_POINT, effectMove };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const TG = makeTarget();                            // the toy full fine-tune ΔW* (teal)
+const TSVD = svd(TG.T);                             // its spectrum, computed here (not copied from SIGMA)
+const TMAX = Math.max(...TG.T.map((row) => Math.max(...row.map(Math.abs))));
+const RMAX = 12;
+const CS = 0.19, HALF = (CS * D) / 2;              // cell size and half-width of the 12 x 12 slab
+const OX = 0.22, OZ = 0.22;                         // slab centre: room for the B fins (left) and the A fins (behind)
+const SLAB_H = 0.2, Y_S = 0.8, LIFT = 0.7;          // slab height, the sheet's zero level, lift of a pulled-out sheet
+const KH = 0.6 / TMAX;                              // world height per unit of ΔW, fixed: α really scales the relief
+const KF = 1.3;                                     // world height per unit of a B or A entry (the fins)
+const KSIG = 0.2;                                   // world height per unit of singular value (the comb)
+const cellX = (j) => OX - HALF + CS * (j + 0.5);    // input index j runs left -> right
+const cellZ = (i) => OZ - HALF + CS * (i + 0.5);    // output index i runs back -> front
+const squash = (h) => { const a = Math.abs(h); return a <= 1 ? h : Math.sign(h) * (1 + 0.4 * Math.tanh((a - 1) / 0.4)); };   // display only
+const finGap = (r) => (r <= 4 ? 0.15 : Math.max(0.05, 0.62 / r));
+const finX = (k, r) => OX - HALF - 0.15 - k * finGap(r);     // column k of B: a fin left of the slab
+const finZ = (k, r) => OZ - HALF - 0.15 - k * finGap(r);     // row k of A: a fin behind it
+const FX0 = cellX(0) - 0.025, FX1 = cellX(D - 1) + 0.025, FZ0 = cellZ(0) - 0.025, FZ1 = cellZ(D - 1) + 0.025;   // brass frame
+const E0 = new THREE.Vector3(0.05, 1.3, 0.05);      // centre of the d = 3 effect room
+const PALE = '#d6cdf3', READ = '#9d86e3';
+const fmt = (v, d = 2) => K.fmt(v, d);
+const fx = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+const int = (n) => Math.round(n).toLocaleString('en-US');
+const pc = (x, d = 2) => `${(100 * x).toFixed(d)}%`;
+const sub = (k) => String(k).split('').map((c) => '₀₁₂₃₄₅₆₇₈₉'[+c]).join('');
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+/* numbers quoted in captions, computed once from the MATH block */
+const N = {
+  full12: fullParams(D, D), lora12r4: loraParams(D, D, 4),
+  full4096: fullParams(4096, 4096), lora4096r4: loraParams(4096, 4096, 4), lora4096r8: loraParams(4096, 4096, 8),
+  org1: organismParams('rank1'), org32: organismParams('rank32'),
+  down: fullParams(QWEN14.d_mlp, QWEN14.d_model), down1: loraParams(QWEN14.d_mlp, QWEN14.d_model, 1),
+  ey2: eckartYoung(TSVD.S, 2), ey4: eckartYoung(TSVD.S, 4), rankT: numericRank(TSVD.S),
+};
+
+const CAM = {
+  slab: { pos: [2.9, 4.4, 6.9], target: [0.2, 0.55, 0.3], fit: 1.3 },
+  sheet: { pos: [-4.3, 5.9, 5.4], target: [-0.15, 0.62, 0.3], fit: 1.15 },
+  table: { pos: [-3.2, 7.0, 5.2], target: [-0.1, 1.0, 0.1], fit: 1.1 },
+  effect: { pos: [3.25, 2.4, 6.45], target: [0.35, 1.45, 0.05], fit: 1.3 },
+  full: { pos: [2.5, 4.0, 7.1], target: [0.2, 0.62, 0.45], fit: 1.3 },
+  fins: { pos: [-5.9, 5.2, 2.6], target: [-0.45, 0.7, 0.15], fit: 1.15 },
+  em: { pos: [-3.3, 4.3, 6.6], target: [-0.1, 0.65, 0.25], fit: 1.25 },
+  organism: { pos: [-4.8, 5.6, 4.6], target: [-0.25, 0.95, 0.1], fit: 1.1 },
+  wide: { pos: [4.4, 5.6, 6.6], target: [0, 0.6, 0] },
+};
+
+/* ======================================================== geometry helpers */
+
+const unitBox = new THREE.BoxGeometry(1, 1, 1);
+const unitCyl = new THREE.CylinderGeometry(1, 1, 1, 10, 1);
+const smallBead = new THREE.SphereGeometry(1, 16, 12);
+const M4 = new THREE.Matrix4(), Q = new THREE.Quaternion(), P3 = new THREE.Vector3(), S3 = new THREE.Vector3(), UPV = new THREE.Vector3(0, 1, 0);
+const COL = new THREE.Color();
+
+function gridTexture(line) {            // grid lines through the 12 x 12 cell centres: the knots are the numbers
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, 512, 512);
+  g.strokeStyle = line; g.lineWidth = 3;
+  for (let k = 0; k < D; k++) {
+    const u = 2 + (508 * k) / (D - 1);
+    g.beginPath(); g.moveTo(u, 0); g.lineTo(u, 512); g.stroke();
+    g.beginPath(); g.moveTo(0, u); g.lineTo(512, u); g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
+const SUB = 3, NV = (D - 1) * SUB + 1;              // sheet vertices: every cell centre + 2 in between
+function sheetMesh(hex, line) {
+  const g = new THREE.BufferGeometry();
+  const pos = new Float32Array(NV * NV * 3), uv = new Float32Array(NV * NV * 2), idx = [];
+  for (let a = 0; a < NV; a++) for (let b = 0; b < NV; b++) { const p = a * NV + b; uv[2 * p] = b / (NV - 1); uv[2 * p + 1] = 1 - a / (NV - 1); }
+  for (let a = 0; a < NV - 1; a++) for (let b = 0; b < NV - 1; b++) { const p = a * NV + b; idx.push(p, p + NV, p + 1, p + 1, p + NV, p + NV + 1); }
+  g.setIndex(idx);
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  const m = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.5, metalness: 0.02, side: THREE.DoubleSide, map: gridTexture(line) });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  return mesh;
+}
+/* heights at the 144 knots are exact (KH·ΔW[i][j]); between knots the sheet is bilinear */
+function setSheet(mesh, M, y0) {
+  const pos = mesh.geometry.attributes.position.array;
+  for (let a = 0; a < NV; a++) {
+    const u = a / SUB, i0 = Math.min(D - 2, Math.floor(u)), fi = u - i0;
+    for (let b = 0; b < NV; b++) {
+      const w = b / SUB, j0 = Math.min(D - 2, Math.floor(w)), fj = w - j0;
+      const h = (1 - fi) * ((1 - fj) * M[i0][j0] + fj * M[i0][j0 + 1]) + fi * ((1 - fj) * M[i0 + 1][j0] + fj * M[i0 + 1][j0 + 1]);
+      const p = (a * NV + b) * 3;
+      pos[p] = cellX(0) + (cellX(D - 1) - cellX(0)) * (b / (NV - 1));
+      pos[p + 1] = y0 + squash(KH * h);
+      pos[p + 2] = cellZ(0) + (cellZ(D - 1) - cellZ(0)) * (a / (NV - 1));
+    }
+  }
+  mesh.geometry.attributes.position.needsUpdate = true;
+  mesh.geometry.computeVertexNormals();
+  mesh.geometry.computeBoundingBox(); mesh.geometry.computeBoundingSphere();
+}
+function frameAt(y) {                  // brass outline of a sheet's zero level (the group moves, not the bars)
+  const g = new THREE.Group(), mat = K.mat.brass(), t = 0.018, w = FX1 - FX0, dz = FZ1 - FZ0;
+  for (const [x, z, sx, sz] of [[(FX0 + FX1) / 2, FZ0, w + t, t], [(FX0 + FX1) / 2, FZ1, w + t, t], [FX0, (FZ0 + FZ1) / 2, t, dz + t], [FX1, (FZ0 + FZ1) / 2, t, dz + t]]) {
+    const m = new THREE.Mesh(unitBox, mat); m.scale.set(sx, t, sz); m.position.set(x, 0, z); m.castShadow = true; g.add(m);
+  }
+  g.position.y = y;
+  return g;
+}
+function setInst(mesh, n, x, y, z, sx, sy, sz, hex) {
+  M4.compose(P3.set(x, y, z), Q.identity(), S3.set(sx, sy, sz));
+  mesh.setMatrixAt(n, M4);
+  if (hex) mesh.setColorAt(n, COL.set(hex));
+}
+function setRod(mesh, n, a, b, r, hex) {     // a cylinder instance from a to b
+  const d = P3.copy(b).sub(a), len = d.length();
+  Q.setFromUnitVectors(UPV, len > 1e-9 ? d.normalize() : UPV);
+  M4.compose(new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5), Q, S3.set(r, Math.max(len, 1e-4), r));
+  mesh.setMatrixAt(n, M4);
+  if (hex) mesh.setColorAt(n, COL.set(hex));
+}
+function inst(geo, mat, n, opt = {}) {
+  const m = new THREE.InstancedMesh(geo, mat, n);
+  m.castShadow = opt.shadow !== false; m.receiveShadow = true; m.count = 0; m.frustumCulled = false;   // instances move: skip stale bounds
+  if (opt.color) { for (let k = 0; k < n; k++) m.setColorAt(k, COL.set(opt.color)); }
+  return m;
+}
+/* the fins: every column of B and row of A is one ribbon (an area chart of its 12 entries), all in one mesh */
+const FIN_V = 2 * RMAX * (D - 1) * 6, EDGE_V = 2 * RMAX * (D - 1) * 2;
+function vertexBuffer(n, lines) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  g.setDrawRange(0, 0);
+  const mesh = lines ? new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true }))
+    : new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.02, side: THREE.DoubleSide }));
+  mesh.castShadow = !lines; mesh.receiveShadow = !lines; mesh.frustumCulled = false;
+  return mesh;
+}
+
+/* ============================================================ build (once) */
+
+function build(S) {
+  const st = S.state, root = S.root, brass = K.mat.brass();
+  st.slabG = new THREE.Group(); root.add(st.slabG);
+  /* W: the frozen slab, 12 x 12 cells engraved on top */
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(2 * HALF + 0.08, SLAB_H, 2 * HALF + 0.08), K.mat.plaster());
+  slab.position.set(OX, SLAB_H / 2, OZ); slab.castShadow = slab.receiveShadow = true; st.slabG.add(slab);
+  const lines = [];
+  for (let k = 0; k <= D; k++) {
+    const u = -HALF + CS * k;
+    lines.push(OX + u, SLAB_H + 0.002, OZ - HALF, OX + u, SLAB_H + 0.002, OZ + HALF, OX - HALF, SLAB_H + 0.002, OZ + u, OX + HALF, SLAB_H + 0.002, OZ + u);
+  }
+  const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(lines, 3));
+  st.slabG.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: '#b5a992' })));
+  /* a brass padlock on the front face: W is frozen */
+  const lock = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.12, 0.05), brass); body.position.y = 0.06;
+  const shackle = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.012, 8, 20, Math.PI), brass); shackle.position.y = 0.12;
+  body.castShadow = shackle.castShadow = true;
+  lock.add(body, shackle); lock.position.set(OX + HALF - 0.3, 0.02, OZ + HALF + 0.07); lock.scale.setScalar(1.1);
+  st.slabG.add(lock);
+  /* the sheet's zero level: a brass frame on four pins */
+  st.frame = frameAt(Y_S); st.slabG.add(st.frame);
+  for (const x of [FX0, FX1]) for (const z of [FZ0, FZ1]) {
+    const pin = new THREE.Mesh(unitCyl, brass); pin.scale.set(0.011, Y_S - SLAB_H, 0.011); pin.position.set(x, (Y_S + SLAB_H) / 2, z); pin.castShadow = true;
+    st.slabG.add(pin);
+  }
+  /* sheets: the LoRA sum (violet), one pulled-out sheet (violet), the full fine-tune (teal) */
+  st.sheet = sheetMesh(C.dir, '#5f4d9e'); st.slabG.add(st.sheet);
+  st.sheetHL = sheetMesh(C.dir, '#5f4d9e'); st.slabG.add(st.sheetHL);
+  st.frameHL = frameAt(Y_S + LIFT); st.slabG.add(st.frameHL);
+  st.sheetFT = sheetMesh(C.aux, '#176a6e'); st.slabG.add(st.sheetFT);
+  K.pick(st.sheet, (hit) => tapCell(S, hit, 'sum'));
+  K.pick(st.sheetHL, (hit) => tapCell(S, hit, 'hl'));
+  K.pick(st.sheetFT, (hit) => tapCell(S, hit, 'ft'));
+  /* fins: B's r columns stand left of the slab (entry i beside output row i), A's r rows behind it (entry j behind input j) */
+  st.fins = vertexBuffer(FIN_V, false); st.finEdge = vertexBuffer(EDGE_V, true); st.slabG.add(st.fins, st.finEdge);
+  st.rails = inst(unitBox, brass, 2 * RMAX + 4); st.posts = inst(unitCyl, brass, 4); st.slabG.add(st.rails, st.posts);
+  /* the full-fine-tune target as 144 teal beads, and red rods for what the sheet misses */
+  st.tbeads = inst(smallBead, K.mat.paint(C.aux), D * D); st.slabG.add(st.tbeads);
+  st.rods = inst(unitCyl, K.mat.paint(C.grad), D * D); st.slabG.add(st.rods);
+  /* the comb: singular values of ΔW (violet) and of ΔW* (teal), in front of the slab */
+  st.comb = inst(unitBox, K.mat.paint('#ffffff'), 2 * D, { color: C.dir }); st.slabG.add(st.comb);
+  st.combRail = new THREE.Mesh(unitBox, brass);
+  st.combRail.scale.set(FX1 - FX0 + 0.2, 0.02, 0.1); st.combRail.position.set(OX, 0.01, OZ + HALF + 0.3);
+  st.combRail.castShadow = true; st.slabG.add(st.combRail);
+
+  /* ---- the effect room (d = 3 toy, W = I): a 3 x 3 x 3 lattice of inputs and where ΔW sends them ---- */
+  const E = new THREE.Group(); st.effG = E; root.add(E);
+  const stand = new THREE.Mesh(unitCyl, brass); stand.scale.set(0.016, E0.y - 0.63, 0.016); stand.position.set(E0.x, (E0.y - 0.63) / 2, E0.z);
+  const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.24, 0.05, 32), brass); foot.position.set(E0.x, 0.025, E0.z);
+  stand.castShadow = foot.castShadow = true;
+  E.add(stand, foot);
+  st.inputs = effectInputs();
+  const nIn = st.inputs.length;
+  st.inBeads = inst(smallBead, K.mat.paint(C.data), nIn); st.inBeads.count = nIn; E.add(st.inBeads);
+  st.outBeads = inst(smallBead, K.mat.paint(C.dir), nIn); st.outBeads.count = nIn; E.add(st.outBeads);
+  st.strings = inst(unitCyl, K.mat.paint(C.dir), nIn); st.strings.count = nIn; E.add(st.strings);
+  for (let n = 0; n < nIn; n++) setInst(st.inBeads, n, E0.x + st.inputs[n][0], E0.y + st.inputs[n][1], E0.z + st.inputs[n][2], 0.05, 0.05, 0.05);
+  st.inBeads.instanceMatrix.needsUpdate = true;
+  K.pick(st.inBeads, (hit) => { if (hit.instanceId != null) { st.focus = hit.instanceId; drawEffect(S); note(S); S.invalidate(); } });
+  const lattice = (hex, op) => {
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(LATTICE_EDGES.length * 6), 3));
+    return new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: hex, transparent: true, opacity: op }));
+  };
+  st.latIn = lattice(C.data, 0.45); st.latOut = lattice(C.dir, 0.8); E.add(st.latIn, st.latOut);
+  setLattice(st.latIn, st.inputs);
+  /* the glass pane: the inputs a rank-1 sheet cannot see (a₁·x = 0) */
+  st.pane = new THREE.Group();
+  const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1.7), K.mat.glass('#e6eef7', 0.3));
+  glass.material.side = THREE.DoubleSide; glass.userData.noFit = true; st.pane.add(glass);
+  for (const [x, y, sx, sy] of [[0, 0.85, 1.72, 0.016], [0, -0.85, 1.72, 0.016], [0.85, 0, 0.016, 1.72], [-0.85, 0, 0.016, 1.72]]) {
+    const m = new THREE.Mesh(unitBox, brass); m.scale.set(sx, sy, 0.016); m.position.set(x, y, 0); m.userData.noFit = true; st.pane.add(m);
+  }
+  st.pane.position.copy(E0); E.add(st.pane);
+  /* the null line of a rank-2 sheet (glass tube, brass core) */
+  st.nullRod = new THREE.Mesh(unitCyl, K.mat.glass('#e6eef7', 0.45));
+  const core = new THREE.Mesh(unitCyl, brass); core.scale.set(0.22, 1, 0.22); st.nullRod.add(core); E.add(st.nullRod);
+  st.aArrows = [0, 1, 2].map(() => { const a = K.arrow([0, 0, 0], [0, 1, 0], READ, { r: 0.016 }); E.add(a.group); return a; });
+  st.bArrows = [0, 1, 2].map(() => { const a = K.arrow([0, 0, 0], [0, 1, 0], C.dir, { r: 0.026 }); E.add(a.group); return a; });
+  st.focusRing = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.013, 8, 32), brass); E.add(st.focusRing);
+  st.focusPlane = PLANE_POINT;                      // (0, 0.6, 0): on sheet 1's blind plane
+  st.focus = 9 * 2 + 3 * 0 + 2;                     // (0.6, −0.6, 0.6): front, right, low; sheet 1 reads it most
+
+  /* ---- labels ---- */
+  st.tagW = K.label([OX + HALF - 0.3, 0.02, OZ + HALF + 0.1], { 1: 'W · frozen', 2: 'W · frozen', 3: 'W₀ · frozen' }, { cls: 'tag', anchor: 'top', dy: 8 });
+  st.tagB = K.label([0, 0, 0], { 1: 'strip B', 2: 'B · d × r', 3: 'B ∈ ℝ^(d×r)' }, { cls: 'tag', anchor: 'top', dy: 6 });
+  st.tagA = K.label([0, 0, 0], { 1: 'strip A', 2: 'A · r × d', 3: 'A ∈ ℝ^(r×d)' }, { cls: 'tag', anchor: 'left', dx: 8 });
+  st.tagS = K.label([FX1 + 0.04, Y_S, FZ1], { 1: 'the sheet', 2: 'ΔW = (α/r)·B·A', 3: 'ΔW = (α/r)·BA' }, { cls: 'tag', anchor: 'left', dx: 8 });
+  st.tagT = K.label([FX1 + 0.04, Y_S, FZ1], { 1: 'full fine-tune', 2: 'ΔW* (full, toy)', 3: 'ΔW* (dense, toy)' }, { cls: 'tag', anchor: 'left', dx: 8 });
+  st.tagC = K.label([FX1 + 0.12, 0.05, OZ + HALF + 0.3], { 1: 'sheet strengths', 2: 'singular values', 3: 'σₖ' }, { cls: 'tag', anchor: 'left', dx: 8 });
+  st.tagRead = K.label([0, 0, 0], { 1: 'A: reads', 2: 'a₁ · reads', 3: 'a₁ (row of A)' }, { cls: 'tag', anchor: 'left', dx: 6 });
+  st.tagWrite = K.label([0, 0, 0], { 1: 'B: pushes', 2: 'b₁ · writes', 3: 'b₁ (column of B)' }, { cls: 'tag', anchor: 'bottom', dy: -6 });
+  st.tagPlane = K.label([0, 0, 0], { 1: 'glass: ignored', 2: 'a·x = 0: no change', 3: 'null(A)' }, { cls: 'tag', anchor: 'left', dx: 6 });
+  st.note = K.label([0, 0, 0], '', { cls: 'note', anchor: 'bottom', dy: -8 });
+  st.readout = K.label([0, 0, 0], '', { cls: 'readout', anchor: 'bottom', dy: -12 });
+  st.readout.show(false);
+  st.fig = K.figure(); root.add(st.fig.group); st.fig.group.visible = false;
+}
+function setLattice(lines, pts) {
+  const p = lines.geometry.attributes.position.array;
+  LATTICE_EDGES.forEach(([a, b], e) => {
+    for (const [o, n] of [[0, a], [3, b]]) { p[6 * e + o] = E0.x + pts[n][0]; p[6 * e + o + 1] = E0.y + pts[n][1]; p[6 * e + o + 2] = E0.z + pts[n][2]; }
+  });
+  lines.geometry.attributes.position.needsUpdate = true;
+  lines.geometry.computeBoundingSphere();
+}
+
+/* ============================================================ compute + draw */
+
+function compute(S) {
+  const st = S.state, k = S.knobs, r = k.r, al = k.alpha;
+  const f = st.zeroB ? initFactors(r) : loraFactors(TG, r);
+  st.B = f.B; st.A = f.A; st.r = r; st.al = al; st.s = scaling(al, r);
+  st.dW = deltaW(st.B, st.A, al, r);
+  st.sv = svd(st.dW).S; st.rank = numericRank(st.sv);
+  st.hlk = k.hl > 0 ? Math.min(k.hl, r) : 0;
+  st.sheetK = st.hlk ? sheetK(st.B, st.A, al, r, st.hlk - 1) : null;
+  st.err = relErr(TG.T, st.dW); st.best = eckartYoung(TSVD.S, r);
+  st.maxAbs = Math.max(...st.dW.map((row) => Math.max(...row.map(Math.abs))));
+  st.E = effectFactors(r);
+  st.outs = st.inputs.map((x) => effectMove(x, st.E.B, st.E.A, al, r));
+  st.effRank = numericRank(svd(matmul(st.E.B, st.E.A)).S);
+}
+
+function drawFins(S, on) {
+  const st = S.state, r = st.r;
+  const P = st.fins.geometry.attributes.position.array, Cv = st.fins.geometry.attributes.color.array;
+  const EP = st.finEdge.geometry.attributes.position.array, EC = st.finEdge.geometry.attributes.color.array;
+  const hot = new THREE.Color(C.dir), pale = new THREE.Color(PALE), hotE = new THREE.Color('#3b2c7e'), paleE = new THREE.Color('#b3a6de');
+  let nv = 0, ne = 0, nr = 0, np = 0;
+  const put = (p, c) => { P.set(p, 3 * nv); Cv[3 * nv] = c.r; Cv[3 * nv + 1] = c.g; Cv[3 * nv + 2] = c.b; nv++; };
+  const putE = (p, c) => { EP.set(p, 3 * ne); EC[3 * ne] = c.r; EC[3 * ne + 1] = c.g; EC[3 * ne + 2] = c.b; ne++; };
+  if (on) {
+    for (let k = 0; k < r; k++) {
+      const isHot = st.hlk === 0 || st.hlk === k + 1, c = isHot ? hot : pale, ce = isHot ? hotE : paleE;
+      for (const side of [0, 1]) {                   // 0: column k of B (along z), 1: row k of A (along x)
+        const at = side === 0 ? (u, h) => [finX(k, r), Y_S + h, u] : (u, h) => [u, Y_S + h, finZ(k, r)];
+        const us = side === 0 ? cellZ : cellX;
+        const hs = Array.from({ length: D }, (_, i) => KF * (side === 0 ? st.B[i][k] : st.A[k][i]));
+        for (let i = 0; i < D - 1; i++) {
+          const u0 = us(i), u1 = us(i + 1), h0 = hs[i], h1 = hs[i + 1];
+          const tri = (a, b, w) => { put(at(...a), c); put(at(...b), c); put(at(...w), c); };
+          if (h0 * h1 < 0) {                         // the curve crosses its baseline: split at the crossing
+            const uc = u0 + (h0 / (h0 - h1)) * (u1 - u0);
+            tri([u0, 0], [u0, h0], [uc, 0]); tri([uc, 0], [u1, h1], [u1, 0]);
+          } else { tri([u0, 0], [u0, h0], [u1, h1]); tri([u0, 0], [u1, h1], [u1, 0]); }
+          putE(at(u0, h0), ce); putE(at(u1, h1), ce);
+        }
+      }
+      setInst(st.rails, nr++, finX(k, r), Y_S, (FZ0 + FZ1) / 2, 0.016, 0.012, FZ1 - FZ0);
+      setInst(st.rails, nr++, (FX0 + FX1) / 2, Y_S, finZ(k, r), FX1 - FX0, 0.012, 0.016);
+    }
+    const xo = finX(r - 1, r) - 0.02, zo = finZ(r - 1, r) - 0.02;   // crossbars from the frame out to the last fin, on two posts each
+    for (const z of [FZ0, FZ1]) { setInst(st.rails, nr++, (xo + FX0) / 2, Y_S, z, FX0 - xo, 0.014, 0.018); setRod(st.posts, np++, V(xo, 0, z), V(xo, Y_S, z), 0.011); }
+    for (const x of [FX0, FX1]) { setInst(st.rails, nr++, x, Y_S, (zo + FZ0) / 2, 0.018, 0.014, FZ0 - zo); setRod(st.posts, np++, V(x, 0, zo), V(x, Y_S, zo), 0.011); }
+  }
+  P.fill(0, 3 * nv); EP.fill(0, 3 * ne);           // stale tail -> origin (keeps bounds honest)
+  for (const [m, n] of [[st.fins, nv], [st.finEdge, ne]]) {
+    const g = m.geometry;
+    g.setDrawRange(0, n);
+    g.attributes.position.needsUpdate = true; g.attributes.color.needsUpdate = true;
+    m.visible = on && n > 0;
+  }
+  if (on) st.fins.geometry.computeVertexNormals();
+  st.fins.geometry.computeBoundingSphere(); st.finEdge.geometry.computeBoundingSphere();
+  st.rails.count = nr; st.posts.count = np;
+  for (const m of [st.rails, st.posts]) { m.instanceMatrix.needsUpdate = true; m.visible = on; }
+}
+
+function draw(S) {
+  const st = S.state, view = S.knobs.view, eff = view === 'effect';
+  st.slabG.visible = !eff; st.effG.visible = eff;
+  const ft = view === 'ft', full = view === 'full';
+  /* sheets */
+  st.sheet.visible = !ft && !eff;
+  st.sheetFT.visible = ft;
+  if (ft) setSheet(st.sheetFT, TG.T, Y_S);
+  if (st.sheet.visible) setSheet(st.sheet, st.dW, Y_S);
+  const hl = st.sheet.visible && st.hlk > 0, mat = st.sheet.material;
+  if (mat.transparent !== hl) { mat.transparent = hl; mat.depthWrite = !hl; mat.needsUpdate = true; }
+  mat.opacity = hl ? 0.28 : 1;
+  st.sheetHL.visible = st.frameHL.visible = hl;
+  if (hl) { setSheet(st.sheetHL, st.sheetK, Y_S + st.lift); st.frameHL.position.y = Y_S + st.lift; }
+  /* fins */
+  const finsOn = !ft && !eff;
+  drawFins(S, finsOn);
+  /* target beads + residual rods (full view) */
+  let nb = 0, nd = 0;
+  if (full) {
+    const a = new THREE.Vector3(), b = new THREE.Vector3();
+    for (let i = 0; i < D; i++) for (let j = 0; j < D; j++) {
+      const yt = Y_S + squash(KH * TG.T[i][j]), ys = Y_S + squash(KH * st.dW[i][j]);
+      setInst(st.tbeads, nb++, cellX(j), yt, cellZ(i), 0.026, 0.026, 0.026);
+      if (Math.abs(yt - ys) > 0.012) { a.set(cellX(j), ys, cellZ(i)); b.set(cellX(j), yt, cellZ(i)); setRod(st.rods, nd++, a, b, 0.011); }
+    }
+  }
+  st.tbeads.count = nb; st.rods.count = nd;
+  st.tbeads.instanceMatrix.needsUpdate = st.rods.instanceMatrix.needsUpdate = true;
+  st.tbeads.visible = st.rods.visible = full;
+  /* comb: σ_k of the sheet (violet, only the non-zero ones) and, in the full view, of ΔW* (teal) */
+  const combOn = !eff && !ft && st.combOn;
+  let nc = 0;
+  if (combOn) {
+    const z = OZ + HALF + 0.3;
+    for (let k = 0; k < D; k++) {
+      const hs = squash(KSIG * st.sv[k]);
+      if (st.sv[k] > RANK_TOL * (st.sv[0] || 1)) setInst(st.comb, nc++, cellX(k) - (full ? 0.036 : 0), 0.02 + hs / 2, z, 0.06, Math.max(hs, 0.004), 0.06, C.dir);
+      if (full) { const ht = squash(KSIG * TSVD.S[k]); setInst(st.comb, nc++, cellX(k) + 0.036, 0.02 + ht / 2, z, 0.06, ht, 0.06, C.aux); }
+    }
+  }
+  st.comb.count = nc; st.comb.instanceMatrix.needsUpdate = true; if (st.comb.instanceColor) st.comb.instanceColor.needsUpdate = true;
+  st.comb.visible = st.combRail.visible = combOn;
+  /* tags */
+  const tags = !eff && st.tagsOn, r = st.r;
+  st.tagW.show(tags); st.tagB.show(tags && finsOn); st.tagA.show(tags && finsOn);
+  st.tagS.show(tags && !ft && !hl); st.tagT.show(tags && ft); st.tagC.show(combOn && st.tagsOn);
+  st.tagB.move([finX((r - 1) / 2, r), Y_S - 0.05, FZ1 + 0.12]);
+  st.tagA.move([FX1 + 0.05, Y_S + 0.34, finZ(0, r)]);
+  if (eff) drawEffect(S);
+  else { st.tagRead.show(false); st.tagWrite.show(false); st.tagPlane.show(false); }
+  note(S);
+  S.invalidate();
+}
+
+function drawEffect(S) {
+  const st = S.state, r = st.r, nIn = st.inputs.length;
+  const a = new THREE.Vector3(), b = new THREE.Vector3();
+  for (let n = 0; n < nIn; n++) {
+    const x = st.inputs[n], y = st.outs[n];
+    a.set(E0.x + x[0], E0.y + x[1], E0.z + x[2]); b.set(E0.x + y[0], E0.y + y[1], E0.z + y[2]);
+    setInst(st.outBeads, n, b.x, b.y, b.z, 0.036, 0.036, 0.036);
+    setRod(st.strings, n, a, b, a.distanceTo(b) > 0.004 ? 0.008 : 0.0001);
+  }
+  st.outBeads.instanceMatrix.needsUpdate = st.strings.instanceMatrix.needsUpdate = true;
+  setLattice(st.latOut, st.outs);
+  /* reading directions (rows of A) and writing directions (columns of B), drawn as unit directions */
+  const EA = st.E.A, EB = st.E.B;
+  for (let k = 0; k < 3; k++) {
+    const on = k < r;
+    st.aArrows[k].show(on); st.bArrows[k].show(on);
+    if (!on) continue;
+    const av = V(...EA[k]).normalize(), bv = V(EB[0][k], EB[1][k], EB[2][k]).normalize();
+    st.aArrows[k].set(E0, E0.clone().addScaledVector(av, 1.18));
+    st.bArrows[k].set(E0, E0.clone().addScaledVector(bv, 1.22));
+    if (k === 0) { st.tagRead.move(E0.clone().addScaledVector(av, 1.22)); st.tagWrite.move(E0.clone().addScaledVector(bv, 1.3)); }
+  }
+  st.tagRead.show(true); st.tagWrite.show(true);
+  /* what the adapter ignores: the plane a₁·x = 0 (r = 1), the line null(A) (r = 2), nothing (r ≥ 3) */
+  const a1 = V(...EA[0]).normalize();
+  st.pane.visible = r === 1; st.nullRod.visible = r === 2;
+  st.tagPlane.show(r <= 2);
+  if (r === 1) {
+    st.pane.quaternion.setFromUnitVectors(V(0, 0, 1), a1);
+    const side = UPV.clone().cross(a1); if (side.z < 0) side.negate();          // along the glass, towards the viewer
+    st.tagPlane.move(E0.clone().addScaledVector(UPV, 0.86).addScaledVector(side, 0.6));
+  }
+  if (r === 2) {
+    const nl = V(...EA[0]).cross(V(...EA[1])).normalize(); if (nl.y < 0) nl.negate();
+    st.nullRod.position.copy(E0); st.nullRod.quaternion.setFromUnitVectors(UPV, nl); st.nullRod.scale.set(0.03, 2.3, 0.03);
+    st.tagPlane.move(E0.clone().addScaledVector(nl, 1.12));
+  }
+  const x = st.inputs[st.focus];
+  st.focusRing.position.set(E0.x + x[0], E0.y + x[1], E0.z + x[2]);
+}
+
+/* ============================================================ notes (live maths) */
+
+function tapCell(S, hit, which) {
+  const st = S.state, p = hit.point.clone(); S.root.worldToLocal(p);
+  const j = Math.max(0, Math.min(D - 1, Math.round((p.x - cellX(0)) / CS))), i = Math.max(0, Math.min(D - 1, Math.round((p.z - cellZ(0)) / CS)));
+  st.cell = { i, j, which };
+  note(S);
+  S.invalidate();
+}
+
+function note(S) {
+  const st = S.state, t = S.tier, view = S.knobs.view;
+  const N0 = st.note, R0 = st.readout;
+  R0.show(false);
+  /* a tapped knot shows its own sum, next to it */
+  if (st.cell && view !== 'effect') {
+    const { i, j, which } = st.cell, y = Y_S + (which === 'hl' ? st.lift : 0);
+    const M = which === 'ft' ? TG.T : which === 'hl' ? st.sheetK : st.dW;
+    if (!M || (which === 'ft') !== (view === 'ft')) st.cell = null;
+    else {
+      const v = M[i][j], s = fmt(st.s, 3);
+      R0.move([cellX(j), y + squash(KH * v) + 0.03, cellZ(i)]).show(true);
+      if (which === 'ft') R0.set(t === 1 ? `this cell changes by ${fx(v, 3)}` : `ΔW*[${i}, ${j}] = ${fx(v, 3)} (its own number)`);
+      else if (which === 'hl') {
+        const k = st.hlk - 1;
+        R0.set(t === 1 ? `${s} × ${fx(st.B[i][k], 3)} × ${fx(st.A[k][j], 3)} = ${fx(v, 3)}`
+          : `(α/r)·B[${i},${k}]·A[${k},${j}]\n= ${s} × ${fx(st.B[i][k], 3)} × ${fx(st.A[k][j], 3)} = ${fx(v, 3)}`);
+      } else {
+        const terms = st.B[i].map((b, k) => b * st.A[k][j]), sum = terms.reduce((a, x) => a + x, 0);
+        const shown = terms.slice(0, 3).map((x) => fx(x, 3)).join(' + ') + (terms.length > 3 ? ' + …' : '');
+        R0.set(t === 1 ? `${s} × (${shown}) = ${fx(v, 3)}`
+          : `ΔW[${i}, ${j}] = (α/r)·Σₖ B[${i},k]·A[k,${j}]\n= ${s} × (${shown})\n= ${s} × ${fx(sum, 4)} = ${fx(v, 3)}`);
+      }
+    }
+  }
+  /* which note: the beat's, unless the view knob has moved away from it */
+  let m = view === 'ft' ? 'ft' : view === 'full' ? 'rank' : view === 'effect' ? 'effect' : st.noteMode;
+  if (view === 'sheet' && (!m || m === 'ft' || m === 'rank' || m === 'effect')) m = 'params';
+  if (m === 'table' && !st.hlk) m = 'params';
+  if (!st.noteMode) m = null;
+  if (!m) { N0.show(false); return; }
+  N0.show(true).anchor('bottom');
+  const r = st.r, al = st.al, s = fmt(st.s, 3), hi = [OX + 0.35, Y_S + 0.78, OZ - HALF - 0.1];
+  if (m === 'effect') {
+    const x = st.inputs[st.focus], y = st.outs[st.focus], d = Math.hypot(y[0] - x[0], y[1] - x[1], y[2] - x[2]);
+    const ax = st.E.A.map((row) => dot(row, x));
+    const an = x[1] > 0.3 ? 'bottom' : x[1] < -0.3 ? 'top' : 'left', dy = an === 'bottom' ? 0.1 : an === 'top' ? -0.13 : 0;   // clear of the ring
+    N0.move([E0.x + x[0] + (an === 'left' ? 0.1 : 0), E0.y + x[1] + dy, E0.z + x[2]]).anchor(an);
+    if (r === 1) N0.set(t === 1 ? `reads ${fx(ax[0], 2)} along a\npushed ${fx(d, 2)} along b`
+      : t === 2 ? `a·x = ${fx(ax[0], 3)}\nΔW·x = ${s} × ${fx(ax[0], 3)} × b\nmoved ${fx(d, 3)}`
+        : `aᵀx = ${fx(ax[0], 4)}, s = α/r = ${s}\n‖ΔW x‖ = s·|aᵀx|·‖b‖ = ${fx(d, 4)}`);
+    else N0.set(t === 1 ? `reads ${ax.slice(0, 3).map((v) => fx(v, 2)).join(', ')}${r > 3 ? ', …' : ''}\npushed ${fx(d, 2)} · rank ${st.effRank}`
+      : `a·x: ${ax.slice(0, 3).map((v) => fx(v, 3)).join(', ')}${r > 3 ? ', …' : ''}\nmoved ${fx(d, 3)} · rank ΔW = ${st.effRank}${r > 3 ? ' ≤ d' : ''}`);
+    return;
+  }
+  N0.move(hi);
+  if (m === 'ft') {
+    N0.set(t === 1 ? `all ${int(N.full12)} numbers move\nd = 4096: ${int(N.full4096)}` : `ΔW*: all ${D}² = ${int(N.full12)} cells train\nd = 4096: ${int(N.full4096)}`);
+    return;
+  }
+  if (m === 'rank') {
+    N0.set(t === 1 ? `${st.rank} strength bar${st.rank === 1 ? '' : 's'} (full change: ${N.rankT})\nbest ${r}-strip sheet misses ${pc(st.best, 1)}\nthis one misses ${pc(st.err, 1)}`
+      : `rank ΔW = ${st.rank}, rank ΔW* = ${N.rankT}\nbest rank-${r} misses ${pc(st.best, 1)}\nthis sheet misses ${pc(st.err, 1)}`);
+    return;
+  }
+  if (m === 'zero') {
+    N0.set(t === 1 ? `step 0: strip B is all zeros\nflat: max |ΔW| = ${fx(st.maxAbs, 3)}` : `B = 0, A ~ U(±1/√${D})\nmax |ΔW| = ${fx(st.maxAbs, 3)}: base model`);
+    return;
+  }
+  if (m === 'em') {
+    N0.set(t === 1 ? `ARENA's organism: 9 one-strip sheets\n= ${int(N.org1)} numbers` : `R1_3_3_3: 9 × (13,824 + 5,120)\n= ${int(N.org1)} (one down_proj: ${fmt(N.down / 1e6, 3)} M)`);
+    return;
+  }
+  if (m === 'organism') {
+    const k = (st.hlk || 1), kk = sub(k);
+    N0.set(t === 1 ? `B: where it pushes ('then')\nA: what it looks for ('if')` : `b${kk}: 'then' (writes, ${D} numbers)\na${kk}: 'if' (reads, ${D} numbers)\nsheet = ${s}·b${kk}a${kk}ᵀ`);
+    return;
+  }
+  if (m === 'table') {
+    N0.move([OX + 0.35, Y_S + st.lift + 0.62, OZ - HALF - 0.1]);
+    N0.set(t === 1 ? `sheet ${st.hlk} of ${r}: strip × strip\ntap any knot` : `sheet ${st.hlk} = (α/r)·b${sub(st.hlk)}a${sub(st.hlk)}ᵀ, rank 1\nΔW = sheet 1 + … + sheet ${r}`);
+    return;
+  }
+  const lo = loraParams(D, D, r), f = fullParams(D, D), lr = loraParams(4096, 4096, r), fr = fullParams(4096, 4096);
+  if (m === 'peft') {
+    N0.set(t === 1 ? `r = ${r} strips, lora_alpha = ${al}\nvolume = ${al}/${r} = ${s}` : `LoraConfig(r=${r}, lora_alpha=${al})\nscaling = ${al}/${r} = ${s}`);
+    return;
+  }
+  N0.set(t === 1 ? `${int(lo)} numbers (slab: ${int(f)})\nd = 4096: ${int(lr)} (${pc(lr / fr, 3)})\nvolume α/r = ${s}`
+    : `2·d·r = ${int(lo)} vs d² = ${int(f)} · rank ${st.rank}\nd = 4096: ${int(lr)} (${pc(lr / fr, 3)})\nα/r = ${al}/${r} = ${s}`);
+}
+
+function dimKnobs(S) {        // the kit cannot dim knobs: grey the ones that do nothing in this view
+  const dim = (id, on) => { const el = document.getElementById('k-' + id); const row = el && el.closest('.k-knob'); if (row) row.style.opacity = on ? '0.42' : ''; };
+  const v = S.knobs.view;
+  dim('r', v === 'ft'); dim('alpha', v === 'ft'); dim('hl', v === 'ft' || v === 'effect');
+}
+
+/* scene configuration shared by beats and predictions */
+function scene(S, o = {}) {
+  const st = S.state;
+  if (!!o.zero !== st.zeroB) { st.zeroB = !!o.zero; compute(S); }
+  st.noteMode = o.note || null;
+  st.combOn = o.comb !== false;
+  st.tagsOn = o.tags !== false;
+  st.cell = null;
+  if (o.focus != null) st.focus = o.focus === 'plane' ? st.focusPlane : o.focus;
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || [1.95, 0, 0.5], o.face || [OX, 0.6, OZ]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.at });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  draw(S);
+  dimKnobs(S);
+}
+function lift(S, on) {        // pull a sheet out of the stack (animated unless ?shot=1)
+  const st = S.state;
+  if (S.shot || !on) { st.lift = LIFT; draw(S); return; }
+  st.lift = 0.02;
+  S.tween(700, (u) => {
+    st.lift = 0.02 + (LIFT - 0.02) * u;
+    if (st.hlk) { setSheet(st.sheetHL, st.sheetK, Y_S + st.lift); st.frameHL.position.y = Y_S + st.lift; }
+    if (st.noteMode === 'table') note(S);
+    S.invalidate();
+  }, K.ease.out);
+}
+
+/* ================================================================ STL solids */
+
+function sheetSolid(M, y0, th = 0.035) {       // watertight thin sheet; JSCAD is z-up: three (x, y, z) -> (x, -z, y)
+  const top = (i, j) => [cellX(j), -cellZ(i), y0 + squash(KH * M[i][j])];
+  const bot = (i, j) => { const p = top(i, j); return [p[0], p[1], p[2] - th]; };
+  const polys = [];
+  for (let i = 0; i < D - 1; i++) for (let j = 0; j < D - 1; j++) {
+    polys.push([top(i, j), top(i + 1, j), top(i + 1, j + 1)], [top(i, j), top(i + 1, j + 1), top(i, j + 1)]);
+    polys.push([bot(i, j), bot(i + 1, j + 1), bot(i + 1, j)], [bot(i, j), bot(i, j + 1), bot(i + 1, j + 1)]);
+  }
+  for (let j = 0; j < D - 1; j++) {
+    polys.push([top(0, j), top(0, j + 1), bot(0, j + 1), bot(0, j)]);
+    polys.push([top(D - 1, j), bot(D - 1, j), bot(D - 1, j + 1), top(D - 1, j + 1)]);
+  }
+  for (let i = 0; i < D - 1; i++) {
+    polys.push([top(i, 0), bot(i, 0), bot(i + 1, 0), top(i + 1, 0)]);
+    polys.push([top(i, D - 1), top(i + 1, D - 1), bot(i + 1, D - 1), bot(i, D - 1)]);
+  }
+  return J.geometries.geom3.fromPoints(polys);
+}
+const cub = (x, y, z, sx, sy, sz) => J.primitives.cuboid({ size: [sx, sz, sy], center: [x, -z, y] });
+
+/* ================================================================== run() */
+
+const OPT_ERR2 = pc(N.ey2, 0);
+
+run({
+  id: 'w12-sheet', num: '24', week: 12, kind: 'weekly',
+  title: 'One thin sheet',
+  subtitle: 'A LoRA fine-tune is a thin sheet laid on a giant slab, and one sheet can tilt a whole model.',
+  back2d: '#week-12',
+  film: 'w12-capstone',
+  plinth: { r: 2.5, h: 0.14 },
+
+  knobs: [
+    { id: 'view', type: 'select', wide: true, label: { 1: 'Show', 2: 'View', 3: 'View' }, value: 'sheet',
+      options: [['ft', { 1: 'A full fine-tune (every number)', 2: 'Full fine-tune ΔW* (toy)', 3: 'dense ΔW* (toy)' }],
+        ['sheet', { 1: 'The LoRA sheet', 2: 'LoRA sheet ΔW = (α/r)·B·A', 3: 'ΔW = (lora_alpha/r)·B·A' }],
+        ['full', { 1: 'Sheet vs full fine-tune', 2: 'Can the sheet copy ΔW*?', 3: 'rank-r sheet vs ΔW* (Eckart–Young)' }],
+        ['effect', { 1: 'What it does to inputs (3-D toy)', 2: 'Effect on inputs (d = 3 toy)', 3: 'x ↦ x + ΔW·x (d = 3, W = I)' }]] },
+    { id: 'r', type: 'range', label: { 1: 'Strips (rank r)', 2: 'Rank r', 3: 'r' }, min: 1, max: RMAX, step: 1, value: 4, fmt: (v) => String(v) },
+    { id: 'alpha', type: 'range', label: { 1: 'Volume (lora_alpha)', 2: 'lora_alpha α', 3: 'lora_alpha' }, min: 1, max: 64, step: 1, value: 32, fmt: (v) => String(v) },
+    { id: 'hl', type: 'range', label: { 1: 'Lift out sheet k (0 = none)', 2: 'Lift out sheet k (0 = none)', 3: 'lift sheet k (0 = none)' }, min: 0, max: RMAX, step: 1, value: 0,
+      fmt: (v) => (v === 0 ? 'none' : String(v)) },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.lift = LIFT; st.combOn = true; st.tagsOn = true; st.zeroB = false; st.noteMode = 'params';
+    build(S);
+    st.focusMax = st.focus;                            // (0.6, −0.6, 0.6): a front corner that sheet 1 reads most strongly
+  },
+
+  rebuild(S, id) {
+    const st = S.state;
+    if (id !== '*') {                                  // a hand on a knob ends any special view
+      if (st.zeroB) { st.zeroB = false; if (st.noteMode === 'zero') st.noteMode = 'params'; }
+      st.cell = null;
+    }
+    compute(S);
+    if (id === 'hl' && st.hlk) lift(S, true);
+    draw(S);
+    dimKnobs(S);
+  },
+
+  onTier(S) { note(S); S.invalidate(); },
+
+  solids(S) {
+    const st = S.state, out = [];
+    out.push(cub(OX, SLAB_H / 2, OZ, 2 * HALF + 0.08, SLAB_H, 2 * HALF + 0.08));
+    const view = S.knobs.view;
+    out.push(sheetSolid(view === 'ft' ? TG.T : st.dW, Y_S));
+    for (const x of [FX0, FX1]) for (const z of [FZ0, FZ1]) {
+      out.push(J.primitives.cylinder({ radius: 0.02, height: Y_S - SLAB_H, center: [x, -z, (Y_S + SLAB_H) / 2], segments: 12 }));
+    }
+    if (view !== 'ft') {                               // fins as printable bars (one per entry) on rails, crossbars and posts
+      const r = st.r, xo = finX(r - 1, r) - 0.02, zo = finZ(r - 1, r) - 0.02;
+      for (let k = 0; k < r; k++) {
+        const xb = finX(k, r), za = finZ(k, r);
+        out.push(cub(xb, Y_S, (FZ0 + FZ1) / 2, 0.03, 0.02, FZ1 - FZ0), cub((FX0 + FX1) / 2, Y_S, za, FX1 - FX0, 0.02, 0.03));
+        for (let i = 0; i < D; i++) { const h = KF * st.B[i][k]; if (Math.abs(h) > 0.004) out.push(cub(xb, Y_S + h / 2, cellZ(i), 0.03, Math.abs(h), CS * 0.8)); }
+        for (let j = 0; j < D; j++) { const h = KF * st.A[k][j]; if (Math.abs(h) > 0.004) out.push(cub(cellX(j), Y_S + h / 2, za, CS * 0.8, Math.abs(h), 0.03)); }
+      }
+      for (const z of [FZ0, FZ1]) out.push(cub((xo + FX0) / 2, Y_S, z, FX0 - xo, 0.025, 0.03), cub(xo, Y_S / 2, z, 0.03, Y_S, 0.03));
+      for (const x of [FX0, FX1]) out.push(cub(x, Y_S, (zo + FZ0) / 2, 0.03, 0.025, FZ0 - zo), cub(x, Y_S / 2, zo, 0.03, Y_S, 0.03));
+    }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**A weight matrix is a slab of numbers.** This one is 12 × 12 = 144. A normal fine-tune nudges every single one: the teal sheet (toy). A real 4096-wide layer holds 16.8 million.',
+        2: `**Weights are slabs.** One layer's W maps d inputs to d outputs with d² numbers: 144 here, ${int(N.full4096)} at d = 4096. Full fine-tuning learns a change ΔW for every cell (teal, toy), and Adam keeps two more numbers per weight while it trains.`,
+        3: `Full fine-tuning: W ← W + ΔW, ΔW dense in ℝ^(d_out×d_in), every entry trained (plus Adam's m and v per weight). The teal ΔW* is a toy full-rank change, singular values ${fmt(TSVD.S[0], 2)} … ${fmt(TSVD.S[D - 1], 2)}. At d = 4096 one square matrix is ${int(N.full4096)} trainable entries.`,
+      },
+      cam: CAM.slab,
+      set: { view: 'ft', r: 4, alpha: 32, hl: 0 },
+      enter(S) { scene(S, { note: 'ft', figure: 'shrug', figAt: [1.95, 0, 0.62], face: [0, 0.6, 3] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**LoRA leaves the slab alone.** It learns two thin strips, B (left) and A (back), and lays their product on top as one violet sheet. Here 96 numbers; at real size about 0.2% of the slab.',
+        2: `**LoRA (Hu et al. 2021): freeze W, learn a thin update.** W′ = W + (α/r)·B·A; B is d × r (left fins), A is r × d (back fins). Only 2dr numbers train: ${N.lora12r4} vs ${N.full12} here, ${int(N.lora4096r4)} vs 16.8 M at d = 4096, r = 4. The sheet is ΔW, computed live.`,
+        3: `h = W₀x + (α/r)·B(Ax); W₀ frozen, A ∈ ℝ^(r×d_in), B ∈ ℝ^(d_out×r), peft's scaling = lora_alpha/r. Trainable r(d_in + d_out): ${N.lora12r4} at d = 12, ${int(N.lora4096r4)} at d = 4096 (${pc(N.lora4096r4 / N.full4096, 3)}). After training, merge W ← W₀ + (α/r)BA: no extra cost at inference.`,
+      },
+      cam: CAM.sheet,
+      set: { view: 'sheet', r: 4, alpha: 32, hl: 0 },
+      enter(S) { scene(S, { note: 'params' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Read the sheet like a times table.** Each knot = a number on the left strip × a number on the back strip. LoRA\'s update is r such tables added up; one is lifted out here. Tap a knot.',
+        2: '**BA is r outer products added up.** Sheet k is column k of B times row k of A: cell (i, j) = B[i,k]·A[k,j], the \'i, j -> i j\' of the matmul cube. So every row of one sheet has the same shape, rescaled. Tap a knot to see its sum.',
+        3: 'BA = Σₖ b_k a_kᵀ = einsum(\'ik,kj->ij\', B, A); each term has rank 1, so rank(BA) ≤ r. The lifted sheet is (α/r)·b₁a₁ᵀ. Compute B(Ax), never the d × d product: ARENA calls that order "very wasteful", as it is huge but only rank r.',
+      },
+      cam: CAM.table,
+      set: { view: 'sheet', r: 4, alpha: 32, hl: 1 },
+      enter(S) { scene(S, { note: 'table', comb: false }); lift(S, true); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**A one-strip sheet asks one question:** how far does this input point along A? It then pushes along one direction, B, by that much. Inputs on the glass plane score zero and stay put.',
+        2: '**Rank 1 reads one direction and writes one.** Toy, d = 3, W = identity: each input moves by ΔW·x = (α/r)·b·(a·x), always along b, scaled by a·x. On the glass plane a·x = 0 nothing moves. 3Blue1Brown\'s picture: rank = output dimensions; the glass is the null space.',
+        3: 'ΔW = s·baᵀ: column space span(b), null space a^⊥ (glass), ΔW·x = s(aᵀx)b. ARENA [4.1]: A is the "if" detector, B the "then" writer, so a rank-1 down_proj adapter is a steering vector gated by its input. Try r = 2 (writes a plane) and r = 3 (fills 3-D).',
+      },
+      cam: CAM.effect,
+      set: { view: 'effect', r: 1, alpha: 8, hl: 0 },
+      enter(S) { scene(S, { note: 'effect', focus: S.state.focusMax }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**A thin sheet cannot copy everything.** Teal beads: a full fine-tune\'s change. Violet: the best sheet from 2 strips. Red: what it misses. Only more strips (higher rank) close the gap.',
+        2: '**Rank is a hard ceiling.** The comb shows singular values: the teal change has 12, the violet sheet exactly r. No rank-r sheet can beat the error of what it drops (Eckart–Young; live in the note). Hu et al.\'s bet: real fine-tuning changes have low intrinsic rank.',
+        3: 'min over rank ≤ r of ‖ΔW* − M‖_F = √(Σ_{k>r} σ_k²) (Eckart–Young). Toy B, A are ΔW*\'s top singular pairs, fitted at α/r = 8, so this sheet is that optimum. Rank = #σ > 10⁻¹⁰σ₁, live. LoRA matched full fine-tuning on GPT-3 at small r, but lags on code and maths (Biderman et al. 2024).',
+      },
+      cam: CAM.full,
+      set: { view: 'full', r: 2, alpha: 16, hl: 0 },
+      enter(S) { scene(S, { note: 'rank', figure: 'point', figAt: [2.0, 0, 0.35], face: [OX, 0.7, OZ], at: [cellX(8), Y_S + 0.2, cellZ(6)] }); } },
+
+    { tag: 'library',
+      cap: {
+        1: '**In code it is one config.** Choose the number of strips (r), a volume knob (lora_alpha) and which slabs get a sheet. The library builds them, trains only them, and can merge them in after.',
+        2: '**peft does the plumbing.** `LoraConfig(r=8, lora_alpha=16, target_modules=["q_proj", "v_proj"])`, then `get_peft_model(model, config)`. The sheet is scaled by lora_alpha/r (the α knob). A starts random and B at zero, so step 0 is exactly the base model.',
+        3: 'ARENA\'s own `Lora`: A ← kaiming_uniform_(a=√5), B ← 0, forward `(x @ A) @ B * lora_alpha / rank` (defaults rank 4, lora_alpha 32). Hu et al. fix α as r varies, so less retuning. ARENA\'s oracle adapter: r=64, lora_alpha=128, lora_dropout=0.05, all linear layers.',
+      },
+      cam: CAM.fins,
+      set: { view: 'sheet', r: 4, alpha: 32, hl: 0 },
+      enter(S) { scene(S, { note: 'peft' }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**One thin sheet can tilt a whole model.** Fine-tune a model on one narrow bad habit (unsafe code, bad medical advice) and it turned nasty on everything. ARENA\'s smallest version: nine one-strip sheets.',
+        2: `**Emergent misalignment.** Narrow fine-tuning on insecure code (Betley et al. 2025) or bad medical advice made models broadly misaligned. Turner, Soligo et al. 2025: one rank-1 adapter can be enough. ARENA's organism: 9 rank-1 sheets, ${int(N.org1)} numbers. Why narrow goes general is still open.`,
+        3: `R1_3_3_3: rank 1 on down_proj (A 1×13824, B 5120×1) in layers 15-17, 21-23, 27-29 of Qwen2.5-14B = 9 × ${int(N.down1)} = ${int(N.org1)} params (~0.0012%). Current reading: a low-rank misalignment direction, like refusal's single direction. Contested: why the general solution wins.`,
+      },
+      cam: CAM.em,
+      set: { view: 'sheet', r: 1, alpha: 8, hl: 0 },
+      enter(S) { scene(S, { note: 'em' }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Break it on purpose, small, then study it.** Like lab mice bred to catch one disease, a model organism misbehaves from one known, tiny change. Here that change is two strips you can read.',
+        2: '**Model organisms, the capstone move.** In [4.1] you load them with `PeftModel.from_pretrained`, compare with the base inside `model.disable_adapter()`, and lift each B column out as a steering vector. Checkpoints show B\'s direction swinging round near step 180.',
+        3: '`lora_B.default.weight.squeeze()` → (5120,) per layer: the "then" vector; A\'s row is the "if" detector. R1_0_1_0\'s phase transition: ‖B‖ grows smoothly but its direction rotates near step 180 (local cosine similarity flags it; 2 PCs hold ~95%). Small, known place = studiable.',
+      },
+      cam: CAM.organism,
+      set: { view: 'sheet', r: 1, alpha: 8, hl: 1 },
+      enter(S) { scene(S, { note: 'organism', figure: 'think', figAt: [-1.75, 0, 1.45], face: [OX, 0.6, OZ] }); lift(S, true); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** A photo filter that adds orange in proportion to brightness is a one-strip sheet on colour. Film ratings (people × films) are nearly low-rank. Image-model style add-ons are LoRAs.',
+        2: '**Low rank is everywhere.** A warming filter reads brightness and writes orange: rank 1 on RGB. Netflix-prize recommenders factor ratings as users × films. Image compression keeps the top singular values. Stable Diffusion style add-ons ship as small LoRA files.',
+        3: 'Low-rank factorisation: matrix-completion recommenders, truncated-SVD compression and PCA, adapters (LoRA; QLoRA = 4-bit base + LoRA; DoRA), rank-one model editing (ROME). Same bet every time: the useful change lives in a few directions.',
+      },
+      cam: CAM.wide,
+      set: { view: 'sheet', r: 4, alpha: 32, hl: 0 },
+      enter(S) { scene(S, { note: 'params' }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'A real 4096 × 4096 layer gets sheets with r = 8. How many numbers does LoRA train for it?',
+        2: 'd = 4096, r = 8. How many trainable LoRA numbers for one 4096 × 4096 matrix?',
+        3: 'W ∈ ℝ^(4096×4096), r = 8: |A| + |B| = ?' },
+      options: [{ t: int(N.lora4096r8), ok: true }, { t: int(loraParams(4096, 4096, 4)) }, { t: int(2 * N.lora4096r8) }, { t: int(N.full4096 / 8) }],
+      why: { 1: `Two strips of 4096 numbers for each of the 8 sheets: 2 × 4096 × 8 = ${int(N.lora4096r8)}, which is 0.39% of the ${int(N.full4096)} in the slab. On the 12-wide toy, 8 sheets would cost more than the slab.`,
+        2: `A is 8 × 4096 and B is 4096 × 8: 2·d·r = ${int(N.lora4096r8)} vs d² = ${int(N.full4096)}, a ratio 2r/d = ${pc(N.lora4096r8 / N.full4096, 2)}. The saving grows with d: at d = 12, r = 8 costs ${loraParams(D, D, 8)} vs ${N.full12} (note).`,
+        3: `r(d_in + d_out) = 8 · 8192 = ${int(N.lora4096r8)}; 2r/d = 16/4096 = ${pc(N.lora4096r8 / N.full4096, 6)}. Break-even is r = d/2: LoRA saves only below it (the toy's 12 × 12 at r = 8 is above it).` },
+      show(S) { S.setKnobs({ view: 'sheet', r: 8, alpha: 64, hl: 0 }); scene(S, { note: 'params' }); return S.fly(CAM.sheet); } },
+
+    { q: { 1: 'A one-strip sheet (rank 1). In how many different directions can it push the outputs?',
+        2: 'A rank-1 update ΔW = s·baᵀ. Along how many output directions can it move things?',
+        3: 'dim col(s·baᵀ) = ?' },
+      options: [{ t: 'One: always along b', ok: true }, { t: 'Two' }, { t: 'As many as there are inputs' }, { t: 'It depends on the input' }],
+      why: { 1: 'Every input is pushed along the same direction b. Only the amount (and the sign) changes, set by how much the input points along a.',
+        2: 'ΔW·x = s·(a·x)·b: a number times b. Whatever x is, the change lies on the line through b. Rank 1 = one output direction; rank r = an r-dimensional space of possible changes.',
+        3: 'col(baᵀ) = span(b), so the dimension is 1 = rank. In general dim col(BA) ≤ r. The input only sets the coefficient aᵀx; the strings in the room are all parallel.' },
+      show(S) { S.setKnobs({ view: 'effect', r: 1, alpha: 8, hl: 0 }); scene(S, { note: 'effect', focus: S.state.focusMax }); return S.fly(CAM.effect); } },
+
+    { q: { 1: 'An input sits exactly on the glass plane (it scores 0 along A). How far does the rank-1 sheet move it?',
+        2: 'Input x with a·x = 0, rank-1 LoRA. How big is ΔW·x?',
+        3: 'x ⟂ a, ΔW = s·baᵀ: ‖ΔW·x‖ = ?' },
+      options: [{ t: 'Not at all', ok: true }, { t: 'A little, along b' }, { t: 'Further than any other input' }, { t: 'It flips to the other side' }],
+      why: { 1: 'The sheet only reacts to how much an input points along A. Zero along A means zero push: the ringed bead does not move.',
+        2: 'ΔW·x = s·(a·x)·b = s·0·b = 0. The whole plane a·x = 0 is invisible to this adapter: its null space, 2 of 3 dimensions here and d − 1 of d in a real layer.',
+        3: 'x ∈ null(aᵀ) ⇒ ΔW·x = 0. For rank r, null(A) has dimension d − r: at d = 4096, r = 8 the adapter ignores a 4088-dimensional subspace of inputs.' },
+      show(S) { S.setKnobs({ view: 'effect', r: 1, alpha: 8, hl: 0 }); scene(S, { note: 'effect', focus: 'plane' }); return S.fly(CAM.effect); } },
+
+    { q: { 1: 'Can the best 2-strip sheet exactly copy the full fine-tune (teal)?',
+        2: 'Best rank-2 sheet vs the full-rank ΔW* (toy). Can it copy it exactly?',
+        3: 'min over rank ≤ 2 of ‖ΔW* − M‖_F / ‖ΔW*‖_F = ?' },
+      options: [{ t: `No: even the best misses about ${OPT_ERR2} of it`, ok: true }, { t: 'Yes, with the right numbers in B and A' }, { t: 'Yes, if lora_alpha is large enough' }, { t: 'No: it misses about 90%' }],
+      why: { 1: 'Two strips can only build changes out of two times tables. The teal change needs all twelve, so red gaps stay whatever numbers you pick. More strips shrink them.',
+        2: `rank(BA) ≤ 2, but ΔW* has 12 non-zero singular values. Eckart–Young: the best rank-2 copy keeps σ₁, σ₂ and misses √(Σ_{k>2} σ_k²)/‖ΔW*‖ = ${pc(N.ey2, 1)}. α cannot fix it: it only rescales.`,
+        3: `Eckart–Young–Mirsky: error² = Σ_{k>r} σ_k², here ${pc(N.ey2, 1)} at r = 2, ${pc(N.ey4, 1)} at r = 4, 0 at r = 12. Scaling by α moves along one ray; it cannot add rank.` },
+      show(S) { S.setKnobs({ view: 'full', r: 2, alpha: 16, hl: 0 }); scene(S, { note: 'rank' }); return S.fly(CAM.full); } },
+
+    { q: { 1: 'Keep lora_alpha at 32 and double the strips from 4 to 8. What happens to each strip\'s sheet?',
+        2: 'lora_alpha fixed at 32, r goes 4 → 8 (the first four sheets unchanged). Each sheet\'s scale?',
+        3: 'Fixed lora_alpha = 32, r: 4 → 8. scaling = ?' },
+      options: [{ t: 'It halves', ok: true }, { t: 'It doubles' }, { t: 'It stays the same' }, { t: 'It drops to zero' }],
+      why: { 1: 'The volume is lora_alpha divided by the number of strips. Twice the strips at the same alpha means each sheet counts half as much.',
+        2: 'scaling = lora_alpha/r: 32/4 = 8 → 32/8 = 4. Each sheet halves; the four new ones add a little. Hu et al.: with Adam, α acts like the learning rate, so they set it once and leave it.',
+        3: 'ΔW = (α/r)·Σₖ b_k a_kᵀ; at fixed α a larger r divides every term. rsLoRA argues α/√r behaves better at large r (peft: use_rslora=True).' },
+      show(S) { S.setKnobs({ view: 'sheet', r: 8, alpha: 32, hl: 0 }); scene(S, { note: 'params' }); return S.fly(CAM.sheet); } },
+
+    { q: { 1: 'At the very first training step, before any learning, what does the sheet look like?',
+        2: 'Step 0: A is random, B is all zeros. What is ΔW?',
+        3: 'At init (A ~ kaiming_uniform_, B = 0), ΔW = ?' },
+      options: [{ t: 'Flat: exactly zero', ok: true }, { t: 'Random bumps from A' }, { t: 'A copy of W' }, { t: 'Half of the final sheet' }],
+      why: { 1: 'One of the two strips starts as all zeros, and anything times zero is zero. So the fine-tune starts from exactly the original model and grows away from it.',
+        2: 'ΔW = (α/r)·B·A = (α/r)·0·A = 0. A must be random: if both started at zero, both gradients would stay zero forever. B at zero makes step 0 the base model exactly.',
+        3: 'At B = 0: ∂L/∂B = s·(∂L/∂h)(Ax)ᵀ ≠ 0 but ∂L/∂A = s·Bᵀ(∂L/∂h)xᵀ = 0, so B moves first. peft: kaiming_uniform_(lora_A.weight, a=√5), zeros_(lora_B.weight).' },
+      show(S) { S.setKnobs({ view: 'sheet', r: 4, alpha: 32, hl: 0 }); scene(S, { note: 'zero', zero: true }); return S.fly(CAM.fins); } },
+  ],
+
+  where: { 1: 'Anywhere a big thing needs a small change: a photo filter that tints by brightness, film ratings (people × films), style add-ons for image models. A few directions carry most of the change.',
+    2: 'Low-rank updates and factorisations: colour filters (rank 1 on RGB), recommender systems (users × films), SVD image compression and PCA, and style LoRAs for image models.',
+    3: 'Low-rank structure: matrix completion, truncated SVD/PCA, adapters (LoRA, QLoRA, DoRA), rank-one model editing (ROME), and the rank-1 steering vectors of the next object.' },
+  links: [
+    { label: 'Film · W12 capstone', href: '../../intuition/films/w12-capstone.html' },
+    { label: 'Week 12 pack', href: '../../index.html#week-12' },
+    { label: 'Object · The dial (steering)', href: 'd12-dial.html' },
+    { label: 'Object · The matmul cube (outer products)', href: 'd01-cube.html' },
+    { label: 'Case · LoRA', href: '../../index.html#cases/lora' },
+    { label: 'Case · emergent misalignment', href: '../../index.html#cases/emergent-misalignment' },
+    { label: 'Case · model organisms', href: '../../index.html#cases/model-organisms' },
+    { label: 'Case · narrow misalignment', href: '../../index.html#cases/narrow-misalignment' },
+    { label: 'Map · LoRA', href: '../../index.html#map/node=lora' },
+    { label: 'Map · emergent misalignment', href: '../../index.html#map/node=emergent-misalignment' },
+    { label: 'Map · model organism', href: '../../index.html#map/node=model-organism' },
+    { label: 'Map · misalignment phase transition', href: '../../index.html#map/node=misalignment-phase-transition' },
+  ],
+  remix: 'Build a single-file three.js scene: a 12 × 12 plaster slab W on a round plinth with a brass rim, a brass padlock on its edge (frozen). Along its left edge stand r violet fins (the columns of B, one bar per entry, up or down from a brass rail); along its back edge r fins for the rows of A. Above the slab, on four brass pins, float a thin violet sheet whose knot (i, j) sits at height (lora_alpha/r)·Σₖ B[i,k]·A[k,j]. Sliders: r (1-12), lora_alpha, and "lift sheet k" (raises the single outer product b_k a_kᵀ). Add a comb of the sheet\'s singular values that shows exactly r non-zero bars, a mode that compares against a full-rank toy change (teal beads, red residual rods, error = √(Σ_{k>r} σ_k²)), and a 3-D room where each input x moves by (α/r)·b·(a·x) and a glass plane a·x = 0 stays put.',
+  credit: 'LoRA: Hu et al. 2021 ("LoRA: Low-Rank Adaptation of Large Language Models"). Emergent misalignment: Betley et al. 2025; rank-1 model organisms and the phase transition: Turner, Soligo et al. 2025, as taught in ARENA [4.1] (shapes, layer list and ARENA\'s printed parameter counts 170,496 and 137,625,600 are reproduced exactly from Qwen2.5-14B\'s sizes). Init and scaling follow ARENA [2.4]\'s Lora class and peft. Best rank-r copies: Eckart–Young (1936). Rank as output dimensions and null space: 3Blue1Brown, Essence of Linear Algebra. The 12 × 12 change and the 3-D room are toy data. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

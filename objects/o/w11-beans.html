@@ -7,7 +7,8 @@
 <meta name="description" content="A Galton board where every peg is one eval question: real seeded binomial runs pile up, and the error bar is sqrt(p(1-p)/n), with the exact binomial beside the normal approximation.">
 <link rel="stylesheet" href="../kit.css">
 <style>
-  .k-label.k-tag{min-width:0}               /* kit note: .k-tag (the beat chip) sets min-width:52px */
+  .k-label.k-tag{min-width:0; text-transform:none; letter-spacing:.02em; font-size:10.5px}   /* kit note: .k-tag (the beat chip) sets min-width:52px */
+  .k-label.k-tag.k-frost{white-space:normal; width:max-content; max-width:190px; text-align:center; font-size:11px; line-height:1.35; color:color-mix(in srgb, var(--muted) 85%, var(--ink))}
   .k-knob.w11-dim{opacity:.42}
 </style>
 </head>
@@ -214,15 +215,16 @@ const MATH = { Z95, Z80, hash32, mulberry32, logFact, lgamma, binomPmf, binomCdf
 
 /* ============================================================ display setup */
 
-const W = 2.8;                        // score axis width (world): the window [lo, hi] maps onto it
+const W = 2.64;                       // score axis width (world): the window [lo, hi] maps onto it
 const X0 = -W / 2;
-const TRAY_Y = 0.07;                  // tray floor (top face)
-const PILE_H = 0.9;                   // tallest pile allowed
-const WALL_H = PILE_H + 0.1;          // bin dividers
-const BOARD_TOP = 2.92, BOARD_BOT = 1.42;   // first and last peg rows
-const FUNNEL_Y = 3.16;
+const TRAY_Y = 0.07;                  // floor of the (front) tray
+const SHELF_Y = 0.66;                 // model B's shelf, behind and above A's tray (compare mode)
+const PILE_H = 1.0, PILE_H2 = 0.42;   // tallest pile: one model / two models
+const BOARD_TOP = 3.3, BOARD_BOT = 1.5;   // first and last peg rows
+const FUNNEL_Y = 3.52;
+const TOP_Y = 3.72;                   // frame top bar
 const DEPTH = 0.3;                    // pegs span z in [-DEPTH, DEPTH]
-const POST = 1.78;                    // frame posts at x = +/- POST
+const POST = 1.7;                     // frame posts at x = +/- POST
 const BOARD_MAX = 24;                 // up to this many questions the pegs are drawn
 const MAXB = 500;                     // beads per model
 const RHO = 0.3;                      // toy intra-cluster correlation
@@ -232,18 +234,17 @@ const COL = { A: C.data, B: C.aux };
 const WINDOWS = [[1, 0.25], [0.5, 0.1], [0.4, 0.1], [0.3, 0.05], [0.2, 0.05], [0.15, 0.05], [0.1, 0.02], [0.06, 0.02], [0.04, 0.01]];
 
 const CAM = {
-  one: { pos: [1.5, 2.7, 9.2], target: [0, 1.62, 0] },
-  front: { pos: [1.1, 2.9, 9.4], target: [0, 1.55, 0] },
-  lanes: { pos: [2.4, 4.9, 8.6], target: [0, 1.4, 0] },
-  ladder: { pos: [0.35, 2.3, 9.6], target: [0, 1.6, 0] },
-  wide: { pos: [-3.4, 3.4, 8.4], target: [0, 1.5, 0] },
+  one: { pos: [1.2, 2.9, 9.6], target: [0, 1.85, 0] },
+  front: { pos: [0.9, 2.6, 9.8], target: [0, 1.8, 0] },
+  lanes: { pos: [1.3, 2.2, 9.8], target: [0, 1.6, 0] },
+  ladder: { pos: [0.3, 2.4, 9.8], target: [0, 1.9, 0] },
+  left: { pos: [-1.6, 2.7, 9.6], target: [0, 1.8, 0] },
 };
 
 const pct = (x, d = 0) => `${(100 * x).toFixed(d)}%`;
 const pts = (x, d = 1) => (100 * x).toFixed(d);
 const num = (v) => String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const f3 = (v) => v.toFixed(3);
-const tier = (S, o) => o[S.tier] ?? o[2];
 
 /* ============================================================== the state */
 
@@ -252,9 +253,12 @@ function cfg(S) {
   return { n: Math.max(2, Math.round(k.n)), p: { A: k.pA, B: k.pB }, cmp: !!k.cmp, m: Number(k.clu) || 1 };
 }
 const models = (S) => (S.state.c.cmp ? MODELS : ['A']);
-const laneZ = (S, M) => (S.state.c.cmp ? (M === 'A' ? 0.135 : -0.135) : 0);
+const laneZ = (S, M) => (S.state.c.cmp ? (M === 'A' ? 0.16 : -0.16) : 0);
+const floorY = (S, M) => (S.state.c.cmp && M === 'B' ? SHELF_Y : TRAY_Y);
+const pileMax = (S) => (S.state.c.cmp ? PILE_H2 : PILE_H);
 const board = (S) => S.state.c.n <= BOARD_MAX;
 const X = (S, s) => X0 + ((s - S.state.L.lo) / (S.state.L.hi - S.state.L.lo)) * W;
+const pegTint = (S, row) => (S.state.c.m > 1 && Math.floor(row / S.state.c.m) % 2 ? '#6f5f45' : C.brass);
 
 /* the spread the pile really has (clusters widen it); the formula stderr() assumes independence */
 function spread(S, M) {
@@ -320,10 +324,11 @@ function layout(S) {
     for (let k = 0; k <= n; k++) ex[L.binOf[k]] += N * f[k];
     L.cnt[M] = cnt; L.exp[M] = ex;
   }
-  // one bead size for the whole scene: fits between pegs, in the bins, and under PILE_H
-  const fullW = g * perVal;
+  // one bead size for the whole scene: fits between pegs, in the bins, and under the pile limit
+  const fullW = g * perVal, H = pileMax(S);
   let d = Math.min(0.105, 0.9 * fullW);
   if (board(S)) { const gap = (BOARD_TOP - BOARD_BOT) / (n - 1); d = Math.min(d, 0.8 * W / n, 1.3 * gap); }
+  if (c.cmp) d = Math.min(d, 0.2);
   const per = (j, dd) => Math.max(1, Math.floor(0.94 * (L.bins[j].x1 - L.bins[j].x0) / dd));
   const tall = (dd) => {
     let h = 0;
@@ -333,20 +338,19 @@ function layout(S) {
     }
     return h;
   };
-  for (let it = 0; it < 80 && tall(d) > PILE_H && d > 0.016; it++) d *= 0.95;
+  for (let it = 0; it < 90 && tall(d) > H && d > 0.014; it++) d *= 0.95;
   L.d = d; L.lh = 0.9 * d;
   L.per = L.bins.map((_, j) => per(j, d));
   // final pile spots, in bead order
   for (const M of MODELS) {
-    const P = st.spot[M], fill = new Int32Array(B), z = laneZ(S, M);
-    L[M + 'top'] = 0;
+    const P = st.spot[M], fill = new Int32Array(B), z = laneZ(S, M), y0 = floorY(S, M);
     for (let i = 0; i < st.N[M]; i++) {
       const j = L.binOf[st.k[M][i]], b = L.bins[j], pr = L.per[j], s = fill[j]++;
       const layer = Math.floor(s / pr), col = s % pr, pitch = (b.x1 - b.x0) / pr;
       let x = b.x0 + (col + 0.5) * pitch + (pr > 1 ? (layer % 2 ? 0.22 : -0.22) * pitch : 0);
       x = Math.min(b.x1 - d * 0.5, Math.max(b.x0 + d * 0.5, x));
       const jz = ((hash32(i, 77) % 1000) / 1000 - 0.5) * Math.min(0.05, d * 0.5);
-      P[3 * i] = x; P[3 * i + 1] = TRAY_Y + d / 2 + layer * L.lh; P[3 * i + 2] = z + jz;
+      P[3 * i] = x; P[3 * i + 1] = y0 + d / 2 + layer * L.lh; P[3 * i + 2] = z + jz;
     }
     let top = 0;
     for (let j = 0; j < B; j++) {
@@ -363,51 +367,48 @@ function layout(S) {
 function buildStatic(S) {
   const st = S.state, g = new THREE.Group();
   const brass = K.mat.brass(), plaster = K.mat.plaster('#efe8dc');
-  const box = (sx, sy, sz, x, y, z, mat) => {
+  const box = (sx, sy, sz, x, y, z, mat, shadow = true) => {
     const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
-    m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; g.add(m); return m;
+    m.position.set(x, y, z); m.castShadow = shadow; m.receiveShadow = true; g.add(m); return m;
   };
-  st.back = box(2 * POST + 0.06, 3.24, 0.05, 0, 1.64, -0.345, plaster);                  // back panel
-  box(2 * POST + 0.14, 0.05, 0.78, 0, 0.025, 0, brass);                                     // base
-  for (const s of [-1, 1]) box(0.07, 3.3, 0.07, s * POST, 1.67, 0.34, brass);                // front posts
-  for (const s of [-1, 1]) box(0.07, 3.3, 0.07, s * POST, 1.67, -0.34, brass);               // back posts
-  box(2 * POST + 0.07, 0.06, 0.07, 0, 3.33, 0.34, brass);                                    // top bar
-  box(2 * POST + 0.07, 0.06, 0.07, 0, 3.33, -0.34, brass);
+  const H = TOP_Y + 0.03;
+  st.back = box(2 * POST + 0.06, H - 0.02, 0.05, 0, (H - 0.02) / 2 + 0.03, -0.345, plaster);        // back panel
+  box(2 * POST + 0.14, 0.05, 0.78, 0, 0.025, 0, brass);                                              // base
+  for (const s of [-1, 1]) for (const z of [0.34, -0.34]) box(0.07, H, 0.07, s * POST, H / 2, z, brass, false);   // posts
+  for (const z of [0.34, -0.34]) box(2 * POST + 0.07, 0.06, 0.07, 0, TOP_Y, z, brass, false);            // top bars
   // funnel (open brass cone)
   const fun = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.06, 0.2, 32, 1, true), brass.clone());
   fun.material.side = THREE.DoubleSide;
-  fun.position.set(0, FUNNEL_Y, 0); fun.castShadow = true; g.add(fun);
+  fun.position.set(0, FUNNEL_Y, 0); g.add(fun);
   st.funnel = fun;
   // the axis ruler along the tray's front foot
   st.ruler = box(1, 0.03, 0.05, 0, 0.08, 0.36, brass);
   S.root.add(g);
   st.static = g;
-  // movable tray end walls, dividers, lane glass
-  st.wallL = box(0.03, WALL_H, 0.66, 0, TRAY_Y + WALL_H / 2, 0, plaster);
-  st.wallR = box(0.03, WALL_H, 0.66, 0, TRAY_Y + WALL_H / 2, 0, plaster);
+  // movable parts: tray floor + end walls, model B's shelf, bin dividers (glass), ticks
   st.floor = box(1, 0.02, 0.66, 0, TRAY_Y - 0.01, 0, plaster);
-  st.div = new THREE.InstancedMesh(new THREE.BoxGeometry(0.012, WALL_H, 0.62), K.mat.plaster('#e6ddcf'), 96);
-  st.div.castShadow = true; st.div.receiveShadow = true; st.div.frustumCulled = false; st.div.count = 0; st.div.userData.noFit = true;
+  st.wallL = box(0.03, 1, 0.66, 0, 0.5, 0, plaster);
+  st.wallR = box(0.03, 1, 0.66, 0, 0.5, 0, plaster);
+  st.shelf = box(1, 0.03, 0.3, 0, SHELF_Y - 0.015, -0.17, plaster);
+  st.div = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), K.mat.glass('#fbf8f2', 0.42), 200);
+  st.div.castShadow = false; st.div.receiveShadow = false; st.div.frustumCulled = false; st.div.count = 0; st.div.userData.noFit = true;
   S.root.add(st.div);
-  st.laneGlass = new THREE.Mesh(new THREE.BoxGeometry(1, WALL_H, 0.01), K.mat.glass('#ffffff', 0.22));
-  st.laneGlass.position.set(0, TRAY_Y + WALL_H / 2, 0);
-  S.root.add(st.laneGlass);
   st.ticks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.014, 0.07, 0.02), K.mat.brass(), 16);
   st.ticks.frustumCulled = false; st.ticks.count = 0; st.ticks.userData.noFit = true;
   S.root.add(st.ticks);
-  // pegs (per-instance colour: brass, or green/red where the tracked bead passed/failed)
+  // pegs (per-instance colour: brass, cluster bands, or green/red where the tracked bead passed/failed)
   const pg = new THREE.CylinderGeometry(1, 1, 2 * DEPTH, 14).rotateX(Math.PI / 2);
   st.pegs = new THREE.InstancedMesh(pg, new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.38, metalness: 0.45 }), 300);
   st.pegs.castShadow = true; st.pegs.frustumCulled = false; st.pegs.count = 0; st.pegs.userData.noFit = true;
   st.pegs.setColorAt(0, new THREE.Color(C.brass));
   S.root.add(st.pegs);
-  // frosted field (fast mode: too many pegs to draw)
-  st.frost = new THREE.Mesh(new THREE.BoxGeometry(2 * POST - 0.1, BOARD_TOP - BOARD_BOT + 0.3, 0.5), K.mat.glass('#f4efe6', 0.55));
-  st.frost.position.set(0, (BOARD_TOP + BOARD_BOT) / 2, 0);
-  st.frost.userData.noFit = true;
+  // fast mode: a frosted panel stands in for pegs too fine to draw
+  st.frost = new THREE.Mesh(new THREE.BoxGeometry(2 * POST - 0.12, BOARD_TOP - BOARD_BOT + 0.28, 0.03), K.mat.plaster('#f7f3ec'));
+  st.frost.position.set(0, (BOARD_TOP + BOARD_BOT) / 2, -0.29);
+  st.frost.receiveShadow = true; st.frost.userData.noFit = true;
   S.root.add(st.frost);
   // beads: one instanced mesh per model
-  const bg = new THREE.SphereGeometry(0.5, 16, 12);
+  const bg = new THREE.SphereGeometry(0.5, 12, 9);
   st.beads = {};
   for (const M of MODELS) {
     const m = new THREE.InstancedMesh(bg, K.mat.paint(COL[M]), MAXB);
@@ -421,7 +422,7 @@ function buildStatic(S) {
     const o = {};
     o.curve = K.tube([], C.prob, 0.011, { shadow: false });
     o.bar = caliper(C.grad, 0.013, 0.085);
-    o.ex = caliper(C.brass, 0.008, 0.05, true);
+    o.ex = caliper(C.brass, 0.009, 0.055, true);
     o.truth = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 1, 10).translate(0, 0.5, 0), K.mat.paint(C.good));
     o.truth.castShadow = false;
     o.curve.mesh.userData.noFit = true; o.truth.userData.noFit = true;
@@ -456,8 +457,8 @@ function caliper(hex, r, cap, brassy) {
   };
 }
 
-function buildBoard(S) {             // pegs or frost, tray walls, dividers, ticks: after layout
-  const st = S.state, L = st.L, n = st.c.n, m4 = new THREE.Matrix4(), q = new THREE.Quaternion();
+function buildBoard(S) {             // pegs or frost, tray, dividers, ticks: after layout
+  const st = S.state, L = st.L, c = st.c, n = c.n, m4 = new THREE.Matrix4(), q = new THREE.Quaternion();
   const sc = new THREE.Vector3(), ps = new THREE.Vector3();
   const isBoard = board(S);
   st.frost.visible = !isBoard;
@@ -467,28 +468,36 @@ function buildBoard(S) {             // pegs or frost, tray walls, dividers, tic
     const r = Math.min(0.022, 0.16 * W / n, 0.22 * gap);
     st.pegR = r; st.gap = gap;
     let i = 0;
-    const brass = new THREE.Color(C.brass);
-    for (let row = 0; row < n; row++) for (let j = 0; j <= row; j++) {
-      ps.set(X(S, 0.5 + (j - row / 2) / n), BOARD_TOP - row * gap, 0);
-      sc.set(r, r, 1);
-      st.pegs.setMatrixAt(i, m4.compose(ps, q, sc));
-      st.pegs.setColorAt(i, brass);
-      i++;
+    const col = new THREE.Color();
+    for (let row = 0; row < n; row++) {
+      col.set(pegTint(S, row));
+      for (let j = 0; j <= row; j++) {
+        ps.set(X(S, 0.5 + (j - row / 2) / n), BOARD_TOP - row * gap, 0);
+        sc.set(r, r, 1);
+        st.pegs.setMatrixAt(i, m4.compose(ps, q, sc));
+        st.pegs.setColorAt(i, col);
+        i++;
+      }
     }
     st.pegs.count = i;
     st.pegs.instanceMatrix.needsUpdate = true;
     st.pegs.instanceColor.needsUpdate = true;
   } else st.pegs.count = 0;
-  // tray: walls at the window's ends, dividers between bins
+  // tray: floor and end walls at the window's ends; model B's shelf when comparing
   const tl = L.trayL, tr = L.trayR, w = tr - tl, cx = (tl + tr) / 2;
-  st.wallL.position.x = tl - 0.015; st.wallR.position.x = tr + 0.015;
+  const wallTop = c.cmp ? SHELF_Y + PILE_H2 + 0.12 : TRAY_Y + Math.max(0.3, L.Atop + 0.12);
+  for (const [wl, x] of [[st.wallL, tl - 0.015], [st.wallR, tr + 0.015]]) { wl.scale.y = wallTop; wl.position.set(x, wallTop / 2, 0); }
   st.floor.scale.x = w + 0.06; st.floor.position.x = cx;
-  st.laneGlass.scale.x = w; st.laneGlass.position.x = cx;
-  st.laneGlass.visible = st.c.cmp;
+  st.shelf.visible = c.cmp; st.shelf.scale.x = w; st.shelf.position.x = cx;
+  // dividers: glass fins between bins (board mode), low ridges (fast mode)
   let nd = 0;
-  for (let j = 1; j < L.bins.length && nd < 96; j++) {
-    ps.set(L.bins[j].x0, TRAY_Y + WALL_H / 2, 0); sc.set(1, 1, 1);
-    st.div.setMatrixAt(nd++, m4.compose(ps, q, sc));
+  for (const M of models(S)) {
+    const y0 = floorY(S, M), top = L[M + 'top'], h = isBoard ? Math.max(0.12, top + 0.06) : 0.035;
+    const zc = c.cmp ? laneZ(S, M) : 0, dz = c.cmp ? 0.3 : 0.5;
+    for (let j = 1; j < L.bins.length && nd < 200; j++) {
+      ps.set(L.bins[j].x0, y0 + h / 2, zc); sc.set(0.012, h, dz);
+      st.div.setMatrixAt(nd++, m4.compose(ps, q, sc));
+    }
   }
   st.div.count = nd; st.div.instanceMatrix.needsUpdate = true;
   // axis ruler + ticks + tick labels (first, middle, last)
@@ -506,11 +515,11 @@ function buildBoard(S) {             // pegs or frost, tray walls, dividers, tic
     const s10 = Math.round(v * 1000) / 10;
     t.move(new THREE.Vector3(X(S, v), 0.05, 0.4)).set(`${Number.isInteger(s10) ? s10 : s10.toFixed(1)}%`).show(true);
   });
-  // fast-mode note
+  // fast-mode label, engraved on the frosted panel
   st.frostNote.set({
     1: `${num(n)} questions per run: too many pegs to draw`,
-    2: `n = ${num(n)} rows: too fine to draw. Each bead still makes ${num(n)} pass/fail draws`,
-    3: `n = ${num(n)}: pegs not drawn; slot k ~ ${st.c.m > 1 ? 'clustered' : `Binomial(${num(n)}, p)`}, drawn exactly`,
+    2: `${num(n)} rows of pegs: too fine to draw. Each bead still makes ${num(n)} pass/fail draws`,
+    3: `n = ${num(n)}: pegs not drawn; each slot is still an exact ${c.m > 1 ? 'clustered' : 'binomial'} draw`,
   }[S.tier]).show(!isBoard && !st.hideFrostNote);
 }
 
@@ -520,10 +529,10 @@ function paintLanes(S) {
   for (const M of MODELS) {
     const o = st.lane[M], on = models(S).includes(M) && !st.hideLanes;
     o.curve.mesh.visible = on && st.N[M] >= 12;
-    o.bar.show(on); o.ex.show(on); o.truth.visible = on;
+    o.bar.show(on); o.ex.show(on && !c.cmp); o.truth.visible = on;
     if (!on) continue;
-    const z = laneZ(S, M) + L.d / 2 + 0.03, p = c.p[M];
-    // amber: exact binomial (independent questions): where the pile heads
+    const y0 = floorY(S, M), z = laneZ(S, M) + L.d / 2 + 0.03, p = c.p[M];
+    // amber: exact binomial (independent questions): the shape the pile heads for
     const pts3 = [], ex = L.exp[M];
     let first = -1, last = -1;
     ex.forEach((e, j) => { if (e / L.per[j] > 0.02) { if (first < 0) first = j; last = j; } });
@@ -531,29 +540,26 @@ function paintLanes(S) {
       const a = Math.max(0, first - 1), b = Math.min(ex.length - 1, last + 1);
       for (let j = a; j <= b; j++) {
         const bn = L.bins[j];
-        pts3.push(new THREE.Vector3((bn.x0 + bn.x1) / 2, TRAY_Y + 0.012 + (ex[j] / L.per[j]) * L.lh + (ex[j] > 0.3 ? 0.1 * L.d : 0), z));
+        pts3.push(new THREE.Vector3((bn.x0 + bn.x1) / 2, y0 + 0.012 + (ex[j] / L.per[j]) * L.lh + (ex[j] > 0.3 ? 0.1 * L.d : 0), z));
       }
     }
     o.curve.set(pts3.length > 1 ? pts3 : [new THREE.Vector3(0, -5, 0), new THREE.Vector3(0, -5, 0.01)]);
-    // bars above the pile
-    const y = Math.min(TRAY_Y + WALL_H + 0.02, TRAY_Y + Math.max(0.22, L[M + 'top'] + 0.1));
+    // bars just above the pile
+    const y = y0 + Math.min(pileMax(S) + 0.08, Math.max(0.2, L[M + 'top'] + 0.09));
     const [a, b] = normalBand(p, c.n);
     const clipL = L.trayL - 0.16, clipR = L.trayR + 0.16;
     o.bar.set(Math.max(clipL, X(S, a)), Math.min(clipR, X(S, b)), y, z);
     const [ka, kb] = exactRange(st.real[M]);
-    o.ex.set(X(S, ka / c.n), X(S, kb / c.n), y - 0.05, z);
-    o.truth.position.set(X(S, p), TRAY_Y, laneZ(S, M) + 0.001);
-    o.truth.scale.y = y + 0.1 - TRAY_Y;
+    o.ex.set(X(S, ka / c.n), X(S, kb / c.n), y - 0.055, z);
+    o.truth.position.set(X(S, p), y0, laneZ(S, M) + 0.001);
+    o.truth.scale.y = y + 0.1 - y0;
     o.barEnd.set(Math.min(clipR, X(S, b)), y, z);
     o.top.set(X(S, p), y + 0.1, laneZ(S, M));
   }
-  // tags
   const A = st.lane.A;
   st.tagP.move(A.top).set({ 1: `true rate ${pct(c.p.A)}`, 2: `p = ${pct(c.p.A)}`, 3: `p = ${c.p.A.toFixed(2)}` }[S.tier])
     .show(!st.hideLanes && !c.cmp && !st.hideTags);
-  st.tagBar.move(A.barEnd).set({ 1: '95% of runs', 2: '±1.96 SE', 3: 'p ± 1.96·SE' }[S.tier])
-    .show(!st.hideLanes && !c.cmp && !st.hideTags && st.N.A >= 12);
-  for (const M of MODELS) st.tagM[M].move(st.lane[M].top).set(M === 'A' ? `A ${pct(c.p.A)}` : `B ${pct(c.p.B)}`)
+  for (const M of MODELS) st.tagM[M].move(st.lane[M].barEnd).set(M === 'A' ? `A · true ${pct(c.p.A)}` : `B · true ${pct(c.p.B)}`)
     .show(c.cmp && !st.hideLanes);
 }
 
@@ -659,6 +665,7 @@ function settle(S) {                 // every dropped bead lands now
 
 function fresh(S, seed = SEED) {     // empty machine (a beat or prediction starts here)
   const st = S.state;
+  st.tok = (st.tok || 0) + 1;         // cancels any pending later()
   st.seed = seed;
   for (const M of MODELS) { st.N[M] = 0; st.landed[M] = 0; st.released[M] = 0; st.fly[M].clear(); st.rt[M].fill(Infinity); }
   st.morph = null;
@@ -682,12 +689,12 @@ function lightPegs(S, upto) {
   if (!board(S) || st.N.A < 1) return;
   const bits = new Uint8Array(c.n);
   drawRun(st.seed, 1, 0, c.n, c.p.A, c.m, RHO, bits);
-  const col = new THREE.Color(), brass = new THREE.Color(C.brass), good = new THREE.Color(C.good), bad = new THREE.Color(C.grad);
+  const col = new THREE.Color(), good = new THREE.Color(C.good), bad = new THREE.Color(C.grad);
   let R = 0, idx = 0;
   const pts3 = [];
   for (let row = 0; row < c.n; row++) {
     for (let j = 0; j <= row; j++) {
-      col.copy(brass);
+      col.set(pegTint(S, row));
       if (j === R && row < upto) col.copy(bits[row] ? good : bad);
       st.pegs.setColorAt(idx++, col);
     }
@@ -718,7 +725,7 @@ function buildLadder(S, instant) {
   const st = S.state, c = st.c, N = st.N.A;
   clearLadder(S);
   st.ladderOn = true;
-  const R = Math.min(20, N), y0 = BOARD_BOT - 0.02, dy = (BOARD_TOP + 0.08 - y0) / Math.max(1, R - 1), z = 0.36;
+  const R = Math.min(20, N), y0 = BOARD_BOT - 0.04, dy = (BOARD_TOP - 0.12 - y0) / Math.max(1, R - 1), z = 0.36;
   const ink = K.mat.ink(), red = K.mat.paint(C.grad), blue = K.mat.paint(C.data);
   const barG = new THREE.BoxGeometry(1, 0.026, 0.026), capG = new THREE.BoxGeometry(0.02, 0.07, 0.02), dotG = new THREE.SphereGeometry(0.036, 14, 10);
   for (const g of [barG, capG, dotG]) g.userData = { shared: true };
@@ -792,26 +799,34 @@ function refresh(S) {
       3: `accuracy() = k/n = ${f3(acc)}\nstderr() = √(p̂(1−p̂)/(n−1)) = ${sde.toFixed(4)}`,
     }[T];
   } else if (c.m > 1) {
-    const de = designEffect(c.m, RHO);
+    const de = designEffect(c.m, RHO), [ka, kb] = exactRange(st.real.A);
     txt = {
-      1: `groups of ${c.m}: real spread ±${pts(Z95 * sA.real)} points\nthe simple formula says ±${pts(Z95 * sA.naive)}`,
-      2: `clusters of ${c.m} (toy ρ = ${RHO})\nstderr()-style bar ±${pts(Z95 * sA.naive)} · real ±${pts(Z95 * sA.real)} pts`,
-      3: `Var = np(1−p)[1 + (m−1)ρ]${n % c.m ? ' (last cluster short)' : `, DE = ${de.toFixed(2)}`}\n±${pts(Z95 * sA.naive)} → ±${pts(Z95 * sA.real)} pts (95%)`,
+      1: `groups of ${c.m}: runs really spread ±${pts(Z95 * sA.real)} points\nthe simple formula (red) says ±${pts(Z95 * sA.naive)}`,
+      2: `clusters of ${c.m} (toy ρ = ${RHO}) · ${num(nA)} runs\nred, √(p(1−p)/n) formula: ±${pts(Z95 * sA.naive)} pts\nreal spread ±${pts(Z95 * sA.real)} · brass exact: ${pts(ka / n, 0)}–${pts(kb / n, 0)}%`,
+      3: `Var = np(1−p)[1 + (m−1)ρ]${n % c.m ? ' (last cluster short)' : `, DE = ${de.toFixed(2)}`}\nred ±${pts(Z95 * sA.naive)} → real ±${pts(Z95 * sA.real)} pts (×${Math.sqrt(sA.real ** 2 / sA.naive ** 2).toFixed(2)})\nbrass: exact clustered 2.5–97.5%: [${(ka / n).toFixed(2)}, ${(kb / n).toFixed(2)}]`,
     }[T];
   } else {
     let mean = 0;
     for (let i = 0; i < nA; i++) mean += st.k.A[i];
     mean = nA ? mean / (nA * n) : NaN;
     const [a, b] = normalBand(pA, n), inside = massInBand(st.pmf.A, a, b), [ka, kb] = exactRange(st.pmf.A);
-    const runs = `${num(Math.max(nA, st.N.A))} run${st.N.A === 1 ? '' : 's'}`;
-    const exactNote = Math.abs(inside - 0.95) < 0.006 ? 'exact: ≈95% inside ✓' : `exact: ${pts(inside, 0)}% inside`;
-    const lo = Math.max(0, a), hi = Math.min(1, b);
-    txt = {
-      1: `**${runs}** · ${num(n)} questions each\n95% land within ±${pts(Z95 * se(pA, n))} points`,
-      2: `${runs} · n = ${num(n)}${nA ? ` · mean ${pct(mean, 1)}` : ''}\nSE = √(p(1−p)/n) = ${pts(se(pA, n))} pts\nred 95%: ${pts(a, 0)}–${pts(b, 0)}% · ${exactNote}`,
-      3: `SE = √(${pA.toFixed(2)}·${(1 - pA).toFixed(2)}/${n}) = ${se(pA, n).toFixed(3)}\np ± 1.96·SE = [${a.toFixed(2)}, ${b.toFixed(2)}] → P = ${inside.toFixed(3)}\nexact 2.5–97.5%: k/n ∈ [${(ka / n).toFixed(2)}, ${(kb / n).toFixed(2)}]`,
-    }[T];
-    if (lo !== a || hi !== b) txt += { 1: '\n(the bar pokes past the ends: the formula strains)', 2: '\nthe red bar passes 0–100%: normal approx. strains', 3: '\nWald band leaves [0, 1]: use exact / Wilson' }[T];
+    const runs = `${num(nA)} run${nA === 1 ? '' : 's'}`;
+    const holds = Math.abs(inside - 0.95) < 0.006 ? 'holds ≈95% ✓' : `holds ${pts(inside, 0)}%`;
+    const out = a < 0 || b > 1;
+    if (pA <= 0 || pA >= 1) {
+      txt = {
+        1: `**${runs}** · every run scores ${pct(pA)}\nno luck left: the error bar is zero`,
+        2: `${runs} · n = ${num(n)} · all at ${pct(pA)}\nSE = √(p(1−p)/n) = 0: no spread`,
+        3: `p(1−p) = 0 ⇒ SE = 0, k ≡ ${pA >= 1 ? 'n' : '0'}\n(an observed ${pA >= 1 ? `${n}/${n}` : `0/${n}`} still has a CI: see Predict)`,
+      }[T];
+    } else {
+      txt = {
+        1: `**${runs}** · ${num(n)} questions each\n95% land within ±${pts(Z95 * se(pA, n))} points (red bar)`,
+        2: `${runs} · n = ${num(n)}${nA ? ` · mean ${pct(mean, 1)}` : ''}\nSE = √(p(1−p)/n) = ${pts(se(pA, n))} pts\nred, p ± 1.96 SE: ${pts(a, 0)}–${pts(b, 0)}% (${holds})\nbrass, exact 95%: ${pts(ka / n, 0)}–${pts(kb / n, 0)}%`,
+        3: `SE = √(${pA.toFixed(2)}·${(1 - pA).toFixed(2)}/${n}) = ${se(pA, n).toFixed(3)}\nred: p ± 1.96·SE = [${a.toFixed(2)}, ${b.toFixed(2)}], P = ${inside.toFixed(3)}\nbrass: exact 2.5–97.5%: [${(ka / n).toFixed(2)}, ${(kb / n).toFixed(2)}]`,
+      }[T];
+      if (out) txt += { 1: '\n(the red bar pokes past 0–100%: the formula strains)', 2: '\nred passes 0–100%: the normal approximation strains', 3: '\nWald band leaves [0, 1]: prefer exact or Wilson' }[T];
+    }
   }
   st.read.set(txt);
   if (st.legend && c.cmp) {
@@ -856,6 +871,11 @@ function dimKnobs(S) {               // the kit cannot dim knobs: a tiny helper 
 }
 
 function wait(S, ms) { return S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)); }
+function later(S, ms, fn) {           // run fn after ms, unless the learner has left this beat
+  if (S.shot) { fn(); return; }
+  const b = S.beat, tok = (S.state.tok = (S.state.tok || 0) + 1);
+  setTimeout(() => { if (S.beat === b && S.state.tok === tok) fn(); }, ms);
+}
 function whenLanded(S) {
   const st = S.state;
   if (S.shot) return Promise.resolve();
@@ -873,7 +893,7 @@ run({
   subtitle: 'A Galton board where every peg is one eval question: why every score needs an error bar.',
   back2d: '#week-11',
   film: 'w11-evals',
-  plinth: { r: 2.05, h: 0.14 },
+  plinth: { r: 1.86, h: 0.14 },
 
   knobs: [
     { id: 'n', type: 'range', label: { 1: 'Questions per run', 2: 'Questions per run, n', 3: 'n (samples per run)' },
@@ -907,10 +927,9 @@ run({
     buildStatic(S);
     st.read = K.label([0, FUNNEL_Y + 0.3, 0], '', { cls: 'readout', anchor: 'bottom', dy: -6 });
     st.tagP = K.label([0, 0, 0], '', { cls: 'tag', anchor: 'bottom', dy: -4 });
-    st.tagBar = K.label([0, 0, 0], '', { cls: 'tag', anchor: 'left', dx: 8, dy: 0 });
-    st.tagM = { A: K.label([0, 0, 0], 'A', { cls: 'tag', anchor: 'bottom', dy: -4 }), B: K.label([0, 0, 0], 'B', { cls: 'tag', anchor: 'bottom', dy: -4 }) };
+    st.tagM = { A: K.label([0, 0, 0], 'A', { cls: 'tag', anchor: 'left', dx: 8, dy: 0 }), B: K.label([0, 0, 0], 'B', { cls: 'tag', anchor: 'left', dx: 8, dy: 0 }) };
     st.axisTags = [0, 1, 2].map(() => K.label([0, 0, 0], '', { cls: 'tag', anchor: 'top', dy: 6 }));
-    st.frostNote = K.label([0, (BOARD_TOP + BOARD_BOT) / 2, 0.3], '', { cls: 'note', anchor: 'center' });
+    st.frostNote = K.label([0, (BOARD_TOP + BOARD_BOT) / 2 + 0.1, -0.26], '', { cls: 'tag frost', anchor: 'center' });
     st.ladderTag = K.label([0, 0, 0], '', { cls: 'tag', anchor: 'bottom', dy: -4 });
     st.ladderTag.show(false);
     st.fig = K.figure();
@@ -1008,16 +1027,22 @@ run({
   onTier(S) { const st = S.state; buildBoard(S); paintLanes(S); refresh(S); if (st.mode === 'one') lightPegs(S, st.litUpto ?? Infinity); },
 
   solids(S) {
-    const st = S.state, L = st.L, out = [];
+    const st = S.state, L = st.L, c = st.c, out = [];
     const cub = (x, y, z, sx, sy, sz) => J.primitives.cuboid({ size: [sx, sz, sy], center: [x, -z, y] });   // three (x, y, z) -> JSCAD (x, -z, y)
+    const H = TOP_Y + 0.03;
     out.push(cub(0, 0.025, 0, 2 * POST + 0.14, 0.05, 0.78));                          // base
-    out.push(cub(0, 1.64, -0.345, 2 * POST + 0.06, 3.24, 0.05));                      // back panel
-    for (const s of [-1, 1]) out.push(cub(s * POST, 1.67, 0.34, 0.07, 3.3, 0.07), cub(s * POST, 1.67, -0.34, 0.07, 3.3, 0.07));
-    out.push(cub(0, 3.33, 0.34, 2 * POST + 0.07, 0.06, 0.07), cub(0, 3.33, -0.34, 2 * POST + 0.07, 0.06, 0.07));
-    for (let j = 1; j < L.bins.length; j++) out.push(cub(L.bins[j].x0, TRAY_Y + WALL_H / 2, -0.02, 0.02, WALL_H, 0.62));
-    out.push(cub(L.trayL - 0.015, TRAY_Y + WALL_H / 2, -0.02, 0.03, WALL_H, 0.62), cub(L.trayR + 0.015, TRAY_Y + WALL_H / 2, -0.02, 0.03, WALL_H, 0.62));
-    if (board(S)) {
-      const n = st.c.n, r = Math.max(0.02, st.pegR);
+    out.push(cub(0, (H - 0.02) / 2 + 0.03, -0.345, 2 * POST + 0.06, H - 0.02, 0.05)); // back panel
+    for (const s of [-1, 1]) for (const z of [0.34, -0.34]) out.push(cub(s * POST, H / 2, z, 0.07, H, 0.07));
+    for (const z of [0.34, -0.34]) out.push(cub(0, TOP_Y, z, 2 * POST + 0.07, 0.06, 0.07));
+    const wallTop = c.cmp ? SHELF_Y + PILE_H2 + 0.12 : TRAY_Y + Math.max(0.3, L.Atop + 0.12);
+    out.push(cub(L.trayL - 0.015, wallTop / 2, 0, 0.03, wallTop, 0.66), cub(L.trayR + 0.015, wallTop / 2, 0, 0.03, wallTop, 0.66));
+    if (c.cmp) out.push(cub((L.trayL + L.trayR) / 2, SHELF_Y - 0.015, -0.17, L.trayR - L.trayL, 0.03, 0.3));
+    for (const M of models(S)) {                        // dividers, printed a little thicker
+      const y0 = floorY(S, M), h = board(S) ? Math.max(0.12, L[M + 'top'] + 0.06) : 0.035, zc = c.cmp ? laneZ(S, M) : 0, dz = c.cmp ? 0.3 : 0.5;
+      for (let j = 1; j < L.bins.length; j++) out.push(cub(L.bins[j].x0, y0 + h / 2, zc, 0.02, h, dz));
+    }
+    if (board(S)) {                                     // pegs, from the back panel forward
+      const n = c.n, r = Math.max(0.02, st.pegR);
       for (let row = 0; row < n; row++) for (let j = 0; j <= row; j++) {
         const x = X(S, 0.5 + (j - row / 2) / n), y = BOARD_TOP - row * st.gap;
         out.push(J.transforms.translate([x, 0.065, y], J.transforms.rotateX(Math.PI / 2, J.primitives.cylinder({ radius: r, height: 0.53, segments: 12 }))));
@@ -1025,12 +1050,12 @@ run({
     }
     // each pile as a printable histogram column (height = the pile's height)
     for (const M of models(S)) {
-      const z = laneZ(S, M), depth = st.c.cmp ? 0.24 : 0.5;
+      const z = laneZ(S, M), depth = c.cmp ? 0.26 : 0.5, y0 = floorY(S, M);
       L.bins.forEach((b, j) => {
-        const c = L.cnt[M][j];
-        if (!c) return;
-        const h = Math.ceil(c / L.per[j]) * L.lh + 0.1 * L.d;
-        out.push(cub((b.x0 + b.x1) / 2, TRAY_Y + h / 2, z, Math.max(0.02, b.x1 - b.x0 - 0.03), h, depth));
+        const cn = L.cnt[M][j];
+        if (!cn) return;
+        const h = Math.ceil(cn / L.per[j]) * L.lh + 0.1 * L.d;
+        out.push(cub((b.x0 + b.x1) / 2, y0 + h / 2, z, Math.max(0.02, b.x1 - b.x0 - 0.03), h, depth));
       });
     }
     return out;
@@ -1073,11 +1098,12 @@ run({
         3: 'Var(k) = np(1−p), so SD(k/n) = √(p(1−p)/n) = O(n^−½). p(1−p) peaks at ½, so SE ≤ 0.5/√n (±9.8 pts at n = 100, worst case). At n = 24 the normal band [0.40, 0.80] holds 96.5% exactly, near the 95% it promises; exact range k ∈ [10, 19].',
       },
       cam: CAM.front,
-      set: { n: 24, pA: 0.6, cmp: false, clu: '1' },
-      enter(S) {
+      set: { n: 6, pA: 0.6, cmp: false, clu: '1' },
+      enter(S) {                          // the same 101 runs, stretched from 6 to 24 questions each
         scene(S, { mode: 'pile' });
         fresh(S);
-        drop(S, 101, { delay: 0.2 });
+        drop(S, 101, { instant: true });
+        later(S, 900, () => S.setKnob('n', 24));
       } },
 
     { tag: 'core',
@@ -1142,7 +1168,7 @@ run({
     { tag: 'contested',
       cap: {
         1: '**Real questions come in clumps.** Six questions on one passage rise or fall together, so runs swing more than the simple formula says. The pile spills past the amber curve.',
-        2: 'Toy: 24 questions in 4 clusters of 6, ρ = 0.3. The pile spills past the binomial curve: the plain formula says ±19.6, the exact spread is ±31.0 (×√(1 + 5·0.3)). Current method: stderr(); emerging: clustered SEs (Miller 2024). And eval awareness moves p itself.',
+        2: 'Toy: 24 questions in 4 clusters of 6, ρ = 0.3. The pile spills past the binomial curve: the plain formula says ±19.6, the real spread is ±31.0 (×√(1 + 5·0.3)). Current method: stderr(); emerging: clustered SEs (Miller 2024). And eval awareness moves p itself.',
         3: 'Var(k) = np(1−p)[1 + (m−1)ρ], design effect 2.5 here; Inspect: stderr(cluster="passage"). Open: eval awareness shifts p itself (bias no error bar catches); questions aren\'t random draws. Inconsequential for applied work: ddof, bootstrap vs analytic SE.',
       },
       cam: CAM.front,
@@ -1159,7 +1185,7 @@ run({
         2: 'Polls: 1,000 people at 50% gives ±3.1 points, the "margin of error". A/B tests, clinical trials and factory quality control use the same √(p(1−p)/n). Francis Galton built this board in the 1870s to show many small chances adding up to a bell.',
         3: 'The same CLT behind every margin of error: polls (±1.96·0.5/√n), A/B tests (two-proportion z-tests), clinical trials (power analysis), control charts (p ± 3SE). Galton\'s quincunx shows the binomial-to-normal limit; with a probe\'s accuracy, report its SE too.',
       },
-      cam: CAM.wide,
+      cam: CAM.left,
       set: { n: 1000, pA: 0.5, cmp: false, clu: '1' },
       enter(S) {
         scene(S, { mode: 'pile', figure: 'cheer', figAt: [-1.66, 0, 0.9], face: [0, 0.6, 4] });
