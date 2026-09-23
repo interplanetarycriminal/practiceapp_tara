@@ -1,0 +1,944 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Arch · Object Lessons</title>
+<meta name="description" content="A research claim stands like an arch: each stone answers one question the room will ask. Pull a stone and the claim sags or falls, by a stated rule; build your own arch for the 12 December capstone talk.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+/* .k-tag (the beat pill) sets min-width:52px, which leaks into K.label({cls:'tag'}) labels */
+.k-label.k-tag{min-width:0}
+.k-label.k-lift{color:color-mix(in srgb, var(--k-brass) 60%, var(--ink)); font-size:10.5px}
+.k-label.k-val{color:var(--ink); letter-spacing:.02em}
+.k-label.k-note b{font-weight:700}
+/* the claim note reads as one sentence, so give it a wider measure than the kit's 210px */
+.k-label.k-note.k-claim{max-width:min(300px, calc(100vw - 64px))}
+/* the "Edit my arch" editor: a sheet of its own, above the kit's chrome */
+.arch-ed{position:fixed; inset:0; z-index:20; display:flex; align-items:flex-end; justify-content:center;
+  background:rgba(22,20,16,.28); -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px)}
+.arch-ed[hidden]{display:none}
+.arch-in{box-sizing:border-box; width:min(560px,100%); max-height:min(92vh,100%); overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain;
+  background:var(--surface); color:var(--ink); border:1px solid var(--rule); border-radius:16px 16px 0 0;
+  box-shadow:var(--shadow); padding:14px 16px 12px; font:14px/1.45 var(--font)}
+@media (min-width:760px){ .arch-ed{align-items:center} .arch-in{border-radius:16px; max-height:88vh} }
+.arch-hd{display:flex; align-items:center; gap:8px; margin:0 0 6px}
+.arch-hd b{font-size:15px}
+.arch-days{color:var(--muted); font-size:12.5px; flex:1}
+.arch-x{border:1px solid var(--rule); background:var(--surface); color:var(--ink); border-radius:999px; width:30px; height:30px; font-size:15px; cursor:pointer}
+.arch-hint{margin:0 0 10px; color:var(--muted); font-size:13px}
+.arch-f{display:block; margin:0 0 9px}
+.arch-f span{display:block; font-weight:650; font-size:12.5px; margin:0 0 3px}
+.arch-f span i{font-style:normal; font-weight:500; color:var(--muted)}
+.arch-f textarea,.arch-f input{box-sizing:border-box; width:100%; max-width:100%; font:14px/1.4 var(--font); color:var(--ink); background:var(--soft);
+  border:1px solid var(--rule); border-radius:8px; padding:6px 8px; resize:vertical}
+.arch-f textarea:focus,.arch-f input:focus{outline:2px solid var(--accent); outline-offset:0}
+.arch-nums{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px}
+.arch-ft{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; position:sticky; bottom:-12px; background:var(--surface); padding:8px 0 10px}
+.arch-ft button{flex:1 1 auto; min-height:36px; border-radius:10px; border:1px solid var(--rule); background:var(--soft); color:var(--ink); font:600 13.5px/1 var(--font); cursor:pointer; padding:0 12px}
+.arch-ft button.pri{background:var(--accent); border-color:var(--accent); color:var(--surface)}
+.arch-note{font-size:12px; color:var(--muted); margin:6px 0 0}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   27 · w14-arch: "The arch" (W14, the capstone talk on 12 December)
+   A claim is an arch of stones; each stone answers one question the room will ask.
+   The rule (real, stated in beat 1): existence stones make the claim exist, so pulling one
+   collapses the arch; reach stones each carry one clause, so pulling one makes the claim
+   drop that clause and the arch sags. Data stones are also tested on seeded toy data (a
+   failed test cracks the stone, which counts as missing). The physics is illustrative.
+   The MATH block is extracted and checked in node + an independent Python run (LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* The toy capstone (stated, not a real result): "does capping activations along the Assistant
+   Axis stop persona drift in long chats?" Three arms of n chats each, per seed: no cap (the
+   baseline), a cap along a random direction (the control) and the Assistant-Axis cap (the
+   intervention). Each chat drifts independently with a fixed toy probability per arm; counts
+   are seeded draws. Three seeds: seed 0 is the main run, seeds 1-2 are the robustness re-runs
+   (the first m chats of a run are the same whatever n is, so n = 20 is the first 20 of n = 200). */
+const ARMS = ['none', 'random', 'axis'];
+const P_DRIFT = { none: 0.30, random: 0.29, axis: 0.12 };
+const N_SEEDS = 3;
+const Z95 = 1.959963984540054;               // two-sided 95% normal quantile
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const streamSeed = (seed, s, arm) => (Math.imul(seed + 1, 0x9E3779B1) ^ Math.imul(s + 1, 0x85EBCA77) ^ Math.imul(arm + 1, 0xC2B2AE3D)) >>> 0;
+function drifted(p, n, rnd) { let k = 0; for (let i = 0; i < n; i++) if (rnd() < p) k++; return k; }
+
+/* Wilson score interval for a rate k/n (as ARENA [4.2] plots rates) */
+function wilson(k, n, z = Z95) {
+  if (!n) return null;
+  const p = k / n, z2 = z * z, den = 1 + z2 / n;
+  const mid = (p + z2 / (2 * n)) / den, half = (z / den) * Math.sqrt(p * (1 - p) / n + z2 / (4 * n * n));
+  return [Math.max(0, mid - half), Math.min(1, mid + half)];
+}
+/* Newcombe (1998) hybrid score interval for p1 - p0 (method 10), from the two Wilson intervals */
+function newcombe(k1, n1, k0, n0, z = Z95) {
+  const w1 = wilson(k1, n1, z), w0 = wilson(k0, n0, z);
+  if (!w1 || !w0) return null;
+  const p1 = k1 / n1, p0 = k0 / n0, d = p1 - p0;
+  return [d - Math.sqrt((p1 - w1[0]) ** 2 + (w0[1] - p0) ** 2), d + Math.sqrt((w1[1] - p1) ** 2 + (p0 - w0[0]) ** 2)];
+}
+const excludes0 = (ci) => !!ci && (ci[0] > 0 || ci[1] < 0);
+
+/* one toy study: counts per seed and arm */
+function experiment(n, seed) {
+  const runs = [];
+  for (let s = 0; s < N_SEEDS; s++) {
+    const r = {};
+    ARMS.forEach((a, ai) => { r[a] = drifted(P_DRIFT[a], n, mulberry32(streamSeed(seed, s, ai))); });
+    runs.push(r);
+  }
+  return { n, seed, runs };
+}
+
+/* the evidence each data stone rests on, and its test (a failed test cracks the stone) */
+function evaluate(E) {
+  const n = E.n, R0 = E.runs[0];
+  const rate = {}, ci = {};
+  ARMS.forEach((a) => { rate[a] = R0[a] / n; ci[a] = wilson(R0[a], n); });
+  const delta = rate.axis - rate.none, deltaCI = newcombe(R0.axis, n, R0.none, n);
+  const ctrl = rate.random - rate.none, ctrlCI = newcombe(R0.random, n, R0.none, n);
+  const vsCtrl = rate.axis - rate.random, vsCtrlCI = newcombe(R0.axis, n, R0.random, n);
+  const seeds = E.runs.map((r) => ({ none: r.none / n, random: r.random / n, axis: r.axis / n,
+    delta: (r.axis - r.none) / n, ci: newcombe(r.axis, n, r.none, n) }));
+  const sign = Math.sign(delta);
+  const agree = seeds.filter((s) => excludes0(s.ci) && Math.sign(s.delta) === sign).length;
+  return {
+    n, k: { ...R0 }, rate, ci, delta, deltaCI, ctrl, ctrlCI, vsCtrl, vsCtrlCI, seeds, agree,
+    ok: {
+      result: excludes0(deltaCI),                                  // the effect's 95% interval misses 0
+      control: !excludes0(ctrlCI) && excludes0(vsCtrlCI),          // random cap ~ no cap, and the axis beats it
+      robust: agree === N_SEEDS,                                   // every seed shows it, same sign, CI off 0
+    },
+  };
+}
+
+/* the arch rule: each stone answers one question; existence stones hold the claim up, reach
+   stones hold one clause of it. Missing = taken out, cracked by a failed test, or left blank. */
+const STONES = [
+  { id: 'question', kind: 'exist', place: 'left' },
+  { id: 'baseline', kind: 'exist', place: 0 },
+  { id: 'robust', kind: 'reach', place: 1 },
+  { id: 'result', kind: 'exist', place: 2 },
+  { id: 'claim', kind: 'exist', place: 3 },
+  { id: 'control', kind: 'reach', place: 4 },
+  { id: 'mechanism', kind: 'reach', place: 5 },
+  { id: 'limits', kind: 'reach', place: 6 },
+  { id: 'mind', kind: 'exist', place: 'right' },
+];
+function archState(missing) {
+  const gone = STONES.filter((s) => missing.has(s.id));
+  const fallen = gone.filter((s) => s.kind === 'exist').map((s) => s.id);
+  const lost = gone.filter((s) => s.kind === 'reach').map((s) => s.id);
+  const standingVoussoirs = STONES.filter((s) => typeof s.place === 'number' && !missing.has(s.id)).length;
+  return { collapsed: fallen.length > 0, fallen, lost, standingVoussoirs };
+}
+/* the same tests on a student's own counts (arms may differ in n; no seeds, so robustness is theirs to state) */
+function evaluateUser(base, res, ctrl) {
+  if (!base || !res) return null;
+  const rate = { none: base.k / base.n, axis: res.k / res.n, random: ctrl ? ctrl.k / ctrl.n : null };
+  const ci = { none: wilson(base.k, base.n), axis: wilson(res.k, res.n), random: ctrl ? wilson(ctrl.k, ctrl.n) : null };
+  const delta = rate.axis - rate.none, deltaCI = newcombe(res.k, res.n, base.k, base.n);
+  const ctrlCI = ctrl ? newcombe(ctrl.k, ctrl.n, base.k, base.n) : null;
+  const vsCtrlCI = ctrl ? newcombe(res.k, res.n, ctrl.k, ctrl.n) : null;
+  return { rate, ci, delta, deltaCI, ctrlCI, vsCtrlCI,
+    ok: { result: excludes0(deltaCI), control: ctrl ? !excludes0(ctrlCI) && excludes0(vsCtrlCI) : null } };
+}
+function parseCount(str) {                  // "34/200" -> {k: 34, n: 200}; anything else -> null
+  const m = /^\s*(\d+)\s*(?:\/|of|out of)\s*(\d+)\s*$/i.exec(String(str || ''));
+  if (!m) return null;
+  const k = +m[1], n = +m[2];
+  return n > 0 && k <= n ? { k, n } : null;
+}
+const MATH = { ARMS, P_DRIFT, N_SEEDS, Z95, mulberry32, streamSeed, drifted, wilson, newcombe, excludes0, experiment, evaluate, evaluateUser, STONES, archState, parseCount };
+// MATH-END
+
+/* ============================================================ content */
+
+const DEFAULT_SEED = 4;                       // a typical draw (rates within 1.5 points of the toy's truth)
+const r0 = (x) => Math.sign(x) * Math.round(Math.abs(x) + 1e-9);          // round half away from zero
+const P = (v) => r0(100 * v);                                             // a rate or a difference in points
+const pc = (v) => P(v) + '%';
+const sp = (v) => (P(v) > 0 ? '+' : P(v) < 0 ? '−' : '') + Math.abs(P(v));  // signed points
+const p1 = (v) => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(100 * v).toFixed(1);
+
+const IDS = MATH.STONES.map((s) => s.id);
+const KIND = Object.fromEntries(MATH.STONES.map((s) => [s.id, s.kind]));
+const PLACE = Object.fromEntries(MATH.STONES.map((s) => [s.id, s.place]));
+const TXT = {
+  question: { name: { 1: 'the question', 2: 'question', 3: 'question' }, eng: ['QUESTION'],
+    judge: 'What question does this answer, and why should anyone care?',
+    field: 'The question, as a question', hint: 'one line, no motivation yet' },
+  baseline: { name: { 1: 'compared to what', 2: 'baseline', 3: 'baseline' }, eng: ['BASELINE'],
+    judge: 'Compared to what?', field: 'Baseline: compared to what?', hint: 'the number you are beating, same setup' },
+  robust: { name: { 1: 'repeats', 2: 'robustness', 3: 'robustness' }, eng: ['SEEDS'],
+    judge: 'How many seeds is that, and what is the spread?', field: 'Robustness', hint: 'seeds, prompts, models' },
+  result: { name: { 1: 'the number', 2: 'result', 3: 'result ± CI' }, eng: ['RESULT'],
+    judge: 'How big is the effect, and how sure are you?', field: 'Result, with its error bar', hint: 'the one figure' },
+  claim: { name: { 1: 'the claim', 2: 'claim', 3: 'claim' }, eng: ['CLAIM'],
+    judge: 'So what is the one thing to remember?', field: 'The claim, in one sentence', hint: 'what, on what, how sure' },
+  control: { name: { 1: 'not just any change', 2: 'control', 3: 'control' }, eng: ['CONTROL'],
+    judge: 'Isn’t there a simpler explanation?', field: 'Control', hint: 'the boring explanation you ruled out' },
+  mechanism: { name: { 1: 'why it works', 2: 'mechanism', 3: 'mechanism' }, eng: ['WHY'],
+    judge: 'Why would that work?', field: 'Mechanism', hint: 'why it works, if you know' },
+  limits: { name: { 1: 'what it doesn’t show', 2: 'limits', 3: 'limits' }, eng: ['LIMITS'],
+    judge: 'Would this hold on a bigger model, or outside this setup?', field: 'Limits', hint: 'what it does NOT show' },
+  mind: { name: { 1: 'change my mind', 2: 'change my mind', 3: 'falsifier' }, eng: ['CHANGE', 'MY MIND?'],
+    judge: 'What result would change your mind?', field: 'What result would change my mind?', hint: 'the result that would flip you' },
+};
+/* the toy capstone's stone texts, from its live numbers */
+function exampleTexts(A) {
+  const d = A.seeds.map((s) => Math.abs(P(s.delta)));
+  return {
+    question: 'Does capping activations along the Assistant Axis stop persona drift in long chats?',
+    claim: 'Capping the Assistant Axis cut persona drift in long chats.',
+    baseline: `No cap, same setup: ${A.k.none} of ${A.n} chats drifted (${pc(A.rate.none)}).`,
+    result: `Axis cap: ${pc(A.rate.axis)} drifted, ${sp(A.delta)} points (95% CI ${sp(A.deltaCI[0])} to ${sp(A.deltaCI[1])}).`,
+    control: `A random-direction cap: ${pc(A.rate.random)} drifted, like no cap.`,
+    robust: `3 seeds: changes of −${d[0]}, −${d[1]} and −${d[2]} points.`,
+    mechanism: 'Drift starts as activations slide off the Assistant end of the axis; the cap stops the slide (toy story).',
+    limits: `One model, one chat style, an LLM judge, ${A.n} chats per arm.`,
+    mind: 'If a random cap did as well, or the drop vanished in a bigger run, I would drop the claim.',
+  };
+}
+
+/* ============================================================ geometry */
+
+const RI = 0.94, RO = 1.3, KEY_UP = 0.09, DEP = 0.3, H0 = 0.62, ZC = -0.32;
+const TH = Math.PI / 7, GAP = 0.0065;          // wedge angle of every voussoir; joint half-gap (rad)
+const RMID = (RI + RO) / 2;
+const SEG = 8;
+const PIER = { x0: RI - 0.05, x1: RO + 0.16 };  // |x| extent of each abutment
+const PIER_W = PIER.x1 - PIER.x0, PIER_X = (PIER.x0 + PIER.x1) / 2;
+const CH = 1.4;                                // chart: world height per 100% drift
+const BAR_X = { none: -0.38, random: 0, axis: 0.38 };
+const ARM_COL = { none: '#b6ab97', random: C.aux, axis: C.dir };
+const CAM = {
+  front: { pos: [0, 2.0, 6.3], target: [0, 1.0, -0.25] },
+  key: { pos: [0.35, 2.58, 2.6], target: [0, 2.0, ZC], fit: 0.62 },       // close-ups: 30 deg spans 0.62 x the free square
+  chart: { pos: [-0.9, 1.46, 3.24], target: [-0.05, 0.75, ZC], fit: 0.8 },
+  right: { pos: [2.6, 2.1, 5.2], target: [0.1, 0.9, -0.3] },
+  left: { pos: [-2.8, 2.2, 5.0], target: [-0.1, 0.9, -0.3] },
+  wide: { pos: [1.4, 3.2, 6.2], target: [0, 0.8, -0.1] },
+};
+const FIG_AT = [-1.5, 0, 0.78];
+const wait = (S, ms) => (S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)));
+
+/* an annular sector (a voussoir's face), centred on the +y axis, with its centroid at the origin */
+function sectorPts(ri, ro, half, cy) {
+  const a0 = Math.PI / 2 - half, a1 = Math.PI / 2 + half, pts = [];
+  for (let i = 0; i <= SEG; i++) { const a = a0 + (a1 - a0) * i / SEG; pts.push([ro * Math.cos(a), ro * Math.sin(a) - cy]); }
+  for (let i = SEG; i >= 0; i--) { const a = a0 + (a1 - a0) * i / SEG; pts.push([ri * Math.cos(a), ri * Math.sin(a) - cy]); }
+  return pts;
+}
+const centroidR = (ri, ro, half) => (2 / 3) * (ro ** 3 - ri ** 3) / (ro ** 2 - ri ** 2) * Math.sin(half) / half;
+/* JSCAD solid: the face extruded DEP deep; JSCAD z-up maps to three y-up (kit: (x, y, z) -> (x, z, -y)) */
+function stoneGeom(pts) {
+  const g2 = J.primitives.polygon({ points: pts });
+  const g3 = J.extrusions.extrudeLinear({ height: DEP }, g2);
+  return J.transforms.rotateX(Math.PI / 2, J.transforms.translate([0, 0, -DEP / 2], g3));   // (u, v, w) -> (u, -w, v)
+}
+const RC = centroidR(RI, RO, TH / 2 - GAP), RCK = centroidR(RI, RO + KEY_UP, TH / 2 - GAP);
+
+/* poses */
+const _e = new THREE.Euler();
+const quatZ = (a, tiltX = 0) => new THREE.Quaternion().setFromEuler(_e.set(tiltX, 0, a, 'XYZ'));
+function standPose(id) {
+  const pl = PLACE[id];
+  if (typeof pl !== 'number') { const sx = pl === 'left' ? -1 : 1; return { p: new THREE.Vector3(sx * PIER_X, H0 / 2, ZC), q: new THREE.Quaternion() }; }
+  const phi = Math.PI - (pl + 0.5) * TH, rc = id === 'claim' ? RCK : RC;
+  return { p: new THREE.Vector3(rc * Math.cos(phi), H0 + rc * Math.sin(phi), ZC), q: quatZ(phi - Math.PI / 2) };
+}
+/* sag (illustrative): the m standing voussoirs keep their wedge angles and re-lay, in order, as a
+   segmental arch through the same springing points; fewer stones = a flatter, lower arch */
+function sagPoses(order) {
+  const m = order.length, half = (m * TH) / 2;
+  const Rn = RMID / Math.sin(half), yc = H0 - Rn * Math.cos(half), s = Rn / RMID;
+  const out = {};
+  order.forEach((id, k) => {
+    const phi = Math.PI / 2 + half - (k + 0.5) * TH, rc = (id === 'claim' ? RCK : RC) * s;
+    out[id] = { p: new THREE.Vector3(rc * Math.cos(phi), yc + rc * Math.sin(phi), ZC), q: quatZ(phi - Math.PI / 2) };
+  });
+  return out;
+}
+/* how low and how high a stone reaches in a given orientation (so it can rest on the plinth, y = 0) */
+const _v = new THREE.Vector3();
+function extentY(o, q) {
+  const pos = o.mesh.geometry.attributes.position;
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < pos.count; i++) { const y = _v.fromBufferAttribute(pos, i).applyQuaternion(q).y; if (y < lo) lo = y; if (y > hi) hi = y; }
+  return [lo, hi];
+}
+/* where a fallen voussoir comes to rest: side stones tip outward onto their lower joint face (the
+   face still toward you), the keystone lands flat on its back; spots keep the chart, the front
+   (where a pulled stone is set down) and the figure clear */
+const TIP = Math.PI / 2 - (TH / 2 - GAP);
+const FLOOR = { baseline: [-0.92, -1.3, 1], robust: [-0.45, -1.0, 1], result: [-1.0, 1.02, 1], claim: [0.02, 0.82, 0],
+  control: [0.45, -1.0, -1], mechanism: [0.92, -1.3, -1], limits: [1.0, 1.02, -1] };
+function floorPose(st, id) {
+  if (typeof PLACE[id] !== 'number') return standPose(id);    // an abutment left blank stays put (as glass)
+  const [x, z, side] = FLOOR[id];
+  const q = side ? quatZ(side * TIP) : new THREE.Quaternion().setFromEuler(_e.set(-Math.PI / 2, 0, -0.12));
+  return { p: new THREE.Vector3(x, -extentY(st.obj[id], q)[0] + 0.001, z), q };
+}
+/* a stone you pull out is set down at the front of the plinth, upright, its face to you */
+const LIFT_AT = [0, 1.42];
+function liftPose(st, id) {
+  const q = new THREE.Quaternion();
+  return { p: new THREE.Vector3(LIFT_AT[0], -extentY(st.obj[id], q)[0] + 0.001, LIFT_AT[1]), q };
+}
+
+/* ============================================================ engraving */
+function engraveTexture(lines, w = 256, h = 128, maxFs = 50) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const g = cv.getContext('2d');
+  let fs = maxFs;
+  const fit = () => { g.font = `700 ${fs}px Georgia, "Times New Roman", serif`; return Math.max(...lines.map((l) => g.measureText(l).width)); };
+  while (fit() > w * 0.9 && fs > 12) fs -= 2;
+  while (fs * 1.08 * lines.length > h * 0.9 && fs > 12) { fs -= 2; fit(); }
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  const lh = fs * 1.08, y0 = h / 2 - (lh * (lines.length - 1)) / 2;
+  lines.forEach((l, i) => {
+    g.fillStyle = 'rgba(255,252,244,0.75)'; g.fillText(l, w / 2, y0 + i * lh + 1.6);    // the lit lower lip of the cut
+    g.fillStyle = 'rgba(88,74,54,0.9)'; g.fillText(l, w / 2, y0 + i * lh);            // the cut
+  });
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  return tex;
+}
+function wrapWords(text, maxChars, maxLines) {
+  const words = String(text).trim().split(/\s+/), lines = [];
+  let cur = '';
+  for (const w of words) {
+    if ((cur + ' ' + w).trim().length > maxChars && cur) { lines.push(cur); cur = w; } else cur = (cur + ' ' + w).trim();
+    if (lines.length === maxLines) break;
+  }
+  if (lines.length < maxLines && cur) lines.push(cur);
+  const used = lines.join(' ').length;
+  if (used < String(text).trim().length && lines.length) lines[lines.length - 1] = lines[lines.length - 1].replace(/[\s,.;:]*$/, '') + '…';
+  return lines.map((l) => l.toUpperCase());
+}
+
+/* ============================================================ my arch (this browser only) */
+const LS_KEY = 'tara.objects.arch';
+const FIELDS = ['question', 'claim', 'baseline', 'result', 'control', 'robust', 'mechanism', 'limits', 'mind'];
+function loadMine() {
+  try { const o = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); if (o && typeof o === 'object') return o; } catch (e) { /* storage off */ }
+  return {};
+}
+function saveMine(o) { try { localStorage.setItem(LS_KEY, JSON.stringify({ ...o, v: 1, saved: Date.now() })); } catch (e) { /* storage off */ } }
+const blank = (v) => !v || !String(v).trim();
+function daysTo12Dec() {
+  const now = new Date(), t = new Date(2026, 11, 12);
+  const d = Math.ceil((t - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+  return d;
+}
+
+/* ============================================================ behaviour */
+
+function compute(S) {
+  const st = S.state;
+  st.E = MATH.experiment(S.knobs.n, st.seed);
+  st.A = MATH.evaluate(st.E);
+  st.ex = exampleTexts(st.A);
+}
+function userCounts(st) {
+  const m = st.my;
+  return { base: MATH.parseCount(m.nBase), res: MATH.parseCount(m.nRes), ctrl: MATH.parseCount(m.nCtrl) };
+}
+/* missing = pulled out by you, cracked by a failed test, or (my arch) not written yet */
+function computeMissing(S) {
+  const st = S.state, k = S.knobs, miss = new Set(), why = {};
+  if (k.out !== 'none') { miss.add(k.out); why[k.out] = 'out'; }
+  if (!k.mine) {
+    const ok = st.A.ok;
+    for (const id of ['result', 'control', 'robust']) if (!ok[id]) { miss.add(id); why[id] = why[id] || 'crack'; }
+    st.U = null;
+  } else {
+    for (const id of FIELDS) if (blank(st.my[id])) { miss.add(id); why[id] = why[id] || 'blank'; }
+    const c = userCounts(st);
+    st.U = MATH.evaluateUser(c.base, c.res, c.ctrl);
+    if (st.U && !st.U.ok.result && !miss.has('result')) { miss.add('result'); why.result = 'crack'; }
+    if (st.U && st.U.ok.control === false && !miss.has('control')) { miss.add('control'); why.control = 'crack'; }
+  }
+  st.missing = miss; st.why = why;
+  st.arch = MATH.archState(miss);
+  const order = [k.out !== 'none' ? k.out : null, ...IDS.filter((id) => KIND[id] === 'exist' && miss.has(id)), ...IDS.filter((id) => miss.has(id))];
+  st.first = order.find(Boolean) || null;
+}
+
+function layout(S, animate) {
+  const st = S.state, miss = st.missing, arch = st.arch, lifted = S.knobs.out !== 'none' ? S.knobs.out : null;
+  const order = IDS.filter((id) => typeof PLACE[id] === 'number' && !miss.has(id));
+  const sag = arch.collapsed ? null : sagPoses(order);
+  for (const id of IDS) {
+    const o = st.obj[id];
+    let to, mode = 'ease', delay = 0;
+    if (id === lifted) to = liftPose(st, id);
+    else if (miss.has(id)) { to = floorPose(st, id); mode = o.down || typeof PLACE[id] !== 'number' ? 'ease' : 'fall'; }
+    else if (typeof PLACE[id] !== 'number') to = standPose(id);
+    else if (arch.collapsed) { to = floorPose(st, id); mode = o.down ? 'ease' : 'fall'; delay = Math.abs(PLACE[id] - 3) * 75 + 120; }
+    else { to = sag[id]; delay = o.down ? (6 - Math.abs(PLACE[id] - 3)) * 60 : 0; }
+    o.from = { p: o.mesh.position.clone(), q: o.mesh.quaternion.clone() };
+    o.to = to; o.mode = mode; o.delay = delay; o.dur = mode === 'fall' ? 820 : 760;
+    o.down = typeof PLACE[id] === 'number' && id !== lifted && (miss.has(id) || arch.collapsed);
+    // material: cracked by data (red tint), not written yet (glass), else plaster
+    const w = st.why[id];
+    o.mesh.material = w === 'crack' ? st.mat.crack : w === 'blank' ? st.mat.blank : (id === 'claim' ? st.mat.key : st.mat.stone);
+    o.eng.material.opacity = w === 'blank' ? 0.35 : 1;
+  }
+  // the pulled stone's tag, beside it on the plinth (above it would sit on the chart)
+  if (lifted) {
+    const o = st.obj[lifted];
+    st.liftAt.position.set(o.to.p.x + 0.34, o.to.p.y, o.to.p.z + DEP / 2);
+    st.liftTag.set(KIND[lifted] === 'exist' ? { 1: 'the claim needs it', 2: 'existence stone', 3: 'existence' }
+      : { 1: 'it sets the reach', 2: 'reach stone', 3: 'reach' });
+  }
+  st.liftShow = !!lifted;
+  st.liftTag.show(st.liftShow && !animate);          // the tag appears once the stone has arrived
+  if (!animate) { for (const id of IDS) applyPose(st.obj[id], 1); st.animating = false; }
+  else { st.animating = true; st.animT0 = null; }
+  placeNote(S);
+  S.invalidate();
+}
+/* the note rides just above the keystone; with no arch left it sits over the chart */
+const NOTE_UP = new THREE.Vector3(0, RO + KEY_UP - RCK + 0.12, 0);
+function placeNote(S) {
+  const st = S.state, m = st.obj.claim.mesh;
+  if (st.arch.collapsed) st.noteAt.position.set(0, 1.0, ZC);
+  else st.noteAt.position.copy(NOTE_UP).applyQuaternion(m.quaternion).add(m.position);
+}
+function applyPose(o, u) {
+  if (!o.to) return;
+  const m = o.mesh;
+  if (o.mode === 'fall') {
+    const h = 1 - (1 - u) * (1 - u);                          // drift sideways fast, then land
+    m.position.set(o.from.p.x + (o.to.p.x - o.from.p.x) * h, o.from.p.y + (o.to.p.y - o.from.p.y) * u * u, o.from.p.z + (o.to.p.z - o.from.p.z) * h);
+    m.quaternion.slerpQuaternions(o.from.q, o.to.q, Math.min(1, u * 1.15));
+  } else {
+    const e = u * u * (3 - 2 * u);
+    m.position.lerpVectors(o.from.p, o.to.p, e);
+    m.quaternion.slerpQuaternions(o.from.q, o.to.q, e);
+  }
+}
+
+/* the bar chart under the arch: toy rates with Wilson 95% whiskers, seeds as beads, baseline as a brass line */
+function drawChart(S) {
+  const st = S.state, k = S.knobs, miss = st.missing;
+  const mine = k.mine, U = st.U, A = st.A;
+  const src = mine ? U : A;
+  const show = { none: !!src && !miss.has('baseline') || (mine && !!U && st.why.baseline !== 'out' && !blank(st.my.baseline)),
+    random: !!src && (mine ? !!(U && U.rate.random != null) : true) && st.why.control !== 'out' && !(mine && blank(st.my.control)),
+    axis: !!src && st.why.result !== 'out' && !(mine && blank(st.my.result)) };
+  if (!mine) show.none = st.why.baseline !== 'out';
+  for (const a of MATH.ARMS) {
+    const b = st.bars[a], on = show[a] && src && src.rate[a] != null;
+    b.group.visible = !!on;
+    b.val.show(!!on);
+    if (!on) { st.legend.set(a, '—'); continue; }
+    const r = src.rate[a], ci = src.ci[a], h = Math.max(0.004, r * CH);
+    b.bar.scale.set(1, h, 1); b.bar.position.y = 0.04 + h / 2;
+    const lo = 0.04 + ci[0] * CH, hi = 0.04 + ci[1] * CH;
+    b.wh.scale.set(1, Math.max(0.004, hi - lo), 1); b.wh.position.y = (lo + hi) / 2;
+    b.capLo.position.y = lo; b.capHi.position.y = hi;
+    b.valAt.position.y = hi + 0.02;
+    b.val.set(pc(r));
+    st.legend.set(a, pc(r));
+    b.seeds.forEach((d, j) => {
+      const s = !mine && A.seeds[j + 1];
+      d.visible = !!s && st.why.robust !== 'out';
+      if (s) d.position.y = 0.04 + s[a] * CH;
+    });
+  }
+  const base = src && show.none ? src.rate.none : null;
+  st.baseLine.visible = base != null;
+  if (base != null) st.baseLine.position.y = 0.04 + base * CH;
+}
+
+/* the note above the keystone: the judge's question for the first missing stone, then the claim
+   as one sentence, built from the standing stones (each clause belongs to one stone) */
+function paintNote(S) {
+  const st = S.state, k = S.knobs, miss = st.missing, arch = st.arch, A = st.A, mine = k.mine;
+  const has = (id) => !miss.has(id);
+  const T = { 1: [], 2: [], 3: [] };
+  const push = (o) => { for (const t of [1, 2, 3]) if (o[t]) T[t].push(o[t]); };
+  const none = { 1: '', 2: '', 3: '' };
+  const f = st.first;
+  if (f) {
+    const w = st.why[f];
+    let q = TXT[f].judge;
+    if (!mine && f === 'baseline') q = `${pc(A.rate.axis)} drift. Compared to what?`;
+    if (!mine && f === 'control') q = 'Would any cap do that?';
+    if (!mine && f === 'mechanism') q = 'Why would a cap stop drift?';
+    const tail = w === 'blank' ? { 1: ' (not written yet)', 2: ' (not written yet)', 3: ' (blank)' }
+      : w === 'crack' ? crackWhy(S, f) : none;
+    push({ 1: `**Judge:** “${q}”${tail[1]}`, 2: `**Judge:** “${q}”${tail[2]}`, 3: `**Q (${TXT[f].name[3]}):** “${q}”${tail[3]}` });
+  }
+  if (arch.collapsed) {
+    const g = arch.fallen[0], w = st.why[g];
+    const R = {
+      question: { 1: 'An answer to no question.', 2: 'An answer to no question: nobody knows why it matters.', 3: 'No question: nothing for the claim to answer.' },
+      baseline: { 1: 'A number with nothing to compare it to says nothing.', 2: 'A rate with no baseline has no meaning: no effect to claim.', 3: 'No contrast, no estimand: Δ is undefined.' },
+      result: w === 'crack'
+        ? (mine ? { 1: 'Your interval includes zero: no effect shown yet.', 2: 'The 95% CI for your difference includes 0: say it as a null, with its interval.', 3: 'Newcombe 95% CI ∋ 0: report a null or a pilot.' }
+          : { 1: `At ${A.n} chats the wobble is bigger than the drop: no effect shown yet.`, 2: `At n = ${A.n}, the 95% CI (${sp(A.deltaCI[0])} to ${sp(A.deltaCI[1])} pts) includes 0: no effect shown.`, 3: `n = ${A.n}: Δ = ${p1(A.delta)} pts, 95% CI [${p1(A.deltaCI[0])}, ${p1(A.deltaCI[1])}] ∋ 0.` })
+        : { 1: 'No number: nothing to stand on.', 2: 'No result: nothing holds the claim up.', 3: 'No estimate: no claim.' },
+      claim: { 1: 'Results with no claim: a tour, not a talk.', 2: 'Evidence with no claim: a tour of results, not a talk.', 3: 'No claim: nothing for the evidence to license.' },
+      mind: { 1: 'If nothing could change your mind, it isn’t a finding.', 2: 'If no result could change your mind, it is not a finding.', 3: 'Unfalsifiable as stated: not a “showed”.' },
+    }[g];
+    const hint = mine && w === 'blank' ? { 1: ` Write “${TXT[g].field}” to raise it.`, 2: ` Knobs → Edit my stones: “${TXT[g].field}”.`, 3: ` Fill “${TXT[g].field}”.` } : none;
+    push({ 1: `**No claim left.** ${R[1]}${hint[1]}`, 2: `**No claim left.** ${R[2]}${hint[2]}`, 3: `**Claim: none.** ${R[3]}${hint[3]}` });
+  } else if (mine) {
+    const c = String(st.my.claim).trim();
+    const cut = c.length > 150 ? c.slice(0, 148).replace(/\s+\S*$/, '') + '…' : c;
+    const U = st.U;
+    const d = U && has('result') ? { 1: ` (change: ${sp(U.delta)} points, between ${sp(U.deltaCI[0])} and ${sp(U.deltaCI[1])})`, 2: ` (Δ ${sp(U.delta)} pts, 95% CI ${sp(U.deltaCI[0])} to ${sp(U.deltaCI[1])})`, 3: ` (Δ = ${p1(U.delta)} pts [${p1(U.deltaCI[0])}, ${p1(U.deltaCI[1])}], Newcombe)` } : none;
+    const lost = arch.lost.map((id) => TXT[id].name[2]);
+    const l = lost.length ? { 1: ` Still to answer: ${lost.join(', ')}.`, 2: ` The claim shrinks: no ${lost.join(', no ')} yet.`, 3: ` Reach lost: ${arch.lost.join(', ')}.` } : none;
+    push({ 1: `**Your claim:** ${cut}${d[1]}${l[1]}`, 2: `**Your claim:** ${cut}${d[2]}${l[2]}`, 3: `**Your claim:** ${cut}${d[3]}${l[3]}` });
+  } else {
+    const down = A.delta < 0, lo = A.deltaCI[0], hi = A.deltaCI[1];
+    const head = { 1: '**The claim** (a toy example): ', 2: '**The claim** (toy example): ', 3: '**Claim** (toy, seeded): ' };
+    const lim = has('limits') ? { 1: 'In one model and one kind of chat, ', 2: 'In one model, one chat style, LLM-judged, ', 3: `[1 model, 1 chat style, LLM judge, n = ${A.n}/arm] ` } : none;
+    const core = {
+      1: `capping ${down ? 'cut' : 'raised'} drift from ${pc(A.rate.none)} to ${pc(A.rate.axis)} (${down ? 'down' : 'up'} ${Math.abs(P(A.delta))} points, somewhere between ${Math.min(Math.abs(P(lo)), Math.abs(P(hi)))} and ${Math.max(Math.abs(P(lo)), Math.abs(P(hi)))})`,
+      2: `the axis cap ${down ? 'cut' : 'raised'} drift ${pc(A.rate.none)} → ${pc(A.rate.axis)} (${sp(A.delta)} pts, 95% CI ${sp(lo)} to ${sp(hi)})`,
+      3: `p(drift) ${A.k.none}/${A.n} → ${A.k.axis}/${A.n}, Δ = ${p1(A.delta)} pts [${p1(lo)}, ${p1(hi)}]`,
+    };
+    const rob = has('robust') ? { 1: ' in all 3 repeats', 2: ` in ${A.agree} of 3 seeds`, 3: `, ${A.agree}/3 seeds CI ∌ 0` } : { 1: ' in one try', 2: ' in one run', 3: ', one seed' };
+    const mech = has('mechanism') ? { 1: ', because it keeps the model near its Assistant self', 2: ', because it holds the Assistant end of the axis', 3: ', via the Assistant-Axis projection (toy)' } : none;
+    const ctl = has('control') ? { 1: ` A random cap didn’t (${pc(A.rate.random)}).`, 2: ` A random-direction cap didn’t (${pc(A.rate.random)}).`, 3: ` Random cap Δ = ${p1(A.ctrl)} [${p1(A.ctrlCI[0])}, ${p1(A.ctrlCI[1])}] ∋ 0.` } : none;
+    const wide = has('limits') ? none : { 1: ' (No limits: it sounds true everywhere.)', 2: ' (No scope: it reads as true everywhere.)', 3: ' (Unscoped: an overclaim.)' };
+    const cap1 = (s, t) => (t === 3 ? s : s.charAt(0).toUpperCase() + s.slice(1));
+    const line = (t) => head[t] + cap1(lim[t] + core[t], t) + rob[t] + mech[t] + '.' + ctl[t] + wide[t];
+    push({ 1: line(1), 2: line(2), 3: line(3) });
+  }
+  st.note.set({ 1: T[1].join('\n'), 2: T[2].join('\n'), 3: T[3].join('\n') });
+}
+function crackWhy(S, id) {
+  const st = S.state, A = st.A, U = st.U;
+  if (S.knobs.mine) return id === 'result' ? { 1: ' (its interval includes zero)', 2: ' (cracked: CI includes 0)', 3: ' (cracked: CI ∋ 0)' }
+    : { 1: ' (your control moved too)', 2: ' (cracked: control differs)', 3: ' (cracked: control test failed)' };
+  if (id === 'result') return { 1: ' (cracked: too few chats)', 2: ` (cracked: CI includes 0 at n = ${A.n})`, 3: ` (cracked: CI ∋ 0, n = ${A.n})` };
+  if (id === 'control') return { 1: ' (cracked: the control didn’t behave)', 2: ' (cracked: control test failed)', 3: ` (cracked: random Δ [${p1(A.ctrlCI[0])}, ${p1(A.ctrlCI[1])}], axis vs random [${p1(A.vsCtrlCI[0])}, ${p1(A.vsCtrlCI[1])}])` };
+  return { 1: ` (cracked: only ${A.agree} of 3 repeats agree)`, 2: ` (cracked: ${A.agree} of 3 seeds clear 0)`, 3: ` (cracked: ${A.agree}/3 seeds exclude 0)` };
+}
+
+function paintEngraving(S) {
+  const st = S.state, mine = S.knobs.mine;
+  const lines = mine && !blank(st.my.claim) ? wrapWords(st.my.claim, 16, 3) : TXT.claim.eng;
+  const key = lines.join('|');
+  if (st.keyEng === key) return;
+  st.keyEng = key;
+  const o = st.obj.claim, old = o.eng.material.map;
+  o.eng.material.map = engraveTexture(lines, 256, 160, lines.length > 1 ? 34 : 50);
+  o.eng.material.needsUpdate = true;
+  if (old) old.dispose();
+}
+function refresh(S, animate) {
+  computeMissing(S); layout(S, animate); drawChart(S); paintNote(S); paintEngraving(S); dimKnobs(S);
+}
+function resetSeed(S) {
+  const st = S.state;
+  if (st.seed === DEFAULT_SEED) return;
+  st.seed = DEFAULT_SEED; compute(S); refresh(S, !S.shot);
+}
+function reseed(S) {
+  const st = S.state;
+  st.seed += 1; compute(S); refresh(S, !S.shot);
+  const A = st.A;
+  K.toast(`New toy data (seed ${st.seed}): ${pc(A.rate.none)} → ${pc(A.rate.axis)}`);
+}
+function dimKnobs(S) {        // the kit cannot dim knobs; grey the ones that do nothing right now
+  const dim = (id, on) => { const el = document.getElementById('k-' + id); const row = el && el.closest('.k-knob'); if (row) row.style.opacity = on ? '0.42' : ''; };
+  dim('n', S.knobs.mine); dim('again', S.knobs.mine);
+}
+function figure(S, o) {
+  const st = S.state;
+  if (!o) { st.fig.group.visible = false; return; }
+  st.fig.group.visible = true;
+  st.fig.place(o.atPos || FIG_AT, o.face || [0, 0.9, ZC]);
+  st.fig.pose('stand', { ms: 0 });
+  const go = () => st.fig.pose(o.pose, { at: o.at });
+  if (S.shot) go(); else setTimeout(go, 450);
+}
+function useLegend(S) {
+  const st = S.state, mine = S.knobs.mine;
+  if (st.legendMine === mine) return;
+  st.legendMine = mine;
+  st.legend = K.legend(mine
+    ? [{ id: 'none', label: { 1: 'baseline', 2: 'baseline', 3: 'baseline' }, color: ARM_COL.none }, { id: 'random', label: { 1: 'control', 2: 'control', 3: 'control' }, color: ARM_COL.random }, { id: 'axis', label: { 1: 'result', 2: 'result', 3: 'result' }, color: ARM_COL.axis }]
+    : [{ id: 'none', label: { 1: 'no cap', 2: 'no cap', 3: 'none' }, color: ARM_COL.none }, { id: 'random', label: { 1: 'random cap', 2: 'random cap', 3: 'random dir.' }, color: ARM_COL.random }, { id: 'axis', label: { 1: 'axis cap', 2: 'axis cap', 3: 'axis cap' }, color: ARM_COL.axis }]);
+}
+
+/* ----------------------------------------------------------- the editor */
+function buildEditor(S) {
+  const st = S.state;
+  const ed = document.createElement('div');
+  ed.className = 'arch-ed'; ed.hidden = true;
+  ed.setAttribute('role', 'dialog'); ed.setAttribute('aria-modal', 'true'); ed.setAttribute('aria-label', 'Edit my arch');
+  const field = (id) => `<label class="arch-f"><span>${TXT[id].field} <i>· ${TXT[id].hint}</i></span><textarea rows="2" data-k="${id}"></textarea></label>`;
+  ed.innerHTML = `<div class="arch-in">
+    <div class="arch-hd"><b>My arch</b><span class="arch-days"></span><button type="button" class="arch-x" aria-label="Close">✕</button></div>
+    <p class="arch-hint">One sentence per stone. A blank stone lies on the ground: blank baseline, result, claim, question or change-my-mind and the arch falls; blank control, robustness, mechanism or limits and the claim shrinks. Saved in this browser only.</p>
+    ${FIELDS.map(field).join('')}
+    <div class="arch-f"><span>Your counts <i>· optional, “k/n” (e.g. 34/200): the page draws the bars and tests the result</i></span>
+      <div class="arch-nums">
+        <label class="arch-f"><span><i>baseline</i></span><input inputmode="numeric" data-k="nBase" placeholder="k/n"></label>
+        <label class="arch-f"><span><i>result</i></span><input inputmode="numeric" data-k="nRes" placeholder="k/n"></label>
+        <label class="arch-f"><span><i>control</i></span><input inputmode="numeric" data-k="nCtrl" placeholder="k/n"></label>
+      </div></div>
+    <div class="arch-ft"><button type="button" data-a="example">Fill with the example</button><button type="button" data-a="clear">Clear all</button><button type="button" class="pri" data-a="done">Done</button></div>
+    <p class="arch-note">Rehearsal plan from the capstone pack: alone and timed on Wed 9 Dec, to a person on Thu 10 Dec, then write your answers to the eight questions.</p>
+  </div>`;
+  document.body.appendChild(ed);
+  const inputs = [...ed.querySelectorAll('[data-k]')];
+  const read = () => { const o = { ...st.my }; inputs.forEach((el) => { o[el.dataset.k] = el.value; }); return o; };
+  const write = (o) => { inputs.forEach((el) => { el.value = o[el.dataset.k] || ''; }); };
+  let tmr = 0;
+  ed.addEventListener('input', () => { clearTimeout(tmr); tmr = setTimeout(() => { st.my = read(); saveMine(st.my); if (S.knobs.mine) refresh(S, !S.shot); }, 350); });
+  const close = () => {
+    clearTimeout(tmr); st.my = read(); saveMine(st.my); ed.hidden = true;
+    const any = FIELDS.some((id) => !blank(st.my[id]));
+    if (any && !S.knobs.mine) S.setKnob('mine', true); else refresh(S, !S.shot);
+    if (st.edReturn && st.edReturn.focus) st.edReturn.focus();
+  };
+  ed.addEventListener('click', (e) => {
+    if (e.target === ed) return close();
+    const a = e.target.closest && e.target.closest('[data-a], .arch-x');
+    if (!a) return;
+    if (a.classList.contains('arch-x') || a.dataset.a === 'done') close();
+    else if (a.dataset.a === 'example') { write({ ...st.ex, nBase: `${st.A.k.none}/${st.A.n}`, nRes: `${st.A.k.axis}/${st.A.n}`, nCtrl: `${st.A.k.random}/${st.A.n}` }); ed.dispatchEvent(new Event('input')); }
+    else if (a.dataset.a === 'clear') { write({}); ed.dispatchEvent(new Event('input')); }
+  });
+  ed.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
+  st.openEditor = (focusId) => {
+    write(st.my);
+    const d = daysTo12Dec();
+    ed.querySelector('.arch-days').textContent = d > 0 ? `${d} day${d === 1 ? '' : 's'} to 12 December` : d === 0 ? 'talk day: 12 December' : '';
+    st.edReturn = document.activeElement;
+    ed.hidden = false;
+    const el = ed.querySelector(`[data-k="${focusId || 'claim'}"]`);
+    if (el && !S.shot) setTimeout(() => el.focus(), 30);
+  };
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'w14-arch', num: '27', week: 14, kind: 'weekly',
+  title: 'The arch',
+  subtitle: 'A research claim stands like an arch: take out any stone and it falls.',
+  back2d: '#capstone-weeks-12-14',
+  film: 'w14-present',
+  plinth: { r: 1.95, h: 0.14 },
+
+  knobs: [
+    { id: 'out', type: 'select', wide: true, label: { 1: 'Pull out a stone (or tap one)', 2: 'Take out a stone (or tap it)', 3: 'remove stone (or tap)' }, value: 'none',
+      options: [['none', { 1: 'None: the whole arch', 2: 'None', 3: 'none' }],
+        ...IDS.map((id) => [id, { 1: TXT[id].name[1], 2: TXT[id].name[2] + (KIND[id] === 'exist' ? ' (holds it up)' : ' (sets its reach)'), 3: `${id} · ${KIND[id]}` }])] },
+    { id: 'n', type: 'range', label: { 1: 'Chats per group', 2: 'Chats per arm, n', 3: 'n per arm' }, min: 10, max: 400, step: 10, value: 200, fmt: (v) => String(v) },
+    { id: 'mine', type: 'toggle', label: { 1: 'Show my own arch', 2: 'My arch (my stones)', 3: 'my arch' }, value: false },
+    { id: 'edit', type: 'button', label: { 1: 'Write my stones…', 2: 'Edit my stones…', 3: 'edit stones…' }, onClick: (S) => S.state.openEditor() },
+    { id: 'again', type: 'button', label: { 1: 'Run the toy study again', 2: 'New toy data (new seed)', 3: 'reseed' }, onClick: (S) => reseed(S) },
+    { id: 'rebuild', type: 'button', label: { 1: 'Put every stone back', 2: 'Rebuild the arch', 3: 'rebuild' }, onClick: (S) => S.setKnob('out', 'none') },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.seed = DEFAULT_SEED;
+    st.my = loadMine();
+    st.mat = {
+      stone: K.mat.plaster(), key: K.mat.plaster('#f3e8d3'), crack: K.mat.plaster('#e9b9ae'), blank: K.mat.glass('#e9e2d6', 0.3),
+    };
+    // abutments (the question, what would change my mind) and seven voussoirs, all JSCAD solids
+    st.geom = {};
+    st.obj = {};
+    const pierPts = [[-PIER_W / 2, -H0 / 2], [PIER_W / 2, -H0 / 2], [PIER_W / 2, H0 / 2], [-PIER_W / 2, H0 / 2]];
+    for (const id of IDS) {
+      const pl = PLACE[id], isPier = typeof pl !== 'number';
+      const half = TH / 2 - GAP;
+      const geom = isPier ? stoneGeom(pierPts)
+        : stoneGeom(sectorPts(RI, RO + (id === 'claim' ? KEY_UP : 0), half, id === 'claim' ? RCK : RC));
+      st.geom[id] = geom;
+      const mesh = K.mesh(geom, id === 'claim' ? st.mat.key : st.mat.stone);
+      mesh.userData.noFit = true;       // framing = plinth + headroom, the same whether the arch stands or lies in pieces
+      // engraving: a transparent plane just proud of the front face, text along the arc
+      const ew = isPier ? PIER_W * 0.86 : RMID * 2 * half * 0.84, eh = isPier ? H0 * 0.5 : (RO - RI) * 0.64;
+      const tex = engraveTexture(TXT[id].eng, 256, isPier ? 180 : 128, isPier ? 44 : 50);
+      const eng = new THREE.Mesh(new THREE.PlaneGeometry(ew, eh), new THREE.MeshStandardMaterial({ map: tex, transparent: true, depthWrite: false, roughness: 0.95, metalness: 0, polygonOffset: true, polygonOffsetFactor: -2 }));
+      eng.position.set(0, isPier ? 0.04 : (RMID - (id === 'claim' ? RCK : RC)) + (id === 'claim' ? KEY_UP / 2 : 0), DEP / 2 + 0.003);
+      eng.userData.noFit = true;
+      mesh.add(eng);
+      // a generous invisible hit box, so a tap on a small stone still lands
+      const hit = new THREE.Mesh(new THREE.BoxGeometry(isPier ? PIER_W : 0.62, isPier ? H0 : 0.5, DEP + 0.1), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+      hit.userData.noFit = true;
+      mesh.add(hit);
+      S.root.add(mesh);
+      const sp0 = standPose(id);
+      mesh.position.copy(sp0.p); mesh.quaternion.copy(sp0.q);
+      st.obj[id] = { id, mesh, eng, down: false };
+      K.pick(mesh, () => {
+        const w = st.why && st.why[id];
+        if (w === 'blank') { st.openEditor(id); return; }
+        if (w === 'crack' && S.knobs.out !== id) { K.toast(id === 'result' ? 'Cracked: its 95% interval includes zero. Try more chats per arm.' : id === 'control' ? 'Cracked: the control did not behave like the baseline.' : 'Cracked: not every seed shows the effect.'); return; }
+        S.setKnob('out', S.knobs.out === id ? 'none' : id);
+      });
+    }
+    // brass imposts on the abutments, at the springing line
+    for (const sx of [-1, 1]) {
+      const band = new THREE.Mesh(new THREE.BoxGeometry(PIER_W + 0.03, 0.028, DEP + 0.04), K.mat.brass());
+      band.position.set(sx * PIER_X, H0 + 0.001, ZC);
+      band.userData.noFit = true;
+      st.obj[sx < 0 ? 'question' : 'mind'].mesh.add(band.translateX(-sx * PIER_X).translateY(-H0 / 2 + 0.014).translateZ(-ZC));
+    }
+    // the chart under the arch
+    const base = new THREE.Mesh(new THREE.RoundedBoxGeometry(1.26, 0.04, 0.36, 2, 0.012), K.mat.plaster('#e7dfd1'));
+    base.position.set(0, 0.02, ZC); base.receiveShadow = true;
+    S.root.add(base);
+    const barGeo = new THREE.BoxGeometry(0.2, 1, 0.2), wGeo = new THREE.CylinderGeometry(0.009, 0.009, 1, 8), capGeo = new THREE.BoxGeometry(0.085, 0.013, 0.013);
+    const ink = K.mat.ink();
+    st.bars = {};
+    for (const a of MATH.ARMS) {
+      const g = new THREE.Group();
+      const mat = a === 'none' ? K.mat.plaster(ARM_COL.none) : K.mat.paint(ARM_COL[a]);
+      const bar = new THREE.Mesh(barGeo, mat); bar.position.set(BAR_X[a], 0.2, ZC); bar.castShadow = true;
+      const wh = new THREE.Mesh(wGeo, ink); wh.position.set(BAR_X[a], 0.3, ZC + 0.115);
+      const capLo = new THREE.Mesh(capGeo, ink), capHi = new THREE.Mesh(capGeo, ink);
+      capLo.position.set(BAR_X[a], 0.2, ZC + 0.115); capHi.position.set(BAR_X[a], 0.4, ZC + 0.115);
+      const seeds = [0, 1].map((j) => { const d = K.bead([BAR_X[a] + 0.135, 0.3, ZC + 0.04 - 0.08 * j], a === 'none' ? '#8f8674' : ARM_COL[a], 0.024); return d; });
+      for (const m of [wh, capLo, capHi, ...seeds]) m.userData.noFit = true;
+      const valAt = new THREE.Object3D(); valAt.position.set(BAR_X[a], 0.5, ZC + 0.115);
+      g.add(bar, wh, capLo, capHi, ...seeds, valAt);
+      S.root.add(g);
+      // the rate at its whisker top (chip values hide on phones); left, over, right so the three never collide
+      const val = K.label(valAt, '', { cls: 'tag val', ...{ none: { anchor: 'right', dx: -5 }, random: { anchor: 'bottom', dy: -3 }, axis: { anchor: 'left', dx: 5 } }[a] });
+      st.bars[a] = { group: g, bar, wh, capLo, capHi, seeds, valAt, val };
+    }
+    st.baseLine = new THREE.Mesh(new THREE.BoxGeometry(1.16, 0.012, 0.012), K.mat.brass());
+    st.baseLine.position.set(0, 0.3, ZC - 0.115); st.baseLine.userData.noFit = true;
+    S.root.add(st.baseLine);
+    // headroom: an invisible point high above the keystone, so the auto-fit leaves room for the note
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+    head.position.set(0, 3.0, ZC);
+    S.root.add(head);
+    // the claim note, pinned above the keystone (placeNote moves it), and the pulled stone's tag
+    st.noteAt = new THREE.Object3D(); st.noteAt.position.set(0, H0 + RO + KEY_UP + 0.12, ZC);
+    S.root.add(st.noteAt);
+    st.note = K.label(st.noteAt, '', { cls: 'note claim', anchor: 'bottom', dy: -4 });
+    st.liftAt = new THREE.Object3D(); S.root.add(st.liftAt);
+    st.liftTag = K.label(st.liftAt, '', { cls: 'tag lift', anchor: 'left', dx: 2 });
+    st.liftTag.show(false);
+    st.fig = K.figure();
+    st.fig.group.visible = false;
+    S.root.add(st.fig.group);
+    useLegend(S);
+    buildEditor(S);
+    compute(S);
+  },
+
+  rebuild(S, id) {
+    const st = S.state;
+    if (id === '*' || id === 'n') compute(S);
+    if (id === '*' || id === 'mine') useLegend(S);
+    refresh(S, !S.first && !S.shot);
+  },
+
+  frame(S, t) {
+    const st = S.state;
+    if (!st.animating) return false;
+    if (st.animT0 == null) st.animT0 = t;
+    const el = (t - st.animT0) * 1000;
+    let busy = false;
+    for (const id of IDS) {
+      const o = st.obj[id];
+      const u = Math.max(0, Math.min(1, (el - o.delay) / o.dur));
+      if (u < 1) busy = true;
+      applyPose(o, u);
+    }
+    placeNote(S);
+    if (!busy) { st.animating = false; st.liftTag.show(st.liftShow); }
+    return busy;
+  },
+
+  onTier(S) { paintNote(S); },
+
+  solids(S) {
+    const st = S.state;
+    const out = [J.primitives.cylinder({ radius: 1.9, height: 0.08, center: [0, 0, -0.04], segments: 64 })];
+    for (const id of IDS) {            // the complete arch, standing: every stone in place
+      const s = standPose(id);
+      const e = new THREE.Euler().setFromQuaternion(s.q);
+      out.push(J.transforms.translate([s.p.x, -s.p.z, s.p.y], J.transforms.rotateY(-e.z, st.geom[id])));
+    }
+    const A = S.knobs.mine ? st.U : st.A;
+    if (A) for (const a of MATH.ARMS) {
+      if (A.rate[a] == null) continue;
+      const h = Math.max(0.01, A.rate[a] * CH);
+      out.push(J.primitives.cuboid({ size: [0.2, 0.2, h], center: [BAR_X[a], -ZC, 0.04 + h / 2] }));
+    }
+    out.push(J.primitives.cuboid({ size: [1.26, 0.36, 0.04], center: [0, -ZC, 0.02] }));
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**A talk is an argument.** On 12 December you stand up with one claim. Each stone answers one question the room will ask; answer them all and the claim stands. Tap a stone to pull it.',
+        2: '**One claim, carried by evidence.** Your capstone talk is an arch: the keystone is the claim, each stone answers a question the room will ask. Pull a stone that makes the claim exist and it falls; pull one that sets its reach and it sags. Shapes illustrative.',
+        3: 'The rule (real): existence stones (question, baseline, result, claim, falsifier) → collapse; reach stones (control, robustness, mechanism, limits) → that clause drops and the arch sags. Toy numbers are seeded draws. The segmental-arch physics is illustrative.',
+      },
+      cam: CAM.front,
+      set: { out: 'none', n: 200, mine: false },
+      enter(S) { resetSeed(S); figure(S, { pose: 'point', at: [0, 1.9, ZC] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The keystone is your claim.** One sentence: what you did, on what, and how sure you are. It rests on everything else, so write it last and say it first.',
+        2: '**The claim, in one sentence:** what, on what, how sure. The pack\'s test: can the room say it on the walk to lunch? Hamming\'s test for the question under it: it matters, and you have a reasonable attack on it.',
+        3: '"Showed" vs "suggests" (the pack): the claim is what your numbers license in your setup, one clause of scope per claim. Hamming (1986): a problem is important when you have a reasonable attack, which is the left abutment\'s job.',
+      },
+      cam: CAM.key,
+      set: { out: 'none', n: 200, mine: false },
+      enter(S) { resetSeed(S); figure(S, null); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The number, with its wobble.** With the cap, drift fell from 31% to 12% of 200 chats. The whiskers show how far the true value could be. Too few chats and they overlap: the stone cracks.',
+        2: '**The result, with its error bar.** Toy data, 200 chats per arm: drift fell from 31% to 12%, −19 points (95% CI −27 to −11). Whiskers are Wilson 95% intervals, as on the bean machine. The stone holds only if the interval for the drop misses 0.',
+        3: 'Rates k/n with Wilson 95% intervals; Δ = p(axis) − p(none) with Newcombe\'s hybrid score interval: −19.0 pts [−26.7, −11.1]. Test: CI ∌ 0. At n = 20 (the first 20 chats) it is [−29.9, +20.6]: the stone cracks, the arch falls.',
+      },
+      cam: CAM.chart,
+      set: { out: 'none', n: 200, mine: false },
+      enter(S) { resetSeed(S); figure(S, null); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Compared to what?** Take out the baseline and "12% drift" means nothing: is that good? The claim has nothing to stand on and the arch falls. Always show the number you beat.',
+        2: '**Baseline: compared to what?** Without the no-cap arm, 12% drift has no meaning, so there is no claim: the arch falls. The pack: draw the baseline on the result figure, and have a check that proves your measurement works at all.',
+        3: 'An effect is a contrast: Δ needs p(baseline) measured in the same setup (prompts, judge, n). No baseline, no estimand, so it is an existence stone. The pack\'s question 2: what is your baseline, and how do you know the instrument works?',
+      },
+      cam: CAM.front,
+      set: { out: 'baseline', n: 200, mine: false },
+      enter(S) { resetSeed(S); figure(S, null); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Once is not enough.** Pull the repeats and the claim shrinks to "in one run". The arch sags but stands. The room will ask how many times you tried; say it before they do.',
+        2: '**Robustness: seeds, prompts, models.** Pull it and the claim keeps only "in one run": the arch sags. The pack: "How many seeds is that?" is asked in every talk; if it is one, say so first. Here 3 seeds give −19, −15 and −17 points.',
+        3: 'Seed-to-seed spread is error you are not otherwise showing. Here 3/3 seeds exclude 0 (Δ = −19.0, −14.5, −16.5 pts). Robustness is a reach stone: without it the clause "across seeds" drops and the claim is scoped to one run.',
+      },
+      cam: CAM.left,
+      set: { out: 'robust', n: 200, mine: false },
+      enter(S) { resetSeed(S); figure(S, null); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Say what it doesn\'t show.** Without limits the claim sounds true everywhere, and nobody believes that. Then answer the best question: what result would change your mind?',
+        2: '**Limits, and what would change my mind.** Pull limits and the claim loses its scope ("one model, one chat style"), so it overreaches: the arch sags. The right abutment answers the best question you will get: what result would change your mind?',
+        3: 'Limits are the claim\'s scope, not a caveat: "stating those bounds is the claim" (the pack). The falsifier is an existence stone: if no result could refute the claim, it is not a "showed". Name the disanalogy that worries you most.',
+      },
+      cam: CAM.right,
+      set: { out: 'limits', n: 200, mine: false },
+      enter(S) { resetSeed(S); figure(S, null); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Rehearse the pushes.** Someone will lean on your weakest stone. Pull each stone here, read the judge\'s question, and answer it out loud. Here: "would any cap do that?"',
+        2: '**The room pushes on the weakest stone.** Rehearse by pulling each one: read the judge\'s question, answer out loud. The pack\'s plan: alone and timed on Wed 9 Dec, to a person on Thu 10 Dec, then write the eight answers.',
+        3: 'The pack\'s eight questions land on stones: seeds (robustness), baseline and instrument, scale and transfer (limits), simpler explanation (control), novelty (question), what would change your mind (falsifier), what next (limits).',
+      },
+      cam: CAM.front,
+      set: { out: 'control', n: 200, mine: false },
+      enter(S) { resetSeed(S); figure(S, { pose: 'point', at: [LIFT_AT[0], 0.3, LIFT_AT[1]] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Any argument that must survive questions: a court case, a grant proposal, a code review, a pitch. Build yours: Knobs → Edit my stones, then pull them out one by one.',
+        2: '**Where else:** a legal argument (claim, evidence, precedent, limits), a grant proposal (aims, pilot data, controls, risks), a code review (the change, its tests, benchmarks against main). Build yours: Knobs → Edit my stones.',
+        3: 'Toulmin\'s argument model (claim, data, warrant, backing, qualifier, rebuttal) is the same arch: qualifier = limits, rebuttal = falsifier. Pre-registration and ablation tables make the stones explicit. My arch saves to this browser only.',
+      },
+      cam: CAM.wide,
+      set: { out: 'none', n: 200, mine: false },
+      enter(S) { resetSeed(S); figure(S, { pose: 'cheer', face: [0.2, 0.9, ZC] }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'You show a result with no baseline. What will someone ask first?',
+        2: 'Your result slide has no baseline. What is the first question?',
+        3: 'Result without a baseline: the first question?' },
+      options: [{ t: '"Compared to what?"', ok: true }, { t: '"How many seeds?"' }, { t: '"Why does it work?"' }, { t: '"What would you do next?"' }],
+      why: { 1: 'A number alone says nothing: 12% drift could be great or awful. Until you show what happens without your change, there is no claim at all, so the arch falls.',
+        2: 'An effect is a difference, so the number you beat is part of the claim, not decoration. With no baseline the arch has no claim to hold up: it falls. Draw the baseline on the same figure.',
+        3: 'Without p(baseline) there is no Δ to estimate; the other questions presuppose one. Existence stone: collapse. The pack also asks for a positive control showing the instrument can detect a known effect.' },
+      show(S) { resetSeed(S); S.setKnobs({ out: 'baseline', n: 200, mine: false }); figure(S, null); S.fly(CAM.front); return wait(S, 1800); } },
+    { q: { 1: 'Your whole result comes from one run. Which stone is missing?',
+        2: 'Your result rests on a single seed. Which stone is missing?',
+        3: 'One seed only: which stone is absent?' },
+      options: [{ t: 'Robustness', ok: true }, { t: 'Baseline' }, { t: 'Mechanism' }, { t: 'Limits' }],
+      why: { 1: 'Repeats show the result was not luck. Without them the claim must shrink to "in one run": the arch sags, but it still stands if you say it plainly.',
+        2: 'Robustness (other seeds, prompts, models). It is a reach stone: the claim keeps only "in one run", so the arch sags. The pack: if it is one seed, say so first, before they conclude it for you.',
+        3: 'Seed variance is unmeasured, so the interval understates the error. Reach loss: scope the claim to one run and name it as the main weakness (the pack\'s question 1).' },
+      show(S) { resetSeed(S); S.setKnobs({ out: 'robust', n: 200, mine: false }); figure(S, null); S.fly(CAM.left); return wait(S, 1800); } },
+    { q: { 1: 'Where should the limits of your result go?',
+        2: 'Where do your limitations belong?',
+        3: 'Where do the limits go?' },
+      options: [{ t: 'In the talk, said plainly by you, before anyone asks', ok: true }, { t: 'In backup slides, in case someone asks' },
+        { t: 'Nowhere: they weaken the claim' }, { t: 'Only in the written report' }],
+      why: { 1: 'Saying what it doesn\'t show is part of the claim. Leave it out and the claim sounds bigger than your evidence, so the room trusts every stone less.',
+        2: 'On a slide of their own, named by you first (the pack\'s slide 07). Pull the limits stone here: the claim loses its scope and overreaches, and the arch sags.',
+        3: 'Scope is part of the claim ("stating those bounds is the claim"). Naming the disanalogy yourself is what makes the rest credible; unscoped, a "suggests" is heard as a "showed".' },
+      show(S) { resetSeed(S); S.setKnobs({ out: 'limits', n: 200, mine: false }); figure(S, null); S.fly(CAM.right); return wait(S, 1800); } },
+    { q: { 1: 'Only 20 chats per group instead of 200. What happens to the result stone?',
+        2: 'Cut to n = 20 chats per arm (the first 20). What happens to the result stone?',
+        3: 'n = 20 per arm: does the result stone hold?' },
+      options: [{ t: 'Its interval now crosses zero: it cracks and the arch falls', ok: true }, { t: 'Nothing: the rates are about the same' },
+        { t: 'It gets stronger: less noise' }, { t: 'Only the baseline stone cracks' }],
+      why: { 1: 'With 20 chats the wobble is bigger than the drop, so you can\'t tell a real effect from luck. Here: 5, 6 and 4 of 20 drifted. No result: the arch falls.',
+        2: 'Error bars shrink like 1/√n. At 20 per arm the drop\'s 95% interval is −30 to +21 points, so it includes 0: the result cracks. Over 1,000 toy studies it held in 284 at n = 20 and 998 at n = 200.',
+        3: 'Newcombe CI [−29.9, +20.6] ∋ 0 at n = 20 (5/20 vs 4/20). Power: the toy result held in 284/1,000 seeds at n = 20, 998/1,000 at n = 200. A null needs its interval and a power statement.' },
+      show(S) { resetSeed(S); S.setKnobs({ out: 'none', n: 20, mine: false }); figure(S, null); S.fly(CAM.front); return wait(S, 1800); } },
+    { q: { 1: 'Someone asks: "Would any cap do that?" Which stone answers?',
+        2: '"Would capping any direction do that?" Which stone answers?',
+        3: 'Which stone rules out "any activation edit does this"?' },
+      options: [{ t: 'The control', ok: true }, { t: 'The baseline' }, { t: 'Robustness' }, { t: 'The question' }],
+      why: { 1: 'The control: a cap along a random direction. It drifted about as much as no cap at all, so the effect comes from the axis, not from capping anything.',
+        2: 'The control: a random-direction cap behaved like no cap (29% vs 31%), so the drop is specific to the axis. Without it the claim loses "not any edit": the arch sags.',
+        3: 'The control arm: random-direction Δ ≈ 0 (CI ∋ 0) while axis vs random excludes 0. It answers the pack\'s question 4, the simpler explanation. Reach stone: the arch sags without it.' },
+      show(S) { resetSeed(S); S.setKnobs({ out: 'control', n: 200, mine: false }); figure(S, null); S.fly(CAM.front); return wait(S, 1800); } },
+  ],
+
+  where: { 1: 'Any argument that has to survive questions: a court case, a grant proposal, a code review, a business pitch, even a case for a new job.',
+    2: 'A legal argument (claim, evidence, precedent, limits), a grant proposal (aims, pilot data, controls, risks), a code review (the change, tests, benchmarks), a startup pitch, a safety case for deploying a model.',
+    3: 'Toulmin\'s model (claim, data, warrant, backing, qualifier, rebuttal), safety cases (claims-arguments-evidence), pre-registration, ablation tables, and the eval report: every claim scoped, every number with its interval and baseline.' },
+  links: [
+    { label: 'Film · W14 show your work', href: '../../intuition/films/w14-present.html' },
+    { label: 'Weeks 12-14 capstone pack', href: '../../index.html#capstone-weeks-12-14' },
+    { label: 'Map · final presentation', href: '../../index.html#map/node=final-presentation' },
+    { label: 'Map · capstone project', href: '../../index.html#map/node=capstone-project' },
+    { label: 'Case · investigator agents', href: '../../index.html#cases/investigator-agents' },
+    { label: 'Case · eval awareness', href: '../../index.html#cases/eval-awareness' },
+    { label: 'Case · Petri', href: '../../index.html#cases/petri' },
+    { label: 'Map · activation capping', href: '../../index.html#map/node=activation-capping' },
+    { label: 'Object · the bean machine (error bars)', href: 'w11-beans.html' },
+    { label: 'Object · the dial (capping)', href: 'd12-dial.html' },
+  ],
+  remix: 'Build a single-file three.js scene of a plaster voussoir arch on a round plinth: two abutments (the question; what result would change my mind) and seven wedge stones (baseline, robustness, result, the keystone claim, control, mechanism, limits), each engraved with its name. Under the arch stand three bars (no cap, random-direction cap, Assistant-Axis cap) of a toy persona-drift rate from seeded binomial draws, with Wilson 95% whiskers and a brass baseline line. Tapping a stone pulls it toward the viewer and shows the question a judge would ask. Rule: pulling the question, baseline, result, claim or falsifier collapses the arch (stones tumble to the floor); pulling control, robustness, mechanism or limits removes that clause from the claim note and re-lays the rest as a lower segmental arch. A slider for chats per arm cracks the result stone when the Newcombe interval for the difference includes zero. Add an editor that saves your own stone texts to localStorage.',
+  credit: 'Talk structure, the eight questions, "showed vs suggests" and the rehearsal plan: the TARA capstone pack, "Three Saturdays and a Talk". Richard Hamming, "You and Your Research" (1986): important problems are the ones you have a reasonable attack on, and doing the work includes presenting it. The example borrows ARENA [4.4]\'s vocabulary (Assistant Axis, activation capping; Lu et al., 2026) but its numbers are a toy: seeded draws from stated drift rates, not a result. Intervals: Wilson (1927), Newcombe (1998). Argument model: Toulmin (1958). Arch physics illustrative. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>
