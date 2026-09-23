@@ -1,0 +1,1774 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Machine · Object Lessons</title>
+<meta name="description" content="The whole course as one object: a real toy GPT-2-style transformer, trained in the page and exploded floor by floor, with the tools that train it, open it and steer it clipped on.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+/* .k-tag (the beat pill) sets min-width:52px, which leaks into K.label({cls:'tag'}) labels */
+.k-label.k-tag{min-width:0}
+/* token chips under the tiles: blue = data, teal = the swapped word, dashed = the generated next tile */
+.k-label.k-tok{background:var(--k-data); color:#fff; border:0; box-shadow:none; -webkit-backdrop-filter:none; backdrop-filter:none;
+  font:700 11px/1.25 var(--font); padding:2px 6px; border-radius:6px}
+.k-label.k-tok.k-swap{background:var(--k-aux)}
+.k-label.k-tok.k-ghost{background:var(--wash); color:var(--k-data); border:1px dashed var(--k-data); padding:1px 5px}
+/* far views: the prompt as one strip of chips under the tiles (per-tube chips only in close-ups) */
+.k-label.k-sent{background:transparent; border:0; box-shadow:none; -webkit-backdrop-filter:none; backdrop-filter:none; padding:0;
+  display:flex; gap:3px; align-items:center; white-space:nowrap}
+.k-sent .t{background:var(--k-data); color:#fff; font:700 11px/1.3 var(--font); padding:2px 6px; border-radius:6px}
+.k-sent .t.sw{background:var(--k-aux)}
+.k-sent .nx{margin-left:2px; color:var(--k-data); background:var(--wash); font:700 11px/1.3 var(--font); padding:1px 5px; border:1px dashed var(--k-data); border-radius:6px}
+/* the gauge's row names sit on its light panel: dark ink in both themes, code names in mono */
+.k-label.k-grow{background:transparent; border:0; box-shadow:none; -webkit-backdrop-filter:none; backdrop-filter:none; padding:0;
+  font:600 12px/1.2 var(--mono); color:#2b2a33}
+.k-label.k-viol{border-left:3px solid var(--k-dir)}
+.k-label.k-teal{border-left:3px solid var(--k-aux)}
+.k-label.k-amber{border-left:3px solid var(--k-prob)}
+/* the part card: what a tapped part is, which week teaches it, and a link to that object */
+.nm-part{position:absolute; z-index:4; left:8px; right:8px; bottom:calc(var(--card-h) + env(safe-area-inset-bottom,0px) + 8px);
+  max-height:min(46vh, calc(100% - var(--bar-h) - var(--card-h) - 40px)); overflow-y:auto; overscroll-behavior:contain;
+  padding:9px 10px 12px 13px; background:var(--surface); color:var(--ink); border:1px solid var(--rule); border-radius:14px; box-shadow:var(--shadow)}
+.nm-part[hidden]{display:none}
+.nm-ph{display:flex; align-items:center; gap:8px}
+.nm-pn{flex:1 1 auto; min-width:0; font:700 14.5px/1.3 var(--font)}
+.nm-pw{flex:0 0 auto; font:700 10.5px/1 var(--font); letter-spacing:.06em; text-transform:uppercase; color:var(--tag-core);
+  background:color-mix(in srgb, var(--tag-core) 13%, transparent); padding:5px 8px; border-radius:999px}
+.nm-px{flex:0 0 auto; width:30px; height:30px; border:0; border-radius:999px; background:transparent; color:var(--muted); font:600 14px/1 var(--font); cursor:pointer}
+.nm-px:hover{background:var(--soft); color:var(--ink)}
+.nm-pt{margin:5px 0 4px; font:14px/1.45 var(--font)}
+.nm-pt code{font:12.5px/1 var(--mono); background:var(--soft); padding:1px 4px; border-radius:4px}
+.nm-live{margin:0 0 9px; font:500 12.5px/1.4 var(--font); color:var(--muted); font-variant-numeric:tabular-nums}
+.nm-live:empty{display:none}
+.nm-pl{display:flex; flex-wrap:wrap; gap:6px}
+.nm-pl a{display:inline-flex; align-items:center; gap:6px; min-height:32px; padding:0 11px; border:1px solid var(--rule); border-radius:999px;
+  background:var(--soft); color:var(--ink); font:600 12.5px/1.2 var(--font); text-decoration:none}
+.nm-pl a:hover{border-color:var(--accent)}
+.nm-pl a i{font-style:normal; font-weight:500; color:var(--muted)}
+@media (min-width:760px){
+  .nm-part{left:auto; right:16px; top:calc(var(--bar-h) + 12px); bottom:auto; width:330px; max-height:calc(100% - var(--bar-h) - 40px)}
+}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   00 · north-machine: "The Machine" (north star)
+   A real, tiny GPT-2-style transformer: ARENA [1.1]'s DemoTransformer line for line at
+   toy size (d_model 12, 4 layers x 3 heads, a 12-word vocabulary), trained with ARENA
+   [0.3]'s AdamW on 12 toy sentences "A met B. B thanked" -> A. Every stream colour, arc,
+   bar, needle and red arrow on screen comes from its forward and backward passes. The
+   default weights are the float32 result of the seeded training run below, so nothing
+   heavy runs on page load; other sizes (and "train again") train live, a few AdamW steps
+   per frame. The MATH block is extracted and checked in node against an independent
+   implementation (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* The toy: ARENA's DemoTransformer ([1.1] Transformers from scratch), line for line, at toy
+   size. Every stream value, arc, bar and gradient on screen comes from these functions. */
+const WORDS = ['Mary', 'Anna', 'John', 'Tom', 'met', '.', 'thanked', 'and', 'the', 'store', 'gave', 'drink'];
+const WID = Object.fromEntries(WORDS.map((w, i) => [w, i]));
+const NAMES = [WID.Mary, WID.Anna, WID.John, WID.Tom];
+const PROMPT = [WID.Mary, WID.met, WID.John, WID['.'], WID.John, WID.thanked];   // "Mary met John. John thanked"
+const ANSWER = WID.Mary;
+/* ARENA's Config at toy size. d_mlp = 4 d_model and eps as ARENA; init_range is ARENA's 0.02
+   scaled to the toy's width, 0.02 * sqrt(768 / 12) = 0.16, so every dot product starts with the
+   same spread as in GPT-2 small (with 0.02 at d_model 12 the toy barely learns). */
+const TOY = { d_model: 12, d_vocab: WORDS.length, n_ctx: 6, d_mlp: 48, layer_norm_eps: 1e-5, init_range: 0.16 };
+/* ARENA's Config() for GPT-2 small (chapter 1, [1.1], "class Config") */
+const GPT2 = { d_model: 768, d_vocab: 50257, n_ctx: 1024, d_head: 64, d_mlp: 3072, n_heads: 12, n_layers: 12, layer_norm_eps: 1e-5, init_range: 0.02 };
+const config = (n_layers, n_heads) => ({ ...TOY, n_layers, n_heads, d_head: TOY.d_model / n_heads });
+
+/* ARENA's parameter names and shapes, in state_dict order, in one flat Float64Array */
+function layout(cfg) {
+  const { d_model: d, d_vocab: V, n_ctx: C, d_mlp: M, n_heads: H, d_head: E, n_layers: L } = cfg;
+  const spec = [['embed.W_E', [V, d], 'w'], ['pos_embed.W_pos', [C, d], 'w']];
+  for (let l = 0; l < L; l++) {
+    const b = `blocks.${l}.`;
+    spec.push([b + 'ln1.w', [d], 'one'], [b + 'ln1.b', [d], 'zero'],
+      [b + 'attn.W_Q', [H, d, E], 'w'], [b + 'attn.W_K', [H, d, E], 'w'], [b + 'attn.W_V', [H, d, E], 'w'], [b + 'attn.W_O', [H, E, d], 'w'],
+      [b + 'attn.b_Q', [H, E], 'zero'], [b + 'attn.b_K', [H, E], 'zero'], [b + 'attn.b_V', [H, E], 'zero'], [b + 'attn.b_O', [d], 'zero'],
+      [b + 'ln2.w', [d], 'one'], [b + 'ln2.b', [d], 'zero'],
+      [b + 'mlp.W_in', [d, M], 'w'], [b + 'mlp.W_out', [M, d], 'w'], [b + 'mlp.b_in', [M], 'zero'], [b + 'mlp.b_out', [d], 'zero']);
+  }
+  spec.push(['ln_final.w', [d], 'one'], ['ln_final.b', [d], 'zero'], ['unembed.W_U', [d, V], 'w'], ['unembed.b_U', [V], 'frozen']);
+  const T = {};
+  let off = 0;
+  for (const [name, shape, init] of spec) { const n = shape.reduce((a, b) => a * b, 1); T[name] = { off, n, shape, init }; off += n; }
+  const o = (k) => T[k].off;
+  const blocks = [];
+  for (let l = 0; l < L; l++) {
+    const b = `blocks.${l}.`;
+    blocks.push({ ln1w: o(b + 'ln1.w'), ln1b: o(b + 'ln1.b'), WQ: o(b + 'attn.W_Q'), WK: o(b + 'attn.W_K'), WV: o(b + 'attn.W_V'), WO: o(b + 'attn.W_O'),
+      bQ: o(b + 'attn.b_Q'), bK: o(b + 'attn.b_K'), bV: o(b + 'attn.b_V'), bO: o(b + 'attn.b_O'), ln2w: o(b + 'ln2.w'), ln2b: o(b + 'ln2.b'),
+      Win: o(b + 'mlp.W_in'), Wout: o(b + 'mlp.W_out'), bin: o(b + 'mlp.b_in'), bout: o(b + 'mlp.b_out') });
+  }
+  const off2 = { WE: o('embed.W_E'), WP: o('pos_embed.W_pos'), blocks, lnfw: o('ln_final.w'), lnfb: o('ln_final.b'), WU: o('unembed.W_U'), bU: o('unembed.b_U') };
+  return { spec, T, size: off, o: off2 };
+}
+/* parameter count of ARENA's DemoTransformer for any Config: W_U separate (as ARENA writes it) or tied to W_E (GPT-2) */
+function paramCount(cfg, { tied = false, b_U = false } = {}) {
+  const { d_model: d, d_vocab: V, n_ctx: C, d_mlp: M, n_heads: H, d_head: E, n_layers: L } = cfg;
+  const block = 2 * d + (3 * H * d * E + H * E * d + 3 * H * E + d) + 2 * d + (d * M + M * d + M + d);
+  const inside = L * (4 * H * d * E + 2 * d * M);                    // the big matrices inside the blocks only
+  const total = V * d + C * d + L * block + 2 * d + (tied ? 0 : d * V) + (b_U ? V : 0);
+  return { total, block, inside, embed: V * d, pos: C * d };
+}
+
+function rng(seed) {                        // mulberry32 (same generator as K.rng)
+  let a = (seed >>> 0) || 1;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function gauss(r) { let u = 0; while (u === 0) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); }
+
+/* nn.init.normal_(std=init_range) for the W's, zeros for biases, ones for LayerNorm w */
+function initModel(cfg, seed = 7) {
+  const lay = layout(cfg), p = new Float64Array(lay.size), r = rng(seed);
+  for (const [name, , init] of lay.spec) {
+    const t = lay.T[name];
+    for (let i = 0; i < t.n; i++) p[t.off + i] = init === 'w' ? cfg.init_range * gauss(r) : init === 'one' ? 1 : 0;
+  }
+  return { cfg, lay, p };
+}
+
+/* gelu_new (TransformerLens / GPT-2): 0.5 x (1 + tanh(sqrt(2/pi) (x + 0.044715 x^3))) */
+const GC = Math.sqrt(2 / Math.PI);
+const gelu_new = (x) => 0.5 * x * (1 + Math.tanh(GC * (x + 0.044715 * x * x * x)));
+
+/* LayerNorm.forward: (x - mean) / sqrt(var(unbiased=False) + eps) * w + b, per position */
+function layerNorm(x, n, d, P, wo, bo, eps, out, xhat, rstd) {
+  for (let p = 0; p < n; p++) {
+    const r = p * d;
+    let m = 0; for (let i = 0; i < d; i++) m += x[r + i];
+    m /= d;
+    let v = 0; for (let i = 0; i < d; i++) { const c = x[r + i] - m; v += c * c; }
+    v /= d;
+    const rs = 1 / Math.sqrt(v + eps);
+    rstd[p] = rs;
+    for (let i = 0; i < d; i++) { const h = (x[r + i] - m) * rs; xhat[r + i] = h; out[r + i] = h * P[wo + i] + P[bo + i]; }
+  }
+}
+
+/* A cache of every activation (ARENA's hook names), allocated once per (config, length). */
+function makeCache(cfg, n) {
+  const { d_model: d, d_vocab: V, d_mlp: M, n_heads: H, d_head: E, n_layers: L } = cfg;
+  const F = (k) => new Float64Array(k);
+  const blk = () => ({ resid_pre: F(n * d), ln1: { y: F(n * d), xhat: F(n * d), rstd: F(n) }, q: F(n * H * E), k: F(n * H * E), v: F(n * H * E),
+    pattern: F(H * n * n), z: F(n * H * E), head_out: F(n * H * d), attn_out: F(n * d), resid_mid: F(n * d),
+    ln2: { y: F(n * d), xhat: F(n * d), rstd: F(n) }, pre: F(n * M), th: F(n * M), post: F(n * M), mlp_out: F(n * d), resid_post: F(n * d) });
+  return { n, tokens: new Int32Array(n), embed: F(n * d), blocks: Array.from({ length: L }, blk), final: F(n * d),
+    lnf: { y: F(n * d), xhat: F(n * d), rstd: F(n) }, logits: F(n * V), probs: F(n * V) };
+}
+
+/* DemoTransformer.forward, caching every activation, with optional interventions (hooks):
+   zero = { attn: Set(layers), mlp: Set(layers) }: that block's output is replaced by 0;
+   add = { layer, pos, vec, alpha }: resid_pre[layer][pos] += alpha * vec (layer = n_layers: the final stream);
+   patch = { layer, pos, vec }: resid_pre[layer][pos] = vec. */
+function forward(model, tokens, iv = {}, c = null) {
+  const { cfg, lay, p: P } = model, O = lay.o;
+  const { d_model: d, d_vocab: V, d_mlp: M, n_heads: H, d_head: E, n_layers: L, layer_norm_eps: eps } = cfg;
+  const n = tokens.length, sc = 1 / Math.sqrt(E), HE = H * E;
+  if (!c) c = makeCache(cfg, n);
+  const zA = iv.zero && iv.zero.attn, zM = iv.zero && iv.zero.mlp;
+  for (let p = 0; p < n; p++) c.tokens[p] = tokens[p];
+  // residual = embed(tokens) + pos_embed(tokens)
+  const x0 = c.embed;
+  for (let p = 0; p < n; p++) for (let i = 0; i < d; i++) x0[p * d + i] = P[O.WE + tokens[p] * d + i] + P[O.WP + p * d + i];
+  let x = x0;
+  const intervene = (l, buf) => {
+    if (iv.add && iv.add.layer === l) { const o = iv.add.pos * d; for (let i = 0; i < d; i++) buf[o + i] += iv.add.alpha * iv.add.vec[i]; }
+    if (iv.patch && iv.patch.layer === l) { const o = iv.patch.pos * d; for (let i = 0; i < d; i++) buf[o + i] = iv.patch.vec[i]; }
+  };
+  for (let l = 0; l < L; l++) {
+    const B = O.blocks[l], A = c.blocks[l];
+    A.resid_pre.set(x);
+    intervene(l, A.resid_pre);
+    const xr = A.resid_pre;
+    // ln1
+    const y1 = A.ln1.y;
+    layerNorm(xr, n, d, P, B.ln1w, B.ln1b, eps, y1, A.ln1.xhat, A.ln1.rstd);
+    // q, k, v = einsum(normalized_resid_pre, W, "posn d_model, nheads d_model d_head -> posn nheads d_head") + b
+    const q = A.q, k = A.k, v = A.v;
+    for (let p = 0; p < n; p++) for (let h = 0; h < H; h++) {
+      const r = (p * H + h) * E;
+      for (let e = 0; e < E; e++) { q[r + e] = P[B.bQ + h * E + e]; k[r + e] = P[B.bK + h * E + e]; v[r + e] = P[B.bV + h * E + e]; }
+      for (let i = 0; i < d; i++) {
+        const yi = y1[p * d + i], w = (h * d + i) * E;
+        for (let e = 0; e < E; e++) { q[r + e] += yi * P[B.WQ + w + e]; k[r + e] += yi * P[B.WK + w + e]; v[r + e] += yi * P[B.WV + w + e]; }
+      }
+    }
+    // attn_scores / d_head**0.5 -> apply_causal_mask (IGNORE = -inf) -> softmax(-1): pattern[h][posn_Q][posn_K]
+    const pat = A.pattern;
+    for (let h = 0; h < H; h++) for (let a = 0; a < n; a++) {
+      const row = (h * n + a) * n, qa = (a * H + h) * E;
+      let mx = -Infinity;
+      for (let bb = 0; bb <= a; bb++) {
+        const kb = (bb * H + h) * E;
+        let s = 0;
+        for (let e = 0; e < E; e++) s += q[qa + e] * k[kb + e];
+        s *= sc;
+        pat[row + bb] = s;
+        if (s > mx) mx = s;
+      }
+      let Z = 0;
+      for (let bb = 0; bb <= a; bb++) { const ex = Math.exp(pat[row + bb] - mx); pat[row + bb] = ex; Z += ex; }
+      for (let bb = 0; bb <= a; bb++) pat[row + bb] /= Z;
+      for (let bb = a + 1; bb < n; bb++) pat[row + bb] = 0;                 // exp(-inf) = 0 exactly
+    }
+    // z = einsum(v, pattern); attn_out = einsum(z, W_O) summed over heads + b_O (head_out keeps each head's share)
+    const z = A.z, ho = A.head_out, ao = A.attn_out;
+    z.fill(0); ho.fill(0);
+    for (let h = 0; h < H; h++) for (let a = 0; a < n; a++) {
+      const za = (a * H + h) * E, row = (h * n + a) * n;
+      for (let bb = 0; bb <= a; bb++) { const w = pat[row + bb], vb = (bb * H + h) * E; for (let e = 0; e < E; e++) z[za + e] += w * v[vb + e]; }
+    }
+    for (let a = 0; a < n; a++) for (let h = 0; h < H; h++) {
+      const hr = (a * H + h) * d;
+      for (let e = 0; e < E; e++) { const ze = z[(a * H + h) * E + e], w = B.WO + (h * E + e) * d; for (let j = 0; j < d; j++) ho[hr + j] += ze * P[w + j]; }
+    }
+    for (let a = 0; a < n; a++) for (let j = 0; j < d; j++) {
+      let s = P[B.bO + j];
+      for (let h = 0; h < H; h++) s += ho[(a * H + h) * d + j];
+      ao[a * d + j] = s;
+    }
+    if (zA && zA.has(l)) ao.fill(0);
+    // resid_mid = attn(ln1(resid_pre)) + resid_pre
+    const mid = A.resid_mid;
+    for (let i = 0; i < n * d; i++) mid[i] = ao[i] + xr[i];
+    // ln2, mlp: gelu_new(normalized_resid_mid @ W_in + b_in) @ W_out + b_out
+    const y2 = A.ln2.y;
+    layerNorm(mid, n, d, P, B.ln2w, B.ln2b, eps, y2, A.ln2.xhat, A.ln2.rstd);
+    const pre = A.pre, th = A.th, post = A.post, mo = A.mlp_out;
+    for (let a = 0; a < n; a++) {
+      const r = a * M;
+      for (let m = 0; m < M; m++) pre[r + m] = P[B.bin + m];
+      for (let i = 0; i < d; i++) { const yi = y2[a * d + i], w = B.Win + i * M; for (let m = 0; m < M; m++) pre[r + m] += yi * P[w + m]; }
+      for (let m = 0; m < M; m++) {
+        const xx = pre[r + m], t = Math.tanh(GC * (xx + 0.044715 * xx * xx * xx));
+        th[r + m] = t; post[r + m] = 0.5 * xx * (1 + t);
+      }
+      for (let j = 0; j < d; j++) mo[a * d + j] = P[B.bout + j];
+      for (let m = 0; m < M; m++) { const pm = post[r + m], w = B.Wout + m * d; for (let j = 0; j < d; j++) mo[a * d + j] += pm * P[w + j]; }
+    }
+    if (zM && zM.has(l)) mo.fill(0);
+    // resid_post = mlp(ln2(resid_mid)) + resid_mid
+    const rp = A.resid_post;
+    for (let i = 0; i < n * d; i++) rp[i] = mo[i] + mid[i];
+    x = rp;
+  }
+  c.final.set(x);
+  intervene(L, c.final);
+  // logits = unembed(ln_final(residual))
+  const yf = c.lnf.y;
+  layerNorm(c.final, n, d, P, O.lnfw, O.lnfb, eps, yf, c.lnf.xhat, c.lnf.rstd);
+  const lg = c.logits, pr = c.probs;
+  for (let a = 0; a < n; a++) {
+    const r = a * V;
+    for (let t = 0; t < V; t++) lg[r + t] = P[O.bU + t];
+    for (let i = 0; i < d; i++) { const yi = yf[a * d + i], w = O.WU + i * V; for (let t = 0; t < V; t++) lg[r + t] += yi * P[w + t]; }
+    let mx = -Infinity;
+    for (let t = 0; t < V; t++) if (lg[r + t] > mx) mx = lg[r + t];
+    let Z = 0;
+    for (let t = 0; t < V; t++) { const e = Math.exp(lg[r + t] - mx); pr[r + t] = e; Z += e; }
+    for (let t = 0; t < V; t++) pr[r + t] /= Z;
+  }
+  return c;
+}
+
+/* mean next-token cross-entropy (ARENA's get_log_probs, negated and averaged), and dL/dlogits * scale */
+function lossAndGrad(c, targets, V, scale, g) {
+  const n = c.n;
+  let loss = 0;
+  for (let a = 0; a < n; a++) {
+    loss -= Math.log(c.probs[a * V + targets[a]]);
+    for (let t = 0; t < V; t++) g[a * V + t] = scale * (c.probs[a * V + t] - (t === targets[a] ? 1 : 0)) / n;
+  }
+  return loss / n;
+}
+
+/* LayerNorm backward: dx += rstd * (dy*w - mean(dy*w) - xhat * mean(dy*w * xhat)) */
+function lnBack(dy, ln, n, d, P, wo, G, gw, gb, dx) {
+  for (let p = 0; p < n; p++) {
+    const r = p * d;
+    let s1 = 0, s2 = 0;
+    for (let i = 0; i < d; i++) {
+      const dyw = dy[r + i] * P[wo + i];
+      G[gw + i] += dy[r + i] * ln.xhat[r + i]; G[gb + i] += dy[r + i];
+      s1 += dyw; s2 += dyw * ln.xhat[r + i];
+    }
+    s1 /= d; s2 /= d;
+    const rs = ln.rstd[p];
+    for (let i = 0; i < d; i++) dx[r + i] += rs * (dy[r + i] * P[wo + i] - s1 - ln.xhat[r + i] * s2);
+  }
+}
+
+/* scratch buffers for backward, one set per (config, length) */
+function makeGradWork(cfg, n) {
+  const { d_model: d, d_mlp: M, n_heads: H, d_head: E } = cfg, F = (k) => new Float64Array(k);
+  return { dyf: F(n * d), dx: F(n * d), dmid: F(n * d), dy2: F(n * d), dpost: F(M), dz: F(n * H * E), dq: F(n * H * E), dk: F(n * H * E),
+    dv: F(n * H * E), dP: F(n), dy1: F(n * d), dres: F(n * d) };
+}
+
+/* .backward() by hand: the gradient of the loss with respect to every weight, accumulated into G */
+function backward(model, c, dlogits, G, W = null) {
+  const { cfg, lay, p: P } = model, O = lay.o;
+  const { d_model: d, d_vocab: V, d_mlp: M, n_heads: H, d_head: E, n_layers: L } = cfg;
+  const n = c.n, sc = 1 / Math.sqrt(E);
+  if (!W) W = makeGradWork(cfg, n);
+  // unembed (b_U is frozen: requires_grad=False in ARENA)
+  const dyf = W.dyf;
+  for (let a = 0; a < n; a++) for (let i = 0; i < d; i++) {
+    const yi = c.lnf.y[a * d + i], w = O.WU + i * V;
+    let s = 0;
+    for (let t = 0; t < V; t++) { const gl = dlogits[a * V + t]; G[w + t] += yi * gl; s += P[w + t] * gl; }
+    dyf[a * d + i] = s;
+  }
+  const dx = W.dx; dx.fill(0);
+  lnBack(dyf, c.lnf, n, d, P, O.lnfw, G, O.lnfw, O.lnfb, dx);
+  for (let l = L - 1; l >= 0; l--) {
+    const B = O.blocks[l], A = c.blocks[l];
+    // resid_post = mlp_out + resid_mid: the gradient reaches resid_mid directly and through the MLP
+    const dmid = W.dmid; dmid.set(dx);
+    const dy2 = W.dy2; dy2.fill(0);
+    const dpost = W.dpost;
+    for (let a = 0; a < n; a++) {
+      const r = a * M, gr = a * d;
+      for (let j = 0; j < d; j++) G[B.bout + j] += dx[gr + j];
+      for (let m = 0; m < M; m++) {
+        const pm = A.post[r + m], w = B.Wout + m * d;
+        let s = 0;
+        for (let j = 0; j < d; j++) { const gj = dx[gr + j]; G[w + j] += pm * gj; s += P[w + j] * gj; }
+        const xx = A.pre[r + m], t = A.th[r + m];
+        dpost[m] = s * (0.5 * (1 + t) + 0.5 * xx * (1 - t * t) * GC * (1 + 3 * 0.044715 * xx * xx));   // gelu_new'
+        G[B.bin + m] += dpost[m];
+      }
+      for (let i = 0; i < d; i++) {
+        const yi = A.ln2.y[gr + i], w = B.Win + i * M;
+        let s = 0;
+        for (let m = 0; m < M; m++) { G[w + m] += yi * dpost[m]; s += P[w + m] * dpost[m]; }
+        dy2[gr + i] = s;
+      }
+    }
+    lnBack(dy2, A.ln2, n, d, P, B.ln2w, G, B.ln2w, B.ln2b, dmid);
+    // resid_mid = attn_out + resid_pre
+    const dres = W.dres; dres.set(dmid);
+    const dz = W.dz; dz.fill(0);
+    for (let a = 0; a < n; a++) {
+      const gr = a * d;
+      for (let j = 0; j < d; j++) G[B.bO + j] += dmid[gr + j];
+      for (let h = 0; h < H; h++) for (let e = 0; e < E; e++) {
+        const zi = (a * H + h) * E + e, ze = A.z[zi], w = B.WO + (h * E + e) * d;
+        let s = 0;
+        for (let j = 0; j < d; j++) { const gj = dmid[gr + j]; G[w + j] += ze * gj; s += P[w + j] * gj; }
+        dz[zi] = s;
+      }
+    }
+    const dq = W.dq, dk = W.dk, dv = W.dv, dP = W.dP;
+    dq.fill(0); dk.fill(0); dv.fill(0);
+    for (let h = 0; h < H; h++) for (let a = 0; a < n; a++) {
+      const row = (h * n + a) * n, za = (a * H + h) * E;
+      let dot = 0;
+      for (let bb = 0; bb <= a; bb++) {
+        const vb = (bb * H + h) * E, w = A.pattern[row + bb];
+        let s = 0;
+        for (let e = 0; e < E; e++) { s += dz[za + e] * A.v[vb + e]; dv[vb + e] += w * dz[za + e]; }
+        dP[bb] = s; dot += s * w;
+      }
+      for (let bb = 0; bb <= a; bb++) {
+        const ds = A.pattern[row + bb] * (dP[bb] - dot) * sc;          // softmax backward, then the 1/sqrt(d_head)
+        const kb = (bb * H + h) * E;
+        for (let e = 0; e < E; e++) { dq[za + e] += ds * A.k[kb + e]; dk[kb + e] += ds * A.q[za + e]; }
+      }
+    }
+    const dy1 = W.dy1; dy1.fill(0);
+    for (let a = 0; a < n; a++) for (let h = 0; h < H; h++) {
+      const r = (a * H + h) * E;
+      for (let e = 0; e < E; e++) { G[B.bQ + h * E + e] += dq[r + e]; G[B.bK + h * E + e] += dk[r + e]; G[B.bV + h * E + e] += dv[r + e]; }
+      for (let i = 0; i < d; i++) {
+        const yi = A.ln1.y[a * d + i], w = (h * d + i) * E;
+        let s = 0;
+        for (let e = 0; e < E; e++) {
+          const gq = dq[r + e], gk = dk[r + e], gv = dv[r + e];
+          G[B.WQ + w + e] += yi * gq; G[B.WK + w + e] += yi * gk; G[B.WV + w + e] += yi * gv;
+          s += P[B.WQ + w + e] * gq + P[B.WK + w + e] * gk + P[B.WV + w + e] * gv;
+        }
+        dy1[a * d + i] += s;
+      }
+    }
+    lnBack(dy1, A.ln1, n, d, P, B.ln1w, G, B.ln1w, B.ln1b, dres);
+    dx.set(dres);
+  }
+  // residual = embed(tokens) + pos_embed(tokens)
+  for (let a = 0; a < n; a++) for (let i = 0; i < d; i++) { G[O.WE + c.tokens[a] * d + i] += dx[a * d + i]; G[O.WP + a * d + i] += dx[a * d + i]; }
+  return G;
+}
+
+/* The training set: "A met B. B thanked" -> A, for every ordered pair of different names (12
+   sentences). Every position learns to predict its next token, as in ARENA's training loop. */
+function dataset() {
+  const out = [];
+  for (const A of NAMES) for (const B of NAMES) if (A !== B) {
+    const toks = [A, WID.met, B, WID['.'], B, WID.thanked];
+    out.push({ tokens: toks, targets: [...toks.slice(1), A] });
+  }
+  return out;
+}
+const DATA = dataset();
+
+/* ARENA's AdamW ([0.3] solution): theta *= 1 - lr*wd; moments m, v; bias-corrected step */
+function makeAdamW(model, { lr = 0.01, betas = [0.9, 0.999], eps = 1e-8, weight_decay = 0.01 } = {}) {
+  const N = model.p.length, f = model.lay.T['unembed.b_U'];
+  return { lr, b1: betas[0], b2: betas[1], eps, wd: weight_decay, t: 1, m: new Float64Array(N), v: new Float64Array(N), f0: f.off, f1: f.off + f.n };
+}
+function adamwStep(opt, P, G) {
+  const { lr, b1, b2, eps, wd, f0, f1 } = opt;
+  const c1 = 1 - b1 ** opt.t, c2 = 1 - b2 ** opt.t;
+  for (let i = 0; i < P.length; i++) {
+    if (i >= f0 && i < f1) continue;                              // b_U: requires_grad=False
+    const g = G[i];
+    P[i] *= 1 - lr * wd;
+    opt.m[i] = b1 * opt.m[i] + (1 - b1) * g;
+    opt.v[i] = b2 * opt.v[i] + (1 - b2) * g * g;
+    P[i] -= lr * (opt.m[i] / c1) / (Math.sqrt(opt.v[i] / c2) + eps);
+  }
+  opt.t += 1;
+}
+
+/* a trainer: full batch (the 12 sentences), AdamW; step() returns the loss before the step */
+const TRAIN = { steps: 300, lr: 0.01, weight_decay: 0.01, seed: 7 };
+function makeTrainer(cfg) {
+  const model = initModel(cfg, TRAIN.seed), opt = makeAdamW(model, { lr: TRAIN.lr, weight_decay: TRAIN.weight_decay });
+  const n = DATA[0].tokens.length, cache = makeCache(cfg, n), work = makeGradWork(cfg, n);
+  const G = new Float64Array(model.p.length), dl = new Float64Array(n * cfg.d_vocab);
+  const T = {
+    model, opt, G, step: 0, losses: [],
+    grad() {                                                       // loss and gradient at the current weights
+      G.fill(0);
+      let loss = 0;
+      for (const s of DATA) {
+        forward(model, s.tokens, {}, cache);
+        loss += lossAndGrad(cache, s.targets, cfg.d_vocab, 1 / DATA.length, dl) / DATA.length;
+        backward(model, cache, dl, G, work);
+      }
+      return loss;
+    },
+    stepOnce() { const loss = T.grad(); adamwStep(opt, model.p, G); T.losses.push(loss); T.step++; return loss; },
+  };
+  return T;
+}
+function train(cfg, steps = TRAIN.steps) { const T = makeTrainer(cfg); for (let s = 0; s < steps; s++) T.stepOnce(); return T; }
+function datasetLoss(model) {
+  const n = DATA[0].tokens.length, cache = makeCache(model.cfg, n), g = new Float64Array(n * model.cfg.d_vocab);
+  let loss = 0;
+  for (const s of DATA) { forward(model, s.tokens, {}, cache); loss += lossAndGrad(cache, s.targets, model.cfg.d_vocab, 1, g) / DATA.length; }
+  return loss;
+}
+/* gradient size per part of the tower (the red arrows' lengths) */
+function partNorms(model, G) {
+  const T = model.lay.T, L = model.cfg.n_layers, out = { embed: 0, attn: [], mlp: [], unembed: 0 };
+  const sq = (name) => { const t = T[name]; let s = 0; for (let i = 0; i < t.n; i++) s += G[t.off + i] ** 2; return s; };
+  out.embed = Math.sqrt(sq('embed.W_E') + sq('pos_embed.W_pos'));
+  for (let l = 0; l < L; l++) {
+    const b = `blocks.${l}.`;
+    out.attn.push(Math.sqrt(['ln1.w', 'ln1.b', 'attn.W_Q', 'attn.W_K', 'attn.W_V', 'attn.W_O', 'attn.b_Q', 'attn.b_K', 'attn.b_V', 'attn.b_O'].reduce((s, k) => s + sq(b + k), 0)));
+    out.mlp.push(Math.sqrt(['ln2.w', 'ln2.b', 'mlp.W_in', 'mlp.W_out', 'mlp.b_in', 'mlp.b_out'].reduce((s, k) => s + sq(b + k), 0)));
+  }
+  out.unembed = Math.sqrt(sq('ln_final.w') + sq('ln_final.b') + sq('unembed.W_U'));
+  return out;
+}
+/* The default toy (4 layers x 3 heads) after train(config(4, 3)): 7,932 float32 numbers,
+   little-endian, in the state_dict order of layout(). Retraining in the page reproduces them. */
+const WEIGHTS_L4H3 = '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';
+function decodeWeights(b64, cfg) {
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const dv = new DataView(bytes.buffer), lay = layout(cfg), p = new Float64Array(lay.size);
+  if (bytes.length !== lay.size * 4) throw new Error('weights do not match the config');
+  for (let i = 0; i < lay.size; i++) p[i] = dv.getFloat32(i * 4, true);
+  return { cfg, lay, p };
+}
+// MATH-END
+
+/* ====================================================================== shapes */
+const NP = PROMPT.length;                          // 6 positions = 6 glass tubes
+const V = WORDS.length;
+const PITCH = 0.4, RT = 0.07, RC = 0.032;          // tube spacing, glass radius, stream-core radius
+const X = (p) => (p - (NP - 1) / 2) * PITCH;
+const LMAX = 6, HMAX = 4;
+const SLAB = { x0: -1.34, x1: 1.34, z0: -0.46, z1: 0.3, t: 0.04 };
+const FY = { read: 0.09, attnAdd: 0.3, mlpC: 0.44, mlpH: 0.13, mlpAdd: 0.555, top: 0.58 };   // heights inside a floor
+const HZ = (h) => -(0.15 + 0.07 * h);             // each head's arcs bulge back to their own depth
+const MLP_R = 0.115;                                // each MLP is a collar round its own tube: it sees that tube only
+const TILE_H = 0.12, CAP = 0.14;
+/* the skyline: a row of 12 bars per position, the last position's row (the answer) in front, amber */
+const SKY = { x0: -1.1, dx: 0.2, w: 0.13, wz: 0.11, h0: 0.012, h1: 0.7, zF: 0.2, dz: 0.15 };
+const skyZ = (p) => SKY.zF - (NP - 1 - p) * SKY.dz;
+/* the stream gauge: a panel of 3 rows x 12 bars on a brass rod clamped to one tube */
+const GW = 2.6, GH = 1.08, GROWS = [0.33, 0, -0.33], GB = { x0: -0.42, dx: 0.145, w: 0.095, h: 0.155 }, GX = 0.05, GZ = 0.95;
+const ARROW_X = { attn: -1.5, mlp: -1.64 };
+const FIG = [-1.28, 0, 1.12];
+const PROMPT_ANNA = PROMPT.map((t, i) => (i === 0 ? WID.Anna : t));
+const SWAPS = { none: null, io: [0, 'Anna'], s1: [2, 'Tom'], end: [5, 'met'] };
+const LAST = NP - 1;
+
+/* heights of everything for explode e and L floors */
+function geo(e, L) {
+  const yE = 0.2 + 0.12 * e, Y0 = 0.4 + 0.3 * e, F = 0.66 + 0.52 * e;
+  const yb = (l) => Y0 + l * F, yT = Y0 + L * F, gap = F - FY.top;
+  const g = (l) => (l === 0 ? (yE + 0.03 + Y0) / 2 : yb(l) - gap / 2);   // the stream between floors
+  const tubeTop = yT + 0.12, capTip = tubeTop + CAP, ySky = yT + 0.5 + 0.2 * e;
+  return { e, L, yE, Y0, F, yb, yT, gap, g, tubeTop, capTip, ySky };
+}
+/* core segments of one tube: E, then per floor P (resid_pre), M (resid_mid), Q (resid_post), then F (final) */
+function segRanges(G) {
+  const out = [[TILE_H, G.g(0)]];
+  for (let l = 0; l < G.L; l++) {
+    const b = G.yb(l);
+    out.push([G.g(l), b + FY.attnAdd], [b + FY.attnAdd, b + FY.mlpAdd], [b + FY.mlpAdd, G.g(l + 1)]);
+  }
+  out.push([G.g(G.L), G.tubeTop - 0.02]);
+  return out;
+}
+function segVec(c, s, L) {
+  if (s === 0) return c.embed;
+  if (s === 3 * L + 1) return c.final;
+  const B = c.blocks[Math.floor((s - 1) / 3)], k = (s - 1) % 3;
+  return k === 0 ? B.resid_pre : k === 1 ? B.resid_mid : B.resid_post;
+}
+/* the stream a probe or the dial sees: resid_pre of floor l, or the final stream for l = n_layers */
+const streamAt = (c, l, L) => (l >= L ? c.final : c.blocks[l].resid_pre);
+function dist(a, b, o, d) { let s = 0; for (let i = 0; i < d; i++) { const t = a[o + i] - b[o + i]; s += t * t; } return Math.sqrt(s); }
+function nrm(a, o, d) { let s = 0; for (let i = 0; i < d; i++) s += a[o + i] * a[o + i]; return Math.sqrt(s); }
+function zeroSets(off, L) {
+  const z = { attn: new Set(), mlp: new Set() };
+  if (off === 'attn' || off === 'mlp') for (let l = 0; l < L; l++) z[off].add(l);
+  const m = /^(attn|mlp)(\d)$/.exec(off || '');
+  if (m && +m[2] < L) z[m[1]].add(+m[2]);
+  return z;
+}
+function tokensFor(swap) {
+  const s = SWAPS[swap];
+  return s ? PROMPT.map((t, i) => (i === s[0] ? WID[s[1]] : t)) : PROMPT.slice();
+}
+const pc = (p) => { const v = 100 * p; return (v >= 1 ? v.toFixed(1) : v >= 0.1 ? v.toFixed(2) : v.toFixed(3)) + '%'; };
+const f2 = (v) => (Math.abs(v) < 0.005 ? '0.00' : v.toFixed(2)).replace('-', '−');
+const f3 = (v) => (Math.abs(v) < 0.0005 ? '0.000' : v.toFixed(3)).replace('-', '−');
+const wq = (t) => `“${WORDS[t]}”`;
+
+/* ====================================================================== the course, part by part */
+const OBJ = {
+  'w01-block': ['The block', 1], 'd01-cube': ['The matmul cube', 1], 'w02-stencil': ['The stencil', 2], 'd02-highway': ['The highway', 2],
+  'w03-ravine': ['The ravine', 3], 'd03-step': ['Anatomy of one step', 3], 'w04-blame': ['The blame web', 4], 'd04-squash': ['One cube, three squashes', 4],
+  'w05-searchlight': ['The searchlight', 5], 'd05-circuits': ['Two machines in one head', 5], 'w06-skyline': ['The skyline', 6],
+  'd06-shelf': ['The activation shelf', 6], 'w07-stripe': ['The stripe', 7], 'd07-relay': ['The relay', 7], 'w08-twins': ['The twin towers', 8],
+  'd08-polytope': ['The polytope', 8], 'd08-dictionary': ['The dictionary', 8], 'w09-terrain': ['The value terrain', 9],
+  'd09-cartpole': ['The pole and the Q-surface', 9], 'w10-saddle': ['The sanded saddle', 10], 'd10-leash': ['The leash', 10],
+  'w11-beans': ['The bean machine', 11], 'd11-threshold': ['The threshold wall', 11], 'w12-sheet': ['One thin sheet', 12], 'd12-dial': ['The dial', 12],
+  'w13-fan': ['The fan', 13], 'w14-arch': ['The arch', 14],
+};
+const PARTS = {
+  tok: { name: { 1: 'Word tiles', 2: 'Tokens', 3: 'tokens' }, wk: 'W5–6', links: ['w05-searchlight', 'w06-skyline'],
+    txt: { 1: 'The words going in, one tile each. Everything above works out which word comes next.',
+      2: 'The input tokens, one per position. GPT-2 cuts text into pieces from a 50,257-token vocabulary; this toy knows 12 words. Each tile starts its own tube.',
+      3: '`tokens` (batch, posn) = [Mary, met, John, ., John, thanked]. Toy d_vocab = 12; GPT-2 uses 50,257 BPE tokens. Each posn gets its own residual stream.' } },
+  embed: { name: { 1: 'Word → numbers', 2: 'Embedding', 3: 'embed + pos_embed' }, wk: 'W5', links: ['w05-searchlight', 'w01-block'],
+    txt: { 1: 'Each word looks up its own list of 12 numbers, plus a list for its place in the sentence. GPT-2 small uses 768.',
+      2: '`W_E` is a table with one row per vocabulary word, `W_pos` one row per position. The stream starts as their sum: 12 numbers here, 768 in GPT-2 small.',
+      3: '`embed(tokens) + pos_embed(tokens)`: `W_E[tokens]` (d_vocab × d_model) + `W_pos[:posn]` (n_ctx × d_model). Toy 12 × 12 and 6 × 12; GPT-2 small 50,257 × 768 and 1,024 × 768.' } },
+  stream: { name: { 1: 'A tube = one word\'s running total', 2: 'Residual stream', 3: 'residual stream (resid_pre / mid / post)' }, wk: 'W2 · W5–6', links: ['d02-highway', 'd06-shelf', 'w01-block'],
+    txt: { 1: 'One tube per word: a running total of 12 numbers. Every part reads it and adds its answer back in; nothing is rubbed out.',
+      2: 'The residual stream, a (position × d_model) table. Each block reads it through a LayerNorm and adds its output back: x ← x + f(LN(x)). The shortcut idea comes from ResNets (week 2).',
+      3: '`resid_pre` → `resid_mid` → `resid_post` per block, (batch, posn, d_model). The sum of every earlier output: the one channel all components read and write (Elhage et al. 2021).' } },
+  block: { name: { 1: 'One floor', 2: 'Transformer block', 3: 'TransformerBlock' }, wk: 'W5', links: ['w05-searchlight', 'd05-circuits', 'd06-shelf'],
+    txt: { 1: 'One floor = one block: attention (the amber arcs at the back), then a small calculator per word (the collar on each tube). Both add to the tubes.',
+      2: 'A block: `ln1` → attention → add, then `ln2` → MLP → add. The toy stacks 4 by default; GPT-2 small stacks 12 of the same design.',
+      3: '`resid_mid = attn(ln1(resid_pre)) + resid_pre`; `resid_post = mlp(ln2(resid_mid)) + resid_mid`. Toy default n_layers 4, n_heads 3, d_head 4; GPT-2 small 12, 12, 64.' } },
+  attn: { name: { 1: 'Attention heads', 2: 'Attention heads', 3: 'Attention' }, wk: 'W5 · W7', links: ['w05-searchlight', 'd05-circuits', 'w07-stripe'],
+    txt: { 1: 'Each amber block is a head: it lets a word look back at earlier words and copy what it needs from them.',
+      2: 'A head scores how well each earlier word answers this word\'s question (query · key), softmaxes the scores and copies a weighted mix of values. The only part that moves information between tubes.',
+      3: 'Per head: q, k, v = LN(x)·W + b; `pattern = softmax(mask(q·kᵀ / √d_head))`; z = pattern·v; `attn_out = Σ_h z·W_O + b_O`. Toy d_head = 12 / n_heads.' } },
+  arcs: { name: { 1: 'Notes passed between words', 2: 'Attention arcs', 3: 'attention pattern' }, wk: 'W5 · W7', links: ['w05-searchlight', 'd07-relay', 'w02-stencil'],
+    txt: { 1: 'Each arc carries a note from an earlier word\'s tube into a later word\'s tube. Thicker = more attention. Arcs only point backwards: no peeking ahead.',
+      2: 'An arc from word j to word i is `pattern[head, i, j]`: how much of j\'s value vector i copies. The causal mask stops any word looking ahead. A convolution (week 2) mixes fixed neighbours; attention picks its own.',
+      3: 'Arc radius ∝ `pattern[h, posn_Q, posn_K]`: drawn if ≥ 0.15, or every arc into the last posn. Causal mask: scores with posn_K > posn_Q become −inf before softmax. Heads compose across floors (K-, Q-, V-composition).' } },
+  mlp: { name: { 1: 'Per-word calculators', 2: 'MLP', 3: 'MLP (position-wise)' }, wk: 'W1 · W8', links: ['d01-cube', 'd08-polytope'],
+    txt: { 1: 'One collar per word per floor: a small calculator that only sees its own tube, then adds its result back in.',
+      2: 'The MLP: 12 → 48 → 12 numbers with a GELU bend in the middle, applied to each position separately. The usual picture: where stored knowledge lives.',
+      3: '`gelu_new(LN(x)·W_in + b_in)·W_out + b_out`, d_mlp = 4·d_model (48 here, 3,072 in GPT-2 small). Position-wise: no term mixes posn. Its neurons are polysemantic (week 8).' } },
+  top: { name: { 1: 'The guess', 2: 'Unembed + softmax', 3: 'ln_final · unembed · softmax' }, wk: 'W5–6', links: ['w06-skyline', 'w05-searchlight'],
+    txt: { 1: 'The top reads the last tube, gives every word in the vocabulary a score, and turns the scores into chances: the amber bars.',
+      2: '`ln_final`, then `W_U` maps each tube to one score (logit) per vocabulary word; softmax turns the last tube\'s scores into the amber probabilities. The pale rows are the other positions\' guesses. Sampling picks from them (week 6).',
+      3: '`logits = unembed(ln_final(resid))`, `W_U` (d_model, d_vocab), `b_U` frozen (requires_grad=False). Bars = softmax(logits[0, −1]); every posn is trained on its own next token.' } },
+  grad: { name: { 1: 'Training arrows', 2: 'Gradients', 3: '∂L/∂θ per part' }, wk: 'W3–4', links: ['w04-blame', 'w03-ravine', 'd03-step', 'd04-squash'],
+    txt: { 1: 'Red arrows: how hard training is pushing on each part. The loss sends blame down through the whole machine, and every weight gets nudged.',
+      2: 'The gradient of the loss for each part. Backprop carries it from the top down through every block (week 4); the optimiser steps each weight against it (week 3). Big arrows early, small once it has learned.',
+      3: 'Arrow length ∝ √(‖∂L/∂θ_part‖ / max at initialisation), L = mean next-token cross-entropy over the 12 toy sentences; AdamW (ARENA [0.3]) steps every weight except the frozen b_U.' } },
+  probe: { name: { 1: 'Probe', 2: 'Linear probe', 3: 'probe (difference of means)' }, wk: 'W12', links: ['d12-dial', 'w07-stripe'],
+    txt: { 1: 'A gauge clamped on the last tube. It reads one direction: how Anna-like the stream is right there. Live.',
+      2: 'A probe is a dot product with one direction. The needle reads (x − x_Mary) · v / |v|²: 0 = Mary\'s run, 1 = Anna\'s run. Live, one floor above the dial.',
+      3: 'Reads (x − x_clean)·v/‖v‖² at the last posn, v = resid(Anna prompt) − resid(Mary prompt) at that floor: a difference-of-means probe with one pair. A trained probe would fit v by logistic regression.' } },
+  sae: { name: { 1: 'Feature lens', 2: 'Sparse autoencoder lens', 3: 'SAE' }, wk: 'W8', links: ['d08-dictionary', 'd08-polytope'],
+    txt: { 1: 'A lens that splits a tube into many simple ingredients, only a few switched on at once. Illustrative here: no lens is trained on this toy.',
+      2: 'A sparse autoencoder rewrites the stream as a few active features out of many more than 12 (superposition). Illustrative needles; The dictionary trains one live.',
+      3: 'z = ReLU(W_enc(x − b_dec) + b_enc), x̂ = W_dec·z + b_dec, loss ‖x − x̂‖² + λ‖z‖₁. Needle lengths here are illustrative, not computed.' } },
+  patch: { name: { 1: 'Patch cable', 2: 'Activation patching', 3: 'activation patching' }, wk: 'W7–8', links: ['w08-twins', 'w07-stripe'],
+    txt: { 1: 'Run the machine twice (the pale ghost tube is the second run), copy one piece across with this cable, and see whether the answer swings.',
+      2: 'Patching: run a clean and a corrupted prompt, copy one activation from one run into the other, measure how much of the answer moves. The cable is for show here; The twin towers runs it live.',
+      3: 'Hook one (layer, posn) activation, overwrite it with the other run\'s cached value, score with a normalised logit difference. Fun fact, live here: the dial at α = 1 is exactly this patch.' } },
+  steer: { name: { 1: 'Steering dial', 2: 'Steering vector', 3: 'activation steering' }, wk: 'W12', links: ['d12-dial', 'w12-sheet'],
+    txt: { 1: 'Turn the dial and the last tube gets pushed toward "Anna". At 1 the machine answers Anna. Live.',
+      2: 'Steering adds α·v to the stream. Here v = the Anna run minus the Mary run at this floor, last word. Persona and steering vectors (week 12) are the same move on big models.',
+      3: '`resid_pre[l][0, −1] += α·v`, v = resid(Anna prompt) − resid(Mary prompt) there (ActAdd-style). At α = 1 that position holds the Anna run\'s activation exactly: a patch.' } },
+  lora: { name: { 1: 'Fine-tuning sheet', 2: 'LoRA', 3: 'LoRA' }, wk: 'W12', links: ['w12-sheet'],
+    txt: { 1: 'A thin sheet laid over one floor: fine-tuning that changes a few directions instead of every weight. Illustrative here.',
+      2: 'LoRA freezes the big weights and learns a thin low-rank change B·A on top. Illustrative sheet; One thin sheet shows it live (and how one sheet can tilt a whole model).',
+      3: 'W′ = W + (α/r)·B·A, B ∈ ℝ^(d×r), A ∈ ℝ^(r×d), W frozen, r ≪ d. Illustrative, over the top block\'s MLPs.' } },
+  reward: { name: { 1: 'Reward scale', 2: 'Reward model', 3: 'reward model · RL' }, wk: 'W9–10', links: ['d10-leash', 'w10-saddle', 'w09-terrain', 'd09-cartpole'],
+    txt: { 1: 'A scale that weighs how good an answer is. Reinforcement learning trains the machine to tip it. Illustrative here.',
+      2: 'RL (weeks 9–10): a reward scores outputs and the policy climbs it. RLHF learns the reward from human preferences and keeps a KL leash to the starting model. Illustrative.',
+      3: 'RLHF: maximise E[r_φ(x, y)] − β·KL(π_θ ‖ π_ref) with PPO\'s clipped objective. Illustrative scale.' } },
+  evals: { name: { 1: 'Test clipboard', 2: 'Evals', 3: 'eval' }, wk: 'W11', links: ['w11-beans', 'd11-threshold'],
+    txt: { 1: 'The clipboard asks the machine all 12 toy questions and counts the right answers, with your knobs applied. Live.',
+      2: 'An eval: fixed questions, a scorer, a score. Here: the 12 toy prompts; right = the top word is the first name. Live, with the switched-off parts and the dial applied.',
+      3: 'Accuracy of argmax(logits[:, −1]) = IO name over the 12 training prompts, with the current ablation and steering hooks. Twelve questions give a wide error bar (week 11).' } },
+  loop: { name: { 1: 'The writing loop', 2: 'Generation loop', 3: 'autoregressive sampling' }, wk: 'W6 · W13', links: ['w06-skyline', 'w13-fan', 'd06-shelf'],
+    txt: { 1: 'The chosen word becomes the next tile and the whole machine runs again. That is how it writes, one word at a time.',
+      2: 'Append the chosen token and run again. The ghost tile shows the top word. Long chains of this are the reasoning traces week 13 takes apart; a KV cache (week 6) saves recomputing old tubes.',
+      3: '`tokens = cat([tokens, sample(logits[:, −1])])`, argmax shown. Thought anchors (W13) resample the chain from each sentence to find what the answer hangs on.' } },
+  plaque: { name: { 1: 'Your claim', 2: 'Research claim', 3: 'capstone claim' }, wk: 'W14', links: ['w14-arch'],
+    txt: { 1: 'The course ends with your own claim about what one part of a machine like this does, and the evidence that holds it up.',
+      2: 'Week 14: a research claim built with these tools, where every experiment is a stone in the arch.',
+      3: 'Capstone: a claim, the experiments that support it, and the ones that could have broken it.' } },
+  gauge: { name: { 1: 'Stream gauge', 2: 'Stream gauge', 3: 'resid, component by component' }, wk: 'W5–6', links: ['d06-shelf', 'w01-block'],
+    txt: { 1: 'The 12 numbers of one tube: before, what one part adds, and after. Row 1 plus row 2 is row 3, exactly.',
+      2: 'Twelve bars = the d_model = 12 numbers of one position. Top: the stream before the part; middle: what the part adds; bottom: the sum. Live.',
+      3: 'Bars are resid_pre[p], attn_out[p] and resid_mid[p] (or resid_mid, mlp_out, resid_post): what `run_with_cache` would hand you for one posn.' } },
+};
+
+/* camera views (the kit auto-fits the plinth unless fit: k asks for a close-up) */
+const CAM = {
+  hero: { pos: [5.0, 4.9, 10.4], target: [0, 2.4, 0] },
+  embed: { pos: [1.0, 1.6, 6.15], target: [0.12, 0.74, 0.55], fit: 1.0 },
+  gauge: { pos: [1.0, 2.13, 6.15], target: [0.12, 1.25, 0.55], fit: 1.0 },
+  swap: { pos: [3.2, 3.9, 9.8], target: [0, 2.3, 0] },
+  top: { pos: [1.6, 7.25, 6.2], target: [0.05, 4.58, -0.15], fit: 1.15 },
+  train: { pos: [-4.6, 4.6, 9.4], target: [0, 2.4, 0] },
+  tools: { pos: [5.8, 4.2, 8.6], target: [0.2, 2.3, 0] },
+  contested: { pos: [-3.4, 5.0, 9.2], target: [0, 2.4, 0] },
+  where: { pos: [6.2, 3.8, 9.8], target: [0, 3.0, 0] },
+};
+/* a close-up that follows the gauge wherever the explode knob has put it */
+function gaugeCam(S) {
+  const g = S.state.gauge.position;
+  return { pos: [1.0, g.y + 0.6, 6.15], target: [0.12, g.y - 0.28, 0.55], fit: 1.0 };
+}
+
+/* ====================================================================== building */
+const _o = new THREE.Object3D();
+function setI(mesh, i, x, y, z, sx = 1, sy = 1, sz = 1, rx = 0, ry = 0, rz = 0) {
+  _o.position.set(x, y, z); _o.rotation.set(rx, ry, rz); _o.scale.set(sx, sy, sz); _o.updateMatrix();
+  mesh.setMatrixAt(i, _o.matrix);
+}
+function commit(mesh, n) {
+  mesh.count = n;
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  mesh.computeBoundingSphere();
+}
+function inst(geom, mat, n, shadow = true) {
+  const m = new THREE.InstancedMesh(geom, mat, n);
+  m.castShadow = shadow; m.receiveShadow = true; m.frustumCulled = false; m.count = 0;
+  return m;
+}
+const COL = {
+  data: new THREE.Color(C.data), aux: new THREE.Color(C.aux), dir: new THREE.Color(C.dir), prob: new THREE.Color(C.prob),
+  grey: new THREE.Color('#b9b3a8'), pale: new THREE.Color('#f5e3bf'), head: new THREE.Color('#ecc071'), mlp: new THREE.Color('#e8decd'), mlpOff: new THREE.Color('#bdb7ad'),
+  arcOff: new THREE.Color('#aaa49a'), white: new THREE.Color('#ffffff'), tmp: new THREE.Color(),
+};
+
+/* one floor plate (JSCAD, z-up, unit height): a rounded slab with a hole for every tube */
+function slabSolid() {
+  const { roundedRectangle, cylinder } = J.primitives;
+  const w = SLAB.x1 - SLAB.x0, d = SLAB.z1 - SLAB.z0, cx = (SLAB.x0 + SLAB.x1) / 2, cy = -(SLAB.z0 + SLAB.z1) / 2;
+  const plate = J.extrusions.extrudeLinear({ height: 1 }, roundedRectangle({ size: [w, d], roundRadius: 0.07, center: [cx, cy], segments: 24 }));
+  const holes = Array.from({ length: NP }, (_, p) => cylinder({ radius: RT + 0.014, height: 1.4, center: [X(p), 0, 0.5], segments: 28 }));
+  return J.booleans.subtract(plate, ...holes);
+}
+function rimSolid() {
+  const { roundedRectangle } = J.primitives;
+  const w = SLAB.x1 - SLAB.x0, d = SLAB.z1 - SLAB.z0, cx = (SLAB.x0 + SLAB.x1) / 2, cy = -(SLAB.z0 + SLAB.z1) / 2;
+  const outer = roundedRectangle({ size: [w + 0.028, d + 0.028], roundRadius: 0.084, center: [cx, cy], segments: 24 });
+  const inner = roundedRectangle({ size: [w - 0.004, d - 0.004], roundRadius: 0.068, center: [cx, cy], segments: 24 });
+  return J.extrusions.extrudeLinear({ height: 1 }, J.booleans.subtract(outer, inner));
+}
+function canvasTex(w, h, draw) {
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  draw(cv.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
+const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif';
+/* an MLP collar: a rounded ring round its tube (lathe profile, closed) */
+function collarGeometry() {
+  const r0 = RT + 0.006, r1 = MLP_R, h = FY.mlpH / 2, c = 0.022;
+  const pts = [[r0, -h], [r1 - c, -h], [r1 - c * 0.3, -h + c * 0.3], [r1, -h + c], [r1, h - c], [r1 - c * 0.3, h - c * 0.3], [r1 - c, h], [r0, h], [r0, -h]];
+  return new THREE.LatheGeometry(pts.map(([x, y]) => new THREE.Vector2(x, y)), 36);
+}
+
+function buildScene(S) {
+  const st = S.state, R = S.root;
+  const mat = st.mat = {
+    tile: K.mat.paint(C.data), glass: K.mat.glass('#dde8f2', 0.2), core: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 }),
+    slab: K.mat.plaster(), brass: K.mat.brass(), head: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 }),
+    mlp: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 }),
+    arc: new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.55, emissive: 0x2a1a00, emissiveIntensity: 0.15 }),
+    bar: K.mat.paint('#ffffff'), ghostBar: new THREE.MeshStandardMaterial({ color: '#fff7ea', transparent: true, opacity: 0.42, roughness: 0.6, depthWrite: false }),
+    fan: new THREE.MeshStandardMaterial({ color: C.brass, roughness: 0.45, metalness: 0.55 }),
+    red: K.mat.paint(C.grad), violet: K.mat.paint(C.dir), teal: K.mat.string(C.aux), green: K.mat.paint(C.good), plaster: K.mat.plaster(),
+    gaugeBar: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 }),
+    ghostTube: K.mat.glass('#a9dcd8', 0.3), ghostTile: new THREE.MeshStandardMaterial({ color: C.data, transparent: true, opacity: 0.32, roughness: 0.5, depthWrite: false }),
+    sheet: new THREE.MeshStandardMaterial({ color: C.dir, transparent: true, opacity: 0.34, roughness: 0.4, side: THREE.DoubleSide, depthWrite: false }),
+    amber: K.mat.string(C.prob), paper: K.mat.plaster('#fbf8f1'),
+  };
+  const M = st.meshes = {};
+  M.tiles = inst(new THREE.RoundedBoxGeometry(0.3, TILE_H, 0.3, 3, 0.03).translate(0, TILE_H / 2, 0), mat.tile, NP);
+  M.glass = inst(new THREE.CylinderGeometry(RT, RT, 1, 28, 1, true).translate(0, 0.5, 0), mat.glass, NP, false);
+  M.glass.renderOrder = 2;
+  M.cores = inst(new THREE.CylinderGeometry(RC, RC, 1, 12, 1).translate(0, 0.5, 0), mat.core, NP * (3 * LMAX + 2), false);
+  st.slabJ = slabSolid();
+  M.slabs = inst(K.mesh(st.slabJ).geometry, mat.slab, LMAX + 2, false);     // no shadow: the holes would print a grid on the floor
+  M.rims = inst(K.mesh(rimSolid()).geometry, mat.brass, LMAX + 2, false);
+  M.rings = inst(new THREE.TorusGeometry(RT + 0.004, 0.009, 8, 28).rotateX(Math.PI / 2), mat.brass, NP * 2 * LMAX, false);
+  M.heads = inst(new THREE.RoundedBoxGeometry(0.13, 0.075, 0.06, 2, 0.018), mat.head, LMAX * HMAX);
+  M.mlps = inst(collarGeometry(), mat.mlp, LMAX * NP);
+  M.caps = inst(new THREE.ConeGeometry(RT + 0.012, CAP, 24, 1).translate(0, CAP / 2, 0), mat.brass, NP);
+  for (const k of ['tiles', 'glass', 'cores', 'slabs', 'rims', 'rings', 'heads', 'mlps', 'caps']) R.add(M[k]);
+  /* arcs: one merged mesh per floor, rebuilt only when the attention patterns change */
+  st.arcMeshes = Array.from({ length: LMAX }, (_, l) => {
+    const m = new THREE.Mesh(new THREE.BufferGeometry(), mat.arc);
+    m.castShadow = true; m.frustumCulled = false; m.userData.floor = l; R.add(m); return m;
+  });
+  st.arcPts = [];
+  /* the skyline: tray, 12 amber bars (+ pale ghost bars for the reference run), the word rail */
+  const sky = st.sky = new THREE.Group(); R.add(sky);
+  const zB = skyZ(0) - SKY.wz / 2 - 0.05, zF = skyZ(NP - 1) + SKY.wz / 2 + 0.05;
+  const tray = new THREE.Mesh(new THREE.RoundedBoxGeometry(2.6, 0.04, zF - zB, 2, 0.015).translate(0, 0.02, (zB + zF) / 2), mat.slab);
+  tray.castShadow = tray.receiveShadow = true; sky.add(tray);
+  const trayRim = new THREE.Mesh(new THREE.BoxGeometry(2.62, 0.012, 0.012).translate(0, 0.034, zF), mat.brass); sky.add(trayRim);
+  M.bars = inst(new THREE.BoxGeometry(SKY.w, 1, SKY.wz).translate(0, 0.5, 0), mat.bar, NP * V); sky.add(M.bars);
+  M.ghostBars = inst(new THREE.BoxGeometry(SKY.w * 1.18, 1, SKY.wz * 1.18).translate(0, 0.5, 0), mat.ghostBar, V, false); sky.add(M.ghostBars);
+  M.ghostBars.renderOrder = 3;
+  const rail = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 0.34), new THREE.MeshStandardMaterial({ roughness: 0.9, map: canvasTex(1200, 170, (g, w, h) => {
+    g.fillStyle = '#f5efe4'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#b58a3c'; g.fillRect(0, 0, w, 5);
+    g.font = `600 34px ${FONT}`; g.textAlign = 'right'; g.textBaseline = 'middle';
+    WORDS.forEach((word, t) => { g.save(); g.translate(50 + 100 * t, 16); g.rotate(-Math.PI / 2); g.fillStyle = t < 4 ? '#1f3fb8' : '#2b2a33'; g.fillText(word, 0, 0); g.restore(); });
+  }) }));
+  rail.position.set(0, -0.17, zF + 0.006); sky.add(rail);
+  st.fan = new THREE.Mesh(new THREE.BufferGeometry(), mat.fan); st.fan.frustumCulled = false; R.add(st.fan);
+  /* red gradient arrows (shaft hangs down from its origin; head below) */
+  M.shafts = inst(new THREE.CylinderGeometry(0.02, 0.02, 1, 10, 1).translate(0, -0.5, 0), mat.red, 2 * LMAX + 2);
+  M.tips = inst(new THREE.ConeGeometry(0.05, 0.13, 16, 1).rotateX(Math.PI).translate(0, -0.065, 0), mat.red, 2 * LMAX + 2);
+  R.add(M.shafts, M.tips);
+  /* the stream gauge (a lectern at the front: three rows of 12 bars) */
+  buildGauge(S);
+  buildTools(S);
+  /* an invisible box that tells the kit's auto-fit how tall the machine is (instanced parts don't count) */
+  st.proxy = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), new THREE.MeshBasicMaterial({ visible: false }));
+  st.proxy.castShadow = false; R.add(st.proxy);
+  st.fig = K.figure(); R.add(st.fig.group); st.fig.group.visible = false;
+}
+
+function buildGauge(S) {
+  const st = S.state, mat = st.mat, g = st.gauge = new THREE.Group();
+  const panel = new THREE.Mesh(new THREE.RoundedBoxGeometry(GW, GH, 0.04, 2, 0.02),
+    new THREE.MeshStandardMaterial({ color: '#fbf8f1', roughness: 0.9, emissive: '#fbf8f1', emissiveIntensity: 0.32 }));
+  panel.castShadow = true; g.add(panel);
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(GW - 0.06, 0.012, 0.012).translate(0, GH / 2 - 0.004, 0.022), mat.brass); g.add(edge);
+  const span = GB.dx * 11 + GB.w + 0.06, mid = GB.x0 + GB.dx * 5.5;
+  for (const y of GROWS) { const r = new THREE.Mesh(new THREE.BoxGeometry(span, 0.006, 0.01), mat.brass); r.position.set(mid, y, 0.025); g.add(r); }
+  st.meshes.gBars = inst(new THREE.BoxGeometry(GB.w, 1, 0.022).translate(0, 0.5, 0), mat.gaugeBar, 36, false);
+  g.add(st.meshes.gBars);
+  st.gaugeRoot = new THREE.Group(); st.gaugeRoot.add(g); S.root.add(st.gaugeRoot);
+  st.gaugeRod = K.tube([[0, 0, 0], [0, 1, 0]], C.brass, 0.011, { material: mat.brass });
+  st.gaugeClamp = new THREE.Mesh(new THREE.TorusGeometry(RT + 0.02, 0.014, 8, 28).rotateX(Math.PI / 2), mat.brass);
+  st.gaugeRoot.add(st.gaugeRod.mesh, st.gaugeClamp);
+  st.gaugeRoot.visible = false;
+}
+
+/* the instruments of weeks 3-14, clipped on where they act */
+function buildTools(S) {
+  const st = S.state, mat = st.mat, T = st.tool = {};
+  const mesh = (geom, m, parent) => { const x = new THREE.Mesh(geom, m); x.castShadow = true; x.receiveShadow = true; parent.add(x); return x; };
+  const clamp = (g, m = mat.brass) => mesh(new THREE.TorusGeometry(RT + 0.018, 0.012, 8, 28).rotateX(Math.PI / 2), m, g);
+  const arm = (g, m, len = 0.26) => mesh(new THREE.CylinderGeometry(0.01, 0.01, len, 8).rotateZ(Math.PI / 2).translate(RT + len / 2, 0, 0), m, g);
+  // probe: clamp, arm and a dial face with a violet needle
+  T.probe = new THREE.Group(); clamp(T.probe); arm(T.probe, mat.brass);
+  mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.02, 32).rotateX(Math.PI / 2).translate(0.43, 0, 0), mat.plaster, T.probe);
+  mesh(new THREE.TorusGeometry(0.1, 0.008, 6, 32).translate(0.43, 0, 0.004), mat.violet, T.probe);
+  T.probeNeedle = mesh(new THREE.BoxGeometry(0.014, 0.085, 0.008).translate(0, 0.0425, 0), mat.violet, T.probe);
+  T.probeNeedle.position.set(0.43, 0, 0.016);
+  mesh(new THREE.SphereGeometry(0.014, 12, 8).translate(0.43, 0, 0.018), mat.brass, T.probe);
+  // steering dial: clamp, violet arm and knob with a white pointer
+  T.steer = new THREE.Group(); clamp(T.steer, mat.violet); arm(T.steer, mat.violet);
+  mesh(new THREE.CylinderGeometry(0.088, 0.094, 0.07, 32).rotateX(Math.PI / 2).translate(0.43, 0, 0.02), mat.violet, T.steer);
+  T.steerPtr = mesh(new THREE.BoxGeometry(0.016, 0.07, 0.01).translate(0, 0.036, 0), K.mat.paint('#ffffff'), T.steer);
+  T.steerPtr.position.set(0.43, 0, 0.058);
+  // patch: a pale ghost tube (the second run) and a teal cable
+  T.patch = new THREE.Group();
+  T.ghostTube = mesh(new THREE.CylinderGeometry(RT, RT, 1, 24, 1, true).translate(0, 0.5, 0), mat.ghostTube, T.patch);
+  T.ghostTube.castShadow = false; T.ghostTube.renderOrder = 2;
+  T.cable = K.tube([[0, 0, 0], [1, 0, 0]], C.aux, 0.013, { material: mat.teal }); T.patch.add(T.cable.mesh);
+  T.clipA = mesh(new THREE.TorusGeometry(RT + 0.016, 0.01, 8, 24).rotateX(Math.PI / 2), mat.brass, T.patch);
+  T.clipB = mesh(new THREE.TorusGeometry(RT + 0.016, 0.01, 8, 24).rotateX(Math.PI / 2), mat.brass, T.patch);
+  // SAE lens: a violet ring with a few feature needles (illustrative)
+  T.sae = new THREE.Group();
+  mesh(new THREE.TorusGeometry(0.15, 0.012, 8, 40).rotateX(Math.PI / 2), mat.violet, T.sae);
+  [[15, 0.02], [45, 0.13], [75, 0.02], [105, 0.015], [135, 0.09], [165, 0.02]].forEach(([deg, len]) => {
+    const a = (deg * Math.PI) / 180, n = mesh(new THREE.CylinderGeometry(0.007, 0.007, len, 6).rotateZ(Math.PI / 2).translate(0.15 + len / 2, 0, 0), mat.violet, T.sae);
+    n.rotation.y = -a;
+  });
+  // LoRA: a thin violet membrane over the top floor's MLP collars (illustrative)
+  T.lora = new THREE.Group();
+  {
+    const sh = new THREE.Shape(), w = 1.23, dz = 0.16, rr = 0.06;
+    sh.moveTo(-w + rr, -dz); sh.lineTo(w - rr, -dz); sh.quadraticCurveTo(w, -dz, w, -dz + rr); sh.lineTo(w, dz - rr);
+    sh.quadraticCurveTo(w, dz, w - rr, dz); sh.lineTo(-w + rr, dz); sh.quadraticCurveTo(-w, dz, -w, dz - rr); sh.lineTo(-w, -dz + rr);
+    sh.quadraticCurveTo(-w, -dz, -w + rr, -dz);
+    for (let p = 0; p < NP; p++) { const hole = new THREE.Path(); hole.absarc(X(p), 0, RT + 0.012, 0, Math.PI * 2, true); sh.holes.push(hole); }
+    T.sheet = mesh(new THREE.ShapeGeometry(sh, 12).rotateX(-Math.PI / 2), mat.sheet, T.lora); T.sheet.castShadow = false;
+  }
+  for (const [x, z] of [[-1.19, -0.12], [1.19, -0.12], [-1.19, 0.12], [1.19, 0.12]]) mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.03, 8).translate(x, 0, z), mat.brass, T.lora);
+  // reward scale at the left end of the skyline (illustrative)
+  T.reward = new THREE.Group();
+  mesh(new THREE.CylinderGeometry(0.016, 0.022, 0.36, 10).translate(0, 0.18, 0), mat.brass, T.reward);
+  T.beam = new THREE.Group(); T.beam.position.y = 0.36; T.reward.add(T.beam);
+  mesh(new THREE.BoxGeometry(0.46, 0.014, 0.02), mat.brass, T.beam);
+  for (const s of [-1, 1]) {
+    const hang = new THREE.Group(); hang.position.x = 0.22 * s; T.beam.add(hang);
+    mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.14, 4).translate(0, -0.07, 0), mat.brass, hang);
+    mesh(new THREE.CylinderGeometry(0.075, 0.06, 0.012, 20).translate(0, -0.146, 0), mat.brass, hang);
+    if (s < 0) mesh(new THREE.BoxGeometry(0.07, 0.07, 0.07).translate(0, -0.105, 0), mat.green, hang);
+    hang.userData.s = s; (T.hangs || (T.hangs = [])).push(hang);
+  }
+  // eval clipboard on the plinth (the score is a live label)
+  T.evals = new THREE.Group();
+  const board = new THREE.Group(); board.rotation.x = -0.32; T.evals.add(board);
+  mesh(new THREE.RoundedBoxGeometry(0.36, 0.48, 0.022, 2, 0.01).translate(0, 0.24, 0), K.mat.plaster('#c9a86a'), board);
+  mesh(new THREE.PlaneGeometry(0.3, 0.38).translate(0, 0.22, 0.013), new THREE.MeshStandardMaterial({ roughness: 0.9, map: canvasTex(240, 304, (g, w, h) => {
+    g.fillStyle = '#fbf8f1'; g.fillRect(0, 0, w, h); g.strokeStyle = '#c7c0b2'; g.lineWidth = 3;
+    for (let i = 0; i < 12; i++) { const y = 26 + i * 23; g.beginPath(); g.moveTo(52, y); g.lineTo(w - 18, y); g.stroke(); }
+    g.strokeStyle = '#2f9e6b'; g.lineWidth = 5;
+    for (let i = 0; i < 12; i++) { const y = 26 + i * 23; g.beginPath(); g.moveTo(18, y - 4); g.lineTo(26, y + 4); g.lineTo(40, y - 10); g.stroke(); }
+  }) }), board);
+  mesh(new THREE.BoxGeometry(0.14, 0.04, 0.03).translate(0, 0.47, 0.012), mat.brass, board);
+  st.evalAt = new THREE.Object3D(); st.evalAt.position.set(0, 0.52, 0); board.add(st.evalAt);
+  // the generation loop: the chosen word comes back as the next tile
+  T.loop = new THREE.Group();
+  T.loopTube = K.tube([[0, 0, 0], [0, 1, 0]], C.prob, 0.013, { material: mat.amber }); T.loop.add(T.loopTube.mesh);
+  T.loopTip = mesh(new THREE.ConeGeometry(0.034, 0.1, 14).rotateX(Math.PI).translate(0, -0.05, 0), mat.amber, T.loop);
+  T.ghostTile = mesh(new THREE.RoundedBoxGeometry(0.3, TILE_H, 0.3, 3, 0.03).translate(0, TILE_H / 2, 0), mat.ghostTile, T.loop);
+  T.ghostTile.castShadow = false; T.ghostTile.position.set(X(NP), 0, 0);
+  // the capstone plaque on the plinth
+  T.plaque = new THREE.Group();
+  mesh(new THREE.BoxGeometry(0.74, 0.024, 0.18).translate(0, 0.012, 0), mat.brass, T.plaque);
+  mesh(new THREE.PlaneGeometry(0.7, 0.16).rotateX(-Math.PI / 2).translate(0, 0.0255, 0), new THREE.MeshStandardMaterial({ transparent: true, roughness: 0.5, metalness: 0.2, map: canvasTex(700, 160, (g, w, h) => {
+    g.clearRect(0, 0, w, h); g.fillStyle = '#3a2c12'; g.font = `700 50px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('00 · THE MACHINE', w / 2, 62); g.font = `500 30px ${FONT}`; g.fillText('your claim goes here · week 14', w / 2, 122);
+  }) }), T.plaque);
+  T.plaque.position.set(0, 0, 1.56); T.plaque.rotation.x = 0.0;
+  for (const k of ['probe', 'steer', 'patch', 'sae', 'lora', 'reward', 'evals', 'loop', 'plaque']) S.root.add(T[k]);
+  T.evals.position.set(1.42, 0, 1.0); T.evals.rotation.y = -0.5;
+}
+
+/* ====================================================================== labels + picking */
+function buildLabels(S) {
+  const st = S.state, R = S.root, A = st.at = {};
+  const anchor = () => { const o = new THREE.Object3D(); R.add(o); return o; };
+  for (const k of ['embed', 'top', 'stream', 'attn', 'mlp', 'sky', 'delta', 'note', 'train', 'probe', 'steer', 'patch', 'sae', 'lora', 'reward', 'loop', 'plaque', 'grad', 'g0', 'g1', 'g2', 'gnote', 'cont', 'rows', 'sent']) A[k] = anchor();
+  A.floor = Array.from({ length: LMAX }, anchor);
+  A.tok = Array.from({ length: NP }, anchor);
+  const Lb = st.lab = {};
+  Lb.tok = A.tok.map((a, p) => K.label(a, WORDS[PROMPT[p]], { cls: 'tok', anchor: 'top', dy: 4 + (p % 2) * 19 }));   // two staggered rows
+  Lb.sent = K.label(A.sent, '', { cls: 'sent', anchor: 'top', dy: 8 });
+  Lb.floor = A.floor.map((a, l) => K.label(a, { 1: `floor ${l + 1}`, 2: `block ${l}`, 3: `blocks.${l}` }, { cls: 'tag', anchor: 'left', dx: 6, dy: 0 }));
+  const tag = (a, t, o = {}) => K.label(a, t, Object.assign({ cls: 'tag', anchor: 'left', dx: 6, dy: 0 }, o));
+  Lb.embed = tag(A.embed, { 1: 'words → numbers', 2: 'embed + pos_embed', 3: 'W_E[t] + W_pos[p]' });
+  Lb.top = tag(A.top, { 1: 'scores for every word', 2: 'ln_final → unembed', 3: 'ln_final · W_U' });
+  Lb.stream = tag(A.stream, { 1: 'one word\'s stream', 2: 'residual stream', 3: 'resid[:, p]' }, { anchor: 'right', dx: -8 });
+  Lb.attn = tag(A.attn, { 1: 'attention heads', 2: 'attention heads', 3: 'attn heads' }, { anchor: 'right', dx: -6 });
+  Lb.mlp = tag(A.mlp, { 1: 'per-word calculator', 2: 'MLP (one per word)', 3: 'MLP, position-wise' });
+  Lb.sky = K.label(A.sky, '', { cls: 'readout', anchor: 'bottom', dy: -6 });
+  Lb.delta = K.label(A.delta, '', { cls: 'readout teal', anchor: 'bottom', dy: -8 });
+  Lb.note = K.label(A.note, '', { cls: 'note', anchor: 'left', dx: 10, dy: 0 });
+  Lb.train = K.label(A.train, '', { cls: 'readout grad', anchor: 'right', dx: -10, dy: 0 });
+  Lb.cont = K.label(A.cont, '', { cls: 'note', anchor: 'right', dx: -8, dy: 0 });
+  Lb.g = [A.g0, A.g1, A.g2].map((a) => K.label(a, '', { cls: 'grow', anchor: 'left', dx: 0, dy: 0, prio: 2 }));
+  Lb.gnote = K.label(A.gnote, '', { cls: 'note', anchor: 'bottom', dy: -6 });
+  Lb.rows = K.label(A.rows, '', { cls: 'note', anchor: 'bottom', dy: -4 });
+  Lb.tools = {
+    probe: tag(A.probe, { 1: 'probe', 2: 'W12 · probe', 3: 'probe · v̂ᵀx' }),
+    steer: tag(A.steer, { 1: 'steering dial', 2: 'W12 · steer', 3: 'steer · +αv' }),
+    patch: tag(A.patch, { 1: 'patch cable', 2: 'W8 · patching', 3: 'W8 · patch' }, { anchor: 'right', dx: -6 }),
+    sae: tag(A.sae, { 1: 'feature lens', 2: 'W8 · SAE lens', 3: 'W8 · SAE' }, { anchor: 'right', dx: -6 }),
+    lora: tag(A.lora, { 1: 'fine-tune sheet', 2: 'W12 · LoRA', 3: 'W12 · LoRA (BA)' }),
+    reward: tag(A.reward, { 1: 'reward scale', 2: 'W9–10 · reward', 3: 'W10 · r_φ' }, { anchor: 'bottom', dx: 0, dy: -6 }),
+    evals: K.label(st.evalAt, '', { cls: 'readout', anchor: 'left', dx: 10, dy: 0 }),
+    loop: tag(A.loop, { 1: 'write the next word', 2: 'W6 · generate', 3: 'W6 · sample loop' }),
+    plaque: tag(A.plaque, { 1: 'your claim', 2: 'W14 · your claim', 3: 'W14 · claim' }, { anchor: 'top', dx: 0, dy: 10 }),
+    grad: tag(A.grad, { 1: 'training push', 2: 'W3–4 · gradients', 3: 'W3–4 · ∂L/∂θ' }, { anchor: 'right', dx: -6 }),
+  };
+}
+
+function wirePicking(S) {
+  const st = S.state, M = st.meshes, T = st.tool;
+  const pk = (obj, id, info) => K.pick(obj, (hit) => { st.pickedAt = performance.now(); openPart(S, id, info ? info(hit) : {}); });
+  const L = () => st.model.cfg.n_layers, H = () => st.model.cfg.n_heads;
+  pk(M.tiles, 'tok', (h) => ({ p: h.instanceId }));
+  pk(M.glass, 'stream', (h) => ({ p: h.instanceId }));
+  pk(M.cores, 'stream', (h) => ({ p: Math.floor(h.instanceId / (3 * L() + 2)) }));
+  pk(M.slabs, 'block', (h) => ({ s: h.instanceId }));
+  pk(M.heads, 'attn', (h) => ({ l: Math.floor(h.instanceId / H()), h: h.instanceId % H() }));
+  pk(M.mlps, 'mlp', (h) => ({ l: Math.floor(h.instanceId / NP), p: h.instanceId % NP }));
+  pk(M.caps, 'top');
+  pk(st.sky, 'top');
+  pk(st.fan, 'top');
+  st.arcMeshes.forEach((m, l) => pk(m, 'arcs', () => ({ l })));
+  pk(M.shafts, 'grad'); pk(M.tips, 'grad');
+  st.gaugePick = () => { st.pickedAt = performance.now(); openPart(S, 'gauge', {}); };
+  st.toolPick = {};
+  for (const k of ['probe', 'steer', 'patch', 'sae', 'lora', 'reward', 'evals', 'loop', 'plaque']) st.toolPick[k] = (hit) => { st.pickedAt = performance.now(); openPart(S, k, {}); };
+}
+/* the kit raycasts hidden objects too, so hidden instruments leave the pick list */
+function setToolPick(S, on) {
+  const st = S.state;
+  for (const k in st.toolPick) {
+    const g = st.tool[k];
+    if (on && !g.userData.picked) { K.pick(g, st.toolPick[k]); g.userData.picked = true; }
+    if (!on && g.userData.picked) { K.unpick(g); g.userData.picked = false; }
+  }
+}
+
+/* ---- the part card (own DOM; closes on an empty tap, Escape, or when a kit sheet opens) ---- */
+function mdLite(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+    .replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+}
+function buildPartCard(S) {
+  const st = S.state, app = document.querySelector('.k-app') || document.body;
+  const box = document.createElement('div');
+  box.className = 'nm-part'; box.hidden = true;
+  box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', 'About this part');
+  box.innerHTML = '<div class="nm-ph"><span class="nm-pn"></span><span class="nm-pw"></span><button type="button" class="nm-px" aria-label="Close">✕</button></div><p class="nm-pt"></p><p class="nm-live"></p><div class="nm-pl"></div>';
+  app.appendChild(box);
+  box.querySelector('.nm-px').addEventListener('click', () => closePart(S));
+  st.part = { box, id: null, info: null };
+  new MutationObserver(() => { if (app.dataset && app.dataset.sheet) closePart(S); }).observe(app, { attributes: true, attributeFilter: ['data-sheet'] });
+  addEventListener('keydown', (e) => { if (e.key === 'Escape') closePart(S); });
+  const cv = S.renderer.domElement;
+  let dn = null;
+  cv.addEventListener('pointerdown', (e) => { dn = { x: e.clientX, y: e.clientY, t: performance.now() }; }, { passive: true });
+  cv.addEventListener('pointerup', (e) => {
+    if (!dn) return;
+    const tap = Math.hypot(e.clientX - dn.x, e.clientY - dn.y) < 8 && performance.now() - dn.t < 450;
+    dn = null;
+    if (tap && !(performance.now() - (st.pickedAt || 0) < 150)) closePart(S);
+  }, { passive: true });
+}
+function openPart(S, id, info = {}) {
+  const st = S.state, P = PARTS[id];
+  if (!P) return;
+  st.part.id = id; st.part.info = info;
+  paintPart(S);
+  st.part.box.hidden = false;
+  st.part.box.scrollTop = 0;
+}
+function closePart(S) { const st = S.state; if (st.part && !st.part.box.hidden) { st.part.box.hidden = true; st.part.id = null; } }
+function paintPart(S) {
+  const st = S.state, id = st.part.id;
+  if (!id) return;
+  const P = PARTS[id], box = st.part.box, t = S.tier;
+  box.querySelector('.nm-pn').textContent = P.name[t] || P.name[2];
+  box.querySelector('.nm-pw').textContent = P.wk;
+  box.querySelector('.nm-pt').innerHTML = mdLite(P.txt[t] || P.txt[2]);
+  box.querySelector('.nm-live').textContent = liveLine(S, id, st.part.info);
+  box.querySelector('.nm-pl').innerHTML = P.links.map((o) => `<a href="${o}.html">${mdLite(OBJ[o][0])} <i>W${OBJ[o][1]}</i></a>`).join('');
+}
+/* one line of live numbers for the tapped part */
+function liveLine(S, id, info) {
+  const st = S.state, m = st.model, cfg = m.cfg, d = cfg.d_model, L = cfg.n_layers, A = st.c.A, k = S.knobs;
+  const toks = st.toks, top = argmaxAt(A.probs, LAST);
+  switch (id) {
+    case 'tok': { const p = info.p ?? 0; return `Live: ${wq(toks[p])} is token ${toks[p]} of ${V}, at position ${p}.`; }
+    case 'embed': return `Live: the last word starts as ${d} numbers with length ${f2(nrm(A.embed, LAST * d, d))}.`;
+    case 'stream': { const p = info.p ?? LAST; return `Live: ${wq(toks[p])}'s stream grows from length ${f2(nrm(A.embed, p * d, d))} to ${f2(nrm(A.final, p * d, d))} on its way up.`; }
+    case 'block': return `Live: this toy has ${L} blocks × ${cfg.n_heads} heads, ${paramCount(cfg, { b_U: true }).total.toLocaleString('en-US')} weights. GPT-2 small: 12 × 12, 124M.`;
+    case 'attn': {
+      const l = info.l ?? 0, h = info.h ?? 0, n = NP, pat = A.blocks[l].pattern, row = (h * n + LAST) * n;
+      let b = 0; for (let j = 1; j < n; j++) if (pat[row + j] > pat[row + b]) b = j;
+      const off = zeroSets(k.off, L).attn.has(l) ? ' (switched off: its output is zeroed)' : '';
+      return `Live: head ${l}.${h}: the last word puts ${pc(pat[row + b])} of its attention on ${wq(toks[b])}${off}.`;
+    }
+    case 'arcs': {
+      const l = info.l ?? 0, n = NP, pat = A.blocks[l].pattern, H = cfg.n_heads;
+      let best = [0, 0, 0]; for (let h = 0; h < H; h++) for (let j = 0; j < LAST; j++) { const w = pat[(h * n + LAST) * n + j]; if (w > best[0]) best = [w, h, j]; }
+      return `Live: block ${l}'s strongest arc into the last word is head ${l}.${best[1]} from ${wq(toks[best[2]])}, weight ${f2(best[0])}.`;
+    }
+    case 'mlp': { const l = info.l ?? 0, p = info.p ?? LAST; return `Live: block ${l}'s MLP adds a vector of length ${f2(nrm(A.blocks[l].mlp_out, p * d, d))} to ${wq(toks[p])}'s stream.`; }
+    case 'top': return `Live: next word ${wq(top)} at ${pc(A.probs[LAST * V + top])}; the 12 amber bars sum to 1.`;
+    case 'grad': return st.gnorm ? `Live: gradient size now: embed ${f3(st.gnorm.embed)}, attention ${st.gnorm.attn.map(f3).join(' / ')}, unembed ${f3(st.gnorm.unembed)}.` : '';
+    case 'probe': return `Live: the needle reads ${f2(st.probe)} (0 = Mary's run, 1 = Anna's run).`;
+    case 'steer': return `Live: α = ${k.steer.toFixed(2)} at floor ${st.sL}; the next word is ${wq(top)} at ${pc(A.probs[LAST * V + top])}.`;
+    case 'evals': return `Live: ${st.evals.ok} of 12 toy prompts right, mean p(answer) ${f3(st.evals.mp)}.`;
+    case 'loop': return `Live: the next tile would be ${wq(top)}.`;
+    case 'gauge': return st.gaugeErr != null ? `Live: largest |row 1 + row 2 − row 3| = ${st.gaugeErr === 0 ? '0 exactly' : st.gaugeErr.toExponential(1)}.` : '';
+    default: return '';
+  }
+}
+function argmaxAt(pr, pos) { let b = 0; for (let t = 1; t < V; t++) if (pr[pos * V + t] > pr[pos * V + b]) b = t; return b; }
+
+/* ====================================================================== the model */
+const keyOf = (L, H) => `L${L}H${H}`;
+function setModel(S, m, force = false) {
+  const st = S.state;
+  if (st.model !== m || force) st.modelVer = (st.modelVer || 0) + 1;
+  st.model = m;
+  if (!st.c || st.c.cfg !== m.cfg) {
+    const cfg = m.cfg;
+    st.c = { cfg, A: makeCache(cfg, NP), R: makeCache(cfg, NP), M: makeCache(cfg, NP), N: makeCache(cfg, NP), E: makeCache(cfg, NP) };
+  }
+}
+/* switch to the model for the current knobs: cached, or train it live */
+function ensureModel(S) {
+  const st = S.state, key = keyOf(S.knobs.layers, S.knobs.heads);
+  if (st.trainer && st.trainer.key === key && !st.trainer.replay) return;
+  if (st.models.has(key) && !(st.trainer && st.trainer.key === key)) { st.trainer = null; setModel(S, st.models.get(key)); return; }
+  if (!st.models.has(key)) startTraining(S, false);
+}
+function startTraining(S, replay) {
+  const st = S.state, key = keyOf(S.knobs.layers, S.knobs.heads);
+  const T = makeTrainer(config(S.knobs.layers, S.knobs.heads));
+  T.key = key; T.replay = replay; T.arcStep = -99;
+  st.trainer = T;
+  setModel(S, T.model);
+  if (S.shot) { while (T.step < TRAIN.steps) T.stepOnce(); finishTraining(S, false); return; }
+  if (!replay) K.toast(`Training a new ${S.knobs.layers} × ${S.knobs.heads} toy live (${TRAIN.steps} steps)`);
+  S.invalidate();
+}
+function finishTraining(S, repaint = true) {
+  const st = S.state, T = st.trainer;
+  if (!T) return;
+  st.models.set(T.key, T.model);
+  st.lastLosses = T.losses.slice();
+  st.trainer = null;
+  setModel(S, T.model, true);
+  if (repaint) { compute(S); paint(S); }
+}
+function cancelReplay(S) {
+  const st = S.state;
+  if (st.trainer && st.trainer.replay && st.models.has(st.trainer.key)) { const k = st.trainer.key; st.trainer = null; setModel(S, st.models.get(k)); }
+}
+
+/* all forward passes the picture needs, with the knobs' hooks */
+function compute(S) {
+  const st = S.state, k = S.knobs, m = st.model, cfg = m.cfg, L = cfg.n_layers, d = cfg.d_model, c = st.c;
+  forward(m, PROMPT, {}, c.M);                                   // clean Mary run
+  forward(m, PROMPT_ANNA, {}, c.N);                              // clean Anna run
+  st.sL = Math.ceil(L / 2); st.pr = Math.min(st.sL + 1, L);
+  if (!st.v || st.v.length !== d) { st.v = new Float64Array(d); st.u = new Float64Array(d); }
+  const diff = (l, out) => { const a = streamAt(c.N, l, L), b = streamAt(c.M, l, L); for (let i = 0; i < d; i++) out[i] = a[LAST * d + i] - b[LAST * d + i]; };
+  diff(st.sL, st.v); diff(st.pr, st.u);                         // v: the dial's direction; u: the probe's
+  const iv = { zero: zeroSets(k.off, L) };
+  if (k.steer > 0) iv.add = { layer: st.sL, pos: LAST, vec: st.v, alpha: k.steer };
+  st.iv = iv;
+  st.toks = tokensFor(k.swap);
+  forward(m, st.toks, iv, c.A);
+  st.cmp = k.swap !== 'none' ? 'swap' : k.off !== 'none' ? 'off' : k.steer > 0 ? 'steer' : null;
+  if (st.cmp) forward(m, PROMPT, k.swap !== 'none' ? iv : {}, c.R);
+  // probe: (x - x_Mary) . u / |u|^2 one floor above the dial
+  const x = streamAt(c.A, st.pr, L), x0 = streamAt(c.M, st.pr, L);
+  let s = 0, uu = 0;
+  for (let i = 0; i < d; i++) { s += (x[LAST * d + i] - x0[LAST * d + i]) * st.u[i]; uu += st.u[i] * st.u[i]; }
+  st.probe = uu > 1e-12 ? s / uu : 0;
+  // evals: the 12 toy prompts with the same hooks
+  let ok = 0, mp = 0;
+  for (const ex of DATA) {
+    forward(m, ex.tokens, iv, c.E);
+    const a = ex.targets[LAST];
+    if (argmaxAt(c.E.probs, LAST) === a) ok++;
+    mp += c.E.probs[LAST * V + a];
+  }
+  st.evals = { ok, mp: mp / DATA.length };
+}
+
+/* gradient of the training loss at the current weights (red arrows outside training) */
+function gradOf(model) {
+  const cfg = model.cfg, cache = makeCache(cfg, NP), work = makeGradWork(cfg, NP), dl = new Float64Array(NP * cfg.d_vocab), G = new Float64Array(model.p.length);
+  for (const ex of DATA) { forward(model, ex.tokens, {}, cache); lossAndGrad(cache, ex.targets, cfg.d_vocab, 1 / DATA.length, dl); backward(model, cache, dl, G, work); }
+  return G;
+}
+function gradScale(S) {                  // the largest part gradient at initialisation (seed 7) for this size
+  const st = S.state, cfg = st.model.cfg, key = keyOf(cfg.n_layers, cfg.n_heads);
+  if (!st.gmax.has(key)) {
+    const m0 = initModel(cfg, TRAIN.seed), n = partNorms(m0, gradOf(m0));
+    st.gmax.set(key, Math.max(n.embed, n.unembed, ...n.attn, ...n.mlp));
+  }
+  return st.gmax.get(key);
+}
+
+/* ====================================================================== layout (explode, floors, heads) */
+function place(S) {
+  const st = S.state, M = st.meshes, T = st.tool, A = st.at, cfg = st.model.cfg, L = cfg.n_layers, H = cfg.n_heads;
+  const G = st.G = geo(S.knobs.explode, L);
+  for (let p = 0; p < NP; p++) { setI(M.tiles, p, X(p), 0, 0); setI(M.glass, p, X(p), TILE_H, 0, 1, G.tubeTop - TILE_H, 1); setI(M.caps, p, X(p), G.tubeTop, 0); }
+  commit(M.tiles, NP); commit(M.glass, NP); commit(M.caps, NP);
+  let s = 0;
+  const slabAt = (y, t) => { setI(M.slabs, s, 0, y, 0, 1, t, 1); setI(M.rims, s, 0, y + t - 0.017, 0, 1, 0.021, 1); s++; };
+  slabAt(G.yE, 0.03);
+  for (let l = 0; l < L; l++) slabAt(G.yb(l), SLAB.t);
+  slabAt(G.yT, 0.05);
+  commit(M.slabs, s); commit(M.rims, s);
+  let r = 0, h = 0, m = 0;
+  for (let l = 0; l < L; l++) {
+    const b = G.yb(l);
+    for (let p = 0; p < NP; p++) { setI(M.rings, r++, X(p), b + FY.attnAdd, 0); setI(M.rings, r++, X(p), b + FY.mlpAdd, 0); setI(M.mlps, m++, X(p), b + FY.mlpC, 0); }
+    for (let k = 0; k < H; k++) setI(M.heads, h++, SLAB.x0 + 0.14, b + SLAB.t + 0.0375, HZ(k));
+  }
+  commit(M.rings, r); commit(M.mlps, m); commit(M.heads, h);
+  st.arcMeshes.forEach((am, l) => { am.position.y = l < L ? G.yb(l) : 0; });
+  st.segY = segRanges(G);
+  st.sky.position.y = G.ySky;
+  // the fan: one brass string from the last tube's cap to every bar
+  const fans = [];
+  const tip = new THREE.Vector3(X(LAST), G.capTip, 0);
+  for (let t = 0; t < V; t++) fans.push(new THREE.TubeGeometry(new THREE.LineCurve3(tip, new THREE.Vector3(SKY.x0 + SKY.dx * t, G.ySky, skyZ(LAST) - 0.02)), 1, 0.0045, 5, false));
+  st.fan.geometry.dispose(); st.fan.geometry = THREE.mergeGeometries(fans); fans.forEach((f) => f.dispose());
+  // label anchors
+  for (let p = 0; p < NP; p++) A.tok[p].position.set(X(p), 0, 0.16);
+  A.sent.position.set(0, 0, 0.18);
+  for (let l = 0; l < LMAX; l++) A.floor[l].position.set(SLAB.x1 + 0.02, l < L ? G.yb(l) + 0.02 : -9, 0.3);
+  A.embed.position.set(SLAB.x1 + 0.02, G.yE + 0.015, 0.3);
+  A.top.position.set(SLAB.x1 + 0.02, G.yT + 0.03, 0.3);
+  A.stream.position.set(X(0) - RT - 0.02, G.yb(Math.min(1, L - 1)) + 0.45, 0);
+  A.attn.position.set(SLAB.x0 + 0.06, G.yb(L - 1) + 0.09, HZ(Math.min(1, H - 1)));
+  A.mlp.position.set(X(LAST) + MLP_R + 0.01, G.yb(0) + FY.mlpC, 0.06);
+  A.delta.position.set(X(LAST), G.capTip + 0.02, 0);
+  A.train.position.set(SKY.x0 - 0.12, G.ySky + 0.35, 0);
+  A.cont.position.set(SLAB.x0 - 0.02, G.yb(Math.min(3, L - 1)) + 0.12, HZ(0));
+  // instruments
+  const gs = G.g(st.sL || Math.ceil(L / 2)), gp = G.g(Math.min((st.sL || Math.ceil(L / 2)) + 1, L));
+  T.steer.position.set(X(LAST), gs, 0);
+  T.probe.position.set(X(LAST), gp + (Math.abs(gp - gs) < 0.01 ? 0.16 : 0), 0);
+  A.steer.position.set(X(LAST) + 0.55, gs, 0.02); A.probe.position.set(X(LAST) + 0.55, T.probe.position.y, 0);
+  const gl = G.g(Math.min(1, L)), gx = -1.7, gz = -0.28;
+  T.ghostTube.position.set(gx, TILE_H, gz); T.ghostTube.scale.y = G.yT - TILE_H;
+  T.cable.set(smooth([[gx + RT * 0.7, gl, gz + 0.03], [gx + 0.2, gl - 0.1, gz + 0.1], [-1.28, gl - 0.12, -0.07], [X(0) - RT * 0.8, gl, 0]], 40));
+  T.clipA.position.set(gx, gl, gz); T.clipB.position.set(X(0), gl, 0);
+  A.patch.position.set(gx - RT - 0.02, gl + 0.08, gz);
+  const ls = Math.max(1, L - 1);
+  T.sae.position.set(X(1), G.g(ls), 0);
+  A.sae.position.set(X(1) - 0.17, G.g(ls) + 0.06, 0);
+  T.lora.position.set(0, G.yb(L - 1) + FY.mlpC + FY.mlpH / 2 + 0.012, 0);
+  A.lora.position.set(1.25, T.lora.position.y + 0.02, 0.14);
+  T.reward.position.set(-1.62, G.ySky + 0.02, 0.05);
+  A.reward.position.set(-1.62, G.ySky + 0.46, 0.05);
+  T.loopTube.set(smooth([[1.24, G.ySky + 0.06, 0.02], [1.58, G.ySky - 0.12, 0.1], [1.74, G.ySky - 0.55, 0.15], [1.74, 0.8, 0.15], [1.6, 0.42, 0.08], [X(NP), 0.28, 0]], 90));
+  T.loopTip.position.set(X(NP), 0.28, 0);
+  A.loop.position.set(1.78, Math.max(1.2, G.ySky * 0.45), 0.15);
+  A.plaque.position.set(0, 0.02, 1.66);
+  A.grad.position.set(ARROW_X.mlp - 0.06, G.yT + 0.1, 0.1);
+  // the gauge needle and its target tube point
+  placeGauge(S);
+  // the fit proxy: the whole machine, skyline and instruments included
+  const top = G.ySky + 0.04 + SKY.h1 + 0.12;
+  st.proxy.scale.set(3.3, top, 1.2); st.proxy.position.set(0, 0, 0);
+  st.figAt = FIG;
+}
+
+function smooth(pts, n) { return new THREE.CatmullRomCurve3(pts.map((q) => new THREE.Vector3(...q)), false, 'centripetal').getPoints(n); }
+
+function placeGauge(S) {
+  const st = S.state, gv = st.view && st.view.gauge;
+  st.gaugeRoot.visible = !!gv;
+  if (gv && !st.gaugePicked) { K.pick(st.gaugeRoot, st.gaugePick); st.gaugePicked = true; }
+  if (!gv && st.gaugePicked) { K.unpick(st.gaugeRoot); st.gaugePicked = false; }
+  if (!gv) return;
+  const G = st.G, T = st.gaugeTarget = gaugeTarget(G, gv);
+  const cy = T.y + 0.74, bot = cy - GH / 2;
+  st.gauge.position.set(GX, cy, GZ);
+  st.gaugeClamp.position.copy(T);
+  st.gaugeRod.set(smooth([[T.x, T.y, RT + 0.03], [T.x, T.y + 0.035, 0.5], [T.x, bot + 0.04, GZ - 0.03]], 28));
+  [st.at.g0, st.at.g1, st.at.g2].forEach((a, i) => a.position.set(GX - GW / 2 + 0.05, cy + GROWS[i], GZ + 0.03));
+  st.at.gnote.position.set(GX, cy + GH / 2 + 0.02, GZ);
+}
+/* where the gauge reads: the start of a tube (embed), or the add-point of one sublayer */
+function gaugeTarget(G, gv) {
+  if (gv.sub === 'embed') return new THREE.Vector3(X(gv.p), G.g(0), 0);
+  const b = G.yb(Math.min(gv.l, G.L - 1));
+  return new THREE.Vector3(X(gv.p), b + (gv.sub === 'mlp' ? FY.mlpAdd : FY.attnAdd), 0);
+}
+
+/* ====================================================================== painting */
+function paint(S, o = {}) {
+  paintCores(S); paintArcs(S, o.arcs !== false); paintSky(S); paintParts(S); paintTools(S); paintGauge(S); paintArrows(S); paintLabels(S);
+  if (S.state.part && S.state.part.id) paintPart(S);
+  S.invalidate();
+}
+function paintCores(S) {
+  const st = S.state, M = st.meshes, cfg = st.model.cfg, L = cfg.n_layers, d = cfg.d_model, A = st.c.A, R = st.cmp ? st.c.R : null;
+  const glowCol = st.cmp === 'steer' ? COL.dir : COL.aux, nS = 3 * L + 2;
+  let i = 0;
+  for (let p = 0; p < NP; p++) for (let s = 0; s < nS; s++) {
+    const [y0, y1] = st.segY[s];
+    let gl = 0;
+    if (R) {
+      const a = segVec(A, s, L), b = segVec(R, s, L), dd = dist(a, b, p * d, d), n = nrm(b, p * d, d);
+      if (dd > 1e-9 * (1 + n)) gl = 0.45 + 0.55 * Math.min(1, dd / (0.3 * n + 1e-6));
+    }
+    const w = 1 + 0.7 * gl;
+    setI(M.cores, i, X(p), y0, 0, w, Math.max(0.001, y1 - y0 - 0.004), w);
+    M.cores.setColorAt(i, COL.tmp.copy(COL.data).lerp(glowCol, gl));
+    i++;
+  }
+  commit(M.cores, i);
+}
+/* arcs: rebuilt only when the patterns (model, prompt, hooks) or the arc mode change */
+const _bz = new THREE.CubicBezierCurve3(new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3());
+function paintArcs(S, allowed = true) {
+  const st = S.state, k = S.knobs, cfg = st.model.cfg, L = cfg.n_layers, H = cfg.n_heads, d = cfg.d_model, n = NP;
+  const sig = `${st.modelVer}|${k.arcs}|${k.swap}|${k.off}|${k.steer}`;
+  if (sig === st.arcSig) return;
+  if (!allowed) return;
+  st.arcSig = sig;
+  const A = st.c.A, R = st.cmp ? st.c.R : null, z = st.iv.zero.attn;
+  for (let l = 0; l < LMAX; l++) {
+    const mesh = st.arcMeshes[l];
+    const parts = [], pts = [];
+    if (l < L) {
+      const pat = A.blocks[l].pattern;
+      for (let h = 0; h < H; h++) for (let a = 1; a < n; a++) {
+        if (k.arcs === 'last' && a !== LAST) continue;
+        for (let b = 0; b < a; b++) {
+          const w = pat[(h * n + a) * n + b];
+          if (w < (k.arcs === 'last' ? 0.04 : 0.15)) continue;
+          const span = a - b, zh = HZ(h) * 1.35, xb = X(b), xa = X(a);
+          _bz.v0.set(xb, FY.read, 0); _bz.v1.set(xb, FY.read + 0.05 + 0.018 * span, zh);
+          _bz.v2.set(xa, FY.attnAdd + 0.05 + 0.012 * span, zh); _bz.v3.set(xa, FY.attnAdd, 0);
+          const r = 0.004 + 0.02 * w;
+          const tg = new THREE.TubeGeometry(_bz, 20, r, 6, false);
+          let col = COL.prob;
+          if (z.has(l)) col = COL.arcOff;
+          else if (R && dist(A.blocks[l].resid_pre, R.blocks[l].resid_pre, b * d, d) > 1e-9) col = COL.aux;
+          const cnt = tg.attributes.position.count, ca = new Float32Array(cnt * 3);
+          for (let q = 0; q < cnt; q++) { ca[3 * q] = col.r; ca[3 * q + 1] = col.g; ca[3 * q + 2] = col.b; }
+          tg.setAttribute('color', new THREE.BufferAttribute(ca, 3));
+          parts.push(tg);
+          pts.push({ pts: _bz.getPoints(14), r });
+        }
+      }
+    }
+    mesh.geometry.dispose();
+    mesh.geometry = parts.length ? THREE.mergeGeometries(parts) : new THREE.BufferGeometry();
+    parts.forEach((g) => g.dispose());
+    mesh.visible = parts.length > 0;
+    st.arcPts[l] = pts;
+  }
+}
+function barH(p) { return SKY.h0 + SKY.h1 * p; }
+function paintSky(S) {
+  const st = S.state, M = st.meshes, A = st.c.A, R = st.cmp ? st.c.R : null;
+  let i = 0;
+  for (let p = 0; p < NP; p++) for (let t = 0; t < V; t++) {       // every position guesses its own next word; the last row is the answer
+    setI(M.bars, i, SKY.x0 + SKY.dx * t, 0.04, skyZ(p), 1, barH(A.probs[p * V + t]), 1);
+    M.bars.setColorAt(i++, p === LAST ? COL.prob : COL.pale);
+  }
+  commit(M.bars, i);
+  if (R) for (let t = 0; t < V; t++) setI(M.ghostBars, t, SKY.x0 + SKY.dx * t, 0.04, skyZ(LAST), 1, barH(R.probs[LAST * V + t]) + 0.004, 1);
+  commit(M.ghostBars, R ? V : 0);
+  const top = argmaxAt(A.probs, LAST);
+  st.at.sky.position.set(SKY.x0 + SKY.dx * top, st.G.ySky + 0.04 + barH(Math.max(A.probs[LAST * V + top], R ? R.probs[LAST * V + top] : 0)) + 0.03, skyZ(LAST));
+}
+function paintParts(S) {             // switched-off heads and MLPs turn grey
+  const st = S.state, M = st.meshes, cfg = st.model.cfg, L = cfg.n_layers, H = cfg.n_heads, z = st.iv.zero;
+  let i = 0;
+  for (let l = 0; l < L; l++) for (let h = 0; h < H; h++) M.heads.setColorAt(i++, z.attn.has(l) ? COL.grey : COL.head);
+  commit(M.heads, i);
+  i = 0;
+  for (let l = 0; l < L; l++) for (let p = 0; p < NP; p++) M.mlps.setColorAt(i++, z.mlp.has(l) ? COL.mlpOff : COL.mlp);
+  commit(M.mlps, i);
+}
+function paintTools(S) {
+  const st = S.state, T = st.tool, k = S.knobs, on = !!k.tools;
+  for (const n of ['probe', 'steer', 'patch', 'sae', 'lora', 'reward', 'evals', 'loop', 'plaque']) T[n].visible = on;
+  setToolPick(S, on);
+  if (!on) return;
+  T.probeNeedle.rotation.z = 0.9 - 1.8 * Math.max(-0.25, Math.min(1.25, st.probe));    // 0 = left (Mary), 1 = right (Anna)
+  T.steerPtr.rotation.z = -(k.steer / 2) * (4 * Math.PI / 3);
+  T.beam.rotation.z = 0.14;                                                             // illustrative tilt
+  for (const hg of T.hangs) hg.rotation.z = -0.14;
+}
+function paintGauge(S) {
+  const st = S.state, gv = st.view && st.view.gauge;
+  if (!gv) { st.gaugeErr = null; return; }
+  const m = st.model, d = m.cfg.d_model, L = m.cfg.n_layers, A = st.c.A, p = gv.p;
+  let rows;
+  if (gv.sub === 'embed') {                                          // W_E[token] + W_pos[position] = the start of the tube
+    const O = m.lay.o, t = st.toks[p];
+    rows = [m.p.subarray(O.WE + t * d, O.WE + t * d + d), m.p.subarray(O.WP + p * d, O.WP + p * d + d), A.embed.subarray(p * d, p * d + d)];
+  } else {
+    const B = A.blocks[Math.min(gv.l, L - 1)];
+    rows = (gv.sub === 'mlp' ? [B.resid_mid, B.mlp_out, B.resid_post] : [B.resid_pre, B.attn_out, B.resid_mid]).map((r) => r.subarray(p * d, p * d + d));
+  }
+  let mx = 1e-9, err = 0;
+  for (const r of rows) for (let i = 0; i < d; i++) mx = Math.max(mx, Math.abs(r[i]));
+  for (let i = 0; i < d; i++) err = Math.max(err, Math.abs(rows[0][i] + rows[1][i] - rows[2][i]));
+  st.gaugeErr = err;
+  const s = GB.h / mx, M = st.meshes.gBars, cols = [COL.data, COL.aux, COL.data];
+  let q = 0;
+  for (let r = 0; r < 3; r++) for (let i = 0; i < d; i++) {
+    const v = rows[r][i] * s, hgt = Math.max(0.002, Math.abs(v));
+    setI(M, q, GB.x0 + GB.dx * i, v >= 0 ? GROWS[r] : GROWS[r] - hgt, 0.03, 1, hgt, 1);
+    M.setColorAt(q++, cols[r]);
+  }
+  commit(M, q);
+}
+function paintArrows(S) {
+  const st = S.state, M = st.meshes, show = !!(S.knobs.tools || (st.view && st.view.arrows));
+  if (!show) { commit(M.shafts, 0); commit(M.tips, 0); st.gnorm = null; return; }
+  const cfg = st.model.cfg, L = cfg.n_layers, G = st.G;
+  if (st.trainer) st.gnorm = partNorms(st.model, st.trainer.G);
+  else {
+    if (st.gradVer !== st.modelVer || !st.gRest) { st.gRest = partNorms(st.model, gradOf(st.model)); st.gradVer = st.modelVer; }
+    st.gnorm = st.gRest;
+  }
+  const n = st.gnorm, g0 = gradScale(S);
+  const len = (v) => 0.06 + 0.46 * Math.sqrt(Math.min(1.5, v / g0));
+  const list = [[ARROW_X.attn, G.yE + 0.1, n.embed], [ARROW_X.attn, G.yT + 0.1, n.unembed]];
+  for (let l = 0; l < L; l++) list.push([ARROW_X.attn, G.yb(l) + 0.2, n.attn[l]], [ARROW_X.mlp, G.yb(l) + 0.44, n.mlp[l]]);
+  if (st.trainer && st.trainer.step === 0) { commit(M.shafts, 0); commit(M.tips, 0); return; }
+  let i = 0;
+  for (const [x, yc, v] of list) {
+    const ln = len(v), top = yc + ln / 2;
+    setI(M.shafts, i, x, top, 0.1, 1, Math.max(0.01, ln - 0.12), 1);
+    setI(M.tips, i, x, top - Math.max(0.01, ln - 0.12), 0.1);
+    i++;
+  }
+  commit(M.shafts, i); commit(M.tips, i);
+}
+
+/* the prompt strip: a kit label whose HTML is set here (one span per token; + the generated word when the tools are on) */
+function paintSentence(S, on, next) {
+  const st = S.state, lab = st.lab.sent, sw = SWAPS[S.knobs.swap];
+  const key = st.toks.join(' ') + '|' + (sw ? sw[0] : -1) + '|' + (next || '');
+  if (lab._key !== key) {
+    lab._key = key;
+    lab.set(key);                                   // new text: the kit re-measures the label
+    lab.el.innerHTML = st.toks.map((t, p) => `<span class="t${sw && sw[0] === p ? ' sw' : ''}">${WORDS[t]}</span>`).join('')
+      + (next ? `<span class="nx">→ ${next}</span>` : '');
+  }
+  lab.show(on);
+}
+/* every pinned label, for the current tier and beat */
+function paintLabels(S) {
+  const st = S.state, Lb = st.lab, k = S.knobs, t = S.tier, v = st.view || { tags: new Set() }, cfg = st.model.cfg, L = cfg.n_layers, d = cfg.d_model;
+  const A = st.c.A, R = st.cmp ? st.c.R : null, tags = v.tags;
+  // the prompt: one chip per tube in close-ups, one strip of chips in far views (the swapped word in teal)
+  const sw = SWAPS[k.swap], chips = v.chips === undefined ? 'sentence' : v.chips;
+  for (let p = 0; p < NP; p++) {
+    Lb.tok[p].set(WORDS[st.toks[p]]);
+    Lb.tok[p].el.classList.toggle('k-swap', !!sw && sw[0] === p);
+    Lb.tok[p].show(chips === 'tubes');
+  }
+  paintSentence(S, chips === 'sentence', k.tools ? WORDS[argmaxAt(A.probs, LAST)] : null);
+  for (let l = 0; l < LMAX; l++) Lb.floor[l].show(tags.has('floor') && l < L);
+  for (const n of ['embed', 'top', 'stream', 'attn', 'mlp']) Lb[n].show(tags.has(n));
+  // the skyline readout
+  const top = argmaxAt(A.probs, LAST), p = A.probs[LAST * V + top];
+  let s = t === 3 ? `argmax **${WORDS[top]}** · p = ${f3(p)}` : `${t === 1 ? 'guess' : 'next word'}: **${WORDS[top]}** ${pc(p)}`;
+  if (R) { const tr = argmaxAt(R.probs, LAST); s += `\n${st.cmp === 'swap' ? 'clean prompt' : 'untouched'}: ${WORDS[tr]} ${pc(R.probs[LAST * V + tr])}`; }
+  Lb.sky.set(s); Lb.sky.show(v.sky !== false);
+  // the change reaching the last tube
+  if (v.note === 'delta' && R) {
+    const dd = dist(A.final, R.final, LAST * d, d);
+    Lb.delta.set(dd === 0 ? { 1: 'last word\'s tube: no change at all', 2: 'change at the last tube: 0, exactly', 3: '‖Δ resid_final[−1]‖ = 0 (exactly)' }[t]
+      : { 1: `last word's tube: changed (${f2(dd)})`, 2: `change at the last tube: ${f2(dd)}`, 3: `‖Δ resid_final[−1]‖ = ${f2(dd)}` }[t]);
+    Lb.delta.show(true);
+  } else Lb.delta.show(false);
+  // notes
+  const N = Lb.note;
+  N.show(false); N.anchor('left'); Lb.cont.show(false); Lb.gnote.show(false); Lb.rows.show(false); Lb.g.forEach((g) => g.show(false));
+  if (v.note === 'rows') {
+    let b = 0; for (let q = 1; q < V; q++) if (A.probs[V + q] > A.probs[V + b]) b = q;
+    st.at.rows.position.set(0.55, st.G.ySky + 0.04 + SKY.h0 + SKY.h1 + 0.2, skyZ(1));
+    const nm = NAMES.filter((q) => q !== st.toks[0]).map((q) => WORDS[q]), pp = nm.map((q) => pc(A.probs[V + WID[q]])).join(' / ');
+    const pv = nm.map((q) => `${q} ${Math.round(100 * A.probs[V + WID[q]])}%`).join(', ');
+    Lb.rows.set({ 1: `pale rows: each earlier word's guess\nafter “met”: ${nm.slice(0, 2).join(', ')} or ${nm[2]}? can't tell`, 2: `pale rows: the other positions' guesses\nafter “met”: ${pv}`, 3: `pale: softmax(logits[0, p]), p < 5\nposn 1: ${pv} (unknowable)` }[t]);
+    Lb.rows.show(true);
+  }
+  {
+    const T = st.trainer, losses = T ? T.losses : v.note === 'train' ? st.lastLosses : null;
+    if (losses && losses.length) {
+      const step = T ? T.step : losses.length, lo = losses[losses.length - 1];
+      Lb.train.set({ 1: `lesson ${step} of ${TRAIN.steps}\nwrongness ${f3(lo)} (was ${f3(losses[0])})`, 2: `step ${step}/${TRAIN.steps} · loss ${f3(lo)}\nstart ${f3(losses[0])} · uniform ln 12 = 2.485`, 3: `step ${step}/${TRAIN.steps}, L = ${f3(lo)}\nL₀ = ${f3(losses[0])}, floor ln 3 / 6 = 0.183` }[t]);
+      Lb.train.show(true);
+    } else Lb.train.show(false);
+  }
+  if (v.note === 'steer') {
+    st.at.note.position.copy(st.tool.steer.position).add(new THREE.Vector3(0.56, -0.02, 0.05));
+    N.set({ 1: `dial at ${k.steer.toFixed(2)}: says ${WORDS[top]}\nprobe reads ${f2(st.probe)}`, 2: `α = ${k.steer.toFixed(2)} → ${WORDS[top]} ${pc(p)}\nprobe (floor above): ${f2(st.probe)}`, 3: `α = ${k.steer.toFixed(2)}: p(${WORDS[top]}) = ${f3(p)}\nprobe (x − x₀)·v̂/‖v‖ = ${f2(st.probe)}` }[t]);
+    N.show(true);
+  }
+  if (v.note === 'contested' && L >= 4) {
+    const pat = A.blocks[3].pattern, w = pat[(0 * NP + LAST) * NP + 0];
+    Lb.cont.set({ 1: `floor 4, head 1: ${pc(w)} on "${WORDS[st.toks[0]]}"\nswitched off → still ${WORDS[top]} ${pc(p)}`, 2: `head 3.0: ${pc(w)} of its attention on ${WORDS[st.toks[0]]}\nblock 3 attention zeroed → ${WORDS[top]} ${pc(p)}`, 3: `pattern[3.0][−1, 0] = ${f2(w)}\nattn_out(3) := 0 → p(${WORDS[top]}) = ${f3(p)}` }[t]);
+    Lb.cont.show(true);
+  }
+  if (v.note === 'mlpoff') {
+    const l = Math.min(1, L - 1);
+    st.at.note.position.set(X(0) - MLP_R - 0.12, st.G.yb(l) + FY.mlpC, 0.06);     // left of the tower: the gauge fills the right
+    N.anchor('right');
+    const B = A.blocks[l]; let mx = 0; for (let i = 0; i < NP * d; i++) mx = Math.max(mx, Math.abs(B.resid_post[i] - B.resid_mid[i]));
+    N.set({ 1: `floor ${l + 1}'s calculators off:\nthe tubes carry on → ${WORDS[top]} ${pc(p)}`, 2: `block ${l} MLP zeroed: the stream\ncarries on → ${WORDS[top]} ${pc(p)}`, 3: `mlp_out(${l}) := 0 ⇒ resid_post = resid_mid\n(max|Δ| = ${mx === 0 ? '0' : mx.toExponential(1)}), p(${WORDS[top]}) = ${f3(p)}` }[t]);
+    N.show(true);
+  }
+  // the gauge rows
+  if (v.gauge) {
+    const sub = v.gauge.sub, gp = v.gauge.p, w = WORDS[st.toks[gp]], e = st.gaugeErr, es = e === 0 ? '0' : e.toExponential(1), gl = Math.min(v.gauge.l, L - 1);
+    const names = sub === 'embed' ? { 1: ['word row', '+ place row', '= start'], 2: ['W_E[t]', '+ W_pos[p]', '= embed'], 3: ['W_E[tok]', '+ W_pos[posn]', '= resid_pre'] }
+      : sub === 'mlp' ? { 1: ['before', '+ calculator', '= after'], 2: ['resid_mid', '+ mlp_out', '= resid_post'], 3: ['resid_mid', '+ mlp_out', '= resid_post'] }
+      : { 1: ['before', '+ attention', '= after'], 2: ['resid_pre', '+ attn_out', '= resid_mid'], 3: ['resid_pre', '+ attn_out', '= resid_mid'] };
+    Lb.g.forEach((g, i) => { g.set(names[t][i]); g.show(true); });
+    Lb.gnote.set(sub === 'embed'
+      ? { 1: `“${w}” → ${d} numbers (GPT-2 small: 768)\nits word's row + its place's row`, 2: `“${w}”, position ${gp}: W_E row ${st.toks[gp]} + W_pos row ${gp}\nd_model = ${d} here, 768 in GPT-2 small`, 3: `embed[${gp}] = W_E[${st.toks[gp]}] + W_pos[${gp}], max|Δ| = ${es}\nW_E ${V} × ${d}, W_pos ${NP} × ${d} (GPT-2: 50,257 × 768)` }[t]
+      : { 1: `the ${d} numbers of “${w}”'s tube · row 1 + row 2 = row 3`, 2: `“${w}”'s stream in block ${gl} · max |1 + 2 − 3| = ${es}`, 3: `posn ${gp}, block ${gl} · max|x + f(x) − x′| = ${es}` }[t]);
+    Lb.gnote.show(true);
+  }
+  // instruments
+  const on = !!k.tools && v.toolTags !== false;
+  for (const n in Lb.tools) Lb.tools[n].show(on);
+  if (!k.tools) Lb.tools.grad.show(false);
+  if (v.arrows && !k.tools) Lb.tools.grad.show(tags.has('grad'));
+  Lb.tools.evals.set({ 1: `test: ${st.evals.ok}/12 right`, 2: `evals ${st.evals.ok}/12 · p̄ ${f2(st.evals.mp)}`, 3: `acc ${st.evals.ok}/12 · mean p ${f3(st.evals.mp)}` }[t]);
+  Lb.tools.evals.show(!!k.tools && v.toolTags !== false);
+}
+
+/* ====================================================================== beats */
+function scene(S, o = {}) {
+  const st = S.state;
+  if (!o.train) cancelReplay(S);
+  st.view = { note: o.note || null, gauge: o.gauge || null, tags: new Set(o.tags || []), toolTags: o.toolTags, arrows: !!o.arrows, sky: o.sky, chips: o.chips };
+  placeGauge(S);
+  const f = st.fig;
+  if (o.fig) {
+    f.group.visible = true;
+    f.place(o.figAt || FIG, o.face || [0, 2.2, 0]);
+    f.pose('stand', { ms: 0 });
+    const at = typeof o.at === 'function' ? o.at(S) : o.at;
+    const go = () => f.pose(o.fig, { at });
+    if (S.shot) go(); else setTimeout(go, 480);
+  } else f.group.visible = false;
+  if (o.train) startTraining(S, true);
+  compute(S); paint(S);
+}
+const worldOf = (obj) => obj.getWorldPosition(new THREE.Vector3()).toArray();
+const DEF = { layers: 4, heads: 3, swap: 'none', off: 'none', steer: 0, explode: 0.3 };
+function wait(S, ms) { return S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)); }
+
+/* ====================================================================== run() */
+run({
+  id: 'north-machine', num: '00', week: 0, kind: 'north',
+  title: 'The Machine',
+  subtitle: 'The whole course is one object: a transformer, plus the tools that train it, open it and steer it.',
+  back2d: '#plan',
+  film: 'north-star',
+  plinth: { r: 1.98, h: 0.14 },
+
+  knobs: [
+    { id: 'explode', type: 'range', label: { 1: 'Pull the floors apart', 2: 'Explode', 3: 'explode (floor gap)' }, min: 0, max: 1, step: 0.01, value: 0.3, fmt: (v) => v.toFixed(2) },
+    { id: 'layers', type: 'range', label: { 1: 'Floors (trains a new toy)', 2: 'Layers (retrains the toy)', 3: 'n_layers (retrains)' }, min: 1, max: 6, step: 1, value: 4, fmt: (v) => String(v) },
+    { id: 'heads', type: 'range', label: { 1: 'Heads per floor (trains a new toy)', 2: 'Heads per layer (retrains)', 3: 'n_heads (d_head = 12 / n_heads)' }, min: 1, max: 4, step: 1, value: 3, fmt: (v) => String(v) },
+    { id: 'swap', type: 'select', wide: true, label: { 1: 'Change one word', 2: 'Swap one token', 3: 'Swap tokens[p]' }, value: 'none',
+      options: [['none', { 1: 'None: “Mary met John. John thanked”', 2: 'None (clean prompt)', 3: 'none (clean)' }],
+        ['io', { 1: 'First word: Mary → Anna', 2: 'Word 1: Mary → Anna', 3: 'tokens[0]: Mary → Anna' }],
+        ['s1', { 1: 'Third word: John → Tom', 2: 'Word 3: John → Tom', 3: 'tokens[2]: John → Tom' }],
+        ['end', { 1: 'Last word: thanked → met', 2: 'Word 6: thanked → met', 3: 'tokens[5]: thanked → met' }]] },
+    { id: 'off', type: 'select', wide: true, label: { 1: 'Switch a part off', 2: 'Zero a part\'s output', 3: 'Zero-ablate' }, value: 'none',
+      options: [['none', { 1: 'Nothing', 2: 'Nothing', 3: 'none' }],
+        ['attn', { 1: 'All attention', 2: 'All attention', 3: 'attn_out := 0, every block' }],
+        ['mlp', { 1: 'All per-word calculators', 2: 'All MLPs', 3: 'mlp_out := 0, every block' }],
+        ...[0, 1, 2, 3, 4, 5].map((l) => [`attn${l}`, { 1: `Attention on floor ${l + 1}`, 2: `Attention in block ${l}`, 3: `blocks.${l} attn_out := 0` }]),
+        ...[0, 1, 2, 3, 4, 5].map((l) => [`mlp${l}`, { 1: `Calculators on floor ${l + 1}`, 2: `MLP in block ${l}`, 3: `blocks.${l} mlp_out := 0` }])] },
+    { id: 'steer', type: 'range', label: { 1: 'Steering dial (toward Anna)', 2: 'Steer α (adds α × Anna − Mary)', 3: 'α: resid_pre[L/2][−1] += α·v' }, min: 0, max: 2, step: 0.05, value: 0, fmt: (v) => v.toFixed(2) },
+    { id: 'arcs', type: 'select', label: { 1: 'Arcs shown', 2: 'Attention arcs', 3: 'pattern arcs' }, value: 'all',
+      options: [['all', { 1: 'Between all words', 2: 'All (weight ≥ 0.15)', 3: 'all posn_Q, w ≥ 0.15' }], ['last', { 1: 'Into the last word', 2: 'Into the last word', 3: 'posn_Q = −1, w ≥ 0.04' }]] },
+    { id: 'tools', type: 'toggle', label: { 1: 'Show the tools', 2: 'Instruments', 3: 'Instruments' }, value: true },
+    { id: 'train', type: 'button', wide: true, label: { 1: 'Watch it learn from scratch', 2: 'Retrain from scratch (300 steps)', 3: 'Retrain: seed 7, AdamW, 300 steps' },
+      onClick: (S) => { S.state.view.note = 'train'; S.state.view.arrows = true; startTraining(S, true); compute(S); paint(S); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.models = new Map(); st.gmax = new Map();
+    const cfg = config(4, 3);
+    st.models.set(keyOf(4, 3), decodeWeights(WEIGHTS_L4H3, cfg));
+    setModel(S, st.models.get(keyOf(4, 3)));
+    st.view = { tags: new Set() };
+    buildScene(S);
+    buildLabels(S);
+    wirePicking(S);
+    buildPartCard(S);
+  },
+
+  rebuild(S, id) {
+    const st = S.state, ch = new Set(S.changed);
+    const cfgChange = S.first || ch.has('layers') || ch.has('heads');
+    if (cfgChange) ensureModel(S);
+    if (id === 'off') {
+      const m = /^(attn|mlp)(\d)$/.exec(S.knobs.off);
+      if (m && +m[2] >= st.model.cfg.n_layers) K.toast(`This tower has only ${st.model.cfg.n_layers} floors`);
+    }
+    compute(S);
+    if (cfgChange || ch.has('explode') || !st.G || st.G.L !== st.model.cfg.n_layers) place(S);
+    paint(S);
+  },
+
+  frame(S) {
+    const st = S.state, T = st.trainer;
+    if (!T) return false;
+    const t0 = performance.now();
+    while (T.step < TRAIN.steps && performance.now() - t0 < 9) T.stepOnce();
+    st.modelVer++;
+    if (T.step >= TRAIN.steps) { finishTraining(S); return false; }
+    compute(S);
+    const arcs = T.step - T.arcStep >= 10;
+    if (arcs) T.arcStep = T.step;
+    paint(S, { arcs });
+    return true;
+  },
+
+  onTier(S) { paintLabels(S); paintPart(S); },
+
+  solids(S) {
+    const st = S.state, G = st.G, L = G.L, H = st.model.cfg.n_heads, A = st.c.A;
+    const { cuboid, cylinder, cylinderElliptic } = J.primitives, { translate, scale } = J.transforms;
+    const jc = (x, y, z) => [x, -z, y];
+    const box = (x, y, z, sx, sy, sz) => cuboid({ size: [sx, sz, sy], center: jc(x, y, z) });
+    const out = [];
+    for (let p = 0; p < NP; p++) {
+      out.push(box(X(p), TILE_H / 2, 0, 0.3, TILE_H, 0.3));
+      out.push(cylinder({ radius: RT + 0.014, height: G.tubeTop - TILE_H, center: jc(X(p), (TILE_H + G.tubeTop) / 2, 0), segments: 24 }));
+      out.push(cylinderElliptic({ height: CAP, startRadius: [RT + 0.012, RT + 0.012], endRadius: [0.006, 0.006], center: jc(X(p), G.tubeTop + CAP / 2, 0), segments: 24 }));
+    }
+    const plates = [[G.yE, 0.03], ...Array.from({ length: L }, (_, l) => [G.yb(l), SLAB.t]), [G.yT, 0.05]];
+    for (const [y, t] of plates) out.push(translate([0, 0, y], scale([1, 1, t], st.slabJ)));
+    for (let l = 0; l < L; l++) {
+      for (let p = 0; p < NP; p++) out.push(cylinder({ radius: MLP_R, height: FY.mlpH, center: jc(X(p), G.yb(l) + FY.mlpC, 0), segments: 32 }));
+      for (let h = 0; h < H; h++) out.push(box(SLAB.x0 + 0.14, G.yb(l) + SLAB.t + 0.0375, HZ(h), 0.13, 0.075, 0.06));
+      for (const a of st.arcPts[l] || []) { const s = K.tubeSolid(a.pts.map((q) => jc(q.x, q.y + G.yb(l), q.z)), Math.max(0.01, a.r), 6); if (s) out.push(s); }
+    }
+    const zB = skyZ(0) - SKY.wz / 2 - 0.05, zF = skyZ(LAST) + SKY.wz / 2 + 0.05;
+    out.push(box(0, G.ySky + 0.02, (zB + zF) / 2, 2.6, 0.04, zF - zB));
+    for (const x of [-1.2, 1.2]) out.push(cylinder({ radius: 0.025, height: G.ySky - G.yT, center: jc(x, (G.ySky + G.yT) / 2, -0.2), segments: 12 }));
+    for (let p = 0; p < NP; p++) for (let t = 0; t < V; t++) { const h = barH(A.probs[p * V + t]); out.push(box(SKY.x0 + SKY.dx * t, G.ySky + 0.04 + h / 2, skyZ(p), SKY.w, h, SKY.wz)); }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**This is the whole course.** A language model as one machine: words go in at the bottom, the next word comes out on top. Each week is a part of it or a tool clipped on (some illustrative). Tap any part.',
+        2: '**One object = the whole course.** A real toy transformer, trained in this page: 6 words in at the bottom, the next word\'s probabilities out of the top. Weeks 1–6 build and run it, 7–8 open it, 9–10 train it on rewards, 11–14 test, steer and report. Lens, sheet and scale are illustrative. Tap a part.',
+        3: 'ARENA\'s `DemoTransformer`, toy-sized (d_model 12, 4 layers × 3 heads, d_vocab 12, 7,932 weights) and trained here on 12 toy sentences; GPT-2 small: 768 wide, 12 × 12, ~124M. Clipped on: ∂L/∂θ (W3–4), patching, SAE* (W8), reward* (W10), evals (W11), steering, LoRA* (W12). *illustrative',
+      },
+      cam: CAM.hero,
+      set: { ...DEF, tools: true, arcs: 'all' },
+      enter(S) { scene(S, { fig: 'point', figAt: FIG, face: [0, 2, 0], at: (S2) => [0, S2.state.G.ySky + 0.5, 0] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Words become lists of numbers.** Each word looks up its own row of 12 numbers and adds a row for its place in the sentence: on the gauge, row 1 + row 2 = row 3. GPT-2 small uses 768.',
+        2: '**Embedding is a lookup table.** Token t reads row t of `W_E` (one row per vocabulary word) and adds row p of `W_pos` for its position; the gauge shows both rows and their sum for “thanked”. Toy: 12 numbers per word; GPT-2 small: 768 per token over 50,257 rows.',
+        3: '`residual = embed(tokens) + pos_embed(tokens)`: `W_E[tokens]` (d_vocab × d_model) plus `W_pos[:seq_len]` (n_ctx × d_model) → (batch, posn, d_model). Toy 12 × 12 and 6 × 12; GPT-2 small 50,257 × 768 and 1,024 × 768 (W_E alone is 38.6M of its 124M weights).',
+      },
+      cam: CAM.embed,
+      set: { ...DEF, tools: false, arcs: 'all' },
+      enter(S) { scene(S, { gauge: { p: LAST, l: 0, sub: 'embed' }, sky: false, chips: 'tubes' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Each tube is a running total.** Every part reads its tube and adds its answer back in; nothing is rubbed out. On the gauge: before + what attention adds = after, 12 numbers, live.',
+        2: '**The tube is the residual stream**, one (position × 12) table. Each block reads it through a LayerNorm and ADDS its output: x ← x + attn(LN(x)), then x ← x + mlp(LN(x)). The gauge shows the last word\'s 12 numbers before block 0\'s attention, its addition, and the sum.',
+        3: 'ARENA\'s `TransformerBlock`: `resid_mid = self.attn(self.ln1(resid_pre)) + resid_pre`; `resid_post = self.mlp(self.ln2(resid_mid)) + resid_mid`. The stream is the sum of every earlier output, so any later part can read what any earlier part wrote (Elhage et al. 2021).',
+      },
+      cam: CAM.gauge,
+      set: { ...DEF, tools: false, arcs: 'all' },
+      enter(S) { scene(S, { gauge: { p: LAST, l: 0, sub: 'attn' }, sky: false, chips: 'tubes' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Only attention passes notes between words.** Change Mary to Anna in the first tile. Teal marks everything that changed: it leaves the first tube only along attention arcs, and the answer flips to Anna.',
+        2: '**Attention moves information between positions.** Word 1 becomes Anna; teal marks every stream segment and arc that now differs from the clean run. The change crosses tubes only along arcs (thickness = attention weight) and the top flips to Anna.',
+        3: 'tokens[0] := Anna; teal = segments where resid differs from the clean cache, arcs from changed sources. Arcs = `pattern[h, q, k]` ≥ 0.15, the only term mixing posns: `einsum(v, pattern)`. Tubes left of a swap never change (causal mask). Karpathy: a block is communicate, then compute.',
+      },
+      cam: CAM.swap,
+      set: { ...DEF, tools: false, swap: 'io', arcs: 'all' },
+      enter(S) { scene(S, { note: 'delta' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Switch attention off and the change is trapped.** The calculators still run, but each only sees its own tube. The last tube never hears the name, so its guess is the same for Mary or Anna.',
+        2: '**MLPs compute, one position at a time.** With attention zeroed, the teal stays in tube 1 and the last tube matches the clean run exactly (difference 0), so its guess can\'t depend on the name. Zero the MLPs instead and the change still crosses. Karpathy: communicate, then compute.',
+        3: 'attn_out := 0 in every block: resid[:, p] then depends on tokens[p] only, since `mlp` and LayerNorm act per posn (ARENA: attention is "the only bit … that moves information between positions"). Measured ‖Δ‖ = 0 exactly. Karpathy: communicate, then compute.',
+      },
+      cam: CAM.swap,
+      set: { ...DEF, tools: false, swap: 'io', off: 'attn', arcs: 'last' },
+      enter(S) { scene(S, { note: 'delta', tags: ['mlp'] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The top turns the last tube into a guess.** Every word gets a score; softmax turns them into chances (amber bars, adding up to 1). The pale rows behind: each earlier word guessing its own next word.',
+        2: '**Unembed, then softmax.** The last tube passes `ln_final`; `W_U` gives one score (logit) per vocabulary word, 12 here and 50,257 in GPT-2 small; softmax makes them probabilities (amber). Pale rows: every position guesses its own next word.',
+        3: '`logits = self.unembed(self.ln_final(residual))` → (batch, posn, d_vocab), `W_U` (d_model, d_vocab), `b_U` frozen. Amber = softmax(logits[0, −1]); pale rows = posns 0–4, each trained on its next token (`get_log_probs`). Posn 1 can only guess the second name: ⅓ each.',
+      },
+      cam: CAM.top,
+      set: { ...DEF, tools: false, arcs: 'all' },
+      enter(S) { scene(S, { tags: ['top'], note: 'rows' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Training: blame flows down, every weight gets nudged.** The toy starts from random numbers and learns live. Red arrows show how hard each part is pushed; they shrink as its guesses sharpen.',
+        2: '**Training replays live.** Loss = how surprised the model is by each next word in 12 toy sentences. Backprop sends the gradient down through every part (red arrows), AdamW nudges all 7,932 weights, 300 steps. GPT-2 small: the same loop over ~124M weights and billions of tokens.',
+        3: 'Full-batch AdamW (lr 0.01, wd 0.01, β (0.9, 0.999)), seed 7, loss = mean −log_probs, b_U frozen. L starts at 2.83 (uniform: ln 12 = 2.48) and floors at ln 3 / 6 = 0.183: one of six targets, the second name, is unknowable. Arrow ∝ √(‖∂L/∂θ‖ / max at init).',
+      },
+      cam: CAM.train,
+      set: { ...DEF, tools: false, arcs: 'all' },
+      enter(S) { scene(S, { note: 'train', arrows: true, tags: ['grad'], train: true }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The course\'s tools, clipped on.** Probe: read one direction. Patch cable: swap a piece between two runs. Lens: split a tube into features (illustrative). Dial: push a direction in; at 1 it says Anna.',
+        2: '**Open it, then steer it.** The violet dial adds the direction "Anna run minus Mary run" to the last tube just before block 2; the probe above it reads that direction with a dot product. Dial at 1 → Anna. Live: dial, probe, evals, arrows. Illustrative: lens, LoRA sheet, reward scale.',
+        3: 'Steering: `resid_pre[2][0, −1] += α·v`, v = Anna run − Mary run there (ActAdd-style); at α = 1 it equals patching that activation. Probe: (x − x₀)·v′/‖v′‖² one floor up. Patching and SAEs (W8), LoRA (W12), reward models (W10), evals (W11): each reads or writes one place in this machine.',
+      },
+      cam: CAM.tools,
+      set: { ...DEF, tools: true, steer: 1, arcs: 'all' },
+      enter(S) { scene(S, { note: 'steer', toolTags: true, fig: 'point', figAt: [1.9, 0, -0.05], face: [0, 1.5, 0], at: (S2) => worldOf(S2.state.tool.steer) }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Where the picture stops.** Real models have 12 to 100+ floors and thousands of numbers per word, and parts rarely do one tidy job each. How much of a big model we can explain is an open question.',
+        2: 'GPT-2 small: 12 floors × 12 heads, 768 numbers per word, ~124M weights; frontier models are far bigger, and parts share many jobs at once (superposition). Even here, attention ≠ importance: this head looks hard at Mary, yet zeroing its whole floor keeps Mary at the top.',
+        3: 'Current method: circuits for small behaviours (IOI, induction) via patching and attribution. Emerging: SAEs, transcoders and attribution graphs at scale. Open: how much is explainable. Live: `pattern[3.0][−1, 0]` is high, yet attn_out(3) := 0 keeps p(Mary) near 1.',
+      },
+      cam: CAM.contested,
+      set: { ...DEF, tools: false, off: 'attn3', arcs: 'last' },
+      enter(S) { scene(S, { note: 'contested', fig: 'shrug', figAt: [-1.45, 0, 0.9], face: [0, 1, 3] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** A shared bus in a computer: every part reads one line and writes back to it. A whiteboard in a meeting: each specialist adds a note, nobody erases. ResNets add back too.',
+        2: 'The residual stream is a shared bus (every component reads and writes one channel) and a whiteboard (specialists add notes, nobody erases). ResNets (week 2) invented the add-back; graph neural networks pass messages along edges the way attention passes them along arcs.',
+        3: 'Residual connections: ResNets (He et al. 2015) and nearly every deep net since. Message passing: graph neural networks generalise attention to any graph. Blackboard architectures in classic AI: independent experts reading and writing one shared store.',
+      },
+      cam: CAM.where,
+      set: { ...DEF, tools: true, arcs: 'all', explode: 0.6 },
+      enter(S) { scene(S, { toolTags: false }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'Which part carries “Mary” from the first word up to the last word?', 2: 'Which component moves the name from position 0 into the last position?', 3: 'Which component can write information from posn 0 into resid[:, −1]?' },
+      options: [{ t: 'Attention', ok: true }, { t: 'The MLPs' }, { t: 'LayerNorm' }, { t: 'The embedding' }],
+      why: { 1: 'Only attention looks across words. Switch it off and the change of name never reaches the last tube: its guess is identical for Mary and Anna.',
+        2: 'Attention is the only term that mixes positions. With every attn_out zeroed, the last tube is bit-for-bit the same for Mary and Anna (difference 0). MLPs and LayerNorm work on one position at a time.',
+        3: 'With attn_out := 0 everywhere, resid[:, −1] is a function of tokens[−1] alone: ‖Δ‖ = 0 exactly under the swap. MLP, LN and the embedding are all position-wise.' },
+      show(S) {
+        S.setKnobs({ ...DEF, tools: false, swap: 'io', off: 'attn', arcs: 'last' });
+        scene(S, { note: 'delta', tags: ['mlp'] }); S.fly(CAM.swap);
+        return wait(S, 1200);
+      } },
+    { q: { 1: 'Switch off the calculators (MLP) on floor 2. What happens to the tubes above?', 2: 'Zero block 1\'s MLP output. What happens to the stream above it?', 3: 'mlp_out(1) := 0. What is resid_post(1)?' },
+      options: [{ t: 'They carry on, missing only that floor\'s addition', ok: true }, { t: 'They become all zeros' }, { t: 'Nothing reaches the top any more' }, { t: 'Nothing changes at all' }],
+      why: { 1: 'Each floor only adds to the tube. Take one addition away and the total just carries on without it. Here the machine still says Mary.',
+        2: 'resid_post = mlp_out + resid_mid, so with mlp_out = 0 it equals resid_mid exactly (the note shows the max difference: 0). Later blocks still run on it; this toy still answers Mary.',
+        3: 'resid_post = resid_mid (max|Δ| = 0). The skip connection keeps the stream alive through any zeroed sublayer, which is also why zero-ablating one layer is a cheap, meaningful experiment.' },
+      show(S) {
+        S.setKnobs({ ...DEF, tools: false, off: 'mlp1', arcs: 'all' });
+        scene(S, { note: 'mlpoff', gauge: { p: LAST, l: 1, sub: 'mlp' }, sky: true, chips: 'tubes' }); S.fly(gaugeCam(S));
+        return wait(S, 1200);
+      } },
+    { q: { 1: 'Where does the machine decide the next word?', 2: 'Where is the next-token prediction read out?', 3: 'Which activation do the next-token logits come from?' },
+      options: [{ t: 'At the top of the last word\'s tube', ok: true }, { t: 'In the first tile' }, { t: 'In the middle floor' }, { t: 'Spread evenly over all tubes' }],
+      why: { 1: 'The top reads the last tube only. Everything the machine knows about the sentence had to be carried into that tube first, by attention.',
+        2: 'logits for the next word = W_U applied to ln_final of the last position\'s stream. Other positions predict their own next words (used in training).',
+        3: 'logits[0, −1] = LN_final(resid_final[−1])·W_U + b_U. Attention must first move the relevant information into posn −1.' },
+      show(S) {
+        S.setKnobs({ ...DEF, tools: false, arcs: 'last' });
+        scene(S, { tags: ['top'] }); S.fly(CAM.top);
+        return wait(S, 1000);
+      } },
+    { q: { 1: 'How many numbers carry each word through GPT-2 small?', 2: 'GPT-2 small\'s residual stream: how many numbers per token?', 3: 'd_model for GPT-2 small?' },
+      options: [{ t: '768', ok: true }, { t: '12' }, { t: '50,257' }, { t: 'About 124 million' }],
+      why: { 1: '768. This toy uses 12 so you can see them all. 50,257 is how many different tokens GPT-2 knows; 124 million is how many weights it has.',
+        2: 'd_model = 768 (ARENA\'s Config). The toy has 12. 50,257 is d_vocab, and ~124M the parameter count (tied embeddings).',
+        3: 'Config: d_model 768, n_layers 12, n_heads 12, d_head 64, d_mlp 3,072, d_vocab 50,257, n_ctx 1,024. Parameters: 124,439,808 with W_U tied to W_E.' },
+      show(S) {
+        S.setKnobs({ ...DEF, tools: false });
+        scene(S, { gauge: { p: LAST, l: 0, sub: 'embed' }, sky: false, chips: 'tubes' }); S.fly(gaugeCam(S));
+        return wait(S, 900);
+      } },
+    { q: { 1: 'Which week\'s tool changes behaviour by adding a direction to the stream?', 2: 'Which tool edits behaviour by adding a vector to the residual stream?', 3: 'resid += α·v at inference time is…' },
+      options: [{ t: 'Steering (week 12)', ok: true }, { t: 'Patching (week 8)' }, { t: 'Optimisers (week 3)' }, { t: 'Sampling (week 6)' }],
+      why: { 1: 'Steering. The dial adds the "Anna minus Mary" direction to the last tube; at 1 the machine answers Anna.',
+        2: 'Activation steering (week 12). Here v = Anna run − Mary run at floor 2; α = 1 flips the answer to Anna. Patching copies a whole activation instead; at α = 1 the two coincide.',
+        3: 'Activation steering (ActAdd, persona vectors). With v = resid(Anna) − resid(Mary) at resid_pre[2][−1], α = 1 is exactly a patch; α = 0.5 already gives Anna ~42%.' },
+      show(S) {
+        S.setKnobs({ ...DEF, tools: true, steer: 1, arcs: 'all' });
+        scene(S, { note: 'steer', toolTags: true }); S.fly(CAM.tools);
+        return wait(S, 1200);
+      } },
+    { q: { 1: 'Change only the last word (“thanked” → “met”). Which tubes change?', 2: 'Swap only the final token. Which positions\' streams change?', 3: 'tokens[5] := met. Which resid[:, p] change?' },
+      options: [{ t: 'Only the last one', ok: true }, { t: 'All six' }, { t: 'Only the first one' }, { t: 'None of them' }],
+      why: { 1: 'Words can only look back, never ahead. The earlier tubes can\'t see the last word, so only its own tube changes.',
+        2: 'The causal mask: position p only attends to positions ≤ p, so tubes 0–4 are bit-for-bit unchanged; only the last one glows.',
+        3: 'Causal masking makes resid[:, p] a function of tokens[:p+1]. Changing tokens[5] leaves posns 0–4 exactly equal (‖Δ‖ = 0).' },
+      show(S) {
+        S.setKnobs({ ...DEF, tools: false, swap: 'end', arcs: 'last' });
+        scene(S, { note: 'delta' }); S.fly(CAM.swap);
+        return wait(S, 1200);
+      } },
+  ],
+
+  where: { 1: 'A shared bus in a computer, a whiteboard that specialists add notes to, and the skip connections of every deep network since ResNets.',
+    2: 'The residual stream is a shared bus and a whiteboard; the add-back comes from ResNets (week 2); attention\'s arcs are message passing, as in graph neural networks.',
+    3: 'Residual connections (He et al. 2015), message passing in graph neural networks, and blackboard architectures in classic AI: many experts, one shared store.' },
+  links: [
+    { label: 'Film · the north star', href: '../../intuition/films/north-star.html' },
+    { label: 'The 14-week plan', href: '../../index.html#plan' },
+    { label: 'Demo · transformer block', href: '../../index.html#demo/transformer-block' },
+    { label: 'Demo · residual stream bus', href: '../../index.html#demo/residual-stream-bus' },
+    { label: 'Case · transformer architecture', href: '../../index.html#cases/transformer-architecture' },
+    { label: 'Case · residual stream', href: '../../index.html#cases/residual-stream' },
+    { label: 'Map · transformer block', href: '../../index.html#map/node=transformer-block' },
+    { label: 'Map · residual stream', href: '../../index.html#map/node=residual-stream' },
+    { label: 'Object · The searchlight (attention)', href: 'w05-searchlight.html' },
+    { label: 'Object · The twin towers (patching)', href: 'w08-twins.html' },
+    { label: 'Object · The dial (steering)', href: 'd12-dial.html' },
+    { label: 'Object · The blame web (backprop)', href: 'w04-blame.html' },
+  ],
+  remix: 'Build a single-file three.js scene of a real toy transformer as an exploded tower on a round plaster plinth with a brass rim. Six blue token tiles ("Mary met John. John thanked") each start a vertical glass tube (the residual stream at that position) with a thin blue core. Stack 4 plaster floors (transformer blocks) with holes for the tubes: on each floor, amber attention arcs (cubic Bezier strings whose thickness is the attention weight) run backwards from earlier tubes to later ones, one depth per head, and one MLP collar rings every tube; brass rings mark where each sublayer adds back. On top, a row of amber bars (one per vocabulary word) shows the last position\'s softmax probabilities, with a pale row behind for every earlier position. Implement ARENA\'s DemoTransformer at d_model 12 (LayerNorm, causal attention, gelu_new MLP, unembed) with hand-written backprop and AdamW, train it on 12 sentences "A met B. B thanked" -> A, and add knobs to swap a token, zero any attention or MLP output, and add a steering vector; colour stream segments teal wherever they differ from the clean run, so you can see that only attention moves information between tubes.',
+  credit: 'Model: ARENA [1.1] Transformer from scratch (Config, Embed, PosEmbed, LayerNorm, Attention, MLP, TransformerBlock, Unembed), toy-sized and trained in the page with ARENA [0.3]\'s AdamW; GPT-2 small\'s sizes from ARENA\'s Config. Framings: Andrej Karpathy ("communicate, then compute"), Anthropic\'s "A Mathematical Framework for Transformer Circuits" (Elhage et al. 2021: the residual stream), ActAdd (Turner et al. 2023) for steering by adding activations. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>
