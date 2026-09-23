@@ -1,0 +1,1083 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The twin towers · Object Lessons</title>
+<meta name="description" content="Run a tiny hand-built IOI model twice, clean and corrupted, copy one piece across and watch the answer swing: activation patching, computed live.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+/* .k-tag (the beat pill) sets min-width:52px, which leaks into K.label({cls:'tag'}) labels */
+.k-label.k-tag{min-width:0}
+/* role chips on the bar field: tags with a wash so they stay readable over the bars */
+.k-label.k-tag.k-chip{background:var(--wash); border:1px solid var(--rule); border-radius:6px; padding:1px 5px; color:var(--ink)}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   15 · w08-twins: "The twin towers" (W8, ARENA [1.4.1] Indirect Object Identification)
+   Every window, bar and needle is computed below by real forward passes of a
+   tiny hand-built 4-layer x 3-head attention-only transformer (explicit weight
+   matrices, softmax attention, causal mask, unembedding) that solves IOI with
+   the circuit Wang et al. 2022 found in GPT-2 small: duplicate-token (0.1) ->
+   S-inhibition (1.1) -> name mover (2.0), plus a negative name mover (2.2), a
+   backup name mover (3.0) and bystander heads. Hand-built toy, not GPT-2.
+   The patching functions and metrics carry ARENA's names and do what ARENA's
+   solutions do. The MATH block is checked in node against an independent
+   feature-level computation (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* The prompt, as ARENA [1.4.1] builds it: BOS + "When Mary and John went to the store, John gave a
+   drink to" (15 tokens). The corrupted prompt flips only S2 (the second John) to Mary, exactly
+   ARENA's corruption, so the right answer flips from Mary to John. */
+const WORDS = ['BOS', 'When', 'Mary', 'and', 'John', 'went', 'to', 'the', 'store', ',', 'gave', 'a', 'drink'];
+const NV = WORDS.length, BOS = 0, MARY = 2, JOHN = 4;
+const clean_tokens = [BOS, 1, MARY, 3, JOHN, 5, 6, 7, 8, 9, JOHN, 10, 11, 12, 6];
+const corrupted_tokens = clean_tokens.map((t, i) => (i === 10 ? MARY : t));
+const answer_tokens = [MARY, JOHN];                 // [correct, incorrect] for the clean prompt
+const NP = clean_tokens.length, N_LAYERS = 4, N_HEADS = 3;
+const POSN = { IO: 2, S1: 4, S2: 10, END: 14 };
+/* residual stream d_model = 50 in named blocks. POS is added to the query/key inputs only
+   ("shortformer" positions, as in ARENA's attn-only models), never to the stream. */
+const O = { TOK: 0, NAME: 13, ONE: 15, DUP: 16, INH: 18, OUT: 20, SCR: 22, POS: 35 }, D = 50, DH = 16;
+const HP = { bd: 10, sd: 6, gs: 10, ss: 4, alpha: 6, delta: 8, sn: 3, kappa: 4, kneg: 1, sb: 0, rho: 3, kb: 3, beta: 5, sbos: 6 };
+const ROLES = [['prev', 'dup', 'cur'], ['bos', 'sinh', 'prev'], ['nm', 'bos', 'neg'], ['backup', 'cur', 'bos']];
+
+const zeros = (r, c) => Array.from({ length: r }, () => new Float64Array(c));
+/* The weights, set by hand. attn_scale = sqrt(d_head); a weight r(x) on both sides gives score x. */
+function buildModel(p = HP) {
+  const sc = Math.sqrt(DH), r = (x) => Math.sqrt(x * sc);
+  const W_E = zeros(NV, D);
+  for (let t = 0; t < NV; t++) { W_E[t][O.TOK + t] = 1; if (t !== BOS) W_E[t][O.ONE] = 1; }
+  W_E[MARY][O.NAME] = 1; W_E[JOHN][O.NAME + 1] = 1;                  // "I am a name" features
+  const W_pos = zeros(NP, D); for (let q = 0; q < NP; q++) W_pos[q][O.POS + q] = 1;
+  const H = () => ({ W_Q: zeros(D, DH), W_K: zeros(D, DH), W_V: zeros(D, DH), W_O: zeros(DH, D) });
+  const sinkQK = (h, s) => { h.W_Q[O.ONE][DH - 1] = r(s); h.W_K[O.TOK + BOS][DH - 1] = r(s); };
+  const copyTokToScratch = (h) => { for (let t = 0; t < NV; t++) { h.W_V[O.TOK + t][t] = 1; h.W_O[t][O.SCR + t] = 1; } };
+  // bystanders (their outputs land in SCR, which no later head reads)
+  const prevTok = () => { const h = H(); for (let q = 0; q < NP; q++) { h.W_Q[O.POS + q][q] = r(p.beta); if (q + 1 < DH - 1) h.W_K[O.POS + q][q + 1] = r(p.beta); } copyTokToScratch(h); return h; };
+  const curTok = () => { const h = H(); for (let q = 0; q < NP; q++) { h.W_Q[O.POS + q][q] = r(p.beta); h.W_K[O.POS + q][q] = r(p.beta); } copyTokToScratch(h); return h; };
+  const bosHead = () => { const h = H(); sinkQK(h, p.sbos); copyTokToScratch(h); return h; };
+  // 0.1 duplicate-token head: a name attends to an earlier copy of itself (not itself: positional
+  // self-penalty), else rests on BOS. OV: NAME -> DUP ("my name appeared before").
+  const dup = H();
+  dup.W_Q[O.NAME][0] = r(p.bd); dup.W_K[O.NAME][0] = r(p.bd); dup.W_Q[O.NAME + 1][1] = r(p.bd); dup.W_K[O.NAME + 1][1] = r(p.bd);
+  for (let q = 0; q < NP && 2 + q < DH - 1; q++) { dup.W_Q[O.POS + q][2 + q] = r(p.bd); dup.W_K[O.POS + q][2 + q] = -r(p.bd); }
+  sinkQK(dup, p.sd);
+  dup.W_V[O.NAME][0] = 1; dup.W_V[O.NAME + 1][1] = 1; dup.W_O[0][O.DUP] = 1; dup.W_O[1][O.DUP + 1] = 1;
+  // 1.1 S-inhibition head: attend where DUP is loud; OV: DUP -> INH ("don't say this name")
+  const sinh = H();
+  sinh.W_Q[O.ONE][0] = r(p.gs); sinh.W_K[O.DUP][0] = r(p.gs); sinh.W_K[O.DUP + 1][0] = r(p.gs);
+  sinkQK(sinh, p.ss);
+  sinh.W_V[O.DUP][0] = 1; sinh.W_V[O.DUP + 1][1] = 1; sinh.W_O[0][O.INH] = 1; sinh.W_O[1][O.INH + 1] = 1;
+  // name movers: score = alpha [key is a name] - delta <INH at query, NAME at key>; OV: NAME -> OUT x kappa
+  const mover = (kap, sink) => {
+    const h = H();
+    h.W_Q[O.ONE][0] = r(p.alpha); h.W_K[O.NAME][0] = r(p.alpha); h.W_K[O.NAME + 1][0] = r(p.alpha);
+    h.W_Q[O.INH][1] = -r(p.delta); h.W_K[O.NAME][1] = r(p.delta);
+    h.W_Q[O.INH + 1][2] = -r(p.delta); h.W_K[O.NAME + 1][2] = r(p.delta);
+    sinkQK(h, sink);
+    h.W_V[O.NAME][0] = 1; h.W_V[O.NAME + 1][1] = 1; h.W_O[0][O.OUT] = kap; h.W_O[1][O.OUT + 1] = kap;
+    return h;
+  };
+  const nm = mover(p.kappa, p.sn), neg = mover(-p.kneg, p.sn), backup = mover(p.kb, p.sb);
+  // 3.0 backup name mover: its BOS-sink score also grows with what is already in OUT (rho per unit),
+  // so it rests on BOS while 2.0 has done the job, and moves the name itself when 2.0 is gone.
+  backup.W_Q[O.OUT][DH - 1] = p.rho * sc / r(1); backup.W_Q[O.OUT + 1][DH - 1] = p.rho * sc / r(1);
+  backup.W_K[O.TOK + BOS][DH - 1] = r(1);
+  backup.W_Q[O.ONE][DH - 1] = p.sb * sc / r(1);
+  const W_U = zeros(D, NV); W_U[O.OUT][MARY] = 1; W_U[O.OUT + 1][JOHN] = 1;
+  return { W_E, W_pos, W_U, blocks: [[prevTok(), dup, curTok()], [bosHead(), sinh, prevTok()], [nm, bosHead(), neg], [backup, curTok(), bosHead()]] };
+}
+
+const vecmat = (x, M) => {
+  const out = new Float64Array(M[0].length);
+  for (let k = 0; k < x.length; k++) { const a = x[k]; if (a) { const row = M[k]; for (let l = 0; l < out.length; l++) out[l] += a * row[l]; } }
+  return out;
+};
+const dot = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+/* the hand-set matrices are 99% zeros: forward() multiplies by their nonzero entries only, in the
+   same order as a dense x @ W (so the sums are identical, just faster). Activations are plain arrays. */
+function sparse(M) {
+  const r = [], c = [], v = [];
+  M.forEach((row, i) => row.forEach((x, j) => { if (x) { r.push(i); c.push(j); v.push(x); } }));
+  return { r, c, v, n: M[0].length };
+}
+function spmv(x, S) {
+  const out = new Array(S.n).fill(0);
+  for (let t = 0; t < S.r.length; t++) { const a = x[S.r[t]]; if (a) out[S.c[t]] += a * S.v[t]; }
+  return out;
+}
+function softmax(s) {
+  let m = -Infinity; for (const v of s) m = Math.max(m, v);
+  const e = s.map((v) => Math.exp(v - m)); const z = e.reduce((a, b) => a + b, 0);
+  return e.map((v) => v / z);
+}
+const toArr = (x) => { const a = new Array(x.length); for (let i = 0; i < x.length; i++) a[i] = x[i]; return a; };
+/* TransformerLens hook names (utils.get_act_name) */
+const get_act_name = (name, layer) => (name === 'resid_pre' ? `blocks.${layer}.hook_resid_pre`
+  : name === 'z' ? `blocks.${layer}.attn.hook_z` : name === 'pattern' ? `blocks.${layer}.attn.hook_pattern` : `blocks.${layer}.hook_${name}`);
+
+/* One forward pass (attention-only, causal mask) with forward hooks and a full cache.
+   fwd_hooks = [[hook_name, fn(tensor, hook) -> tensor]], like model.run_with_hooks.
+   Shapes (batch of 1 dropped): resid_pre [pos][d_model], z [pos][head][d_head], pattern [head][dest][src]. */
+function forward(model, tokens, fwd_hooks = []) {
+  const L = tokens.length, isc = 1 / Math.sqrt(DH), cache = {};
+  const hookPoint = (name, layer, x) => {
+    for (const [n, fn] of fwd_hooks) if (n === name) { const y = fn(x, { name, layer: () => layer }); if (y) x = y; }
+    cache[name] = x; return x;
+  };
+  let resid = tokens.map((t) => toArr(model.W_E[t]));
+  model.blocks.forEach((heads, l) => {
+    resid = hookPoint(get_act_name('resid_pre', l), l, resid);
+    const qk_in = resid.map((x, i) => { const y = x.slice(), pp = model.W_pos[i]; for (let d = 0; d < D; d++) y[d] += pp[d]; return y; });
+    const pattern = [];
+    let z = Array.from({ length: L }, () => heads.map(() => new Array(DH).fill(0)));
+    heads.forEach((Hd, h) => {
+      const sp = Hd.sp || (Hd.sp = { Q: sparse(Hd.W_Q), K: sparse(Hd.W_K), V: sparse(Hd.W_V), O: sparse(Hd.W_O) });
+      const q = qk_in.map((x) => spmv(x, sp.Q)), k = qk_in.map((x) => spmv(x, sp.K)), v = resid.map((x) => spmv(x, sp.V));
+      const pat = [];
+      for (let i = 0; i < L; i++) {
+        const row = new Array(L).fill(0);                 // src > dest stays 0: the causal mask
+        let m = -Infinity, sum = 0;
+        for (let j = 0; j <= i; j++) { row[j] = dot(q[i], k[j]) * isc; if (row[j] > m) m = row[j]; }
+        for (let j = 0; j <= i; j++) { row[j] = Math.exp(row[j] - m); sum += row[j]; }
+        const zi = z[i][h];
+        for (let j = 0; j <= i; j++) { const w = (row[j] /= sum), vj = v[j]; for (let d = 0; d < DH; d++) zi[d] += w * vj[d]; }
+        pat.push(row);
+      }
+      pattern.push(pat);
+    });
+    cache[get_act_name('pattern', l)] = pattern;
+    z = hookPoint(get_act_name('z', l), l, z);
+    resid = resid.map((x, i) => {
+      const o = x.slice();
+      heads.forEach((Hd, h) => { const w = spmv(z[i][h], Hd.sp.O); for (let d = 0; d < D; d++) o[d] += w[d]; });
+      return o;
+    });
+  });
+  cache[`blocks.${N_LAYERS - 1}.hook_resid_post`] = resid;
+  const WU = model.sp_U || (model.sp_U = sparse(model.W_U));
+  return { logits: resid.map((x) => spmv(x, WU)), cache };
+}
+const run_with_cache = (model, tokens) => forward(model, tokens);
+const run_with_hooks = (model, tokens, fwd_hooks) => forward(model, tokens, fwd_hooks).logits;
+
+/* ARENA [1.4.1] metrics. logit diff = logit(Mary) - logit(John) at the final position. */
+function logits_to_ave_logit_diff(logits, answer = answer_tokens) {
+  const fin = logits[logits.length - 1];
+  return fin[answer[0]] - fin[answer[1]];
+}
+// 0 = same as the corrupted run, 1 = same as the clean run (denoising convention)
+function ioi_metric(logits, answer, corrupted_logit_diff, clean_logit_diff) {
+  return (logits_to_ave_logit_diff(logits, answer) - corrupted_logit_diff) / (clean_logit_diff - corrupted_logit_diff);
+}
+// 0 = unharmed, -1 = as bad as the corrupted run (noising convention; ARENA uses it with the ABC set)
+function ioi_metric_2(logits, answer, clean_logit_diff, corrupted_logit_diff) {
+  return (logits_to_ave_logit_diff(logits, answer) - clean_logit_diff) / (clean_logit_diff - corrupted_logit_diff);
+}
+
+/* ARENA's patching hooks and sweeps. For noising, call them with the roles swapped:
+   "corrupted_tokens" = the clean prompt, "clean_cache" = the corrupted run's cache. */
+function patch_residual_component(corrupted_residual_component, hook, pos, clean_cache) {
+  corrupted_residual_component[pos] = clean_cache[hook.name][pos].slice();
+  return corrupted_residual_component;
+}
+function get_act_patch_resid_pre(model, corrupted_tokens, clean_cache, patching_metric, extra_hooks = []) {
+  const results = [];
+  for (let layer = 0; layer < N_LAYERS; layer++) {
+    const row = [];
+    for (let position = 0; position < corrupted_tokens.length; position++) {
+      const hook_fn = (x, hook) => patch_residual_component(x, hook, position, clean_cache);
+      const patched_logits = run_with_hooks(model, corrupted_tokens, [...extra_hooks, [get_act_name('resid_pre', layer), hook_fn]]);
+      row.push(patching_metric(patched_logits));
+    }
+    results.push(row);
+  }
+  return results;                                    // [layer][pos]
+}
+function patch_head_vector(corrupted_head_vector, hook, head_index, clean_cache) {
+  corrupted_head_vector.forEach((zp, p) => { zp[head_index] = clean_cache[hook.name][p][head_index].slice(); });
+  return corrupted_head_vector;
+}
+function get_act_patch_attn_head_out_all_pos(model, corrupted_tokens, clean_cache, patching_metric, extra_hooks = []) {
+  const results = [];
+  for (let layer = 0; layer < N_LAYERS; layer++) {
+    const row = [];
+    for (let head = 0; head < N_HEADS; head++) {
+      const hook_fn = (x, hook) => patch_head_vector(x, hook, head, clean_cache);
+      const patched_logits = run_with_hooks(model, corrupted_tokens, [...extra_hooks, [get_act_name('z', layer), hook_fn]]);
+      row.push(patching_metric(patched_logits));
+    }
+    results.push(row);
+  }
+  return results;                                    // [layer][head]
+}
+/* ARENA [1.2]'s head_zero_ablation_hook: z[:, :, head, :] = 0 */
+function head_zero_ablation_hook(z, hook, head_index_to_ablate) {
+  z.forEach((zp) => zp[head_index_to_ablate].fill(0));
+  return z;
+}
+const ablate_nm_hooks = () => [[get_act_name('z', 2), (z, hook) => head_zero_ablation_hook(z, hook, 0)]];
+
+/* everything the object shows, for the intact model or with name mover 2.0 zero-ablated */
+function analyse(model, ablate = false) {
+  const base_hooks = ablate ? ablate_nm_hooks() : [];
+  const clean = forward(model, clean_tokens, base_hooks), corr = forward(model, corrupted_tokens, base_hooks);
+  const clean_logit_diff = logits_to_ave_logit_diff(clean.logits);
+  const corrupted_logit_diff = logits_to_ave_logit_diff(corr.logits);
+  const metric = (logits) => ioi_metric(logits, answer_tokens, corrupted_logit_diff, clean_logit_diff);
+  return {
+    ablate, base_hooks, clean, corr, clean_logit_diff, corrupted_logit_diff, metric,
+    resid: { denoise: get_act_patch_resid_pre(model, corrupted_tokens, clean.cache, metric, base_hooks),
+      noise: get_act_patch_resid_pre(model, clean_tokens, corr.cache, metric, base_hooks) },
+    heads: { denoise: get_act_patch_attn_head_out_all_pos(model, corrupted_tokens, clean.cache, metric, base_hooks),
+      noise: get_act_patch_attn_head_out_all_pos(model, clean_tokens, corr.cache, metric, base_hooks) },
+  };
+}
+/* one patched run (for the dials and the glow): mode 'resid' | 'heads', dir 'denoise' | 'noise' */
+function patched_run(model, R, mode, dir, layer, col) {
+  const tokens = dir === 'denoise' ? corrupted_tokens : clean_tokens;
+  const src = dir === 'denoise' ? R.clean.cache : R.corr.cache;
+  const hook = mode === 'resid' ? [get_act_name('resid_pre', layer), (x, hk) => patch_residual_component(x, hk, col, src)]
+    : [get_act_name('z', layer), (x, hk) => patch_head_vector(x, hk, col, src)];
+  return forward(model, tokens, [...R.base_hooks, hook]);
+}
+/* self-repair: zero-ablate 2.0 on the clean prompt, then also hold 3.0 at its un-ablated output */
+function self_repair(model) {
+  const full = forward(model, clean_tokens);
+  const ablated = forward(model, clean_tokens, ablate_nm_hooks());
+  const frozen = forward(model, clean_tokens, [...ablate_nm_hooks(),
+    [get_act_name('z', 3), (z, hk) => patch_head_vector(z, hk, 0, full.cache)]]);
+  const ld = (r) => logits_to_ave_logit_diff(r.logits);
+  return { intact: ld(full), ablated: ld(ablated), frozen: ld(frozen), full, ablated_run: ablated };
+}
+const MATH = { WORDS, NV, BOS, MARY, JOHN, clean_tokens, corrupted_tokens, answer_tokens, NP, N_LAYERS, N_HEADS, POSN, O, D, DH, HP, ROLES,
+  buildModel, forward, run_with_cache, run_with_hooks, get_act_name, logits_to_ave_logit_diff, ioi_metric, ioi_metric_2,
+  patch_residual_component, get_act_patch_resid_pre, patch_head_vector, get_act_patch_attn_head_out_all_pos,
+  head_zero_ablation_hook, analyse, patched_run, self_repair, softmax, vecmat };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const MODEL = buildModel();
+const RES = {};                                     // analyse() per model variant (the ablated one on demand)
+function getR(ablate) { const key = ablate ? 'ablated' : 'intact'; return RES[key] || (RES[key] = analyse(MODEL, ablate)); }
+const SR = self_repair(MODEL);
+const PHONE = (() => { try { return Math.min(innerWidth, innerHeight) < 700; } catch (e) { return false; } })();
+
+/* Layout. Two towers at the back (x: positions or heads, floors: layers 0-3), the bar field in front
+   (x: the same columns, z: layers, layer 0 at the back as if each tower were folded forward onto the
+   floor, which is also the order of ARENA's imshow rows), the word rail at the front. */
+const TW = 1.8, TD = 0.3, TX = 1.0, TZ = -1.3, LOB = 0.24, FH = 0.42, Y0 = LOB + 0.03, ROOF = Y0 + N_LAYERS * FH;
+const CELL_Z = TZ + 0.02, CW = TW - 0.14;
+const DR = 0.46, DIAL_Y = ROOF + 0.05, DIAL_Z = TZ + 0.03, LD_MAX = 4, SWING = 1.3;
+const FZ0 = -0.62, BR = 0.34, BH = 0.8, SLAB = 0.05, RAIL_Z = 0.99, RAIL_D = 0.5, RAIL_TILT = 0.62;
+const FW = { resid: 3.5, heads: 1.95 }, NCOL = { resid: NP, heads: N_HEADS }, MAXC = NP;
+const SIDES = ['clean', 'corr'];
+const towerX = (side) => (side === 'clean' ? -TX : TX);
+const cellX = (side, mode, c) => towerX(side) - CW / 2 + (c + 0.5) * CW / NCOL[mode];
+const cellY = (l) => Y0 + (l + 0.5) * FH;
+const fieldX = (mode, c) => -FW[mode] / 2 + (c + 0.5) * FW[mode] / NCOL[mode];
+const fieldZ = (l) => FZ0 + (l + 0.5) * BR;
+const cid = (l, c) => l * MAXC + c;
+const ROLE_OF = { [POSN.IO]: 'IO', [POSN.S1]: 'S1', [POSN.S2]: 'S2', [POSN.END]: 'END' };
+const word = (p, side = 'clean') => WORDS[(side === 'clean' ? clean_tokens : corrupted_tokens)[p]];
+const posLabel = (p) => `${p} · ${p === POSN.S2 ? 'John|Mary' : word(p)}${ROLE_OF[p] ? ' (' + ROLE_OF[p] + ')' : ''}`;
+const ROLE_TXT = {
+  dup: { 1: 'spots the repeat', 2: 'duplicate-token', 3: 'dup-token' },
+  sinh: { 1: 'says "not him"', 2: 'S-inhibition', 3: 'S-inhibition' },
+  nm: { 1: 'says the name', 2: 'name mover', 3: 'name mover' },
+  neg: { 1: 'pushes back', 2: 'negative mover', 3: 'negative NM' },
+  backup: { 1: 'understudy', 2: 'backup mover', 3: 'backup NM' },
+  prev: { 1: 'looks back', 2: 'previous-token', 3: 'prev-token' },
+  cur: { 1: 'looks at itself', 2: 'current-token', 3: 'current-token' },
+  bos: { 1: 'resting', 2: 'resting (BOS)', 3: 'BOS sink' },
+};
+const CIRCUIT_HEADS = [[0, 1], [1, 1], [2, 0], [2, 2], [3, 0]];
+const hn = (l, h) => `${l}.${h}`;
+const f2 = (v) => (Math.abs(v) < 0.005 ? '0.00' : v.toFixed(2).replace('-', '−'));
+const f3 = (v) => (Math.abs(v) < 0.0005 ? '0.000' : v.toFixed(3).replace('-', '−'));
+const sgn = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? (0).toFixed(d) : (v > 0 ? '+' : '−') + Math.abs(v).toFixed(d));
+const pct = (v) => `${Math.round(v * 100)}%`.replace('-', '−');
+const PAL = {
+  cell: new THREE.Color('#f4f1ea'), glow: new THREE.Color(C.data),
+  mary: new THREE.Color(C.good), john: new THREE.Color(C.grad),
+  tile: new THREE.Color('#f4eee4'), tileDone: new THREE.Color('#e3dac9'), tileSel: new THREE.Color('#e5c476'),
+};
+/* Views. Phones get close-ups (fit: k) of the part that matters; desktops keep the kit's auto-fit. */
+const view = (pos, target, phoneFit, deskFit) => {
+  const f = PHONE ? phoneFit : deskFit;
+  return f ? { pos, target, fit: f } : { pos, target };
+};
+const CAM = {
+  towers: view([0.35, 3.0, 7.6], [0, 1.3, -1.05], 1.1),
+  field: view([0.1, 7.2, 5.1], [0, 0.4, -0.12], 1.08),
+  over: view([1.3, 5.2, 7.9], [0, 0.8, -0.25]),
+  side: view([3.6, 5.9, 6.4], [0.15, 0.75, -0.4], 1.02),
+  wide: view([-5.0, 4.6, 6.9], [0, 0.95, -0.2], 0.92),
+};
+
+/* notes: phones put the tower note above the dials, desktops beside the clean tower; field notes sit under the rail */
+const NOTE_TOP = PHONE ? [0, DIAL_Y + DR + 0.72, DIAL_Z] : [-TX - TW / 2 - 0.12, ROOF - 0.1, TZ], NOTE_FIELD = [0, 0.02, 1.5];
+
+/* how different the two runs are, per cell: ||resid_pre|| (resid mode) or ||head output|| (heads mode) */
+const norm2 = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += (a[i] - b[i]) ** 2; return s; };
+function diffOf(mode, A, B) {
+  const out = [];
+  for (let l = 0; l < N_LAYERS; l++) {
+    const row = [];
+    if (mode === 'resid') {
+      const a = A[get_act_name('resid_pre', l)], b = B[get_act_name('resid_pre', l)];
+      for (let p = 0; p < NP; p++) row.push(Math.sqrt(norm2(a[p], b[p])));
+    } else {
+      const a = A[get_act_name('z', l)], b = B[get_act_name('z', l)];
+      for (let h = 0; h < N_HEADS; h++) {
+        let s = 0;
+        for (let p = 0; p < NP; p++) { const d = vecmat(a[p][h].map((v, e) => v - b[p][h][e]), MODEL.blocks[l][h].W_O); s += d.reduce((x, y) => x + y * y, 0); }
+        row.push(Math.sqrt(s));
+      }
+    }
+    out.push(row);
+  }
+  return out;
+}
+const R0 = getR(false);
+const GLOW_REF = {};
+for (const mode of ['resid', 'heads']) GLOW_REF[mode] = Math.max(...diffOf(mode, R0.clean.cache, R0.corr.cache).flat());
+
+/* ======================================================== object behaviour */
+
+const curCol = (S) => Math.round(S.knobs.mode === 'resid' ? S.knobs.pos : S.knobs.head);
+const revKey = (S) => `${S.knobs.mode}|${S.knobs.dir}|${S.knobs.ablate ? 1 : 0}`;
+function revSet(S) { const st = S.state, key = revKey(S); return st.rev[key] || (st.rev[key] = new Set()); }
+const barValue = (S, l, c) => { const g = S.state.R[S.knobs.mode][S.knobs.dir][l][c]; return S.knobs.dir === 'denoise' ? g : 1 - g; };
+
+/* the source run (never changed) and the receiving run (patched when a cell is chosen) */
+function computeRuns(S) {
+  const st = S.state, k = S.knobs, den = k.dir === 'denoise';
+  st.R = getR(k.ablate);
+  st.src = den ? st.R.clean : st.R.corr;
+  st.run = st.patchOn ? patched_run(MODEL, st.R, k.mode, k.dir, Math.round(k.layer), curCol(S)) : null;
+  st.recv = st.run || (den ? st.R.corr : st.R.clean);
+  st.ldSrc = logits_to_ave_logit_diff(st.src.logits);
+  st.ldRecv = logits_to_ave_logit_diff(st.recv.logits);
+  st.metric = st.R.metric(st.recv.logits);
+}
+
+const m4 = new THREE.Matrix4(), q0 = new THREE.Quaternion(), vS = new THREE.Vector3(), vP = new THREE.Vector3(), col = new THREE.Color();
+const HIDE = new THREE.Matrix4().makeScale(1e-5, 1e-5, 1e-5);
+function finishInst(m) {
+  m.instanceMatrix.needsUpdate = true;
+  if (m.instanceColor) m.instanceColor.needsUpdate = true;
+  m.computeBoundingSphere(); m.computeBoundingBox();
+}
+
+function paintTowers(S) {
+  const st = S.state, k = S.knobs, mode = k.mode, nc = NCOL[mode], cw = CW / nc;
+  st.diff = diffOf(mode, st.src.cache, st.recv.cache);
+  for (const side of SIDES) {
+    const cells = st.towers[side].cells;
+    for (let l = 0; l < N_LAYERS; l++) for (let c = 0; c < MAXC; c++) {
+      const id = cid(l, c);
+      if (c >= nc) { cells.setMatrixAt(id, HIDE); continue; }
+      vP.set(cellX(side, mode, c), cellY(l), CELL_Z); vS.set(cw * 0.82, FH * 0.7, 0.14);
+      m4.compose(vP, q0, vS); cells.setMatrixAt(id, m4);
+      const g = st.glowOn ? Math.min(1, st.diff[l][c] / GLOW_REF[mode]) : 0;
+      const t = g < 0.02 ? 0 : 0.2 + 0.8 * Math.pow(g, 0.6);     // below 2% of the biggest difference: no glow
+      cells.setColorAt(id, col.copy(PAL.cell).lerp(PAL.glow, t));
+    }
+    finishInst(cells);
+    // the patched cell: a brass frame on both towers
+    const fr = st.towers[side].frame;
+    fr.visible = !!st.run;
+    if (st.run) { fr.position.set(cellX(side, mode, curCol(S)), cellY(Math.round(k.layer)), CELL_Z + 0.075); fr.scale.set(cw * 0.96, FH * 0.84, 1); }
+  }
+}
+
+function paintField(S, instant) {
+  const st = S.state, k = S.knobs, mode = k.mode, nc = NCOL[mode], pw = FW[mode] / nc, rev = revSet(S);
+  const sel = st.run ? cid(Math.round(k.layer), curCol(S)) : -1;
+  for (let l = 0; l < N_LAYERS; l++) for (let c = 0; c < MAXC; c++) {
+    const id = cid(l, c);
+    if (c >= nc) { st.tiles.setMatrixAt(id, HIDE); st.hT[id] = 0; continue; }
+    vP.set(fieldX(mode, c), SLAB + 0.003, fieldZ(l)); vS.set(pw * 0.94, 0.006, BR * 0.94);
+    m4.compose(vP, q0, vS); st.tiles.setMatrixAt(id, m4);
+    st.tiles.setColorAt(id, id === sel ? PAL.tileSel : rev.has(id) ? PAL.tileDone : PAL.tile);
+    const v = rev.has(id) ? barValue(S, l, c) : 0;
+    st.hT[id] = v;
+    st.barCol[id] = (k.dir === 'denoise') === (v >= 0) ? 'mary' : 'john';   // green = pushed toward Mary
+  }
+  finishInst(st.tiles);
+  const anyBar = rev.size > 0;
+  st.level.forEach((m) => { m.visible = anyBar; }); st.posts.forEach((m) => { m.visible = anyBar; });
+  if (instant || S.shot) st.hNow = st.hT.slice();
+  drawBars(S);
+}
+
+function drawBars(S) {
+  const st = S.state, mode = S.knobs.mode, nc = NCOL[mode], pw = FW[mode] / nc;
+  for (let l = 0; l < N_LAYERS; l++) for (let c = 0; c < MAXC; c++) {
+    const id = cid(l, c), h = Math.abs(st.hNow[id]) * BH;
+    if (c >= nc || h < 0.004) { st.bars.setMatrixAt(id, HIDE); continue; }
+    vP.set(fieldX(mode, c), SLAB, fieldZ(l)); vS.set(pw * 0.62, h, BR * 0.62);
+    m4.compose(vP, q0, vS); st.bars.setMatrixAt(id, m4);
+    st.bars.setColorAt(id, st.barCol[id] === 'mary' ? PAL.mary : PAL.john);
+  }
+  finishInst(st.bars);
+}
+
+/* the patch cable: a teal string from the source cell to the same cell of the other tower */
+function makeCable() {
+  const mat = K.mat.string(C.aux);
+  const tube = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 16).translate(0, -0.5, 0), mat);
+  const plugA = K.bead([0, 0, 0], C.brass, 0.034), plugB = K.bead([0, 0, 0], C.brass, 0.03);
+  tube.castShadow = head.castShadow = true;
+  const g = new THREE.Group(); g.add(tube, head, plugA, plugB);
+  const DOWN = new THREE.Vector3(0, -1, 0);
+  function set(a, b) {
+    const lift = 0.28, fwd = 0.62, r = 0.02;
+    const c1 = a.clone().add(new THREE.Vector3(0, lift, fwd)), c2 = b.clone().add(new THREE.Vector3(0, lift, fwd));
+    const curve = new THREE.CubicBezierCurve3(a, c1, c2, b);
+    const hl = 0.11, tEnd = 1 - Math.min(0.3, hl / curve.getLength());
+    const pts = []; for (let s = 0; s <= 40; s++) pts.push(curve.getPoint(tEnd * s / 40));
+    tube.geometry.dispose();
+    tube.geometry = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 60, r, 8, false);
+    const tip = curve.getPoint(1), tang = curve.getTangent(1).normalize();
+    head.position.copy(tip); head.scale.set(r * 2.6, hl, r * 2.6);
+    head.quaternion.setFromUnitVectors(DOWN, tang.clone().negate());
+    plugA.position.copy(a); plugB.position.copy(tip);
+    g.visible = true;
+  }
+  return { group: g, set, show(b) { g.visible = !!b; } };
+}
+function paintCable(S) {
+  const st = S.state, k = S.knobs;
+  if (!st.run) { st.cable.show(false); return; }
+  const l = Math.round(k.layer), c = curCol(S), den = k.dir === 'denoise', z = CELL_Z + 0.08;
+  const a = new THREE.Vector3(cellX(den ? 'clean' : 'corr', k.mode, c), cellY(l), z);
+  const b = new THREE.Vector3(cellX(den ? 'corr' : 'clean', k.mode, c), cellY(l), z);
+  st.cable.set(a, b);
+}
+
+/* dials: logit difference, John (left) to Mary (right) */
+const angOf = (ld) => -Math.max(-1, Math.min(1, ld / LD_MAX)) * SWING;
+function dialTexture() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 512;
+  const g = cv.getContext('2d'), cx = 256, cy = 256, R = 252;
+  const arc = (a0, a1, r0, r1, fill) => { g.beginPath(); g.arc(cx, cy, r1, a0, a1); g.arc(cx, cy, r0, a1, a0, true); g.closePath(); g.fillStyle = fill; g.fill(); };
+  g.fillStyle = '#f8f3ea'; g.beginPath(); g.arc(cx, cy, R, Math.PI, 2 * Math.PI); g.closePath(); g.fill();
+  arc(-Math.PI / 2 - SWING, -Math.PI / 2, R * 0.74, R * 0.93, 'rgba(214,69,69,0.30)');
+  arc(-Math.PI / 2, -Math.PI / 2 + SWING, R * 0.74, R * 0.93, 'rgba(47,158,107,0.30)');
+  g.strokeStyle = '#2b2a33'; g.lineCap = 'round';
+  for (let v = -LD_MAX; v <= LD_MAX; v++) {
+    const a = -Math.PI / 2 + (v / LD_MAX) * SWING, big = v % 2 === 0, r0 = R * (big ? 0.66 : 0.72);
+    g.lineWidth = v === 0 ? 9 : big ? 6 : 4;
+    g.beginPath(); g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); g.lineTo(cx + Math.cos(a) * R * 0.93, cy + Math.sin(a) * R * 0.93); g.stroke();
+  }
+  g.fillStyle = '#2b2a33'; g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+  g.font = '800 64px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
+  g.fillStyle = '#b53a3a'; g.fillText('John', cx - R * 0.56, cy - 22);
+  g.fillStyle = '#23805a'; g.fillText('Mary', cx + R * 0.56, cy - 22);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  return tex;
+}
+function makeDial(S, cx) {
+  const g = new THREE.Group(); g.position.set(cx, DIAL_Y, DIAL_Z);
+  const shape = new THREE.Shape(); shape.absarc(0, 0, DR, 0, Math.PI, false); shape.lineTo(DR, 0);
+  const body = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: 0.05, bevelEnabled: false, curveSegments: 40 }), K.mat.plaster('#efe7d8'));
+  body.position.z = -0.05; body.castShadow = body.receiveShadow = true;
+  const face = new THREE.Mesh(new THREE.CircleGeometry(DR * 0.97, 64, 0, Math.PI), new THREE.MeshStandardMaterial({ map: S.state.dialTex, roughness: 0.85 }));
+  face.position.z = 0.002;
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(DR, 0.014, 8, 56, Math.PI), K.mat.brass());
+  const base = new THREE.Mesh(new THREE.BoxGeometry(2 * DR + 0.06, 0.035, 0.1), K.mat.brass()); base.position.set(0, -0.012, -0.02);
+  const needle = new THREE.Group(); needle.position.z = 0.012;
+  const nd = new THREE.Mesh(new THREE.BoxGeometry(0.02, DR * 0.86, 0.012).translate(0, DR * 0.43, 0), K.mat.ink());
+  nd.castShadow = true; needle.add(nd);
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 20).rotateX(Math.PI / 2), K.mat.brass()); hub.position.z = 0.02;
+  g.add(body, face, rim, base, needle, hub);
+  return { group: g, needle, ang: 0, target: 0 };
+}
+function setDials(S) {
+  const st = S.state, den = S.knobs.dir === 'denoise';
+  st.dials.clean.target = angOf(den ? st.ldSrc : st.ldRecv);
+  st.dials.corr.target = angOf(den ? st.ldRecv : st.ldSrc);
+  if (S.shot || st.snapDials) for (const side of SIDES) { const d = st.dials[side]; d.ang = d.target; d.needle.rotation.z = d.ang; }
+  st.snapDials = false;
+}
+
+/* canvas textures: the lobby signs and the word rail */
+const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
+function signTexture(text, hex) {
+  const W = 1024, H = Math.round(1024 * (LOB * 0.78) / (TW + 0.02));
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#f4ede1'; g.fillRect(0, 0, W, H);
+  g.fillStyle = hex; g.beginPath(); g.arc(70, H / 2, H * 0.24, 0, 2 * Math.PI); g.fill();
+  g.fillStyle = '#2b2a33'; g.font = `800 ${Math.round(H * 0.66)}px ${FONT}`; g.textBaseline = 'middle';
+  g.fillText(text, 120, H / 2 + 3);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  return tex;
+}
+function railTexture(mode) {
+  const nc = NCOL[mode], W = Math.round(FW[mode] * 600), H = Math.round(RAIL_D * 600), cw = W / nc;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#f7f2e9'; g.fillRect(0, 0, W, H);
+  const TINT = { IO: '#d9eee2', S1: '#f5dada', S2: '#f5dada', END: '#f1e2bf' };
+  const INK = { IO: '#23805a', S1: '#b53a3a', S2: '#b53a3a', END: '#8a6420' };
+  for (let c = 0; c < nc; c++) {
+    const x0 = c * cw, role = mode === 'resid' ? ROLE_OF[c] : null;
+    g.fillStyle = role ? TINT[role] : '#efe8dc';
+    g.beginPath(); g.roundRect(x0 + 5, 5, cw - 10, H - 10, 12); g.fill();
+    g.fillStyle = '#2b2a33'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    if (mode === 'resid') {
+      if (role) { g.fillStyle = INK[role]; g.font = `800 ${Math.round(cw * 0.36)}px ${FONT}`; g.fillText(role, x0 + cw / 2, 44); }
+      const w = c === POSN.S2 ? 'John|Mary' : word(c);
+      g.save(); g.translate(x0 + cw / 2, role ? H * 0.6 : H * 0.52); g.rotate(-Math.PI / 2);
+      const fs = Math.round(cw * (w.length > 6 ? 0.36 : 0.44));
+      g.font = `700 ${fs}px ${FONT}`; g.fillStyle = w === 'BOS' ? '#7a5c22' : '#1f4fae';
+      g.fillText(w, 0, 0); g.restore();
+      g.font = `600 ${Math.round(cw * 0.22)}px ${FONT}`; g.fillStyle = '#8f877a'; g.fillText(String(c), x0 + cw / 2, H - 24);
+    } else {
+      g.font = `800 ${Math.round(H * 0.3)}px ${FONT}`; g.fillText(`head ${c}`, x0 + cw / 2, H / 2);
+    }
+  }
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+  return tex;
+}
+
+/* per-mode layout: field slab, clean-level frame, rail, row and role tags */
+function layout(S) {
+  const st = S.state, mode = S.knobs.mode, fw = FW[mode];
+  st.slab.scale.set(fw + 0.16, SLAB, N_LAYERS * BR + 0.12 + 0.62);
+  st.slab.position.set(0, SLAB / 2, FZ0 + (N_LAYERS * BR + 0.62) / 2);
+  const z0 = FZ0 - 0.02, z1 = FZ0 + N_LAYERS * BR + 0.02, x1 = fw / 2 + 0.03, y = SLAB + BH;
+  const [back, left, right] = st.level;
+  back.position.set(0, y, z0); back.scale.set(2 * x1, 1, 1);
+  left.position.set(-x1, y, (z0 + z1) / 2); left.scale.set(1, 1, z1 - z0);
+  right.position.set(x1, y, (z0 + z1) / 2); right.scale.set(1, 1, z1 - z0);
+  st.posts.forEach((p, i) => { p.position.set(i % 2 ? x1 : -x1, (SLAB + y) / 2, i < 2 ? z0 : z1); });
+  for (const m in st.rails) st.rails[m].visible = m === mode;
+  st.rowTags.forEach((t, l) => t.move([-fw / 2 - 0.1, SLAB + 0.02, fieldZ(l)]));
+  st.levelTag.move([x1 + 0.02, y, z0]);
+}
+
+/* ======================================================== labels */
+
+function dialText(S, side) {
+  const st = S.state, k = S.knobs, den = k.dir === 'denoise', tier = S.tier;
+  const srcSide = den ? 'clean' : 'corr', ld = side === srcSide ? st.ldSrc : st.ldRecv;
+  const who = ld >= 0 ? 'Mary' : 'John';
+  let s = tier === 1 ? `says **${who}** (${sgn(ld)})` : tier === 2 ? `logit diff **${sgn(ld)}**` : `ld = ${sgn(ld, 3)}`;
+  if (side !== srcSide && st.run) {
+    const m = st.metric;
+    if (den) s += tier === 1 ? `\nback to Mary: **${pct(m)}**` : tier === 2 ? `\nioi_metric **${f2(m)}**` : `\nioi_metric = ${f3(m)}`;
+    else s += tier === 1 ? `\ndamage: **${pct(1 - m)}**` : tier === 2 ? `\ndamage **${f2(1 - m)}**` : `\nioi_metric_2 = ${f3(m - 1)}`;
+  }
+  return s;
+}
+
+function noteText(S) {
+  const st = S.state, k = S.knobs, tier = S.tier, R = st.R, mode = st.noteMode;
+  const l = Math.round(k.layer), c = curCol(S), g = R[k.mode][k.dir];
+  const cl = R.clean_logit_diff, co = R.corrupted_logit_diff;
+  const cellName = k.mode === 'resid' ? (tier === 1 ? `floor ${l}, "${c === POSN.S2 ? 'John|Mary' : word(c)}"` : `[L${l}, ${ROLE_OF[c] || word(c)}]`) : `head ${hn(l, c)}`;
+  switch (mode) {
+    case 'task': return tier === 1 ? `…John gave a drink to → **Mary**\n…Mary gave a drink to → **John**`
+      : tier === 2 ? `clean: "…John gave a drink to"\ncorrupted: "…Mary gave…"\nsame weights, one token apart`
+        : `ld = logit(Mary) − logit(John)\nclean ${sgn(cl, 3)} · corrupted ${sgn(co, 3)}`;
+    case 'twin': {
+      const d = st.diff;
+      return tier === 1 ? 'blue windows: the runs differ\nfloor 0: only the swapped name'
+        : tier === 2 ? `blue = ‖clean − corrupted‖\nL0: only S2 · L3: S2 to END`
+          : `‖Δresid_pre‖ L0: S2 ${f2(d[0][POSN.S2])}, rest 0\nL3: END ${f2(d[3][POSN.END])}`;
+    }
+    case 'patch': {
+      const m = st.metric;
+      if (!st.run) return '';
+      return tier === 1 ? `copied: ${cellName}\nanswer now: **${st.ldRecv >= 0 ? 'Mary' : 'John'}** (${pct(k.dir === 'denoise' ? m : 1 - m)} ${k.dir === 'denoise' ? 'back' : 'damage'})`
+        : tier === 2 ? `patched ${cellName}\nlogit diff ${sgn(k.dir === 'denoise' ? co : cl)} → ${sgn(st.ldRecv)}`
+          : k.mode === 'resid' ? `blocks.${l}.hook_resid_pre, pos ${c}\n→ ioi_metric ${f3(m)}` : `blocks.${l}.attn.hook_z, head ${c}\n→ ioi_metric ${f3(m)}`;
+    }
+    case 'sweep': {
+      const s = R.resid.denoise;
+      return tier === 1 ? 'low floors: the swapped name\nhigh floors: the last word'
+        : tier === 2 ? `S2 at L0-1: ${f2(s[0][POSN.S2])}\nEND at L2-3: ${f2(s[2][POSN.END])}\neverything else ≈ 0`
+          : `[0,S2] ${f3(s[0][POSN.S2])} · [1,S2] ${f3(s[1][POSN.S2])}\n[2,END] ${f3(s[2][POSN.END])} · [3,END] ${f3(s[3][POSN.END])}`;
+    }
+    case 'noise': {
+      const s = R.resid.noise;
+      return tier === 1 ? 'red bar = how much the answer\nbreaks if that spot is swapped'
+        : tier === 2 ? `damage = 1 − ioi_metric\nS2 at L0-1: ${f2(1 - s[0][POSN.S2])}\nEND at L2-3: ${f2(1 - s[2][POSN.END])}`
+          : `−ioi_metric_2 [0,S2] ${f3(1 - s[0][POSN.S2])}\n[3,END] ${f3(1 - s[3][POSN.END])}`;
+    }
+    case 'heads': {
+      const h = R.heads[k.dir];
+      return tier === 1 ? 'green: heads that carry Mary\nred: a head that pushes back'
+        : tier === 2 ? `2.0 name mover: ${f2(h[2][0])}\n2.2 negative mover: ${f2(h[2][2])}\n0.1 dup ${f2(h[0][1])} · 1.1 S-inh ${f2(h[1][1])}`
+          : `2.0 ${f3(h[2][0])} · 2.2 ${f3(h[2][2])}\n0.1 ${f3(h[0][1])} · 1.1 ${f3(h[1][1])}\n3.0 ${f3(h[3][0])}`;
+    }
+    case 'repair': {
+      const RA = getR(true), a0 = SR.full.cache[get_act_name('pattern', 3)][0][POSN.END][POSN.IO], a1 = SR.ablated_run.cache[get_act_name('pattern', 3)][0][POSN.END][POSN.IO];
+      return tier === 1 ? `head 2.0 out: still Mary\n${sgn(SR.intact)} → ${sgn(SR.ablated)}: 3.0 stepped in\nstop 3.0 too: ${sgn(SR.frozen)}`
+        : tier === 2 ? `zero-ablate 2.0: ${sgn(SR.intact)} → ${sgn(SR.ablated)}\nhold 3.0 as before too: ${sgn(SR.frozen)}\n3.0 now patches at ${f2(RA.heads.denoise[3][0])}`
+          : `3.0's A[END, IO]: ${f2(a0)} → ${f2(a1)}\nld ${f3(SR.ablated)}; 3.0 frozen: ${f3(SR.frozen)}`;
+    }
+    case 'gave': {
+      const d = st.diff ? st.diff[l][c] : 0, m = st.metric;
+      return tier === 1 ? `"gave" differs (a copied name\nno later head reads): ${pct(m)} back`
+        : tier === 2 ? `‖Δ‖ = ${f2(d)} here, but ioi_metric\n= ${f2(m)}: 0.0 copied S2's name\ninto a slot nothing reads`
+          : `‖Δresid_pre[1][11]‖ = ${f2(d)}\n(SCR block only)\nioi_metric = ${f3(m)}`;
+    }
+    case 'mid': {
+      const mix = R.clean.logits.map((row, i) => row.map((v, j) => (v + R.corr.logits[i][j]) / 2));
+      return tier === 1 ? `halfway between ${sgn(cl)} and ${sgn(co)}\nis 0.00: score **${f2(R.metric(mix))}**`
+        : `ioi_metric((clean + corr) / 2)\n= (${sgn(logits_to_ave_logit_diff(mix))} − (${sgn(co)})) / ${f2(cl - co)}\n= **${f2(R.metric(mix))}**`;
+    }
+    default: return '';
+  }
+}
+
+function labels(S) {
+  const st = S.state, k = S.knobs, sh = st.show || {};
+  for (const side of SIDES) st.dialLab[side].set(dialText(S, side)).show(sh.dials !== false);
+  const nt = st.noteMode ? noteText(S) : '';
+  st.note.set(nt).show(!!nt);
+  if (st.noteAt) st.note.move(st.noteAt);
+  st.rowTags.forEach((t) => t.show(!!sh.rows));
+  st.levelTag.show(!!sh.rows && revSet(S).size > 0);
+  const rev = revSet(S);
+  st.roleTags.forEach(({ tag, l, h }) => {
+    const id = cid(l, h);
+    tag.show(!!sh.roles && k.mode === 'heads' && rev.has(id));
+    tag.move([fieldX('heads', h), SLAB + Math.abs(st.hT[id]) * BH + 0.03, fieldZ(l)]);
+  });
+  S.invalidate();
+}
+
+function paintAll(S, instant) {
+  computeRuns(S);
+  paintTowers(S); paintField(S, instant); paintCable(S); setDials(S); labels(S);
+  S.invalidate();
+}
+
+function setCell(S, l, c) {
+  const st = S.state;
+  st.patchOn = true;
+  S.setKnob('layer', l, { silent: true });
+  S.setKnob(S.knobs.mode === 'resid' ? 'pos' : 'head', c, { silent: true });
+  revSet(S).add(cid(l, c));
+}
+
+function parkBest(S) {                    // after a sweep, the cable rests on the cell that matters most
+  const st = S.state, k = S.knobs, grid = st.R[k.mode][k.dir];
+  let best = [0, 0], bv = -1;
+  grid.forEach((row, l) => row.forEach((v, c) => { const a = Math.abs(k.dir === 'denoise' ? v : 1 - v); if (a > bv + 1e-6) { bv = a; best = [l, c]; } }));
+  setCell(S, best[0], best[1]);
+}
+
+function startSweep(S) {
+  const st = S.state, k = S.knobs, nc = NCOL[k.mode];
+  const cells = []; for (let l = 0; l < N_LAYERS; l++) for (let c = 0; c < nc; c++) cells.push([l, c]);
+  const rev = revSet(S); rev.clear();
+  st.patchOn = true; st.show = Object.assign({}, st.show, { dials: true });
+  if (S.shot) { cells.forEach(([l, c]) => rev.add(cid(l, c))); parkBest(S); paintAll(S, true); return; }
+  st.sweep = { cells, done: 0, t0: null, dt: k.mode === 'resid' ? 0.055 : 0.2 };
+  const [l0, c0] = cells[0]; setCell(S, l0, c0);
+  st.hNow.fill(0);
+  paintAll(S, false);
+}
+
+function dimKnobs(S) {        // the kit cannot dim knobs: grey the column knob the current mode ignores
+  const dim = (id, on) => { const el = document.getElementById('k-' + id); const row = el && el.closest('.k-knob'); if (row) row.style.opacity = on ? '0.42' : ''; };
+  dim('pos', S.knobs.mode !== 'resid'); dim('head', S.knobs.mode !== 'heads');
+}
+
+/* one call per beat / prediction */
+function scene(S, o = {}) {
+  const st = S.state, k = S.knobs;
+  st.sweep = null;
+  st.noteMode = o.note || null; st.noteAt = o.noteAt || null;
+  st.note.anchor(o.noteAt === NOTE_FIELD ? 'top' : o.noteAt === NOTE_TOP && !PHONE ? 'right' : 'bottom');
+  st.patchOn = !!o.patch; st.glowOn = o.glow !== false;
+  st.show = { dials: o.dials !== false, rows: !!o.rows, roles: !!o.roles };
+  const rev = revSet(S);
+  if (o.reveal === 'all') { rev.clear(); for (let l = 0; l < N_LAYERS; l++) for (let c = 0; c < NCOL[k.mode]; c++) rev.add(cid(l, c)); }
+  else if (o.reveal === 'cell') { rev.clear(); rev.add(cid(Math.round(k.layer), curCol(S))); }
+  else if (o.reveal === 'none') rev.clear();
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || [-2.1, 0, 0.9], o.face || [0, 0.5, 0.2]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.at });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  layout(S);
+  st.snapDials = !!o.snap;
+  if (o.grow && !S.shot) { paintAll(S, false); st.hNow.fill(0); drawBars(S); }
+  else paintAll(S, true);
+  if (o.sweep) startSweep(S);
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'w08-twins', num: '15', week: 8, kind: 'weekly',
+  title: 'The twin towers',
+  subtitle: 'Run the model twice, swap one part between runs, and watch the answer swing.',
+  back2d: '#week-08',
+  film: 'w8-patching',
+  plinth: { r: 2.62, h: 0.14 },
+
+  knobs: [
+    { id: 'mode', type: 'select', wide: true, label: { 1: 'What to swap', 2: 'Patch what', 3: 'activation' }, value: 'resid',
+      options: [['resid', { 1: 'Places: floor × word', 2: 'resid_pre: layer × position', 3: 'resid_pre [layer, pos]' }],
+        ['heads', { 1: 'Heads: floor × head', 2: 'head outputs: layer × head', 3: 'attn hook_z [layer, head]' }]] },
+    { id: 'dir', type: 'select', wide: true, label: { 1: 'Direction', 2: 'Direction', 3: 'direction' }, value: 'denoise',
+      options: [['denoise', { 1: 'Fix the broken run (clean → corrupted)', 2: 'Denoise: clean → corrupted', 3: 'denoise: clean → corrupted' }],
+        ['noise', { 1: 'Break the good run (corrupted → clean)', 2: 'Noise: corrupted → clean', 3: 'noise: corrupted → clean' }]] },
+    { id: 'layer', type: 'range', label: { 1: 'Floor (layer)', 2: 'Layer', 3: 'layer' }, min: 0, max: N_LAYERS - 1, step: 1, value: 1, fmt: (v) => String(Math.round(v)) },
+    { id: 'pos', type: 'range', label: { 1: 'Word', 2: 'Position (tap a window)', 3: 'pos' }, min: 0, max: NP - 1, step: 1, value: POSN.S2, fmt: (v) => posLabel(Math.round(v)) },
+    { id: 'head', type: 'range', label: { 1: 'Head', 2: 'Head (tap a window)', 3: 'head' }, min: 0, max: N_HEADS - 1, step: 1, value: 0, fmt: (v) => `head ${Math.round(v)}` },
+    { id: 'sweep', type: 'button', label: { 1: 'Try every window', 2: 'Sweep every cell', 3: 'Sweep all cells' }, onClick: (S) => startSweep(S) },
+    { id: 'ablate', type: 'toggle', label: { 1: 'Knock out head 2.0', 2: 'Zero-ablate name mover 2.0', 3: 'z[2.0] = 0 (both runs)' }, value: false },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.rev = {};
+    st.hNow = new Array(N_LAYERS * MAXC).fill(0); st.hT = st.hNow.slice(); st.barCol = new Array(N_LAYERS * MAXC).fill('mary');
+    st.dialTex = dialTexture();
+    const box = new THREE.BoxGeometry(1, 1, 1);
+    const boxUp = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+    // ---- the two towers
+    st.towers = {};
+    for (const side of SIDES) {
+      const cx = towerX(side), g = new THREE.Group(), T = { group: g };
+      const lobby = new THREE.Mesh(box, K.mat.plaster());
+      lobby.position.set(cx, LOB / 2, TZ); lobby.scale.set(TW + 0.06, LOB, TD + 0.1);
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(TW + 0.02, LOB * 0.78), new THREE.MeshStandardMaterial({ map: signTexture(side === 'clean' ? 'CLEAN' : 'CORRUPTED', side === 'clean' ? C.good : C.grad), roughness: 0.9 }));
+      sign.position.set(cx, LOB / 2, TZ + (TD + 0.1) / 2 + 0.002);
+      g.add(lobby, sign);
+      for (let l = 0; l <= N_LAYERS; l++) {
+        const s = new THREE.Mesh(box, K.mat.plaster('#e9e1d3'));
+        const th = l === N_LAYERS ? 0.05 : 0.03;
+        s.position.set(cx, Y0 + l * FH - (l === N_LAYERS ? -th / 2 : th / 2), TZ); s.scale.set(TW + 0.06, th, TD + 0.06);
+        g.add(s);
+      }
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const p = new THREE.Mesh(box, K.mat.brass());
+        p.position.set(cx + sx * (TW / 2 + 0.005), Y0 + N_LAYERS * FH / 2, TZ + sz * (TD / 2 + 0.005)); p.scale.set(0.035, N_LAYERS * FH, 0.035);
+        g.add(p);
+      }
+      const glass = new THREE.Mesh(box, K.mat.glass('#cfe2f0', 0.2));
+      glass.position.set(cx, Y0 + N_LAYERS * FH / 2, TZ); glass.scale.set(TW, N_LAYERS * FH, TD);
+      glass.castShadow = false; glass.userData.noFit = true;
+      g.add(glass);
+      g.traverse((o) => { if (o.isMesh && o !== glass) { o.castShadow = true; o.receiveShadow = true; } });
+      T.cells = new THREE.InstancedMesh(box, new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.55 }), N_LAYERS * MAXC);
+      T.cells.castShadow = true; T.cells.receiveShadow = true; T.cells.frustumCulled = false;
+      for (let i = 0; i < N_LAYERS * MAXC; i++) { T.cells.setColorAt(i, PAL.cell); T.cells.setMatrixAt(i, HIDE); }
+      g.add(T.cells);
+      // brass frame round the patched cell
+      const fr = new THREE.Group();
+      const bar = (w, h, x, y) => { const m = new THREE.Mesh(box, K.mat.brass()); m.scale.set(w, h, 0.02); m.position.set(x, y, 0); fr.add(m); };
+      bar(1, 0.06, 0, 0.5); bar(1, 0.06, 0, -0.5); bar(0.06, 1, -0.5, 0); bar(0.06, 1, 0.5, 0);
+      fr.visible = false; T.frame = fr; g.add(fr);
+      T.dial = makeDial(S, cx); g.add(T.dial.group);
+      st.towers[side] = T;
+      S.root.add(g);
+    }
+    st.dials = { clean: st.towers.clean.dial, corr: st.towers.corr.dial };
+    // ---- the bar field
+    st.slab = new THREE.Mesh(box, K.mat.plaster('#ece5d8')); st.slab.castShadow = true; st.slab.receiveShadow = true;
+    st.tiles = new THREE.InstancedMesh(box, new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.95 }), N_LAYERS * MAXC);
+    st.tiles.receiveShadow = true; st.tiles.frustumCulled = false;
+    st.bars = new THREE.InstancedMesh(boxUp, new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.5 }), N_LAYERS * MAXC);
+    st.bars.castShadow = true; st.bars.receiveShadow = true; st.bars.frustumCulled = false;
+    for (let i = 0; i < N_LAYERS * MAXC; i++) { st.tiles.setColorAt(i, PAL.tile); st.bars.setColorAt(i, PAL.mary); st.bars.setMatrixAt(i, HIDE); st.tiles.setMatrixAt(i, HIDE); }
+    S.root.add(st.slab, st.tiles, st.bars);
+    // the clean level (value 1): a brass rail round three sides of the field, on four posts
+    const lv = (sx, sz) => { const m = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.018, sz), K.mat.brass()); m.castShadow = true; S.root.add(m); return m; };
+    st.level = [lv(1, 0.018), lv(0.018, 1), lv(0.018, 1)];
+    st.posts = [0, 1, 2, 3].map(() => { const m = new THREE.Mesh(new THREE.BoxGeometry(0.018, BH, 0.018), K.mat.brass()); m.castShadow = true; S.root.add(m); return m; });
+    // the word rails (tilted label boards), one per mode
+    st.rails = {};
+    for (const mode of ['resid', 'heads']) {
+      const rail = new THREE.Group();
+      const board = new THREE.Mesh(new THREE.BoxGeometry(FW[mode] + 0.08, RAIL_D + 0.06, 0.03), K.mat.brass());
+      board.position.z = -0.017; board.castShadow = true; board.receiveShadow = true;
+      const face = new THREE.Mesh(new THREE.PlaneGeometry(FW[mode], RAIL_D), new THREE.MeshStandardMaterial({ map: railTexture(mode), roughness: 0.9 }));
+      face.receiveShadow = true;
+      rail.add(board, face); rail.rotation.x = -Math.PI / 2 + RAIL_TILT;
+      rail.position.set(0, SLAB + 0.5 * RAIL_D * Math.sin(RAIL_TILT) + 0.012, RAIL_Z);
+      rail.visible = mode === 'resid';
+      st.rails[mode] = rail; S.root.add(rail);
+    }
+    // taps: a window of either tower, a tile or a bar picks that cell
+    const onTap = (hit) => {
+      const id = hit.instanceId; if (id == null) return;
+      const l = Math.floor(id / MAXC), c = id % MAXC;
+      if (c >= NCOL[S.knobs.mode]) return;
+      st.sweep = null; st.show = Object.assign({}, st.show, { dials: true });
+      if (!st.noteMode) st.noteMode = 'patch';
+      setCell(S, l, c); paintAll(S, false);
+    };
+    for (const side of SIDES) K.pick(st.towers[side].cells, onTap);
+    K.pick(st.tiles, onTap); K.pick(st.bars, onTap);
+    st.cable = makeCable(); st.cable.show(false); S.root.add(st.cable.group);
+    // labels
+    st.dialLab = {};
+    for (const side of SIDES) st.dialLab[side] = K.label([towerX(side), DIAL_Y + DR + 0.04, DIAL_Z], '', { cls: 'readout', anchor: 'bottom', dy: -4 });
+    st.note = K.label([0, 0, 0], '', { cls: 'note', anchor: 'bottom', dy: -6 });
+    st.rowTags = [0, 1, 2, 3].map((l) => K.label([0, 0, 0], { 1: `floor ${l}`, 2: `L${l}`, 3: `L${l}` }, { cls: 'tag', anchor: 'right', dx: -4 }));
+    st.levelTag = K.label([0, 0, 0], { 1: 'fully back', 2: '1.0 = clean', 3: 'ioi_metric 1' }, { cls: 'tag', anchor: 'left', dx: 6 });
+    const SHORT = { dup: 'dup', sinh: 'S-inh', nm: 'mover', neg: 'neg', backup: 'backup' };
+    const ANCH = { '0.1': 'right', '1.1': 'left' };
+    st.roleTags = CIRCUIT_HEADS.map(([l, h]) => ({ l, h, tag: K.label([0, 0, 0], { 1: hn(l, h), 2: `${hn(l, h)} ${SHORT[ROLES[l][h]]}`, 3: `${hn(l, h)} ${SHORT[ROLES[l][h]]}` },
+      { cls: 'tag chip', prio: 1, anchor: ANCH[hn(l, h)] || 'bottom', dx: ANCH[hn(l, h)] === 'right' ? -4 : ANCH[hn(l, h)] === 'left' ? 4 : 0, dy: ANCH[hn(l, h)] ? 0 : -3 }) }));
+    st.fig = K.figure();
+    st.fig.group.visible = false;
+    S.root.add(st.fig.group);
+  },
+
+  rebuild(S, id) {
+    const st = S.state, k = S.knobs;
+    dimKnobs(S);
+    if (id === 'layer' || id === 'pos' || id === 'head') {
+      if ((id === 'pos' && k.mode !== 'resid') || (id === 'head' && k.mode !== 'heads')) return;
+      st.sweep = null; st.show = Object.assign({}, st.show, { dials: true });
+      if (!st.noteMode) st.noteMode = 'patch';
+      setCell(S, Math.round(k.layer), curCol(S));
+      paintAll(S, false);
+      return;
+    }
+    st.sweep = null;
+    layout(S);
+    paintAll(S, id === '*' || !!S.first);
+  },
+
+  frame(S, t, dt) {
+    const st = S.state;
+    let moving = false;
+    const sw = st.sweep;
+    if (sw) {
+      if (sw.t0 == null) sw.t0 = t;
+      const due = Math.min(sw.cells.length, Math.floor((t - sw.t0) / sw.dt) + 1);
+      if (due > sw.done) {
+        while (sw.done < due) { const [l, c] = sw.cells[sw.done++]; revSet(S).add(cid(l, c)); }
+        const [l, c] = sw.cells[sw.done - 1];
+        setCell(S, l, c); paintAll(S, false);
+      }
+      if (sw.done >= sw.cells.length && t - sw.t0 > sw.cells.length * sw.dt + 0.35) { st.sweep = null; parkBest(S); paintAll(S, false); }
+      moving = true;
+    }
+    for (const side of SIDES) {
+      const d = st.dials[side], diff = d.target - d.ang;
+      if (Math.abs(diff) > 2e-4) { d.ang += diff * Math.min(1, dt * 7); moving = true; } else d.ang = d.target;
+      d.needle.rotation.z = d.ang;
+    }
+    let grow = false;
+    for (let i = 0; i < st.hNow.length; i++) {
+      const diff = st.hT[i] - st.hNow[i];
+      if (Math.abs(diff) > 1e-3) { st.hNow[i] += diff * Math.min(1, dt * 9); grow = true; } else st.hNow[i] = st.hT[i];
+    }
+    if (grow || moving) drawBars(S);
+    return moving || grow;
+  },
+
+  onTier(S) { labels(S); },
+
+  solids(S) {
+    const st = S.state, mode = S.knobs.mode, nc = NCOL[mode], cw = CW / nc, pw = FW[mode] / nc;
+    // JSCAD is z-up: three (x, y, z) -> jscad (x, -z, y)
+    const B = (x, y, z, sx, sy, sz) => J.primitives.cuboid({ size: [sx, sz, sy], center: [x, -z, y] });
+    const out = [];
+    for (const side of SIDES) {
+      const cx = towerX(side);
+      out.push(B(cx, LOB / 2, TZ, TW + 0.06, LOB, TD + 0.1));
+      for (let l = 0; l <= N_LAYERS; l++) out.push(B(cx, Y0 + l * FH - 0.015, TZ, TW + 0.06, 0.03, TD + 0.06));
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) out.push(B(cx + sx * TW / 2, Y0 + N_LAYERS * FH / 2, TZ + sz * TD / 2, 0.04, N_LAYERS * FH, 0.04));
+      // windows stand proud of the facade by how much the two runs differ there
+      for (let l = 0; l < N_LAYERS; l++) for (let c = 0; c < nc; c++) {
+        const g = st.diff ? Math.min(1, st.diff[l][c] / GLOW_REF[mode]) : 0, d = TD * 0.6 + 0.12 * g;
+        out.push(B(cellX(side, mode, c), cellY(l), TZ - TD * 0.3 + d / 2, cw * 0.82, FH * 0.7, d));
+      }
+      const disc = J.transforms.rotateX(Math.PI / 2, J.primitives.cylinder({ radius: DR, height: 0.05, segments: 48 }));
+      const half = J.booleans.intersect(disc, J.primitives.cuboid({ size: [2 * DR + 0.02, 0.06, DR + 0.01], center: [0, 0, (DR + 0.01) / 2] }));
+      out.push(J.transforms.translate([cx, -(DIAL_Z - 0.025), DIAL_Y - 0.01], half));
+    }
+    out.push(B(0, SLAB / 2, FZ0 + N_LAYERS * BR / 2, FW[mode] + 0.16, SLAB, N_LAYERS * BR + 0.12));
+    const rev = revSet(S);
+    for (let l = 0; l < N_LAYERS; l++) for (let c = 0; c < nc; c++) {
+      if (!rev.has(cid(l, c))) continue;
+      const h = Math.abs(barValue(S, l, c)) * BH;
+      if (h > 0.02) out.push(B(fieldX(mode, c), SLAB + h / 2 - 0.001, fieldZ(l), pw * 0.62, h, BR * 0.62));
+    }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**Who gets the drink?** "When Mary and John went to the store, John gave a drink to…" The answer is Mary. The dial on the left tower scores the model: how much more it favours Mary than John.',
+        2: '**IOI: indirect object identification.** A model should end "…John gave a drink to" with Mary (the indirect object, IO), not John (the subject, S). The score is the logit difference, logit(Mary) − logit(John) at the last position: the needle on each roof.',
+        3: '`logits_to_ave_logit_diff`: logit(IO) − logit(S) at END, averaged over the batch (one prompt here). The model is a hand-built 4-layer × 3-head attention-only toy, not GPT-2: weights set by hand, every forward pass real.',
+      },
+      cam: CAM.towers,
+      set: { mode: 'resid', dir: 'denoise', layer: 1, pos: POSN.S2, head: 0, ablate: false },
+      enter(S) { scene(S, { note: 'task', glow: false, reveal: 'none', snap: true, noteAt: NOTE_TOP }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Twin towers, one difference.** Left: the real sentence. Right: the same sentence with the second John swapped for Mary, so the answer flips to John. Blue windows: where the two runs differ inside.',
+        2: '**A controlled twin.** Same model, two prompts one token apart: S2 (the second John) becomes Mary, so the answer flips. Each floor is a layer, each window one position\'s residual stream; blue = how far clean and corrupted differ there. It starts at S2 and spreads.',
+        3: 'ARENA corrupts only S2 (flipping all three names would leave the positional signal intact). Glow = ‖resid_pre_clean − resid_pre_corr‖ per [layer, pos]: nonzero only at S2 in L0, then spreading right as heads move information.',
+      },
+      cam: CAM.towers,
+      set: { mode: 'resid', dir: 'denoise', layer: 1, pos: POSN.S2, head: 0, ablate: false },
+      enter(S) { scene(S, { note: 'twin', reveal: 'none', noteAt: NOTE_TOP }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Swap one part.** Run the swapped sentence again, but copy one window over from the real run (the teal cable). If the answer swings back to Mary, that window carried what mattered.',
+        2: '**Activation patching.** Rerun the corrupted prompt with one activation overwritten by its clean value (the teal cable). Here S2\'s residual stream at layer 1: the needle swings all the way back to Mary, so this one cell is enough to restore the answer.',
+        3: 'Hook `blocks.1.hook_resid_pre`, overwrite pos S2 with the clean cache, rerun, score with `ioi_metric` = (ld − ld_corr) / (ld_clean − ld_corr): 0 = corrupted, 1 = clean. Tap any window (or use Knobs) to patch it.',
+      },
+      cam: CAM.towers,
+      set: { mode: 'resid', dir: 'denoise', layer: 1, pos: POSN.S2, head: 0, ablate: false },
+      enter(S) { scene(S, { note: 'patch', patch: true, reveal: 'cell', noteAt: NOTE_TOP }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Try every window, one at a time.** Each try leaves a bar: tall = the answer came back. Read it like a thermal camera: the swapped name glows on the low floors, the last word on the high ones.',
+        2: '**Sweep → heatmap.** Patch every [layer, position] in turn; bar height = how much of the clean answer comes back (0 to 1). Low layers: only S2 matters. High layers: only END. In between, a head moved the name information from S2 to END.',
+        3: '`get_act_patch_resid_pre` loops layers × positions into a [layer, pos] grid of `ioi_metric`. ARENA on GPT-2: "all relevant computation happens on S2, and at layers 7 and 8, the information is moved to END". Here S-inhibition head 1.1 moves it.',
+      },
+      cam: CAM.field,
+      set: { mode: 'resid', dir: 'denoise', layer: 0, pos: 0, head: 0, ablate: false },
+      enter(S) { scene(S, { note: 'sweep', sweep: true, rows: true, noteAt: NOTE_FIELD }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Fix or break?** Copying a good part into the broken run asks "is this part enough?" Copying a broken part into the good run asks "is this part needed?" Red bars: the damage.',
+        2: '**Denoising** (clean into corrupted) tests sufficiency: is this enough to restore the answer? **Noising** (corrupted into clean) tests necessity: does breaking it break the answer? Red bar = damage, 1 − ioi_metric. One simple chain here, so the same cells light.',
+        3: 'ARENA: "noising tells you what is necessary, denoising tells you what is sufficient." Noising metric `ioi_metric_2` = (ld − ld_clean) / (ld_clean − ld_corr): 0 unharmed, −1 destroyed; bars show −ioi_metric_2. The two differ when parts are redundant (beat 7).',
+      },
+      cam: CAM.field,
+      set: { mode: 'resid', dir: 'noise', layer: 2, pos: POSN.END, head: 0, ablate: false },
+      enter(S) { scene(S, { note: 'noise', patch: true, reveal: 'all', grow: true, rows: true, noteAt: NOTE_FIELD }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Your exercise: the same sweep, in code.** You\'ll write the loop that copies one piece at a time and scores each try. Here with whole heads: tall bars are the heads that do the job, red pushes back.',
+        2: '**ARENA [1.4.1].** `patch_residual_component` + `get_act_patch_resid_pre` (hook "resid_pre", grid [layer, pos]); `patch_head_vector` + `get_act_patch_attn_head_out_all_pos` (hook "z", grid [layer, head]). Here heads 0.1, 1.1 and 2.0 carry it; 2.2 pushes back.',
+        3: '`model.run_with_hooks(corrupted_tokens, fwd_hooks=[(utils.get_act_name("z", layer), partial(patch_head_vector, head_index=head, clean_cache=clean_cache))])`, scored by `ioi_metric`; check against `transformer_lens.patching`.',
+      },
+      cam: CAM.field,
+      set: { mode: 'heads', dir: 'denoise', layer: 2, pos: POSN.END, head: 0, ablate: false },
+      enter(S) { scene(S, { note: 'heads', patch: true, reveal: 'all', grow: true, rows: true, roles: true, noteAt: NOTE_FIELD }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Knock out the star head: the answer only dips.** An understudy head wakes up and does the job, so knock-out tests mislead. Still argued: how far such circuits carry over. Your code stays the same.',
+        2: 'Wang et al. 2022\'s circuit: duplicate-token → S-inhibition → name movers (GPT-2\'s 9.9, 9.6, 10.0). Zero-ablate our mover 2.0 and backup 3.0 takes over (self-repair), so ablation understates 2.0. How far such circuits generalise is open; the exercise is unaffected.',
+        3: 'Current method: find the circuit by patching, then test faithfulness and completeness (backup movers 10.10, 10.6 break completeness). Emerging: automated circuit discovery, attribution graphs; self-repair is still being mapped. Irrelevant to the patching code.',
+      },
+      cam: CAM.side,
+      set: { mode: 'heads', dir: 'denoise', layer: 3, pos: POSN.END, head: 0, ablate: true },
+      enter(S) { scene(S, { note: 'repair', patch: true, reveal: 'all', grow: true, roles: true, figure: 'shrug', figAt: [1.95, 0, 1.3], face: [3.6, 0.5, 6.4], noteAt: NOTE_FIELD }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** A mechanic swapping parts between a working car and a broken one. Knocking out one gene to see what it does. An A/B test: change one thing, keep the rest, watch the result.',
+        2: 'Same logic everywhere: two otherwise identical systems, swap one part, measure the effect. Mechanics swap parts, biologists knock out genes, product teams A/B test. Next in ARENA: path patching (which head feeds which) and attribution patching (gradients).',
+        3: 'Interchange interventions / causal mediation: swap one mediator between matched inputs, measure the effect. Relatives: path patching (edges, not nodes), attribution patching (first-order estimate), causal scrubbing; outside ML, gene knockouts and A/B tests.',
+      },
+      cam: CAM.wide,
+      set: { mode: 'resid', dir: 'denoise', layer: 2, pos: POSN.END, head: 0, ablate: false },
+      enter(S) { scene(S, { patch: true, reveal: 'all', grow: true, figure: 'cheer', figAt: [-2.15, 0, 0.55], face: [-5.0, 0.5, 6.9] }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'The word "gave" also differs between the two runs on floor 1. Copy just that window across. How much of the answer comes back?',
+        2: 'resid_pre at layer 1, position "gave" differs between clean and corrupted. Patch it (denoising). What does ioi_metric read?',
+        3: 'Denoise `blocks.1.hook_resid_pre` at pos 11 ("gave"), where ‖Δ‖ > 0. `ioi_metric`?' },
+      options: [{ t: 'About 0: nothing later reads that difference', ok: true }, { t: 'About 1: any difference matters' }, { t: 'About 0.5' }, { t: 'Below 0: it flips further to John' }],
+      why: { 1: 'The difference there is a copy of the swapped name that a look-back head left in a corner no later head reads. Different is not the same as important: patching finds what matters.',
+        2: 'Layer 0\'s previous-token head copied S2\'s name into "gave", into a scratch subspace nothing reads. A diff shows what changed; patching shows what matters.',
+        3: 'The only change is in the SCR block written by 0.0 (prev-token); no W_Q, W_K or W_V reads SCR, so the output is untouched: ioi_metric ≈ 0.' },
+      show(S) { S.setKnobs({ mode: 'resid', dir: 'denoise', layer: 1, pos: 11, head: 0, ablate: false }); scene(S, { note: 'gave', patch: true, reveal: 'cell', noteAt: NOTE_TOP }); return S.fly(CAM.towers); } },
+    { q: { 1: 'You copy one part from the good run into the broken run, and the right answer comes back. What have you shown about that part?',
+        2: 'Denoising: patching one clean activation into the corrupted run restores the answer. What does that show?',
+        3: 'A denoising patch at one node gives `ioi_metric` ≈ 1. Which claim does that support?' },
+      options: [{ t: 'It is enough to restore the answer (sufficient)', ok: true }, { t: 'It is needed for the answer (necessary)' }, { t: 'It is the whole circuit' }, { t: 'Nothing: patching is noise' }],
+      why: { 1: 'Putting it in brought the answer back, so it is enough. Whether the model needs it is a different test: break it in the good run (noising).',
+        2: 'Sufficiency. ARENA: "noising tells you what is necessary, denoising tells you what is sufficient." Necessity needs the reverse experiment.',
+        3: 'Sufficiency (given the rest of the corrupted run). Necessity is the noising question, and redundancy (backup heads) can make the two disagree.' },
+      show(S) { S.setKnobs({ mode: 'resid', dir: 'denoise', layer: 1, pos: POSN.S2, head: 0, ablate: false }); scene(S, { note: 'patch', patch: true, reveal: 'cell', noteAt: NOTE_TOP }); return S.fly(CAM.towers); } },
+    { q: { 1: 'Why copy parts from a second, swapped sentence instead of just blanking a part to zero?',
+        2: 'Why patch from a corrupted prompt rather than zero-ablate the activation?',
+        3: 'Why is resampling from a corrupted prompt preferred to zero-ablation?' },
+      options: [{ t: 'Zeros are values the model never sees; the swap changes only the one fact', ok: true }, { t: 'Zeros are slower to compute' }, { t: 'Zeros always give a score of exactly 0' }, { t: 'There is no real difference' }],
+      why: { 1: 'A blank part is like pulling a wire: things break that have nothing to do with the question. The swapped sentence keeps everything normal except who the subject is (blue windows).',
+        2: 'Zero is off-distribution: the model may break for reasons unrelated to IOI (ARENA\'s example: ablating MLP0 hurts every task). The corrupted run differs only where the swap reaches.',
+        3: 'Zero-ablation pushes activations off-distribution, so effects may not be task-specific; a corrupted (or mean/resampled) value stays on-distribution and isolates the one variable (S).' },
+      show(S) { S.setKnobs({ mode: 'resid', dir: 'denoise', layer: 1, pos: POSN.S2, head: 0, ablate: false }); scene(S, { note: 'twin', reveal: 'none', noteAt: NOTE_TOP }); return S.fly(CAM.towers); } },
+    { q: { 1: 'The good run scores +3.04, the broken run −3.04. A patch gives 0.00. What does ARENA\'s score (0 = broken, 1 = good) say?',
+        2: 'Clean logit diff +3.04, corrupted −3.04, patched 0.00. What is ioi_metric?',
+        3: '`ioi_metric` for patched ld = 0 with clean +3.04, corrupted −3.04?' },
+      options: [{ t: '0.5', ok: true }, { t: '0' }, { t: '1' }, { t: '−0.5' }],
+      why: { 1: 'Zero sits exactly halfway between −3.04 and +3.04, so half of the answer came back: 0.5.',
+        2: '(0 − (−3.04)) / (3.04 − (−3.04)) = 3.04 / 6.08 = 0.5. ARENA even tests it: ioi_metric((clean_logits + corrupted_logits) / 2) = 0.5.',
+        3: '(ld − ld_corr) / (ld_clean − ld_corr) = 0.5; linear in ld, so ARENA\'s assert on the averaged logits holds exactly (computed in the note).' },
+      show(S) { S.setKnobs({ mode: 'resid', dir: 'denoise', layer: 1, pos: POSN.S2, head: 0, ablate: false }); scene(S, { note: 'mid', glow: false, reveal: 'none', noteAt: NOTE_TOP }); return S.fly(CAM.towers); } },
+    { q: { 1: 'Knock out head 2.0, the one that says the name. What happens to the good run\'s answer?',
+        2: 'Zero-ablate name mover 2.0 on the clean prompt. What happens to the logit difference?',
+        3: '`head_zero_ablation_hook` on 2.0, clean prompt: effect on ld?' },
+      options: [{ t: 'It drops but stays Mary: a backup head covers', ok: true }, { t: 'It flips to John' }, { t: 'Nothing changes at all' }, { t: 'It gets stronger' }],
+      why: { 1: 'An understudy head (3.0) only speaks up when the answer is missing. With 2.0 gone it says Mary itself, so the answer survives, weaker.',
+        2: 'Backup name mover 3.0 rests on BOS while the answer is already written; ablate 2.0 and it moves Mary itself. Self-repair: ablation understates 2.0 (hold 3.0 fixed and the answer flips).',
+        3: '3.0\'s BOS score grows with what OUT already holds; with 2.0 ablated it attends IO and writes Mary. ld stays positive; freezing 3.0 too sends it negative (note).' },
+      show(S) { S.setKnobs({ mode: 'heads', dir: 'denoise', layer: 3, pos: POSN.END, head: 0, ablate: true }); scene(S, { note: 'repair', patch: true, reveal: 'all', grow: true, roles: true, noteAt: NOTE_FIELD }); return S.fly(CAM.side); } },
+    { q: { 1: 'Try every window of the lowest floor. Which one brings the answer back?',
+        2: 'In the resid_pre sweep, which position lights up at layer 0?',
+        3: '`act_patch_resid_pre[0]`: which position is nonzero?' },
+      options: [{ t: 'S2, the swapped name', ok: true }, { t: 'END, the last word' }, { t: 'IO, Mary' }, { t: 'Every position a little' }],
+      why: { 1: 'At the bottom nothing has moved yet: the only difference between the runs is the swapped word itself.',
+        2: 'Layer 0\'s input is just the embeddings; the runs differ only at S2, so patching anywhere else changes nothing.',
+        3: 'resid_pre at layer 0 = embeddings; clean and corrupted differ only at pos 10, so the row is 1.00 there and 0 elsewhere (ARENA\'s plot shows the same).' },
+      show(S) { S.setKnobs({ mode: 'resid', dir: 'denoise', layer: 0, pos: POSN.S2, head: 0, ablate: false }); scene(S, { note: 'sweep', patch: true, reveal: 'all', grow: true, rows: true, noteAt: NOTE_FIELD }); return S.fly(CAM.field); } },
+  ],
+
+  where: { 1: 'Anything with a working and a broken twin: a mechanic swapping parts between two cars, a biologist knocking out one gene, an A/B test that changes one thing at a time.',
+    2: 'Swap one part between two otherwise identical runs and measure: mechanics, gene knockouts, A/B tests. In interpretability it grows into path patching (which head feeds which) and attribution patching (a gradient shortcut for big sweeps).',
+    3: 'Interchange interventions / causal mediation analysis. Relatives: path patching, attribution patching (first-order), causal scrubbing, distributed alignment search; outside ML, gene knockouts and A/B tests.' },
+  links: [
+    { label: 'Film · W8 activation patching', href: '../../intuition/films/w8-patching.html' },
+    { label: 'Film · the IOI circuit, deep', href: '../../intuition/films/deep-w08-ioi.html' },
+    { label: 'Week 8 pack', href: '../../index.html#week-08' },
+    { label: 'Demo · induction heads & patching', href: '../../index.html#demo/induction-heads-patching' },
+    { label: 'Case · the IOI task', href: '../../index.html#cases/ioi-task' },
+    { label: 'Case · activation patching', href: '../../index.html#cases/activation-patching' },
+    { label: 'Case · path patching', href: '../../index.html#cases/path-patching' },
+    { label: 'Case · direct logit attribution', href: '../../index.html#cases/direct-logit-attribution' },
+    { label: 'Map · activation patching', href: '../../index.html#map/node=activation-patching' },
+    { label: 'Map · indirect object identification', href: '../../index.html#map/node=indirect-object-identification' },
+    { label: 'Map · logit difference', href: '../../index.html#map/node=logit-difference' },
+    { label: 'Map · denoising vs noising', href: '../../index.html#map/node=denoising-vs-noising' },
+    { label: 'Map · name mover head', href: '../../index.html#map/node=name-mover-head' },
+    { label: 'Map · S-inhibition head', href: '../../index.html#map/node=s-inhibition-head' },
+  ],
+  remix: 'Build a single-file three.js scene of activation patching as two identical glass towers (floors = 4 layers, windows = 15 token positions) for a clean prompt ("When Mary and John went to the store, John gave a drink to") and a corrupted one (only the second John flipped to Mary), each with a roof dial showing logit(Mary) − logit(John). Compute everything with a real hand-built 4-layer x 3-head attention-only transformer: 0.1 duplicate-token head (a name attends to its earlier copy, writes DUP), 1.1 S-inhibition head (END attends where DUP is loud, writes INH), 2.0 name mover (attends names minus INH, writes the name to the logits), a negative mover, a backup mover whose BOS sink grows with what is already written, and bystander heads. Glow each window by ||clean − corrupted||; a teal cable copies one window across; a bar field in front shows ARENA\'s ioi_metric for every cell (sweep), with denoise/noise and head-mode toggles and a zero-ablate-2.0 switch that shows self-repair.',
+  credit: 'Task, corruption, metrics and patching functions from ARENA [1.4.1] (logits_to_ave_logit_diff, ioi_metric, ioi_metric_2, patch_residual_component, get_act_patch_resid_pre, patch_head_vector, get_act_patch_attn_head_out_all_pos; head_zero_ablation_hook from [1.2]); the toy model is hand-built (weights set by hand, forward passes real). IOI circuit and self-repair: Wang et al. 2022 (Interpretability in the Wild); GPT-2 head names from ARENA\'s CIRCUIT dict. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

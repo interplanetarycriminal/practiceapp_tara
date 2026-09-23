@@ -1,0 +1,944 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Sanded Saddle · Object Lessons</title>
+<meta name="description" content="PPO's clipped objective as a plaster saddle with its over-eager slopes sanded flat: ARENA's calc_clipped_surrogate_objective, computed live.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+  /* the kit's beat chip .k-tag sets min-width:52px; not wanted on 3D tags */
+  .k-label.k-tag{min-width:0; text-transform:none; letter-spacing:.01em; font-size:10.5px}
+  .k-label.k-tag.k-teal{color:color-mix(in srgb, var(--k-aux, #1c9aa0) 80%, var(--ink))}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   20 · w10-saddle: "The sanded saddle" (W10, ARENA [2.3] PPO)
+   The plaster surface is ARENA's clipped surrogate, one sample's term:
+   min(r·Â, clip(r, 1 − ε, 1 + ε)·Â), with Â the minibatch-normalised
+   advantage. Every height, slope and readout is computed below; the MATH
+   block is extracted and verified in node (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const sigmoid = (z) => 1 / (1 + Math.exp(-z));
+const logsigmoid = (z) => (z >= 0 ? -Math.log1p(Math.exp(-z)) : z - Math.log1p(Math.exp(z)));
+const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+// torch's Tensor.std() is the sample standard deviation (Bessel's correction: divide by n - 1)
+const std = (a) => { const m = mean(a); return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / (a.length - 1)); };
+
+// ARENA [2.3]: advantage normalisation inside calc_clipped_surrogate_objective (PPO detail #7)
+function normalize_advantages(mb_advantages, eps = 1e-8) {
+  const m = mean(mb_advantages), s = std(mb_advantages);
+  return mb_advantages.map((a) => (a - m) / (s + eps));
+}
+
+// ARENA [2.3] calc_clipped_surrogate_objective, line for line; new_logprobs = dist.log_prob(mb_action)
+function calc_clipped_surrogate_objective(new_logprobs, mb_advantages, mb_logprobs, clip_coef, eps = 1e-8) {
+  const logits_diff = new_logprobs.map((lp, i) => lp - mb_logprobs[i]);
+  const prob_ratio = logits_diff.map((d) => Math.exp(d));
+  const adv = normalize_advantages(mb_advantages, eps);
+  const non_clipped = prob_ratio.map((r, i) => r * adv[i]);
+  const clipped = prob_ratio.map((r, i) => clamp(r, 1 - clip_coef, 1 + clip_coef) * adv[i]);
+  return mean(non_clipped.map((x, i) => Math.min(x, clipped[i])));
+}
+
+// one sample's term: the height of the plaster at (r, Â); and the unclipped saddle r·Â
+function surrogate(r, A, clip_coef) { return Math.min(r * A, clamp(r, 1 - clip_coef, 1 + clip_coef) * A); }
+function unclipped(r, A) { return r * A; }
+
+// ∂term/∂r exactly as torch autograd computes it: t.clip passes gradient only where
+// 1 − ε <= r <= 1 + ε; t.minimum sends it to the smaller input and splits it evenly on a tie
+function dsurrogate_dr(r, A, clip_coef) {
+  const x = r * A, y = clamp(r, 1 - clip_coef, 1 + clip_coef) * A;
+  const gx = A, gy = (r >= 1 - clip_coef && r <= 1 + clip_coef) ? A : 0;
+  if (x < y) return gx;
+  if (x > y) return gy;
+  return 0.5 * gx + 0.5 * gy;
+}
+
+// ARENA's logged diagnostics (compute_ppo_objective, under inference_mode)
+function diagnostics(new_logprobs, mb_logprobs, clip_coef) {
+  const logratio = new_logprobs.map((lp, i) => lp - mb_logprobs[i]);
+  const ratio = logratio.map((d) => Math.exp(d));
+  const approx_kl = mean(ratio.map((r, i) => r - 1 - logratio[i]));
+  const clipfrac = mean(ratio.map((r) => (Math.abs(r - 1.0) > clip_coef ? 1 : 0)));
+  return { approx_kl, clipfrac };
+}
+
+/* Toy policy (illustrative): one state, two actions; θ is the logit of the action that was taken,
+   π_θ(a) = σ(θ), and the old policy took it with p_old = 0.5 (a near-uniform start, like ARENA's
+   std = 0.01 actor head). Gradient ascent (SGD, maximize=True) on this sample's term:
+   θ ← θ + lr · ∂term/∂r · ∂r/∂θ, with ∂r/∂θ = r · (1 − σ(θ)). */
+function climb({ r0, A, clip_coef, lr, steps, p_old = 0.5, clip = true }) {
+  const lp_old = Math.log(p_old);
+  let theta = Math.log((r0 * p_old) / (1 - r0 * p_old));   // σ(θ₀) = r₀ · p_old
+  const path = [];
+  for (let k = 0; k <= steps; k++) {
+    const r = Math.exp(logsigmoid(theta) - lp_old);        // prob_ratio = exp(logprob − old logprob)
+    const g = clip ? dsurrogate_dr(r, A, clip_coef) : A;
+    path.push({ k, theta, r, L: clip ? surrogate(r, A, clip_coef) : unclipped(r, A), g });
+    theta += lr * g * r * (1 - sigmoid(theta));
+  }
+  return path;
+}
+
+/* Toy minibatch (illustrative): N states, each with its own logit (a table, not a network), all
+   starting at θ = θ_old (so r = 1). SGD on ARENA's mean objective. */
+function trainBatch({ raw, clip_coef, lr, steps, p_old = 0.5, clip = true }) {
+  const N = raw.length, lp_old = new Array(N).fill(Math.log(p_old));
+  const adv = normalize_advantages(raw);
+  let theta = new Array(N).fill(Math.log(p_old / (1 - p_old)));
+  const hist = [];
+  for (let k = 0; k <= steps; k++) {
+    const lp = theta.map(logsigmoid);
+    const ratio = lp.map((l, i) => Math.exp(l - lp_old[i]));
+    const obj = clip ? calc_clipped_surrogate_objective(lp, raw, lp_old, clip_coef) : mean(ratio.map((r, i) => r * adv[i]));
+    hist.push({ k, ratio, obj, ...diagnostics(lp, lp_old, clip_coef) });
+    theta = theta.map((t, i) => t + lr * (1 / N) * (clip ? dsurrogate_dr(ratio[i], adv[i], clip_coef) : adv[i]) * ratio[i] * (1 - sigmoid(t)));
+  }
+  return { adv, hist };
+}
+const MATH = { clamp, sigmoid, logsigmoid, mean, std, normalize_advantages, calc_clipped_surrogate_objective,
+  surrogate, unclipped, dsurrogate_dr, diagnostics, climb, trainBatch };
+// MATH-END
+
+/* ============================================================ display setup */
+
+/* Height is the GAIN this sample claims over not changing: z = L − Â (the value at r = 1).
+   Â is fixed data during the update, so subtracting it moves no slope (∂z/∂r = ∂L/∂r), and ARENA's
+   normalised Â average exactly 0, so a minibatch's mean height is L^CLIP itself. Unclipped,
+   z = (r − 1)·Â: a saddle centred on the plinth; the clip caps the gain at ε·|Â|. */
+const gainC = (r, A, c) => surrogate(r, A, c) - A;       // the plaster (clipped)
+const gainU = (r, A) => unclipped(r, A) - A;              // the unsanded saddle, (r − 1)·Â
+const SR = 1.7, SA = 0.75, ZS = 0.45, BASE = 0.1, ZMIN = -2;   // world scales (r, Â, height)
+const wx = (r) => (r - 1) * SR;
+const wz = (A) => -A * SA;                                     // Â > 0 at the back
+const wy = (z) => BASE + (z - ZMIN) * ZS;
+const STEPS = 20;                                              // gradient steps per run
+const RAW = [2.1, 1.7, 1.4, 1.0, 0.7, 0.3, 0.2, -0.2];          // toy raw advantages (mean 0.9)
+const BR = 0.075, TR = 0.0085, RAIL = 0.011, BEAD = 0.066;
+const UP = new THREE.Vector3(0, 1, 0);
+const CAM = {
+  hero: { pos: [4.0, 3.8, 5.8], target: [0, 0.9, 0] },
+  axisA: { pos: [1.6, 4.8, 6.6], target: [0, 0.9, 0] },
+  saddle: { pos: [4.6, 3.2, 5.2], target: [0, 0.9, 0] },
+  sand: { pos: [3.4, 4.0, 6.0], target: [0, 0.9, 0] },
+  corner: { pos: [2.0, 3.0, 6.8], target: [0.2, 0.8, 0] },
+  batch: { pos: [3.0, 5.0, 5.6], target: [0, 0.9, 0] },
+  wide: { pos: [-3.6, 4.2, 6.0], target: [0, 0.9, 0] },
+  low: { pos: [5.9, 2.2, 3.0], target: [0.4, 1.0, -0.5] },
+};
+const fx = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+const sg = (v, d = 1) => (v > 0 ? '+' : '') + fx(v, d);
+
+function axisGrid(a, b, n, extra) {
+  const v = [];
+  for (let i = 0; i <= n; i++) v.push(a + (b - a) * i / n);
+  for (const e of extra) if (e > a && e < b) v.push(e);
+  v.sort((p, q) => p - q);
+  return v.filter((x, i) => i === 0 || x - v[i - 1] > 1e-9);
+}
+// the displayed plaster: s = 1 is ARENA's clipped term exactly, s = 0 is the unsanded saddle r·Â
+function hDisp(r, A, c, s) { const u = gainU(r, A); return s >= 1 ? gainC(r, A, c) : u - s * (u - gainC(r, A, c)); }
+function slopeDisp(r, A, c, s) { return (1 - s) * A + s * dsurrogate_dr(r, A, c); }
+
+function rod(mat, radius, seg = 8) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 1, seg, 1), mat);
+  m.castShadow = true;
+  const d = new THREE.Vector3();
+  m.userData.set = (p, q) => {
+    d.subVectors(q, p);
+    const len = Math.max(d.length(), 1e-6);
+    m.position.copy(p).addScaledVector(d, 0.5);
+    m.quaternion.setFromUnitVectors(UP, d.multiplyScalar(1 / len));
+    m.scale.set(1, len, 1);
+  };
+  return m;
+}
+
+/* ============================================================ the plaster */
+
+function buildSurface(S) {
+  const st = S.state, c = st.c;
+  st.rs = axisGrid(0, 2, 40, [1 - c, 1 + c]);
+  st.As = axisGrid(-2, 2, 40, [0]);
+  const nx = st.rs.length - 1, ny = st.As.length - 1;
+  const nt = nx * ny * 6, ns = (2 * nx + 2 * ny) * 6;
+  const mk = (n, col) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    if (col) g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    return g;
+  };
+  if (st.top) { st.top.geometry.dispose(); st.skirt.geometry.dispose(); st.top.geometry = mk(nt, true); st.skirt.geometry = mk(ns, false); }
+  else {
+    const topMat = new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 0.9, metalness: 0 });
+    topMat.shadowSide = THREE.DoubleSide;
+    st.top = new THREE.Mesh(mk(nt, true), topMat);
+    st.skirt = new THREE.Mesh(mk(ns, false), K.mat.plaster('#e9e2d6'));
+    for (const m of [st.top, st.skirt]) { m.castShadow = true; m.receiveShadow = true; S.root.add(m); }
+    // brass trim round the foot
+    const bm = K.mat.brass(), tw = 0.026, th = 0.06, hx = SR, hz = 2 * SA;
+    const box = (w, d, x, z) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, th, d), bm); b.position.set(x, th / 2, z); b.castShadow = true; b.receiveShadow = true; S.root.add(b); };
+    box(2 * hx + 2 * tw, tw, 0, hz + tw / 2); box(2 * hx + 2 * tw, tw, 0, -hz - tw / 2);
+    box(tw, 2 * hz, hx + tw / 2, 0); box(tw, 2 * hz, -hx - tw / 2, 0);
+  }
+  paintSurface(S);
+}
+
+const cPl = new THREE.Color(), cGr = new THREE.Color(), cTmp = new THREE.Color();
+function paintSurface(S) {
+  const st = S.state, c = st.c, s = st.sand, rs = st.rs, As = st.As;
+  const nx = rs.length - 1, ny = As.length - 1, W1 = nx + 1;
+  const Y = new Float32Array((nx + 1) * (ny + 1));
+  for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) Y[j * W1 + i] = wy(hDisp(rs[i], As[j], c, s));
+  const pos = st.top.geometry.attributes.position.array, nor = st.top.geometry.attributes.normal.array;
+  const col = st.top.geometry.attributes.color.array;
+  cPl.set(C.plaster); cGr.set(C.grad);
+  let q = 0;
+  const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), n = new THREE.Vector3();
+  const tri = (ax, ay, az, bx, by, bz, cx, cy, cz, cr) => {
+    e1.set(bx - ax, by - ay, bz - az); e2.set(cx - ax, cy - ay, cz - az); n.crossVectors(e1, e2).normalize();
+    for (const [x, y, z] of [[ax, ay, az], [bx, by, bz], [cx, cy, cz]]) {
+      pos[q] = x; pos[q + 1] = y; pos[q + 2] = z;
+      nor[q] = n.x; nor[q + 1] = n.y; nor[q + 2] = n.z;
+      col[q] = cr.r; col[q + 1] = cr.g; col[q + 2] = cr.b;
+      q += 3;
+    }
+  };
+  for (let j = 0; j < ny; j++) {
+    const z0 = wz(As[j]), z1 = wz(As[j + 1]), Ac = (As[j] + As[j + 1]) / 2;
+    for (let i = 0; i < nx; i++) {
+      const x0 = wx(rs[i]), x1 = wx(rs[i + 1]), rc = (rs[i] + rs[i + 1]) / 2;
+      const y00 = Y[j * W1 + i], y10 = Y[j * W1 + i + 1], y11 = Y[(j + 1) * W1 + i + 1], y01 = Y[(j + 1) * W1 + i];
+      // red tint = |slope along r| of the displayed surface (the push this sample feels); shelves stay white
+      const g = Math.abs(slopeDisp(rc, Ac, c, s));
+      cTmp.copy(cPl).lerp(cGr, 0.62 * Math.min(1, g / 2));
+      tri(x0, y00, z0, x1, y10, z0, x1, y11, z1, cTmp);
+      tri(x0, y00, z0, x1, y11, z1, x0, y01, z1, cTmp);
+    }
+  }
+  const tg = st.top.geometry;
+  tg.attributes.position.needsUpdate = true; tg.attributes.normal.needsUpdate = true; tg.attributes.color.needsUpdate = true;
+  tg.computeBoundingSphere(); tg.computeBoundingBox();
+  // skirts: walk the perimeter, outward quads down to the plinth
+  const per = [];
+  for (let i = 0; i < nx; i++) per.push([i, 0, [0, 0, 1]]);
+  for (let j = 0; j < ny; j++) per.push([nx, j, [1, 0, 0]]);
+  for (let i = nx; i > 0; i--) per.push([i, ny, [0, 0, -1]]);
+  for (let j = ny; j > 0; j--) per.push([0, j, [-1, 0, 0]]);
+  const sp = st.skirt.geometry.attributes.position.array, sn = st.skirt.geometry.attributes.normal.array;
+  let w = 0;
+  const put = (x, y, z, o) => { sp[w] = x; sp[w + 1] = y; sp[w + 2] = z; sn[w] = o[0]; sn[w + 1] = o[1]; sn[w + 2] = o[2]; w += 3; };
+  for (let p = 0; p < per.length; p++) {
+    const [ia, ja, o] = per[p], [ib, jb] = per[(p + 1) % per.length];
+    const ax = wx(rs[ia]), az = wz(As[ja]), ay = Y[ja * W1 + ia];
+    const bx = wx(rs[ib]), bz = wz(As[jb]), by = Y[jb * W1 + ib];
+    // winding chosen so the face normal points along o (outward)
+    e1.set(bx - ax, 0, bz - az); e2.set(0, -1, 0); n.crossVectors(e1, e2);
+    const flip = n.x * o[0] + n.z * o[2] < 0;
+    if (!flip) { put(ax, ay, az, o); put(bx, by, bz, o); put(ax, 0, az, o); put(bx, by, bz, o); put(bx, 0, bz, o); put(ax, 0, az, o); }
+    else { put(ax, ay, az, o); put(ax, 0, az, o); put(bx, by, bz, o); put(bx, by, bz, o); put(ax, 0, az, o); put(bx, 0, bz, o); }
+  }
+  const sg2 = st.skirt.geometry;
+  sg2.attributes.position.needsUpdate = true; sg2.attributes.normal.needsUpdate = true; sg2.computeBoundingSphere();
+  placeLines(S);
+  paintGhost(S);
+  S.invalidate();
+}
+
+/* creases (brass), the r = 1 line (ink), the slice rail (amber), tick posts */
+function placeLines(S) {
+  const st = S.state, c = st.c, s = st.sand, A = S.knobs.A;
+  const P = (r, a, lift = 0.012) => new THREE.Vector3(wx(r), wy(hDisp(r, a, c, s)) + lift, wz(a));
+  st.creaseUp.userData.set(P(1 + c, 0, 0.014), P(1 + c, 2, 0.014));
+  st.creaseDn.userData.set(P(1 - c, -2, 0.014), P(1 - c, 0, 0.014));
+  st.oneLine.userData.set(P(1, -2, 0.01), P(1, 2, 0.01));
+  st.rail.set([0, 1 - c, 1 + c, 2].map((r) => P(r, A, RAIL)));
+  const zf = wz(-2) + 0.12;
+  st.ticks.forEach((t, i) => { const r = [1 - c, 1, 1 + c][i]; t.position.set(wx(r), 0.04, zf); });
+  st.tickTags.forEach((t, i) => t.move(new THREE.Vector3(wx([1 - c, 1, 1 + c][i]), 0.02, zf + 0.12)));
+  st.tickTags[0].set(() => (S.tier === 1 ? fx(1 - S.knobs.eps) : '1−ε'));
+  st.tickTags[2].set(() => (S.tier === 1 ? fx(1 + S.knobs.eps) : '1+ε'));
+  st.shelfTag.move(P(1 + c + (1 - c) * 0.55, 1.45, 0.02));
+  st.slopeTag.move(P(1.62, -1.4, 0.02));
+  st.shelfDnTag.move(P((1 - c) * 0.45, -1.45, 0.02));
+}
+
+/* the unclipped saddle r·Â where the min cut material away: translucent teal wedges over the two
+   shelves (L <= r·Â everywhere, so there is nothing to show elsewhere), ruled with straight strings
+   (z = r·Â is doubly ruled). */
+const WN = 8;
+function ghostRegions(c) {   // [r range, Â range, the two outer walls]
+  return [
+    { r: [1 + c, 2], A: [0, 2], walls: [['r', 2], ['A', 2]] },
+    { r: [0, 1 - c], A: [-2, 0], walls: [['r', 0], ['A', -2]] },
+  ];
+}
+function buildGhost(S) {
+  const st = S.state;
+  const nv = 2 * (WN * WN * 6 + 2 * WN * 6);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+  const mat = K.mat.glass(C.aux, 0.26);
+  mat.side = THREE.DoubleSide;
+  st.wedge = new THREE.Mesh(g, mat);
+  st.wedge.renderOrder = 2;
+  st.wedge.userData.noFit = true;
+  S.root.add(st.wedge);
+  st.strings = new THREE.InstancedMesh(new THREE.CylinderGeometry(TR, TR, 1, 6, 1), K.mat.string(C.aux), 12);
+  st.strings.castShadow = true;
+  S.root.add(st.strings);
+  st.sliceStr = rod(K.mat.string(C.aux), TR * 1.6, 6);
+  S.root.add(st.sliceStr);
+}
+function paintGhost(S) {
+  const st = S.state, c = st.c, s = st.sand;
+  const pos = st.wedge.geometry.attributes.position.array;
+  let q = 0;
+  const put = (x, y, z) => { pos[q++] = x; pos[q++] = y; pos[q++] = z; };
+  const G = (r, A) => [wx(r), wy(gainU(r, A)), wz(A)];
+  const Hs = (r, A) => [wx(r), wy(hDisp(r, A, c, s)), wz(A)];
+  for (const R of ghostRegions(c)) {
+    const [r0, r1] = R.r, [a0, a1] = R.A;
+    for (let j = 0; j < WN; j++) for (let i = 0; i < WN; i++) {
+      const ra = r0 + (r1 - r0) * i / WN, rb = r0 + (r1 - r0) * (i + 1) / WN;
+      const aa = a0 + (a1 - a0) * j / WN, ab = a0 + (a1 - a0) * (j + 1) / WN;
+      const p00 = G(ra, aa), p10 = G(rb, aa), p11 = G(rb, ab), p01 = G(ra, ab);
+      put(...p00); put(...p10); put(...p11); put(...p00); put(...p11); put(...p01);
+    }
+    for (const [kind, val] of R.walls) {
+      for (let i = 0; i < WN; i++) {
+        let ta, tb, ba, bb;
+        if (kind === 'r') { const aa = a0 + (a1 - a0) * i / WN, ab = a0 + (a1 - a0) * (i + 1) / WN; ta = G(val, aa); tb = G(val, ab); ba = Hs(val, aa); bb = Hs(val, ab); }
+        else { const ra = r0 + (r1 - r0) * i / WN, rb = r0 + (r1 - r0) * (i + 1) / WN; ta = G(ra, val); tb = G(rb, val); ba = Hs(ra, val); bb = Hs(rb, val); }
+        put(...ta); put(...tb); put(...bb); put(...ta); put(...bb); put(...ba);
+      }
+    }
+  }
+  const g = st.wedge.geometry;
+  g.attributes.position.needsUpdate = true;
+  g.computeVertexNormals();
+  g.computeBoundingSphere();
+  // strings on the wedge tops (straight: rulings of z = r·Â)
+  const d = new THREE.Object3D(), v = new THREE.Vector3();
+  const V = (r, A) => new THREE.Vector3(wx(r), wy(gainU(r, A)) + TR, wz(A));
+  let i = 0;
+  const seg = (p, qq) => {
+    v.subVectors(qq, p); const len = Math.max(1e-6, v.length());
+    d.position.copy(p).addScaledVector(v, 0.5); d.quaternion.setFromUnitVectors(UP, v.multiplyScalar(1 / len)); d.scale.set(1, len, 1);
+    d.updateMatrix(); st.strings.setMatrixAt(i++, d.matrix);
+  };
+  for (const A of [0.5, 1, 1.5, 2]) seg(V(1 + c, A), V(2, A));
+  for (const A of [-0.5, -1, -1.5, -2]) seg(V(0, A), V(1 - c, A));
+  for (const r of [1.5, 2]) seg(V(r, 0), V(r, 2));
+  for (const r of [0, 0.5]) seg(V(r, -2), V(r, 0));
+  st.strings.instanceMatrix.needsUpdate = true;
+  st.strings.computeBoundingSphere();
+  const show = S.knobs.ghost && s > 0.02;
+  st.wedge.visible = show; st.strings.visible = show;
+}
+
+/* ============================================================ state and motion */
+
+function compute(S) {
+  const st = S.state, k = S.knobs;
+  st.P = climb({ r0: k.r0, A: k.A, clip_coef: k.eps, lr: k.lr, steps: STEPS, clip: k.clip });
+  st.G = climb({ r0: k.r0, A: k.A, clip_coef: k.eps, lr: k.lr, steps: STEPS, clip: false });
+  st.B = trainBatch({ raw: RAW, clip_coef: k.eps, lr: k.lr * RAW.length, steps: STEPS, clip: k.clip });
+  st.u = 0; st.ub = 0; st.nf = 1;
+  st.glide = null;
+}
+
+const tmp = new THREE.Vector3();
+function onSurf(S, r, A, lift) { const st = S.state; return tmp.set(wx(r), wy(hDisp(r, A, st.c, st.sand)) + lift, wz(A)); }
+
+function pathAt(P, u) {   // position along a path at fractional step u (hops between landings)
+  const last = P.length - 1, k = Math.min(Math.floor(u), last), f = Math.min(1, u - k);
+  if (k >= last) return { r: P[last].r, hop: 0, k: last };
+  const a = P[k].r, b = P[k + 1].r;
+  return { r: a + (b - a) * f, hop: 4 * f * (1 - f) * (0.12 * Math.abs(b - a) * SR + 0.004), k };
+}
+
+function drawOne(S) {
+  const st = S.state, k = S.knobs;
+  let r, A = k.A, hop = 0, kk = 0;
+  if (st.glide) { r = st.glide.r; A = st.glide.A; }
+  else { const p = pathAt(st.P, st.u); r = p.r; hop = p.hop; kk = p.k; }
+  st.ball.position.copy(onSurf(S, r, A, BR + hop));
+  // the numbers this spot stands for (a hop shows the landing it left from)
+  const g = st.glide ? (k.clip ? dsurrogate_dr(r, A, k.eps) : A) : st.P[kk].g;
+  const rr = st.glide ? r : st.P[kk].r;
+  st.shown = { r: rr, A, L: k.clip ? surrogate(rr, A, k.eps) : unclipped(rr, A), g, k: kk };
+  readout(S);
+  // gradient arrow: along the rail, pointing the way gradient ascent moves r
+  if (Math.abs(g) < 1e-12 || !st.showArrow) st.arrow.show(false);
+  else {
+    const p0 = st.ball.position.clone();
+    const dir = new THREE.Vector3(Math.sign(g) * SR, ZS * Math.abs(g) * 1, 0).normalize();
+    const len = 0.16 + 0.3 * Math.min(2, Math.abs(g));
+    st.arrow.show(true);
+    st.arrow.set(p0.clone().addScaledVector(dir, BR * 0.9), p0.clone().addScaledVector(dir, BR + len));
+  }
+  // the ghost ball runs the same steps on the unclipped saddle
+  const gv = st.ghostBall.visible;
+  if (gv) {
+    const q = st.glide ? { r, hop: 0 } : pathAt(st.G, st.u);
+    st.ghostBall.position.set(wx(q.r), wy(gainU(q.r, A)) + BR * 0.95 + q.hop, wz(A));
+    const gk = st.glide ? null : st.G[Math.min(Math.floor(st.u), STEPS)];
+    const rg = gk ? gk.r : r;
+    st.ghostTag.set(S.tier === 1 ? `unsanded · r = ${fx(rg)}` : S.tier === 2 ? `unclipped · r = ${fx(rg)}` : `r·Â only · r = ${fx(rg, 3)}`);
+  }
+  S.invalidate();
+}
+
+function readout(S) {
+  const st = S.state, k = S.knobs, v = st.shown;
+  if (!v) return;
+  const z = v.L - v.A;                       // the height: gain over r = 1
+  const push = v.g === 0 ? (S.tier === 1 ? 'flat here: no push' : '∂L/∂r = 0 (flat)') : null;
+  if (S.tier === 1) {
+    st.readout.set(`**r = ${fx(v.r)}** · gain ${sg(z, 2)}\n${push || `push ${sg(v.g, 1)}: ${v.g > 0 ? 'r goes up' : 'r goes down'}`}`);
+  } else if (S.tier === 2) {
+    st.readout.set(`**r = ${fx(v.r, 3)}** · Â = ${sg(v.A)}\ngain ${k.clip ? 'L' : 'r·Â'} − Â = ${sg(z, 3)} · ${push || `∂L/∂r = ${fx(v.g, 2)}`}`);
+  } else {
+    st.readout.set(`**r = ${fx(v.r, 3)}** · Â = ${sg(v.A, 2)} · step ${v.k}\n${k.clip ? 'L' : 'r·Â'} = ${fx(v.L, 3)}, height ${sg(z, 3)} · ∂L/∂r = ${fx(v.g, 2)}`);
+  }
+}
+
+function drawBatch(S) {
+  const st = S.state, B = st.B, nf = st.nf;
+  const raw = RAW, adv = B.adv, H = B.hist;
+  const last = H.length - 1, u = Math.min(st.ub, last), kk = Math.min(Math.floor(u), last), f = Math.min(1, u - kk);
+  const m0 = mean(raw);
+  for (let i = 0; i < raw.length; i++) {
+    const A = raw[i] + (adv[i] - raw[i]) * nf;
+    let r = 1, hop = 0;
+    if (nf >= 1) {
+      const a = H[kk].ratio[i], b = kk < last ? H[kk + 1].ratio[i] : a;
+      r = a + (b - a) * f; hop = 4 * f * (1 - f) * (0.1 * Math.abs(b - a) * SR);
+    }
+    st.beads[i].position.copy(onSurf(S, r, A, BEAD + hop));
+    // trail: from r = 1 along the landings so far
+    const pts = [onSurf(S, 1, A, 0.012).clone()];
+    if (nf >= 1) {
+      for (let j = 1; j <= kk; j++) pts.push(onSurf(S, H[j].ratio[i], A, 0.012).clone());
+      pts.push(onSurf(S, r, A, 0.012).clone());
+    }
+    st.trails[i].set(pts.length > 1 ? pts : [pts[0], pts[0].clone().add(new THREE.Vector3(1e-4, 0, 0))]);
+  }
+  st.hiRing.visible = st.hi >= 0;
+  if (st.hi >= 0) st.hiRing.position.copy(st.beads[st.hi].position).add(new THREE.Vector3(0, -BEAD + 0.006, 0));
+  st.meanRing.position.copy(onSurf(S, 1, m0 * (1 - nf), 0.014));
+  const h = H[kk];
+  const nClip = Math.round(h.clipfrac * raw.length);
+  if (nf < 1) {
+    const s = std(raw);
+    st.batchNote.set(S.tier === 1 ? `raw advantages (toy): average ${fx(m0)}\nrescaled: average 0, spread 1`
+      : S.tier === 2 ? `raw A (toy): mean ${fx(m0)}, std ${fx(s)}\nÂ = (A − mean) / (std + 1e-8)`
+      : `mb_advantages (toy): μ = ${fx(m0, 3)}, σ = ${fx(s, 3)}\n(A − A.mean()) / (A.std() + eps)`);
+  } else if (S.tier === 1) {
+    st.batchNote.set(`**score = average height ${fx(h.obj, 3)}**\n${nClip} of ${raw.length} past a sanded edge · step ${h.k}`);
+  } else if (S.tier === 2) {
+    st.batchNote.set(`**L^CLIP = mean height = ${fx(h.obj, 3)}**\nclipfrac ${fx(h.clipfrac, 3)} · approx_kl ${fx(h.approx_kl, 4)} · step ${h.k}`);
+  } else {
+    st.batchNote.set(`**${S.knobs.clip ? 'calc_clipped_surrogate_objective' : 'mean(r·Â)'} → ${fx(h.obj, 4)}**\nclipfrac ${fx(h.clipfrac, 3)} · approx_kl ${fx(h.approx_kl, 4)} · step ${h.k}`);
+  }
+  S.invalidate();
+}
+
+/* ---------------- a small animation queue (cancellable; instant under ?shot=1) */
+function play(S, phases) {
+  const st = S.state;
+  if (st.done) { const d = st.done; st.done = null; d(); }
+  st.q = phases.slice(); st.qt0 = null;
+  if (S.shot) {
+    for (const p of phases) p.fn(1);
+    st.q = [];
+    S.invalidate();
+    return Promise.resolve();
+  }
+  if (st.q.length) st.q[0].fn(0);
+  S.invalidate();
+  return new Promise((res) => { st.done = res; });
+}
+const ph = (ms, fn) => ({ ms, fn });
+const ease = (f) => (f < 0.5 ? 2 * f * f : 1 - 2 * (1 - f) * (1 - f));
+function climbPhase(S, per = 150) { return ph(STEPS * per, (f) => { S.state.glide = null; S.state.u = f * STEPS; drawOne(S); }); }
+function sandPhase(S, from, to, ms = 1300) {
+  return ph(ms, (f) => { const st = S.state; st.sand = from + (to - from) * ease(f); paintSurface(S); drawOne(S); });
+}
+function glidePhase(S, a, b, ms) {
+  return ph(ms, (f) => { const st = S.state, e = ease(f); st.glide = { r: a[0] + (b[0] - a[0]) * e, A: a[1] + (b[1] - a[1]) * e }; placeRailAt(S, st.glide.A); drawOne(S); });
+}
+function holdPhase(ms) { return ph(ms, () => {}); }
+function normPhase(S, ms = 1100) { return ph(ms, (f) => { S.state.nf = ease(f); S.state.ub = 0; drawBatch(S); }); }
+function trainPhase(S, per = 120) { return ph(STEPS * per, (f) => { S.state.nf = 1; S.state.ub = f * STEPS; drawBatch(S); }); }
+
+function placeRailAt(S, A) {
+  const st = S.state, c = st.c, s = st.sand;
+  st.rail.set([0, 1 - c, 1 + c, 2].map((r) => new THREE.Vector3(wx(r), wy(hDisp(r, A, c, s)) + RAIL, wz(A))));
+  st.sliceStr.userData.set(new THREE.Vector3(wx(0), wy(gainU(0, A)) + TR, wz(A)), new THREE.Vector3(wx(2), wy(gainU(2, A)) + TR, wz(A)));
+}
+
+/* default run after a knob change */
+function runDefault(S) {
+  const st = S.state;
+  if (S.knobs.mode === 'batch') return play(S, [normPhase(S), holdPhase(300), trainPhase(S)]);
+  st.glide = null;
+  return play(S, [holdPhase(250), climbPhase(S)]);
+}
+
+/* visibility per mode / toggles */
+function applyMode(S) {
+  const st = S.state, one = S.knobs.mode === 'one';
+  st.ball.visible = one; st.rail.mesh.visible = one; st.readout.show(one);
+  st.ghostBall.visible = one && S.knobs.ghost && S.knobs.clip;
+  st.ghostTag.show(st.ghostBall.visible && st.cfg.ghostTag !== false);
+  st.sliceStr.visible = one && S.knobs.ghost;
+  st.wedge.visible = st.strings.visible = S.knobs.ghost && st.sand > 0.02;
+  for (const b of st.beads) b.visible = !one;
+  for (const t of st.trails) t.mesh.visible = !one;
+  st.meanRing.visible = !one;
+  st.batchNote.show(!one);
+  if (one) st.hiRing.visible = false;
+  st.showArrow = one;
+  if (!one) st.arrow.show(false);
+  const btn = document.querySelector('.k-knob-button .k-btn');
+  if (btn) btn.textContent = goLabel(S);
+  dimKnobs(S);
+}
+function goLabel(S) {
+  const one = S.knobs.mode === 'one';
+  return one ? { 1: 'Roll the ball', 2: 'Climb: 20 gradient steps', 3: 'Run 20 SGD steps (ascent)' }[S.tier]
+    : { 1: 'Train the batch', 2: 'Normalise, then train', 3: 'Normalise + 20 SGD steps' }[S.tier];
+}
+function dimKnobs(S) {   // the kit cannot dim knobs; grey the ones that do nothing right now
+  const dim = (id, on) => { const el = document.getElementById('k-' + id); const row = el && el.closest('.k-knob'); if (row) row.style.opacity = on ? '0.42' : ''; };
+  const batch = S.knobs.mode === 'batch';
+  dim('A', batch); dim('r0', batch); dim('eps', !S.knobs.clip);
+}
+
+/* scene configuration shared by beats and predictions */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.cfg = o;
+  const names = o.names ?? !!o.axes;
+  st.tagR.show(names); st.tagAp.show(names); st.tagAm.show(names);
+  st.axR.show(!!o.axes); st.axA.show(!!o.axes);
+  st.ticks.forEach((t, i) => { t.visible = !!o.axes && (i === 1 || !!o.ticks); });
+  st.tickTags.forEach((t, i) => t.show(!!o.axes && (i === 1 || !!o.ticks)));
+  st.shelfTag.show(!!o.shelf); st.slopeTag.show(!!o.slope); st.shelfDnTag.show(!!o.shelfDn);
+  st.grpoTag.show(!!o.grpo);
+  st.hi = o.hi ?? -1;
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || [2.0, 0, 1.05], o.face || [0, 0.9, 0]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: typeof o.at === 'function' ? o.at(S) : o.at });
+    if (S.shot) doPose(); else setTimeout(doPose, 520);
+  } else st.fig.group.visible = false;
+  applyMode(S);
+}
+const ballWorld = (S) => S.state.ball.getWorldPosition(new THREE.Vector3());
+
+/* ================================================================== run() */
+
+run({
+  id: 'w10-saddle', num: '20', week: 10, kind: 'weekly',
+  title: 'The sanded saddle',
+  subtitle: 'PPO\'s clipped objective is a saddle with its dangerous slopes sanded flat.',
+  back2d: '#week-10',
+  film: 'w10-ppo-rlhf',
+  plinth: { r: 2.42, h: 0.14 },
+  fit: innerWidth / innerHeight < 0.8 ? 1.2 : 1,   // portrait is width-bound (the saddle is narrower than the plinth); landscape is height-bound
+
+  knobs: [
+    { id: 'mode', type: 'select', wide: true, label: { 1: 'Show', 2: 'Show', 3: 'View' }, value: 'one',
+      options: [['one', { 1: 'One action (one ball)', 2: 'One sample on an Â slice', 3: 'One sample (a slice of the surface)' }],
+        ['batch', { 1: 'A batch of 8 actions (toy)', 2: 'Toy minibatch of 8', 3: 'Toy minibatch, N = 8' }]] },
+    { id: 'eps', type: 'range', label: { 1: 'Sanding starts at 1 ± ε', 2: 'clip_coef ε', 3: 'clip_coef' },
+      min: 0.05, max: 0.4, step: 0.05, value: 0.2, fmt: (v) => v.toFixed(2) },
+    { id: 'A', type: 'range', label: { 1: 'How much better (advantage)', 2: 'Advantage Â (slice)', 3: 'Â (normalised)' },
+      min: -2, max: 2, step: 0.1, value: 1, fmt: (v) => sg(v, 1) },
+    { id: 'r0', type: 'range', label: { 1: 'Starting ratio', 2: 'Start ratio r₀', 3: 'r₀ (at this revisit)' },
+      min: 0.2, max: 1.8, step: 0.05, value: 1, fmt: (v) => v.toFixed(2) },
+    { id: 'lr', type: 'range', label: { 1: 'Step size (toy)', 2: 'Step size lr (toy)', 3: 'lr (SGD on the logit)' },
+      min: 0.05, max: 3, log: true, value: 0.3, fmt: (v) => K.fmt(v, 2) },
+    { id: 'clip', type: 'toggle', label: { 1: 'Sand the saddle (clip)', 2: 'Clip on', 3: 'clip (the min with t.clip)' }, value: true },
+    { id: 'ghost', type: 'toggle', label: { 1: 'Show the unsanded saddle', 2: 'Unclipped r·Â strings', 3: 'Show r·Â (unclipped)' }, value: true },
+    { id: 'go', type: 'button', wide: true, label: (S) => goLabel(S), onClick: (S) => runDefault(S) },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.sand = 1; st.c = null; st.q = []; st.cfg = {}; st.hi = -1; st.showArrow = true;
+    buildGhost(S);
+    const brass = K.mat.brass();
+    st.creaseUp = rod(brass, 0.016); st.creaseDn = rod(brass, 0.016);
+    st.oneLine = rod(K.mat.ink(), 0.008, 6);
+    S.root.add(st.creaseUp, st.creaseDn, st.oneLine);
+    st.rail = K.tube([new THREE.Vector3(), new THREE.Vector3(0.1, 0, 0)], C.prob, RAIL);
+    S.root.add(st.rail.mesh);
+    st.ball = K.bead([0, 1, 0], C.prob, BR);
+    S.root.add(st.ball);
+    st.ghostBall = new THREE.Mesh(new THREE.SphereGeometry(BR * 0.95, 24, 16), K.mat.glass(C.aux, 0.6));
+    S.root.add(st.ghostBall);
+    st.arrow = K.arrow([0, 0, 0], [0, 1, 0], C.grad, { r: 0.02 });
+    S.root.add(st.arrow.group);
+    // axes along the front (r) and left (Â) edges
+    const zf = wz(-2) + 0.12, xl = wx(0) - 0.12;
+    st.axR = K.arrow([wx(0) - 0.02, 0.03, zf], [wx(2) + 0.22, 0.03, zf], C.brass, { r: 0.011 });
+    st.axA = K.arrow([xl, 0.03, wz(-2) + 0.02], [xl, 0.03, wz(2) - 0.22], C.brass, { r: 0.011 });
+    for (const a of [st.axR, st.axA]) { a.group.traverse((m) => { if (m.isMesh) m.material = brass; }); S.root.add(a.group); }
+    st.ticks = [0, 1, 2].map(() => { const t = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.08, 10), brass); t.castShadow = true; S.root.add(t); return t; });
+    st.tickTags = [
+      K.label([0, 0, 0], () => (S.tier === 1 ? fx(1 - S.knobs.eps) : '1−ε'), { cls: 'tag', anchor: 'top', dy: 4 }),
+      K.label([0, 0, 0], { 1: '1 = same', 2: 'r = 1', 3: 'r = 1' }, { cls: 'tag', anchor: 'top', dy: 4 }),
+      K.label([0, 0, 0], () => (S.tier === 1 ? fx(1 + S.knobs.eps) : '1+ε'), { cls: 'tag', anchor: 'top', dy: 4 }),
+    ];
+    st.tagR = K.label([wx(2) + 0.22, 0.03, zf], { 1: 'likelier →', 2: 'r = π_new / π_old', 3: 'r_t(θ)' }, { cls: 'tag', anchor: 'left', dx: 6, dy: 0 });
+    st.tagAp = K.label([xl, 0.03, wz(2) - 0.22], { 1: 'better than usual', 2: 'Â > 0 · better', 3: 'Â > 0' }, { cls: 'tag', anchor: 'bottom', dy: -4 });
+    st.tagAm = K.label([xl, 0.03, wz(-2) + 0.02], { 1: 'worse than usual', 2: 'Â < 0 · worse', 3: 'Â < 0' }, { cls: 'tag', anchor: 'top', dy: 6 });
+    st.shelfTag = K.label([0, 0, 0], { 1: 'sanded flat: no push', 2: 'shelf: ∂L/∂r = 0', 3: 'clip branch: ∂L/∂r = 0' }, { cls: 'tag', anchor: 'bottom', dy: -6 });
+    st.shelfDnTag = K.label([0, 0, 0], { 1: 'sanded flat', 2: 'shelf: ∂L/∂r = 0', 3: '∂L/∂r = 0' }, { cls: 'tag', anchor: 'bottom', dy: -6 });
+    st.slopeTag = K.label([0, 0, 0], { 1: 'not sanded: still sloped', 2: 'unsanded: ∂L/∂r = Â', 3: 'min keeps r·Â: ∂L/∂r = Â' }, { cls: 'tag', anchor: 'top', dy: 8 });
+    st.grpoTag = K.label([0, 2.25, -0.6], { 1: 'GRPO: 8 answers to one question', 2: 'GRPO: a group of 8 answers', 3: 'GRPO: Â = (R − mean) / std per group' }, { cls: 'tag', anchor: 'bottom', dy: 0 });
+    st.readout = K.label(st.ball, '', { cls: 'readout', dy: -16 });
+    st.ghostTag = K.label(st.ghostBall, '', { cls: 'tag teal', anchor: 'bottom', dy: -12 });
+    // toy minibatch
+    st.beads = []; st.trails = [];
+    for (let i = 0; i < RAW.length; i++) {
+      const b = K.bead([0, 0, 0], C.prob, BEAD); b.visible = false; S.root.add(b); st.beads.push(b);
+      const t = K.tube([new THREE.Vector3(), new THREE.Vector3(0.01, 0, 0)], C.prob, 0.012); t.mesh.visible = false; S.root.add(t.mesh); st.trails.push(t);
+    }
+    st.meanRing = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.012, 8, 36), brass);
+    st.meanRing.rotation.x = Math.PI / 2; st.meanRing.castShadow = true; S.root.add(st.meanRing);
+    st.hiRing = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.012, 8, 36), K.mat.paint(C.ink));
+    st.hiRing.rotation.x = Math.PI / 2; st.hiRing.visible = false; S.root.add(st.hiRing);
+    st.batchNote = K.label([0, 2.05, -0.2], '', { cls: 'readout', anchor: 'bottom', dy: 0 });
+    st.fig = K.figure();
+    S.root.add(st.fig.group);
+    st.fig.group.visible = false;
+  },
+
+  rebuild(S, id) {
+    const st = S.state, k = S.knobs;
+    if (id === '*') {
+      if (st.done) { const d = st.done; st.done = null; d(); }
+      st.q = [];
+      st.sand = k.clip ? 1 : 0;
+      if (st.c !== k.eps || !st.top) { st.c = k.eps; buildSurface(S); } else paintSurface(S);
+      placeRailAt(S, k.A);
+      compute(S);
+      st.u = 0; st.ub = 0; st.nf = 1;
+      applyMode(S);
+      if (k.mode === 'one') drawOne(S); else drawBatch(S);
+      return;
+    }
+    if (id === 'eps') { st.c = k.eps; buildSurface(S); placeRailAt(S, k.A); compute(S); applyMode(S); runDefault(S); return; }
+    if (id === 'A' || id === 'r0' || id === 'lr') { placeRailAt(S, k.A); compute(S); applyMode(S); runDefault(S); return; }
+    if (id === 'clip') {
+      compute(S); applyMode(S);
+      const from = st.sand, to = k.clip ? 1 : 0;
+      if (k.mode === 'one') play(S, [sandPhase(S, from, to), climbPhase(S)]);
+      else play(S, [sandPhase(S, from, to), normPhase(S, 700), trainPhase(S)]);
+      return;
+    }
+    if (id === 'ghost') { applyMode(S); if (k.mode === 'one') drawOne(S); S.invalidate(); return; }
+    if (id === 'mode') { compute(S); applyMode(S); if (k.mode === 'one') drawOne(S); else drawBatch(S); runDefault(S); return; }
+  },
+
+  frame(S, t) {
+    const st = S.state;
+    if (!st.q.length) return false;
+    if (st.qt0 == null) st.qt0 = t;
+    for (;;) {
+      const p = st.q[0], f = ((t - st.qt0) * 1000) / p.ms;
+      if (f < 1) { p.fn(Math.max(0, f)); return true; }
+      p.fn(1);
+      st.q.shift();
+      st.qt0 += p.ms / 1000;
+      if (!st.q.length) { if (st.done) { const d = st.done; st.done = null; d(); } return false; }
+      st.q[0].fn(0);
+    }
+  },
+
+  onTier(S) {
+    const st = S.state;
+    if (S.knobs.mode === 'one') { readout(S); drawOne(S); } else drawBatch(S);
+    const btn = document.querySelector('.k-knob-button .k-btn');
+    if (btn) btn.textContent = goLabel(S);
+    void st;
+  },
+
+  solids(S) {
+    const st = S.state, c = st.c;
+    const out = [surfaceSolid(c)];
+    const J3 = (v) => [v.x, -v.z, v.y];
+    // the unclipped saddle's strings where they float above the sanded shelves (printable 1 mm rods)
+    for (const A of [-2, -1.5, -1, -0.5, 0.5, 1, 1.5, 2]) {
+      const [ra, rb] = A > 0 ? [1 + c, 2] : [0, 1 - c];
+      const p = new THREE.Vector3(wx(ra), wy(gainU(ra, A)), wz(A)), q = new THREE.Vector3(wx(rb), wy(gainU(rb, A)), wz(A));
+      const tube = K.tubeSolid([J3(p), J3(q)], 0.02, 8);
+      if (tube) out.push(tube);
+    }
+    const b = st.ball.position;
+    out.push(J.primitives.sphere({ radius: BR, center: J3(b), segments: 16 }));
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**One action from last round\'s play.** Left to right is r: how much likelier the updated policy makes it. 1 = no change, 1.5 = 50% likelier. Height = the gain the update claims.',
+        2: '**r = π_new(a|s) / π_old(a|s).** PPO learns from actions its previous self took. The ball\'s left-right spot says how much likelier the policy in training makes that action: 1 = unchanged, 1.5 = 50% likelier. Before the first update new = old, so r = 1.',
+        3: '`prob_ratio = t.exp(dist.log_prob(mb_action) - mb_logprobs)`: r_t(θ) = π_θ(a_t|s_t) / π_θold(a_t|s_t), `mb_logprobs` stored at rollout; r ∈ [0, 2] runs left to right. On a learning phase\'s first minibatch θ = θ_old, so every r is exactly 1.',
+      },
+      cam: CAM.hero,
+      set: { mode: 'one', A: 1, r0: 1, eps: 0.2, lr: 0.3, clip: false, ghost: false },
+      enter(S) {
+        scene(S, { axes: true, figure: 'point', at: ballWorld });
+        play(S, [holdPhase(500), glidePhase(S, [1, 1], [1.5, 1], 1300), holdPhase(900), glidePhase(S, [1.5, 1], [0.5, 1], 1700), holdPhase(900), glidePhase(S, [0.5, 1], [1, 1], 1100)]);
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Front to back is the advantage:** better than usual (back) or worse (front). It sets the push: the red arrow shows which way r should move, and how hard.',
+        2: '**Front to back: the advantage Â**, how much better the action went than the critic expected (`compute_advantages`, GAE), rescaled per minibatch to mean 0, std 1. The red arrow is the push ∂L/∂r = Â: right for good actions, left for bad.',
+        3: 'Â from GAE (γ 0.99, λ 0.95), then per minibatch `(mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + eps)` inside `calc_clipped_surrogate_objective` (detail #7): Â is in batch standard deviations. Unclipped, ∂L/∂r = Â.',
+      },
+      cam: CAM.axisA,
+      set: { mode: 'one', A: 1, r0: 1, eps: 0.2, lr: 0.3, clip: false, ghost: false },
+      enter(S) {
+        scene(S, { axes: true });
+        play(S, [holdPhase(400), glidePhase(S, [1, 1], [1, 1.8], 1100), holdPhase(800), glidePhase(S, [1, 1.8], [1, -1.5], 2000), holdPhase(900), glidePhase(S, [1, -1.5], [1, 1], 1300)]);
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Together: gain = (r − 1) × advantage.** A saddle. On the good side it rises forever, so the update keeps pushing, until one lucky sample makes the action nearly certain.',
+        2: 'The plain objective is L = r·Â. Height here is its gain over not changing, L − Â = (r − 1)·Â: a saddle made of straight lines. The push along r is Â everywhere, so it never stops. But the gain is a fair estimate only near r = 1, where old data describes the new policy.',
+        3: 'L^IS = r·Â; height z = L − Â = (r − 1)Â (same ∂/∂r; normalised Â average 0, so a batch\'s mean height is L itself). z is a hyperbolic paraboloid, doubly ruled. ∂L/∂r = Â never vanishes: repeated epochs drive r to 1/π_old (here 2), far from valid data.',
+      },
+      cam: CAM.saddle,
+      set: { mode: 'one', A: 1, r0: 1, eps: 0.2, lr: 0.3, clip: false, ghost: true },
+      enter(S) {
+        scene(S, { axes: true, names: false, figure: 'shrug' });
+        play(S, [holdPhase(400), climbPhase(S, 170)]);
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**PPO sands off the saddle\'s two raised horns.** Past r = 1.2 the gain is capped, so the good side goes flat: no push. The ball stops at the edge; the teal ghost, unsanded, runs on.',
+        2: '**The clip:** L = min(r·Â, clip(r, 1 − ε, 1 + ε)·Â), `clip_coef` ε = 0.2. Each sample\'s claimed gain is capped at ε·|Â|: the horns are sanded flat, zero gradient, no push. The min only removes: L ≤ r·Â, a pessimistic bound (Schulman et al. 2017). Red tint = push.',
+        3: 'Â > 0: L = min(r, 1+ε)·Â; Â < 0: L = max(r, 1−ε)·Â; so L − Â ≤ ε|Â|. Outside [1−ε, 1+ε] `t.clip` has zero gradient and `t.minimum` routes through it: ∂L/∂r = 0. It removes the slope, not the place: a big step lands past the edge (try lr).',
+      },
+      cam: CAM.sand,
+      set: { mode: 'one', A: 1, r0: 1, eps: 0.2, lr: 0.3, clip: true, ghost: true },
+      enter(S) {
+        scene(S, { axes: true, names: false, ticks: true, shelf: true, figure: 'lean' });
+        const st = S.state;
+        st.sand = 0; paintSurface(S); st.u = 0; drawOne(S);
+        play(S, [holdPhase(600), sandPhase(S, 0, 1, 1500), holdPhase(300), climbPhase(S)]);
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The two low corners stay.** A bad action made likelier (front right), or a good one made rarer (back left), keeps its slope and is pushed back. PPO caps the gains, never the fixes.',
+        2: 'The min is pessimistic: it ignores changes that look like gains beyond ε, never changes that look like losses. Â < 0 with r > 1 + ε (front right) keeps r·Â and its push Â: here r falls from 1.5 until it passes 0.8, where the other shelf starts.',
+        3: 'Nonzero gradient iff (Â > 0, r < 1+ε) or (Â < 0, r > 1−ε). Schulman et al.: "we only ignore the change in probability ratio when it would make the objective improve, and we include it when it makes the objective worse." Here Â = −1, r₀ = 1.5.',
+      },
+      cam: CAM.corner,
+      set: { mode: 'one', A: -1, r0: 1.5, eps: 0.2, lr: 0.3, clip: true, ghost: true },
+      enter(S) {
+        scene(S, { axes: true, names: false, ticks: true, slope: true, shelfDn: true, ghostTag: false });
+        play(S, [holdPhase(500), climbPhase(S, 170)]);
+      } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Your function scores a whole batch.** Each bead is one action. First the advantages are rescaled to average zero, then each bead\'s height is read off; the score is the average height.',
+        2: '`calc_clipped_surrogate_objective`: r = exp(new − old log-probs); normalise the minibatch\'s advantages; min; `.mean()`. Toy batch of 8: beads slide from raw A to Â, then gradient ascent moves each to a shelf. The loss you maximise: L^CLIP − value loss + entropy bonus.',
+        3: '`t.exp(dist.log_prob(mb_action) - mb_logprobs)`, normalise, `t.minimum(non_clipped, clipped).mean()`; total `clipped_surrogate_objective - value_loss + entropy_bonus` (vf_coef 1.0, ent_coef 0.01), AdamW `maximize=True`. Toy: one logit per bead, SGD lr 8 × 0.3.',
+      },
+      cam: CAM.batch,
+      set: { mode: 'batch', eps: 0.2, lr: 0.3, clip: true, ghost: false },
+      enter(S) {
+        scene(S, {});
+        const st = S.state; st.nf = 0; st.ub = 0; drawBatch(S);
+        play(S, [holdPhase(700), normPhase(S), holdPhase(500), trainPhase(S)]);
+      } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Is the clip the secret?** Debated. PPO trained the first ChatGPT-style models. Newer recipes keep this sanded saddle but judge each answer against its group, with no critic.',
+        2: 'Current method: PPO, ε = 0.2, plus small tricks (ARENA follows the "37 implementation details" post). Research: r escapes the band anyway, and the tricks matter as much as the clip (Engstrom et al. 2020). For LLMs, GRPO keeps the clip but scores answers against their group; DPO drops RL.',
+        3: 'Engstrom et al. 2020: code-level optimisations explain much of PPO\'s edge over TRPO, and ratios escape [1−ε, 1+ε]. GRPO (DeepSeekMath; ARENA [2.4] bonus): same L^CLIP, Â = (R − mean)/std within a group, no critic. DPO: no rollouts. ε in 0.1-0.3: inconsequential for you.',
+      },
+      cam: CAM.batch,
+      set: { mode: 'batch', eps: 0.2, lr: 0.3, clip: true, ghost: false },
+      enter(S) {
+        scene(S, { grpo: true, figure: 'think' });
+        const st = S.state; st.nf = 1; st.ub = STEPS; drawBatch(S);
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Any time you improve using evidence from how things used to be: change a little, then look again. A dose adjusted in steps; a speed limiter; RLHF\'s leash on a chatbot.',
+        2: 'The same trust-region idea: TRPO\'s KL limit, gradient clipping (ARENA\'s `max_grad_norm` 0.5), learning-rate warm-up, and RLHF\'s KL penalty to a reference model (The leash, next object). Trust a cheap local estimate only near where it was measured.',
+        3: 'Trust regions and proximal steps: TRPO (KL ≤ δ), the natural gradient, proximal-point and mirror descent, Levenberg-Marquardt damping, `clip_grad_norm_`, and the KL-to-reference β of RLHF, GRPO and DPO. One move: optimise a surrogate only where it is accurate.',
+      },
+      cam: CAM.wide,
+      set: { mode: 'one', A: 1.5, r0: 1, eps: 0.2, lr: 0.3, clip: true, ghost: true },
+      enter(S) {
+        scene(S, { axes: true, ticks: true, figure: 'cheer', figAt: [0.35, 0, 2.08] });
+        play(S, [holdPhase(500), climbPhase(S)]);
+      } },
+  ],
+
+  predict: [
+    { q: { 1: 'A good action (advantage +1) is already 1.5× likelier than before; the clip is at 1.2. How hard does it still push?',
+        2: 'Â = +1, the ratio is already r = 1.5, ε = 0.2. What is ∂L/∂r for this sample?',
+        3: 'Â = +1, r = 1.5, clip_coef = 0.2. ∂L^CLIP/∂r?' },
+      options: [{ t: 'Not at all: slope 0, it sits on the sanded shelf', ok: true }, { t: 'Slope +1, like any good action' },
+        { t: 'It is pulled back towards 1.2' }, { t: 'Slope +1.5 (r × Â)' }],
+      why: { 1: 'Past the sanded edge the surface is flat, so this sample has already moved as far as one update allows. It is not pulled back either: the push is simply gone.',
+        2: 'For Â > 0, L = min(r, 1 + ε)·Â = 1.2 here, constant in r, so ∂L/∂r = 0. The clip removes the push; it adds no pull back to 1.2.',
+        3: 'clip(1.5) = 1.2, so clipped = 1.2 < non_clipped = 1.5; t.minimum routes the gradient through t.clip, which is flat outside [0.8, 1.2]. The sample adds nothing to ∇θ.' },
+      show(S) {
+        S.setKnobs({ mode: 'one', A: 1, r0: 1.5, eps: 0.2, lr: 0.3, clip: true, ghost: true });
+        scene(S, { axes: true, ticks: true, shelf: true }); S.fly(CAM.sand);
+        return play(S, [holdPhase(400), climbPhase(S, 110)]);
+      } },
+    { q: { 1: 'A bad action (advantage −1) became 1.5× likelier. Is its slope sanded flat too?',
+        2: 'Â = −1 and r = 1.5 (outside the band). Is this sample\'s gradient clipped to zero?',
+        3: 'Â = −1, r = 1.5, ε = 0.2: is the clip branch active?' },
+      options: [{ t: 'No: it keeps slope −1 and gets pushed back', ok: true }, { t: 'Yes: r is outside [0.8, 1.2]' },
+        { t: 'Yes, after one step' }, { t: 'No, and it is pushed further up' }],
+      why: { 1: 'Being too keen on a bad action makes the score worse, and PPO never ignores that. The slope stays and the ball rolls back.',
+        2: 'clip(1.5)·(−1) = −1.2 is above 1.5·(−1) = −1.5, so the min keeps −1.5 and its slope −1: r falls until it passes 0.8, where the other shelf starts.',
+        3: 'For Â < 0, L = max(r, 1−ε)·Â; at r = 1.5 the max is r, so ∂L/∂r = Â = −1. Clipping only applies where it lowers L: ignore apparent gains, never apparent losses.' },
+      show(S) {
+        S.setKnobs({ mode: 'one', A: -1, r0: 1.5, eps: 0.2, lr: 0.3, clip: true, ghost: true });
+        scene(S, { axes: true, ticks: true, slope: true, ghostTag: false }); S.fly(CAM.corner);
+        return play(S, [holdPhase(400), climbPhase(S, 140)]);
+      } },
+    { q: { 1: 'Shrink the clip from 0.2 to 0.05. What happens to each update?',
+        2: 'Set ε = 0.05 instead of 0.2. What changes?',
+        3: 'clip_coef → 0.05. Effect per learning phase?' },
+      options: [{ t: 'Every action stops pushing sooner: small, safe, slower learning', ok: true }, { t: 'Nothing: ε only matters for bad actions' },
+        { t: 'Updates get bigger' }, { t: 'Learning stops for good' }],
+      why: { 1: 'The shelves now start at 1.05, so each action can only change a little per round. Safer, but you need more rounds.',
+        2: 'The band shrinks to [0.95, 1.05]: after a hop or two every sample reaches a shelf and its gradient is 0. The next rollout resets θ_old and r = 1, so learning goes on, in smaller steps.',
+        3: 'ε is the trust region\'s radius: per phase each r moves about ε (plus one step\'s overshoot) before its gradient dies. Too small is slow, too big unstable. ARENA uses 0.2 (CartPole), 0.1 (Atari).' },
+      show(S) {
+        S.setKnobs({ mode: 'one', A: 1, r0: 1, eps: 0.05, lr: 0.3, clip: true, ghost: true });
+        scene(S, { axes: true, ticks: true, shelf: true }); S.fly(CAM.sand);
+        return play(S, [holdPhase(400), climbPhase(S, 110)]);
+      } },
+    { q: { 1: 'The very first update of a round, before the policy has changed. What is r for every action?',
+        2: 'First minibatch of a learning phase: what is r for every sample?',
+        3: 'At the first minibatch of a learning phase, r_t(θ) = ?' },
+      options: [{ t: 'Exactly 1', ok: true }, { t: 'Somewhere in [0.8, 1.2]' }, { t: 'Random, around 1' }, { t: '0: nothing is learned yet' }],
+      why: { 1: 'Nothing has changed since the policy played those moves, so new = old and every ratio is 1. The average score is exactly 0 too, since the rescaled advantages average zero.',
+        2: '`mb_logprobs` came from this same network during the rollout, so before the first `optimizer.step()` the log-prob difference is 0 and r = 1. Step one is plain policy gradient; the clip bites only later.',
+        3: 'θ = θ_old gives r ≡ 1, inside the band, so ∇L^CLIP = mean(Â·∇log π): vanilla PG, and L^CLIP = mean(Â) = 0 exactly. Only later minibatches (4 passes per phase) meet the shelves.' },
+      show(S) {
+        S.setKnobs({ mode: 'batch', eps: 0.2, lr: 0.3, clip: true, ghost: false });
+        scene(S, {}); S.fly(CAM.batch);
+        const st = S.state; st.nf = 1; st.ub = 0; drawBatch(S);
+        return play(S, [holdPhase(1600)]);
+      } },
+    { q: { 1: 'An action\'s raw advantage is +0.3, but its batch averages +0.9. Does PPO make it more likely or less?',
+        2: 'Raw advantage +0.3 in a minibatch whose mean is +0.9. Pushed up or down?',
+        3: 'A_raw = 0.3, minibatch mean 0.9 (toy). Sign of the update to π(a|s)?' },
+      options: [{ t: 'Less likely: after rescaling its advantage is negative', ok: true }, { t: 'More likely: its advantage is positive' },
+        { t: 'Neither: small advantages are ignored' }, { t: 'More likely, but clipped' }],
+      why: { 1: 'PPO rescales advantages so the batch averages zero. Good but below the batch\'s average now counts as bad, so it is pushed down (the ringed bead).',
+        2: 'Â = (0.3 − 0.9)/std = −0.75 here. ARENA normalises inside calc_clipped_surrogate_objective, so "good" means better than this minibatch\'s average.',
+        3: 'Mean subtraction is a per-batch baseline, the std division a per-batch step scale (detail #7); ΣÂ = 0, so the pushes balance. Tiny minibatches make both noisy.' },
+      show(S) {
+        S.setKnobs({ mode: 'batch', eps: 0.2, lr: 0.3, clip: true, ghost: false });
+        scene(S, { hi: 5 }); S.fly(CAM.batch);
+        const st = S.state; st.nf = 0; st.ub = 0; drawBatch(S);
+        return play(S, [holdPhase(500), normPhase(S), holdPhase(400), trainPhase(S, 90)]);
+      } },
+    { q: { 1: 'Where does the sanded plaster sit compared with the teal strings of the unsanded saddle?',
+        2: 'Compare L^CLIP (plaster) with the unclipped r·Â (strings). Which is true everywhere?',
+        3: 'Pointwise relation between L^CLIP(r, Â) and L^IS = r·Â?' },
+      options: [{ t: 'Never above them: sanding only removes', ok: true }, { t: 'Always above them' },
+        { t: 'Above on the bad side, below on the good side' }, { t: 'They only meet at r = 1' }],
+      why: { 1: 'PPO\'s score is never more optimistic than the plain one: where they differ, it is lower. That is the "pessimistic" design.',
+        2: 'min(x, y) ≤ x, so L^CLIP ≤ r·Â everywhere: equal in the band and on the unsanded corners, lower on the shelves. Maximising a lower bound cannot be fooled by gains the old data cannot vouch for.',
+        3: 'L^CLIP = min(L^IS, clip term) ≤ L^IS, with equality iff sign(Â)·(r − 1) ≤ ε. Schulman et al.: a lower bound on the unclipped objective, equal to first order at θ_old.' },
+      show(S) {
+        S.setKnobs({ mode: 'one', A: 2, r0: 1, eps: 0.2, lr: 0.3, clip: true, ghost: true });
+        scene(S, { shelf: true }); S.fly(CAM.low);
+        return play(S, [holdPhase(400), climbPhase(S, 110)]);
+      } },
+  ],
+
+  where: {
+    1: 'Anywhere you improve something using evidence of how it used to behave: change a little, look again. A dose adjusted in steps, a speed limiter, RLHF\'s leash on a chatbot.',
+    2: 'Trust regions: TRPO\'s KL limit, gradient clipping (ARENA\'s max_grad_norm 0.5), learning-rate warm-up, RLHF\'s KL penalty (The leash). Trust a cheap local estimate only near where it was measured.',
+    3: 'TRPO (KL ≤ δ), natural gradient, proximal-point and mirror descent, Levenberg-Marquardt damping, clip_grad_norm_, and the KL-to-reference β of RLHF, GRPO and DPO: optimise a surrogate only where it is accurate.',
+  },
+  links: [
+    { label: 'Film · W10 PPO & RLHF', href: '../../intuition/films/w10-ppo-rlhf.html' },
+    { label: 'Film · PPO & RLHF, deep', href: '../../intuition/films/deep-w10-ppo-rlhf.html' },
+    { label: 'Week 10 pack', href: '../../index.html#week-10' },
+    { label: 'Demo · policy gradients & PPO', href: '../../index.html#demo/policy-gradients-ppo' },
+    { label: 'Case · PPO clipped surrogate', href: '../../index.html#cases/ppo-clipped-surrogate' },
+    { label: 'Case · actor-critic', href: '../../index.html#cases/actor-critic' },
+    { label: 'Case · GAE', href: '../../index.html#cases/generalized-advantage-estimation' },
+    { label: 'Case · GRPO', href: '../../index.html#cases/grpo' },
+    { label: 'Map · PPO', href: '../../index.html#map/node=ppo' },
+    { label: 'Map · clipped surrogate', href: '../../index.html#map/node=ppo-clipped-surrogate' },
+    { label: 'Map · advantage', href: '../../index.html#map/node=advantage' },
+    { label: 'Map · trust region', href: '../../index.html#map/node=trust-region' },
+    { label: 'Object · The leash (RLHF)', href: 'd10-leash.html' },
+  ],
+  remix: 'Build a single-file three.js scene: a plaster surface of PPO\'s clipped surrogate L(r, Â) = min(r·Â, clip(r, 1 − ε, 1 + ε)·Â) over r in [0, 2] (left to right) and Â in [−2, 2] (front to back), ε = 0.2, on a round plinth with a brass rim. Build the grid so r = 1 ± ε and Â = 0 are exact grid lines (sharp creases) and tint each face red in proportion to |∂L/∂r|, so the zero-gradient shelves stay white. String the unclipped saddle z = r·Â above it as straight teal strings (a hyperbolic paraboloid is doubly ruled). An amber ball on one Â-slice starts at r = 1 and does gradient ascent on a one-logit policy (π = σ(θ), p_old = 0.5, θ ← θ + lr·∂L/∂r·r(1 − σ(θ)), lr 0.3); a teal ghost ball does the same on r·Â and runs away while the amber one stops just past 1 + ε. Add a toy minibatch of 8 raw advantages that slide to (A − mean)/(std + 1e-8) before training, with live readouts of the mean height, clipfrac and approx_kl.',
+  credit: 'Formula, names and defaults: ARENA [2.3] PPO: calc_clipped_surrogate_objective line for line (advantage normalisation with torch\'s sample std and eps 1e-8, clip_coef 0.2, t.minimum(...).mean()), with clipfrac and approx_kl as logged in compute_ppo_objective. PPO and its pessimistic lower bound: Schulman, Wolski, Dhariwal, Radford & Klimov 2017, "Proximal Policy Optimization Algorithms". Also Huang et al. 2022, "The 37 Implementation Details of PPO"; Engstrom et al. 2020, "Implementation Matters in Deep Policy Gradients"; GRPO from Shao et al. 2024 (DeepSeekMath). The string saddle nods to the 19th-century string models of the hyperbolic paraboloid. The one-logit policy and the 8 raw advantages are toy inputs; every height, slope and readout is computed live. Built with three.js and JSCAD.',
+});
+
+/* watertight STL solid of the clipped surface (JSCAD is z-up: three (x, y, z) -> JSCAD (x, -z, y)) */
+function surfaceSolid(c) {
+  const rs = axisGrid(0, 2, 40, [1 - c, 1 + c]), As = axisGrid(-2, 2, 40, [0]);
+  const nx = rs.length - 1, ny = As.length - 1, W1 = nx + 1;
+  const points = [], faces = [];
+  for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) points.push([wx(rs[i]), -wz(As[j]), wy(gainC(rs[i], As[j], c))]);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const a = j * W1 + i, b = a + 1, cc = a + 1 + W1, d = a + W1;
+    faces.push([a, b, cc], [a, cc, d]);
+  }
+  const per = [];
+  for (let i = 0; i < nx; i++) per.push([i, 0]);
+  for (let j = 0; j < ny; j++) per.push([nx, j]);
+  for (let i = nx; i > 0; i--) per.push([i, ny]);
+  for (let j = ny; j > 0; j--) per.push([0, j]);
+  const bIdx = new Map();
+  const bottom = (i, j) => { const key = j * W1 + i; if (!bIdx.has(key)) { bIdx.set(key, points.length); points.push([points[key][0], points[key][1], 0]); } return bIdx.get(key); };
+  for (let p = 0; p < per.length; p++) {
+    const [ia, ja] = per[p], [ib, jb] = per[(p + 1) % per.length];
+    faces.push([ja * W1 + ia, bottom(ia, ja), bottom(ib, jb), jb * W1 + ib]);
+  }
+  const c0 = points.length;
+  points.push([0, 0, 0]);
+  for (let p = 0; p < per.length; p++) {
+    const [ia, ja] = per[p], [ib, jb] = per[(p + 1) % per.length];
+    faces.push([c0, bottom(ib, jb), bottom(ia, ja)]);
+  }
+  return J.primitives.polyhedron({ points, faces, orientation: 'outward' });
+}
+</script>
+</body>
+</html>

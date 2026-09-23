@@ -540,6 +540,8 @@ function labels(S) {
   // readout: the text so far and the sampler settings
   if (st.readoutOn) {
     st.readout.show(true);
+    // just above the framed volume: a label far above it leaves a wide screen (the fit is height-bound there)
+    st.readout.move([beam ? xBeam(0, n) : xOf(0) - 0.1, Math.min(BENCH + H * 0.98, Math.max(1.35, st.fitTop || 0) + 0.05), ZF]);
     if (beam) {
       const b = st.beam.best[0];
       st.readout.set(`**${wrap(words(b.toks))}**\n` + (T === 1 ? 'the most likely of 3 half-sentences' : `best beam · Σ log p = ${f2(b.lp)}`));
@@ -567,7 +569,7 @@ function labels(S) {
   if (on) {
     tg.temp.move([xOf(0) - 0.05, BENCH + Math.min(H + 0.2, rodHeights(S)[0]) + 0.06, ZF - 0.22]);
     tg.topp.move([xOf(7), BENCH + H * (k.topp || 0.9) - 0.03, ZF]);
-    tg.basic.move([0, 0.06, ZT]);
+    tg.basic.move([0, 0.03, ZT + 0.11]);            // in front of the brass track, not on it
     tg.greedy.move([st.tops[0].x, st.tops[0].y + 0.05, ZF]);
   }
 }
@@ -577,7 +579,8 @@ function note(S) {
   const N = st.note;
   if (!mode) { N.show(false); return; }
   N.show(true);
-  N.move(st.noteAt || [1.35, BENCH + H * 0.72, ZF]);
+  const at = st.noteAt || [1.35, BENCH + H * 0.72, ZF];
+  N.move([at[0], Math.min(at[1], Math.max(1.2, (st.fitTop || 0) * 0.85)), at[2]]);
   const front = st.rows[0], sk = front.sk;
   const it = front.items;
   let t = '';
@@ -639,7 +642,8 @@ function note(S) {
     const g = generate(MODEL, st.prompt, BEAM_STEPS, { temperature: 0 }, 1);
     let lpg = 0; g.steps.forEach((s) => { lpg += log_softmax(modelLogits(MODEL, s.ctx[s.ctx.length - 1]))[s.tok]; });
     const lines = st.beam.best.map((b) => `${f2(b.lp)}  ${words(b.toks.slice(st.prompt.length))}`);
-    t = (T === 1 ? `3 beams (higher = likelier):\n` : `beams, Σ log p:\n`) + lines.join('\n') + `\ngreedy: ${f2(lpg)}  ${words(g.ids.slice(st.prompt.length))}`;
+    const pr = `“${words(st.prompt)}”`;
+    t = (T === 1 ? `after ${pr}, 3 beams\n(higher = likelier):\n` : `after ${pr}\nbeams, Σ log p:\n`) + lines.join('\n') + `\ngreedy: ${f2(lpg)}  ${words(g.ids.slice(st.prompt.length))}`;
   } else if (mode === 'penalty') {
     const g = generate(MODEL, st.prompt, 12, optsOf(k), 1);
     t = (T === 1 ? `repeat penalty ${k.pen} at temperature 0:\n` : `T = 0 returns before apply_frequency_penalty:\n`) + wrap(words(g.ids), 30);
@@ -777,7 +781,7 @@ run({
     { id: 'rods', type: 'toggle', label: { 1: 'Show the scores', 2: 'Show logits (blue)', 3: 'show logits / T' }, value: true },
     { id: 'roll', type: 'button', label: { 1: 'Roll the marble', 2: 'Sample one word', 3: 'sample_next_token' }, onClick: (S) => { scene(S, { note: 'marble', fig: false }); rollOne(S); } },
     { id: 'gen', type: 'button', label: { 1: 'Write 10 words', 2: 'Generate 10', 3: 'sample(…, 10)' }, onClick: (S) => { scene(S, { note: 'story' }); genTen(S); } },
-    { id: 'beam', type: 'button', label: { 1: 'Beam search', 2: 'Beam search, 3 beams', 3: 'beam_search(num_beams=3)' }, onClick: (S) => { scene(S, { note: 'beam' }); beamMode(S); } },
+    { id: 'beam', type: 'button', label: { 1: 'Beam search', 2: 'Beam search, 3 beams', 3: 'beam_search(num_beams=3)' }, onClick: (S) => { scene(S, { note: 'beam', readout: false }); beamMode(S); } },
     { id: 'clear', type: 'button', label: { 1: 'Start over', 2: 'Start over', 3: 'reset' }, onClick: (S) => { scene(S, { note: 'logits' }); setMode(S, 'sample', 0); } },
   ],
 
@@ -964,7 +968,7 @@ run({
       },
       cam: CAM.beam,
       set: { ctx: 'day', T: 1, topk: 0, topp: 0, pen: 0, rods: false },
-      enter(S) { scene(S, { note: 'beam', noteAt: [1.0, BENCH + H * 0.5, -0.4] }); beamMode(S); } },
+      enter(S) { scene(S, { note: 'beam', readout: false, noteAt: [1.0, BENCH + H * 0.5, -0.4] }); beamMode(S); } },
 
     { tag: 'core',
       cap: {

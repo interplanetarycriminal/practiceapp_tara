@@ -1,0 +1,1077 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The value terrain · Object Lessons</title>
+<meta name="description" content="A gridworld whose tile heights are the exact values V*(s) from ARENA's own planning code: Bellman sweeps, greedy arrows, discounting, a slippery floor by the cliff, and a respawning coin that hacks the reward.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+  .k-label.k-tag{min-width:0}            /* the kit's beat chip .k-tag sets min-width:52px; not for 3D tags */
+  .k-label.k-tag.k-rw{text-transform:none; letter-spacing:0; font:700 11px/1.15 var(--font); background:var(--wash); padding:2px 6px; border-radius:6px}
+  .k-label.k-tag.k-good{color:var(--k-good)}
+  .k-label.k-tag.k-bad{color:var(--k-grad)}
+  .k-label.k-tag.k-coin{color:color-mix(in srgb, var(--k-prob) 72%, var(--ink))}
+  .k-label.k-tag.k-rule{color:color-mix(in srgb, var(--k-brass) 78%, var(--ink)); text-transform:none; letter-spacing:0; font:700 10.5px/1.1 var(--font)}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   18 · w09-terrain: "The value terrain" (W9, ARENA [2.1] Intro to RL, planning)
+   Every height is V*(s) for the board as set, computed in the page by ARENA's own
+   planning functions (policy_eval_exact + policy_improvement inside
+   find_optimal_policy); the sweeps are the Bellman optimality operator from
+   ARENA's proof. The MATH block is extracted and checked in node against an
+   independent numpy implementation, closed forms and Monte Carlo (LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* ARENA [2.1] conventions: actions up (0), right (1), down (2), left (3); states numbered
+   left-to-right, top-to-bottom; env.T[s, a, s'] = T(s' | s, a) and env.R[s, a, s'] = R(s, a, s'),
+   stored flat at index (s * num_actions + a) * num_states + s'. */
+const ACTIONS = ['up', 'right', 'down', 'left'];
+const DIRS = [[-1, 0], [0, 1], [1, 0], [0, -1]];            // (row, col) step for each action
+
+class Environment {
+  constructor(num_states, num_actions, start = 0, terminal = []) {
+    this.num_states = num_states;
+    this.num_actions = num_actions;
+    this.start = start;
+    this.terminal = terminal;
+  }
+  /* T and R from dynamics() (ARENA's constructor does this itself; JS subclasses must set their
+     fields first, so they call build()). Several outcomes can land in the same s' with different
+     rewards (falling off the cliff and bumping a wall can both leave you at the start), so
+     R[s, a, s'] is their probability-weighted mean: then sum_s' T * R is exactly the expected reward. */
+  build() {
+    const S = this.num_states, A = this.num_actions;
+    const T = new Float64Array(S * A * S), R = new Float64Array(S * A * S);
+    for (let s = 0; s < S; s++) for (let a = 0; a < A; a++) {
+      const [states, rewards, probs] = this.dynamics(s, a);
+      const pr = new Map();
+      states.forEach((s2, i) => {
+        const k = (s * A + a) * S + s2;
+        T[k] += probs[i];
+        pr.set(k, (pr.get(k) || 0) + probs[i] * rewards[i]);
+      });
+      for (const [k, v] of pr) R[k] = v / T[k];
+    }
+    this.T = T; this.R = R;
+    return this;
+  }
+}
+
+/* ARENA's GridWorld: 'S' start, 'G' goal (+goal_reward, terminal), 'T' trap (+trap_reward,
+   terminal), 'C' cliff (+cliff_reward, back to the start, not terminal), '#' wall (bump: stay),
+   '.' floor. Every other transition pays step_reward. slipperiness p: the chosen move happens
+   with prob 1 - p, each of the other three with p / 3. This page adds '$', a coin that pays
+   coin_reward each time you step onto it (it respawns at once); with coin_reward 0 it is floor. */
+class GridWorld extends Environment {
+  constructor(grid_map, { step_reward = 0.0, goal_reward = 1.0, trap_reward = -1.0, cliff_reward = -100.0,
+    slipperiness = 0.0, coin_reward = 0.0 } = {}) {
+    const rows = grid_map.trim().split('\n').map((r) => r.trim());
+    const cells = rows.join('');
+    const terminal = [...cells].flatMap((ch, i) => (ch === 'G' || ch === 'T' ? [i] : []));
+    super(cells.length, 4, cells.indexOf('S'), terminal);
+    Object.assign(this, { rows, cells, H: rows.length, W: rows[0].length,
+      step_reward, goal_reward, trap_reward, cliff_reward, slipperiness, coin_reward });
+    this.build();
+  }
+  /* one attempted move in direction d from state s: where you land, what you get, what happened */
+  move(s, d) {
+    const { H, W, cells } = this;
+    const r = Math.floor(s / W), c = s % W, nr = r + DIRS[d][0], nc = c + DIRS[d][1];
+    if (nr < 0 || nr >= H || nc < 0 || nc >= W || cells[nr * W + nc] === '#') return { s2: s, r: this.step_reward, kind: 'bump' };
+    const s2 = nr * W + nc, ch = cells[s2];
+    if (ch === 'C') return { s2: this.start, r: this.cliff_reward, kind: 'fall', over: s2 };
+    if (ch === 'G') return { s2, r: this.goal_reward, kind: 'goal' };
+    if (ch === 'T') return { s2, r: this.trap_reward, kind: 'trap' };
+    if (ch === '$' && this.coin_reward) return { s2, r: this.coin_reward, kind: 'coin' };
+    return { s2, r: this.step_reward, kind: 'step' };
+  }
+  dynamics(state, action) {
+    const ch = this.cells[state];
+    if (ch === 'G' || ch === 'T' || ch === '#' || ch === 'C') return [[state], [0], [1]];   // absorbing, reward 0
+    const p = this.slipperiness, states = [], rewards = [], probs = [];
+    for (let d = 0; d < 4; d++) {
+      const q = d === action ? 1 - p : p / 3;
+      if (q <= 0) continue;
+      const out = this.move(state, d);
+      states.push(out.s2); rewards.push(out.r); probs.push(q);
+    }
+    return [states, rewards, probs];
+  }
+}
+
+/* ARENA: iterate V <- sum_s' T(s'|s,pi(s)) (R + gamma V) until max |dV| < eps */
+function policy_eval_numerical(env, pi, gamma = 0.99, eps = 1e-8, max_iterations = 10000) {
+  const S = env.num_states, A = env.num_actions;
+  let value = new Float64Array(S);
+  for (let i = 0; i < max_iterations; i++) {
+    const new_value = new Float64Array(S);
+    for (let s = 0; s < S; s++) {
+      const base = (s * A + pi[s]) * S;
+      let v = 0;
+      for (let s2 = 0; s2 < S; s2++) { const t = env.T[base + s2]; if (t) v += t * (env.R[base + s2] + gamma * value[s2]); }
+      new_value[s] = v;
+    }
+    let delta = 0;
+    for (let s = 0; s < S; s++) delta = Math.max(delta, Math.abs(new_value[s] - value[s]));
+    if (delta < eps) break;
+    value = new_value;
+  }
+  return value;
+}
+
+/* ARENA: solve (I - gamma P_pi) v = r_pi exactly (np.linalg.solve: Gaussian elimination, partial pivoting) */
+function policy_eval_exact(env, pi, gamma = 0.99) {
+  const S = env.num_states, A = env.num_actions;
+  const M = Array.from({ length: S }, () => new Float64Array(S + 1));
+  for (let s = 0; s < S; s++) {
+    const base = (s * A + pi[s]) * S;
+    let r = 0;
+    for (let s2 = 0; s2 < S; s2++) {
+      const t = env.T[base + s2];
+      r += t * env.R[base + s2];
+      M[s][s2] = (s === s2 ? 1 : 0) - gamma * t;
+    }
+    M[s][S] = r;
+  }
+  for (let c = 0; c < S; c++) {
+    let piv = c;
+    for (let r = c + 1; r < S; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+    [M[c], M[piv]] = [M[piv], M[c]];
+    for (let r = c + 1; r < S; r++) {
+      const f = M[r][c] / M[c][c];
+      if (f) for (let k = c; k <= S; k++) M[r][k] -= f * M[c][k];
+    }
+  }
+  const v = new Float64Array(S);
+  for (let r = S - 1; r >= 0; r--) {
+    let x = M[r][S];
+    for (let k = r + 1; k < S; k++) x -= M[r][k] * v[k];
+    v[r] = x / M[r][r];
+  }
+  return v;
+}
+
+/* Q(s, a) = sum_s' T(s'|s,a) (R(s,a,s') + gamma V(s'))  (ARENA's einsum "s a s_next, s a s_next -> s a") */
+function q_values(env, V, gamma = 0.99) {
+  const S = env.num_states, A = env.num_actions, Q = new Float64Array(S * A);
+  for (let s = 0; s < S; s++) for (let a = 0; a < A; a++) {
+    const base = (s * A + a) * S;
+    let q = 0;
+    for (let s2 = 0; s2 < S; s2++) { const t = env.T[base + s2]; if (t) q += t * (env.R[base + s2] + gamma * V[s2]); }
+    Q[s * A + a] = q;
+  }
+  return Q;
+}
+/* ties go to the first action, like np.argmax; values within 1e-12 count as tied, so float
+   noise from the linear solve cannot flip a policy back and forth */
+function argmax_first(Q, s, A) {
+  let best = 0;
+  for (let a = 1; a < A; a++) if (Q[s * A + a] > Q[s * A + best] + 1e-12) best = a;
+  return best;
+}
+/* ARENA: pi_better = argmax_a Q(s, a) */
+function policy_improvement(env, V, gamma = 0.99) {
+  const Q = q_values(env, V, gamma), A = env.num_actions;
+  return Int32Array.from({ length: env.num_states }, (_, s) => argmax_first(Q, s, A));
+}
+/* ARENA: policy iteration from pi = 0 (all "up"): evaluate exactly, improve, until stable */
+function find_optimal_policy(env, gamma = 0.99, max_iterations = 10000) {
+  let pi = new Int32Array(env.num_states);
+  for (let i = 0; i < max_iterations; i++) {
+    const V = policy_eval_exact(env, pi, gamma);
+    const pi_new = policy_improvement(env, V, gamma);
+    if (pi_new.every((a, s) => a === pi[s])) return { pi: pi_new, V, rounds: i + 1 };
+    pi = pi_new;
+  }
+  return { pi, V: policy_eval_exact(env, pi, gamma), rounds: max_iterations };
+}
+
+/* One sweep of value iteration: the Bellman optimality operator from ARENA's proof,
+   (BV)(s) = max_a sum_s' T(s'|s,a) (R(s,a,s') + gamma V(s')), applied to every state at once. */
+function bellman_backup(env, V, gamma = 0.99) {
+  const Q = q_values(env, V, gamma), A = env.num_actions, S = env.num_states;
+  const out = new Float64Array(S);
+  for (let s = 0; s < S; s++) { let m = -Infinity; for (let a = 0; a < A; a++) m = Math.max(m, Q[s * A + a]); out[s] = m; }
+  return out;
+}
+function value_iteration(env, gamma = 0.99, tol = 1e-12, max_sweeps = 100000) {
+  let V = new Float64Array(env.num_states), k = 0;
+  for (; k < max_sweeps; k++) {
+    const V2 = bellman_backup(env, V, gamma);
+    let d = 0;
+    for (let s = 0; s < V.length; s++) d = Math.max(d, Math.abs(V2[s] - V[s]));
+    V = V2;
+    if (d < tol) return { V, sweeps: k + 1 };
+  }
+  return { V, sweeps: k };
+}
+
+/* seeded rollout of a policy: the walk. Each step samples one outcome from dynamics. */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+function rollout(env, pi, gamma, seed, max_steps = 60) {
+  const rand = mulberry32(seed), p = env.slipperiness, steps = [];
+  let s = env.start, G = 0, disc = 1;
+  for (let t = 0; t < max_steps; t++) {
+    if (env.terminal.includes(s)) break;
+    const a = pi[s];
+    let d = a;
+    if (p > 0) {
+      const u = rand();
+      if (u >= 1 - p) { const k = Math.min(2, Math.floor((u - (1 - p)) / (p / 3))); d = [0, 1, 2, 3].filter((x) => x !== a)[k]; }
+    }
+    const out = env.move(s, d);
+    G += disc * out.r; disc *= gamma;
+    steps.push({ s, a, d, s2: out.s2, r: out.r, kind: out.kind, over: out.over, slip: d !== a, G });
+    s = out.s2;
+  }
+  return { steps, G };
+}
+
+/* the two boards */
+const MAPS = {
+  cliff: `
+    ........
+    ..#.....
+    ..#.$...
+    ..#.....
+    ........
+    SCCCCCCG`,
+  norvig: `
+    ...G
+    .#.T
+    S...`,
+};
+function makeBoard(board, { step_reward = -0.04, slipperiness = 0, coin = false } = {}) {
+  if (board === 'norvig') return new GridWorld(MAPS.norvig, { step_reward, goal_reward: 1.0, trap_reward: -1.0, slipperiness });
+  return new GridWorld(MAPS.cliff, { step_reward, goal_reward: 1.0, cliff_reward: -1.0, slipperiness, coin_reward: coin ? 0.1 : 0 });
+}
+// MATH-END
+
+/* ============================================================ display setup */
+
+const LAYOUT = {
+  cliff: { P: 0.42, bead: 0.075, flagH: 0.5 },
+  norvig: { P: 0.76, bead: 0.1, flagH: 0.62 },
+};
+const CAP = 0.04;                             // coloured cap on each column
+const K0 = 0.95, Y0 = 0.45, TOP = 1.45, BOT = 0.07;   // default: height = 0.45 + 0.95 V (world units)
+const PLASTER_CAP = new THREE.Color('#efe8dc'), GREEN = new THREE.Color(C.good), RED = new THREE.Color(C.grad);
+const ARW = ['↑', '→', '↓', '←'];
+const PHI = [Math.PI / 2, 0, -Math.PI / 2, Math.PI];   // yaw that turns +x into each action's direction
+const G99 = 0.99;
+const fx = (v, d = 2) => { const s = (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d); return s.replace('-', '−'); };
+
+const CAM = {
+  hero: { pos: [-1.9, 5.6, 7.2], target: [0.1, 0.55, 0.1] },
+  low: { pos: [-3.4, 3.6, 6.8], target: [0.1, 0.6, 0.1] },
+  side: { pos: [-2.9, 4.3, 7.2], target: [0.1, 0.6, 0.1] },
+  high: { pos: [-1.2, 7.4, 5.2], target: [0.1, 0.45, 0.15] },
+  norvig: { pos: [-2.0, 5.6, 7.0], target: [0.1, 0.55, 0.1] },
+  wide: { pos: [-0.9, 6.3, 6.9], target: [0.1, 0.5, 0.1] },
+};
+
+/* ---------------------------------------------------------------- geometry */
+function arrowGeometry(len, w) {
+  const s = new THREE.Shape(), hw = w * 0.3, head = len * 0.46, hh = w * 0.62;
+  s.moveTo(-len / 2, -hw); s.lineTo(len / 2 - head, -hw); s.lineTo(len / 2 - head, -hh); s.lineTo(len / 2, 0);
+  s.lineTo(len / 2 - head, hh); s.lineTo(len / 2 - head, hw); s.lineTo(-len / 2, hw); s.closePath();
+  const g = new THREE.ExtrudeGeometry(s, { depth: 0.016, bevelEnabled: false });
+  g.rotateX(-Math.PI / 2);
+  return g;
+}
+function flagMesh(color, h) {
+  const g = new THREE.Group();
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, h, 8).translate(0, h / 2, 0), K.mat.brass());
+  pole.castShadow = true;
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0); shape.lineTo(0.2, -0.055); shape.lineTo(0, -0.11); shape.closePath();
+  const cloth = new THREE.Mesh(new THREE.ShapeGeometry(shape), K.mat.paint(color));
+  cloth.material.side = THREE.DoubleSide;
+  cloth.position.set(0.005, h - 0.005, 0);
+  cloth.castShadow = true;
+  const tip = new THREE.Object3D(); tip.position.set(0.05, h + 0.02, 0);
+  g.add(pole, cloth, tip);
+  g.userData.tip = tip;
+  return g;
+}
+
+/* ------------------------------------------------------------ board layout */
+function cellXZ(st, s) {
+  const { W, H } = st.env, P = st.L.P, r = Math.floor(s / W), c = s % W;
+  return [(c - (W - 1) / 2) * P, (r - (H - 1) / 2) * P];
+}
+const isLive = (env, s) => '.S$'.includes(env.cells[s]);
+const niceDown = (x) => { const e = 10 ** Math.floor(Math.log10(x)); for (const m of [10, 8, 5, 4, 2.5, 2, 1]) if (m * e <= x + 1e-12) return m * e; return e; };
+function chooseScale(env, V) {
+  let lo = 0, hi = 0;
+  for (let s = 0; s < env.num_states; s++) if (isLive(env, s)) { lo = Math.min(lo, V[s]); hi = Math.max(hi, V[s]); }
+  if (Y0 + K0 * lo >= BOT - 1e-9 && Y0 + K0 * hi <= TOP + 1e-9) return { k: K0, y0: Y0, lo, hi };
+  const k = niceDown((TOP - BOT) / (hi - lo));
+  return { k, y0: BOT - k * lo, lo, hi };
+}
+const disp = (st, v) => Math.max(0.03, st.scale.y0 + st.scale.k * v);
+
+/* the solved board for the current knobs */
+function solve(S) {
+  const st = S.state, k = S.knobs;
+  st.env = makeBoard(k.board, { step_reward: k.step, slipperiness: k.slip, coin: k.coin && k.board === 'cliff' });
+  st.L = LAYOUT[k.board];
+  st.gamma = k.gamma;
+  const res = find_optimal_policy(st.env, k.gamma);
+  st.Vstar = res.V; st.piStar = res.pi; st.rounds = res.rounds;
+  st.scale = chooseScale(st.env, st.Vstar);
+}
+
+/* greedy policy + ties on whatever values are shown */
+function greedyOn(st, V) {
+  const env = st.env, A = 4, Q = q_values(env, V, st.gamma), pi = new Int32Array(env.num_states), tie = new Uint8Array(env.num_states);
+  for (let s = 0; s < env.num_states; s++) {
+    pi[s] = argmax_first(Q, s, A);
+    let m = -Infinity, n = 0;
+    for (let a = 0; a < A; a++) m = Math.max(m, Q[s * A + a]);
+    for (let a = 0; a < A; a++) if (Q[s * A + a] >= m - 1e-9) n++;
+    tie[s] = n === 4 ? 1 : 0;
+  }
+  return { Q, pi, tie };
+}
+
+/* ------------------------------------------------------- scene construction */
+const _o = new THREE.Object3D(), _c = new THREE.Color();
+function inst(S, geo, mat, n, shadow = true) {
+  const m = new THREE.InstancedMesh(geo, mat, n);
+  m.castShadow = shadow; m.receiveShadow = true; m.frustumCulled = false; m.userData.noFit = true;
+  m.count = 0; S.root.add(m); return m;
+}
+
+function buildBoard(S) {
+  const st = S.state, env = st.env, L = st.L, P = L.P, N = env.num_states;
+  // columns + caps (one instance per live square, goal and trap included)
+  st.tileStates = [];
+  for (let s = 0; s < N; s++) if ('.S$GT'.includes(env.cells[s])) st.tileStates.push(s);
+  st.inst = new Int32Array(N).fill(-1);
+  st.tileStates.forEach((s, i) => { st.inst[s] = i; });
+  for (const m of [st.cols, st.caps, st.arrows, st.dots, st.walls, st.wallCaps, st.pits]) m.count = 0;
+  st.cols.geometry.dispose(); st.caps.geometry.dispose(); st.arrows.geometry.dispose(); st.dots.geometry.dispose();
+  st.cols.geometry = new THREE.BoxGeometry(P * 0.9, 1, P * 0.9).translate(0, 0.5, 0);
+  st.caps.geometry = new THREE.RoundedBoxGeometry(P * 0.93, CAP, P * 0.93, 2, 0.012).translate(0, CAP / 2, 0);
+  st.arrows.geometry = arrowGeometry(P * 0.6, P * 0.46);
+  st.dots.geometry = new THREE.CylinderGeometry(P * 0.075, P * 0.075, 0.014, 16).translate(0, 0.007, 0);
+  st.cols.count = st.caps.count = st.tileStates.length;
+  // walls and the cliff's drop
+  const walls = [], pits = [];
+  for (let s = 0; s < N; s++) { if (env.cells[s] === '#') walls.push(s); if (env.cells[s] === 'C') pits.push(s); }
+  st.wallStates = walls; st.pitStates = pits;
+  st.walls.geometry.dispose(); st.wallCaps.geometry.dispose(); st.pits.geometry.dispose();
+  st.walls.geometry = new THREE.BoxGeometry(P * 0.96, 1, P * 0.96).translate(0, 0.5, 0);
+  st.wallCaps.geometry = new THREE.BoxGeometry(P * 0.99, 0.022, P * 0.99).translate(0, 0.011, 0);
+  st.pits.geometry = new THREE.BoxGeometry(P * 0.99, 0.018, P * 0.99).translate(0, 0.009, 0);
+  st.walls.count = st.wallCaps.count = walls.length;
+  st.pits.count = pits.length;
+  pits.forEach((s, i) => { const [x, z] = cellXZ(st, s); _o.position.set(x, 0, z); _o.rotation.set(0, 0, 0); _o.scale.set(1, 1, 1); _o.updateMatrix(); st.pits.setMatrixAt(i, _o.matrix); });
+  st.pits.instanceMatrix.needsUpdate = true;
+  // flags, ring, coin, bead size
+  const goal = env.cells.indexOf('G'), trap = env.cells.indexOf('T');
+  S.root.remove(st.flag); S.root.remove(st.trapFlag);
+  st.flag = flagMesh(C.good, L.flagH); S.root.add(st.flag);
+  st.trapFlag = flagMesh(C.grad, L.flagH * 0.8); S.root.add(st.trapFlag);
+  st.trapFlag.visible = trap >= 0;
+  st.goalS = goal; st.trapS = trap;
+  st.ring.scale.setScalar(P / 0.42);
+  st.bead.scale.setScalar(L.bead);
+  st.coinS = env.cells.indexOf('$');
+  st.flagTag.move(st.flag.userData.tip);
+  st.trapTag.move(st.trapFlag.userData.tip);
+  // the cliff tag sits in front of the middle of the drop
+  if (pits.length) { const [x0, z0] = cellXZ(st, pits[0]), [x1] = cellXZ(st, pits[pits.length - 1]); st.cliffAt.position.set((x0 + x1) / 2, 0.02, z0 + P * 0.52); }
+  // ruler: back-left corner, just off the board
+  st.ruler.position.set(-(env.W / 2) * P - 0.2, 0, -(env.H / 2) * P + 0.12);
+  // figure spot: left of the board
+  st.figAt = [-(env.W / 2) * P - 0.3, 0, 0.62 * (env.H / 2) * P];
+  st.boardKey = S.knobs.board;
+  // framing proxy: the board and its tallest possible column
+  st.proxy.scale.set(env.W * P, TOP + 0.45, env.H * P);
+  st.proxy.position.set(0, (TOP + 0.45) / 2, 0);
+}
+
+/* a wall stands a little above the columns around it */
+function wallHeight(st, s, h) {
+  const { W, H } = st.env, r = Math.floor(s / W), c = s % W;
+  let m = 0.3;
+  for (const [dr, dc] of DIRS) { const nr = r + dr, nc = c + dc; if (nr >= 0 && nr < H && nc >= 0 && nc < W && h[nr * W + nc] > 0) m = Math.max(m, h[nr * W + nc]); }
+  return m + CAP + 0.1;
+}
+/* place every per-square thing at the heights in st.hNow (display units, from values) */
+function place(S) {
+  const st = S.state, env = st.env, P = st.L.P;
+  const g = st.greedy, showArrows = st.showArrows;
+  let na = 0, nd = 0;
+  st.tileStates.forEach((s, i) => {
+    const [x, z] = cellXZ(st, s), h = st.hNow[s];
+    _o.rotation.set(0, 0, 0);
+    _o.position.set(x, 0, z); _o.scale.set(1, h, 1); _o.updateMatrix(); st.cols.setMatrixAt(i, _o.matrix);
+    _o.position.set(x, h, z); _o.scale.set(1, 1, 1); _o.updateMatrix(); st.caps.setMatrixAt(i, _o.matrix);
+    st.caps.setColorAt(i, st.capCol[s]);
+    if (showArrows && g && isLive(env, s)) {
+      if (g.tie[s]) { _o.position.set(x, h + CAP + 0.001, z); _o.updateMatrix(); st.dots.setMatrixAt(nd++, _o.matrix); }
+      else { _o.position.set(x, h + CAP + 0.001, z); _o.rotation.set(0, PHI[g.pi[s]], 0); _o.updateMatrix(); st.arrows.setMatrixAt(na++, _o.matrix); }
+    }
+  });
+  st.arrows.count = na; st.dots.count = nd;
+  for (const m of [st.cols, st.caps, st.arrows, st.dots]) m.instanceMatrix.needsUpdate = true;
+  st.caps.instanceColor.needsUpdate = true;
+  // walls: a little taller than the tallest column they could hide behind
+  st.wallStates.forEach((s, i) => {
+    const [x, z] = cellXZ(st, s), wallH = wallHeight(st, s, st.hNow);
+    _o.rotation.set(0, 0, 0);
+    _o.position.set(x, 0, z); _o.scale.set(1, wallH, 1); _o.updateMatrix(); st.walls.setMatrixAt(i, _o.matrix);
+    _o.position.set(x, wallH, z); _o.scale.set(1, 1, 1); _o.updateMatrix(); st.wallCaps.setMatrixAt(i, _o.matrix);
+  });
+  st.walls.instanceMatrix.needsUpdate = true; st.wallCaps.instanceMatrix.needsUpdate = true;
+  // flags stand in their squares; the ring and coin ride on their tiles
+  const top = (s) => st.hNow[s] + CAP;
+  const [gx, gz] = cellXZ(st, st.goalS); st.flag.position.set(gx - P * 0.18, top(st.goalS), gz + P * 0.1);
+  if (st.trapS >= 0) { const [tx, tz] = cellXZ(st, st.trapS); st.trapFlag.position.set(tx - P * 0.18, top(st.trapS), tz + P * 0.1); }
+  const [sx, sz] = cellXZ(st, env.start); st.ring.position.set(sx, top(env.start) + 0.004, sz);
+  if (st.coinS >= 0) { const [cx, cz] = cellXZ(st, st.coinS); st.coin.position.set(cx, top(st.coinS) + 0.17, cz); }
+  st.coin.visible = st.coinS >= 0 && env.coin_reward > 0;
+  placeRuler(S);
+  if (!st.walk || !st.walk.running) placeBead(S);
+  if (st.sel >= 0) { const [x, z] = cellXZ(st, st.sel); st.selAt.position.set(x, top(st.sel) + 0.02, z); }
+}
+
+function capColors(S, V) {
+  const st = S.state, env = st.env;
+  let m = 1;
+  for (let s = 0; s < env.num_states; s++) if (isLive(env, s)) m = Math.max(m, Math.abs(st.Vstar[s]));
+  st.capCol = [];
+  for (let s = 0; s < env.num_states; s++) {
+    const ch = env.cells[s];
+    if (ch === 'G') { st.capCol[s] = GREEN.clone().lerp(PLASTER_CAP, 0.35); continue; }
+    if (ch === 'T') { st.capCol[s] = RED.clone().lerp(PLASTER_CAP, 0.3); continue; }
+    const t = Math.max(-1, Math.min(1, V[s] / m));
+    st.capCol[s] = PLASTER_CAP.clone().lerp(t >= 0 ? GREEN : RED, 0.12 + 0.8 * Math.abs(t) ** 0.85);
+  }
+}
+
+/* ------------------------------------------------------------------ ruler */
+function buildRuler(S) {
+  const st = S.state, g = new THREE.Group();
+  st.rulerRod = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 1, 10).translate(0, 0.5, 0), K.mat.brass());
+  st.rulerRod.castShadow = true;
+  g.add(st.rulerRod);
+  st.ticks = [];
+  const tg = new THREE.CylinderGeometry(0.006, 0.006, 0.12, 6).rotateZ(Math.PI / 2).translate(0.05, 0, 0);
+  for (let i = 0; i < 12; i++) { const m = new THREE.Mesh(tg, K.mat.brass()); m.visible = false; g.add(m); st.ticks.push(m); }
+  st.tickTags = [0, 1, 2].map(() => K.label([0, 0, 0], '', { cls: 'tag rule', anchor: 'right', dx: -6, dy: 0 }));
+  st.ruler = g;
+  S.root.add(g);
+}
+function placeRuler(S) {
+  const st = S.state, sc = st.shownScale || st.scale;
+  const span = [(sc.lo), (sc.hi)];
+  let step = 0.1;
+  for (const s of [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10]) { step = s; if (sc.k * s >= 0.3) break; }
+  const ys = (v) => sc.y0 + sc.k * v;
+  const i0 = Math.max(Math.floor(span[0] / step + 1e-9), Math.ceil((0.03 - sc.y0) / sc.k / step - 1e-9));
+  let i1 = Math.ceil(span[1] / step - 1e-9);
+  while (i1 > i0 && ys(i1 * step) > TOP + 0.06) i1--;
+  const vals = [];
+  for (let i = i0; i <= i1; i++) vals.push(i * step);
+  const lo = Math.max(0.02, ys(vals[0] ?? 0)), hi = ys(vals[vals.length - 1] ?? 1);
+  st.rulerRod.scale.y = Math.max(0.05, hi + 0.04);
+  st.ticks.forEach((m, i) => {
+    m.visible = i < vals.length && st.rulerOn;
+    if (m.visible) m.position.y = ys(vals[i]);
+  });
+  st.ruler.visible = st.rulerOn;
+  // labels: the top value, zero, the bottom value (if below zero)
+  const pick = [vals[vals.length - 1], 0, vals[0] < 0 ? vals[0] : null];
+  st.tickTags.forEach((L, i) => {
+    const v = pick[i];
+    const show = st.rulerOn && v != null && !(i === 0 && Math.abs(v) < 1e-9) && ys(v) > 0.02;
+    L.show(show);
+    if (!show) return;
+    L.move(new THREE.Vector3(st.ruler.position.x, ys(v), st.ruler.position.z));
+    const dg = step < 1 ? (step < 0.5 ? 2 : 1) : 0;
+    L.set(`${S.tier === 1 ? 'worth' : 'V ='} ${i === 1 ? '0' : fx(v, dg)}`);
+  });
+  void lo;
+}
+
+/* ------------------------------------------------------------- the bead */
+function tileTop(st, s) { const [x, z] = cellXZ(st, s); return new THREE.Vector3(x, st.hNow[s] + CAP + st.L.bead, z); }
+function placeBead(S) {
+  const st = S.state;
+  const s = st.beadS ?? st.env.start;
+  if (!st.hNow || s >= st.hNow.length) return;
+  st.bead.position.copy(tileTop(st, s));
+  st.bead.visible = st.beadOn;
+}
+
+/* ------------------------------------------------------------ show values */
+function setValues(S, V, { tween = true, keepScale = false } = {}) {
+  const st = S.state, env = st.env;
+  st.Vshow = Float64Array.from(V);
+  if (!keepScale) st.shownScale = st.scale;
+  const to = new Float64Array(env.num_states);
+  for (let s = 0; s < env.num_states; s++) to[s] = '.S$GT'.includes(env.cells[s]) ? disp(st, V[s]) : 0;
+  st.greedy = greedyOn(st, st.Vshow);
+  capColors(S, st.Vshow);
+  if (!st.hNow || st.hNow.length !== env.num_states || !tween || S.shot) {
+    st.hNow = to; st.hTween = null; place(S); readout(S); S.invalidate(); return;
+  }
+  st.hTween = { from: Float64Array.from(st.hNow), to, t0: null, ms: tween === true ? 520 : tween };
+  readout(S);
+  S.invalidate();
+}
+function stepHeights(S, t) {
+  const st = S.state, tw = st.hTween;
+  if (!tw) return false;
+  if (tw.t0 == null) tw.t0 = t;
+  const u = Math.min(1, (t - tw.t0) * 1000 / tw.ms), e = K.ease.inOut(u);
+  for (let s = 0; s < tw.to.length; s++) st.hNow[s] = tw.from[s] + (tw.to[s] - tw.from[s]) * e;
+  place(S);
+  if (u >= 1) { st.hTween = null; return false; }
+  return true;
+}
+
+/* ----------------------------------------------------------- readouts */
+function qLine(st, s) {
+  const Q = st.greedy.Q, parts = [];
+  for (let a = 0; a < 4; a++) parts.push(`${ARW[a]}${fx(Q[s * 4 + a], 2)}`);
+  return parts.join('  ');
+}
+function readout(S) {
+  const st = S.state, env = st.env, s = st.sel, R = st.readout;
+  if (s < 0 || !st.Vshow || s >= st.Vshow.length) { R.show(false); return; }
+  R.show(true);
+  const v = st.Vshow[s], T = S.tier;
+  const name = s === env.start ? (T === 1 ? 'the start' : 'start') : env.cells[s] === '$' && env.coin_reward ? 'coin square' : `square ${s}`;
+  if (env.cells[s] === 'G' || env.cells[s] === 'T') {
+    const g = env.cells[s] === 'G';
+    R.set(T === 1 ? `**${g ? 'The flag' : 'The trap'}: worth 0**\ngame over here; the ${g ? '+1' : '−1'} was paid\non the step in`
+      : T === 2 ? `**V(${g ? 'flag' : 'trap'}) = 0**\nterminal: no reward after this;\nthe ${g ? '+1' : '−1'} is paid on the way in`
+        : `**V(s) = 0** (terminal, T(s|s,·) = 1, R = 0)\nR(s′, a, ${g ? 'G' : 'T'}) = ${g ? '+1' : '−1'} on entry`);
+    return;
+  }
+  const best = st.greedy.tie[s] ? (T === 1 ? 'any move: all equal' : 'all four tie') : ARW[st.greedy.pi[s]];
+  if (T === 1) R.set(`**${name}: worth ${fx(v, 2)}**\nbest move: ${best}`);
+  else if (T === 2) R.set(`**V(${name}) = ${fx(v, 3)}**\nQ: ${qLine(st, s)}`);
+  else R.set(`**V(s=${s}) = max_a Q(s,a) = ${fx(v, 4)}**\nQ(s,·) ${qLine(st, s)}`);
+}
+function note(S, text) {
+  const st = S.state;
+  st.noteText = text;
+  if (!text) { st.note.show(false); return; }
+  st.note.show(true);
+  st.note.set(typeof text === 'function' ? text(S) : S.tr(text));
+}
+
+/* ------------------------------------------------------------ Bellman sweeps */
+function startSweeps(S, { from = 'zero', upTo = Infinity, auto = true } = {}) {
+  const st = S.state, env = st.env;
+  stopWalk(S);
+  if (from === 'zero' || st.sweepK == null) { st.sweepK = 0; setValues(S, new Float64Array(env.num_states), { tween: 360, keepScale: true }); }
+  st.lastDelta = null;
+  st.sweep = { running: auto, upTo, tLast: null };
+  sweepNote(S);
+  if (S.shot && auto) { while (st.sweepK < upTo && !sweepOnce(S, true)); setValues(S, st.Vshow, { tween: false, keepScale: true }); st.sweep.running = false; sweepNote(S); }
+  S.invalidate();
+}
+/* one backup; returns true when settled */
+function sweepOnce(S, silent = false) {
+  const st = S.state;
+  const V2 = bellman_backup(st.env, st.Vshow, st.gamma);
+  let d = 0;
+  for (let s = 0; s < V2.length; s++) d = Math.max(d, Math.abs(V2[s] - st.Vshow[s]));
+  st.sweepK++; st.lastDelta = d;
+  if (silent) st.Vshow = V2; else setValues(S, V2, { tween: st.sweepK < 14 ? 260 : 90, keepScale: true });
+  return d < 1e-6;
+}
+function stepSweep(S, t) {
+  const st = S.state, sw = st.sweep;
+  if (!sw || !sw.running) return false;
+  if (sw.tLast == null) sw.tLast = t;
+  const gap = st.sweepK < 14 ? 0.42 : 0.1;
+  if (t - sw.tLast < gap) return true;
+  sw.tLast = t;
+  const done = sweepOnce(S);
+  sweepNote(S);
+  if (done || st.sweepK >= sw.upTo) { sw.running = false; return !!st.hTween; }
+  return true;
+}
+function sweepNote(S) {
+  const st = S.state, k = st.sweepK, d = st.lastDelta;
+  if (k == null) return;
+  const settled = d != null && d < 1e-6;
+  note(S, () => {
+    const T = S.tier;
+    if (k === 0) return T === 1 ? '**Sweep 0:** everything flat\n(worth 0 until we look ahead)' : T === 2 ? '**Sweep 0:** V = 0 everywhere' : '**V₀ = 0**';
+    if (settled) return T === 1 ? `**Settled after ${k} sweeps**\nheights stop changing` : T === 2 ? `**Settled after ${k} sweeps**\nlargest change < 0.000001: V = V*` : `**V_${k} = V* (‖ΔV‖∞ < 1e−6)**\n${k} applications of 𝓑`;
+    return T === 1 ? `**Sweep ${k}**\nbiggest height change ${fx(d, 3)}` : T === 2 ? `**Sweep ${k}**\nlargest change max|ΔV| = ${fx(d, 3)}` : `**V_${k} = 𝓑V_${k - 1}**\n‖V_${k} − V_${k - 1}‖∞ = ${fx(d, 4)}`;
+  });
+}
+
+/* ------------------------------------------------------------------ walks */
+function startWalk(S, seed) {
+  const st = S.state, env = st.env;
+  stopWalk(S);
+  st.sweep = null;
+  const pi = st.greedy.pi;
+  const loopy = env.coin_reward > 0;
+  const ro = rollout(env, pi, st.gamma, seed, loopy ? 26 : 60);
+  st.walk = { ro, i: 0, t0: null, running: true, pts: [tileTop(st, env.start)], seed };
+  st.beadS = env.start; st.beadOn = true; placeBead(S);
+  st.trail.set([]);
+  st.trail.mesh.visible = true;
+  walkNote(S);
+  if (S.shot) { st.walk.i = ro.steps.length; finishWalkInstant(S); }
+  S.invalidate();
+}
+function stopWalk(S) {
+  const st = S.state;
+  if (st.walk) st.walk.running = false;
+  st.walk = null;
+  st.beadS = st.env ? st.env.start : 0;
+  if (st.trail) { st.trail.set([]); }
+  if (st.env) placeBead(S);
+}
+function finishWalkInstant(S) {
+  const st = S.state, w = st.walk, steps = w.ro.steps;
+  let pts = [tileTop(st, st.env.start)];
+  for (const k of steps) {
+    if (k.kind === 'fall') pts = [tileTop(st, st.env.start)];
+    else if (k.s2 !== k.s) pts.push(tileTop(st, k.s2));
+  }
+  st.trail.set(pts.map((p) => p.clone().setY(p.y - st.L.bead + 0.02)));
+  const last = steps.length ? steps[steps.length - 1].s2 : st.env.start;
+  st.beadS = last; w.running = false; placeBead(S);
+  walkNote(S);
+}
+const HOP = 0.3;
+function stepWalk(S, t) {
+  const st = S.state, w = st.walk;
+  if (!w || !w.running) return false;
+  if (w.t0 == null) w.t0 = t;
+  const steps = w.ro.steps, u = (t - w.t0) / HOP;
+  const i = Math.floor(u), f = u - i;
+  if (i >= steps.length) {
+    w.running = false; w.i = steps.length;
+    st.beadS = steps.length ? steps[steps.length - 1].s2 : st.env.start;
+    placeBead(S); walkNote(S); return false;
+  }
+  if (i !== w.i) {   // a new hop begins: the previous one landed
+    for (let j = w.i; j < i; j++) {
+      const k = steps[j];
+      if (k.kind === 'fall') w.pts = [tileTop(st, st.env.start)];
+      else if (k.s2 !== k.s) w.pts.push(tileTop(st, k.s2));
+    }
+    w.i = i;
+    st.trail.set(w.pts.map((p) => p.clone().setY(p.y - st.L.bead + 0.02)));
+    walkNote(S);
+  }
+  const k = steps[i], a = tileTop(st, k.s), P = st.L.P, p = st.bead.position;
+  if (k.kind === 'fall') {
+    const [ox, oz] = cellXZ(st, k.over);
+    if (f < 0.45) { const g = f / 0.45; p.set(a.x + (ox - a.x) * g, a.y + 0.12 * Math.sin(Math.PI * g), a.z + (oz - a.z) * g); }
+    else { const g = (f - 0.45) / 0.55; p.set(ox, a.y - g * g * (a.y + 0.2), oz); }
+    st.bead.visible = f < 0.95;
+  } else if (k.kind === 'bump') {
+    const dx = [0, 1, 0, -1][k.d], dz = [-1, 0, 1, 0][k.d], g = Math.sin(Math.PI * f);
+    p.set(a.x + dx * P * 0.22 * g, a.y + 0.06 * g, a.z + dz * P * 0.22 * g);
+    st.bead.visible = true;
+  } else {
+    const b = tileTop(st, k.s2);
+    p.lerpVectors(a, b, f); p.y += Math.sin(Math.PI * f) * (0.16 + Math.max(0, b.y - a.y) * 0.5);
+    st.bead.visible = true;
+  }
+  return true;
+}
+function walkNote(S) {
+  const st = S.state, w = st.walk;
+  if (!w) return;
+  note(S, () => {
+    const T = S.tier, steps = w.ro.steps, n = Math.min(w.i, steps.length);
+    const G = n ? steps[n - 1].G : 0, done = !w.running || n >= steps.length;
+    const last = n ? steps[n - 1] : null;
+    const what = last ? { fall: T === 1 ? 'slipped off the cliff: −1, back to start' : 'fell: −1, back to start', slip: 'slipped', coin: 'coin +0.1', goal: 'flag +1', trap: 'trap −1', bump: T === 1 ? 'bumped a wall' : 'bump' }[last.kind === 'step' && last.slip ? 'slip' : last.kind] : null;
+    const tail = what ? `\n${what}${last.slip && last.kind !== 'step' ? ' (slip)' : ''}` : '';
+    const Vs = st.Vshow[st.env.start];
+    if (done && steps.length && ['goal', 'trap'].includes(steps[steps.length - 1].kind)) {
+      return T === 1 ? `**Done in ${steps.length} moves**\nscore ${fx(G, 3)} (start was worth ${fx(Vs, 3)})`
+        : T === 2 ? `**Return ${fx(G, 3)} in ${steps.length} moves**\nV(start) = ${fx(Vs, 3)} is the average over walks`
+          : `**G₀ = Σ γᵗ r = ${fx(G, 4)}** (${steps.length} steps)\nV*(start) = E[G₀] = ${fx(Vs, 4)}`;
+    }
+    if (done) return T === 1 ? `**Still going after ${steps.length} moves…**\nit never heads for the flag` : `**${steps.length} moves, return ${fx(G, 3)} and climbing**\nthe loop never ends`;
+    return T === 1 ? `**Move ${n}** · score so far ${fx(G, 2)}${tail}` : `**Step ${n}** · return so far ${fx(G, 3)}${tail}`;
+  });
+}
+
+/* --------------------------------------------------------- scene per beat */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.sel = o.sel === 'start' ? st.env.start : o.sel === 'goal' ? st.goalS : o.sel === 'coin' ? st.coinS : o.sel === 'nb' ? st.goalS - st.env.W : o.sel ?? -1;
+  st.rulerOn = o.ruler ?? true;
+  st.showArrows = !!o.arrows;
+  st.beadOn = o.bead ?? true;
+  st.startTag.show(o.tags !== false);
+  st.flagTag.show(o.tags !== false);
+  st.cliffTag.show(o.tags !== false && st.pitStates.length > 0);
+  st.trapTag.show(o.tags !== false && st.trapS >= 0);
+  st.coinTag.show(o.tags !== false && st.coin.visible);
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(st.figAt, o.face || [0, 0.5, 0]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.at ? (typeof o.at === 'function' ? o.at(S) : o.at) : undefined });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  note(S, null);
+  place(S); readout(S);
+  S.invalidate();
+}
+function wait(S, ms) { return S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)); }
+function walkDone(S) {   // resolves when the current walk finishes
+  return new Promise((res) => { const tick = () => { const w = S.state.walk; if (!w || !w.running) res(); else setTimeout(tick, 120); }; tick(); });
+}
+function sweepsDone(S) {
+  return new Promise((res) => { const tick = () => { const w = S.state.sweep; if (!w || !w.running) res(); else setTimeout(tick, 120); }; tick(); });
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'w09-terrain', num: '18', week: 9, kind: 'weekly',
+  title: 'The value terrain',
+  subtitle: 'In RL the value of every square is a height; the policy just walks uphill.',
+  back2d: '#week-09',
+  film: 'w9-rl',
+  plinth: { r: 2.22, h: 0.14 },
+  fit: 1.12,
+
+  knobs: [
+    { id: 'board', type: 'select', wide: true, label: { 1: 'Board', 2: 'Board', 3: 'Environment' }, value: 'cliff',
+      options: [['cliff', { 1: 'Cliff walk (6 × 8)', 2: 'Cliff walk, 6 × 8', 3: 'GridWorld(cliff map), 6 × 8' }],
+        ['norvig', { 1: 'ARENA\'s exercise board (3 × 4)', 2: 'ARENA\'s Norvig world, 3 × 4', 3: 'Norvig(): GridWorld 3 × 4, slip 0.3' }]] },
+    { id: 'gamma', type: 'range', label: { 1: 'Patience γ', 2: 'Discount γ', 3: 'gamma' }, min: 0, max: 0.99, step: 0.01, value: 0.99, fmt: (v) => v.toFixed(2) },
+    { id: 'step', type: 'range', label: { 1: 'Cost per step', 2: 'Step reward', 3: 'step_reward' }, min: -1, max: 0, step: 0.01, value: -0.04, fmt: (v) => fx(v, 2) },
+    { id: 'slip', type: 'range', label: { 1: 'Slippery floor', 2: 'Slip probability', 3: 'slipperiness' }, min: 0, max: 0.6, step: 0.05, value: 0, fmt: (v) => v.toFixed(2) },
+    { id: 'coin', type: 'toggle', label: { 1: 'Respawning coin (+0.1)', 2: 'Coin, +0.1, respawns', 3: 'coin_reward = 0.1 (\'$\')' }, value: false },
+    { id: 'arrows', type: 'toggle', label: { 1: 'Show the arrows', 2: 'Policy arrows', 3: 'show π = argmax Q' }, value: true },
+    { id: 'sweep', type: 'button', label: { 1: 'One sweep', 2: 'One Bellman sweep', 3: 'V ← 𝓑V' },
+      onClick: (S) => { const st = S.state; if (st.sweepK == null) startSweeps(S, { auto: false }); if (st.sweep) st.sweep.running = false; sweepOnce(S); sweepNote(S); } },
+    { id: 'solve', type: 'button', label: { 1: 'Solve', 2: 'Solve exactly', 3: 'find_optimal_policy' },
+      onClick: (S) => { const st = S.state; stopWalk(S); st.sweep = null; st.sweepK = null; setValues(S, st.Vstar);
+        note(S, { 1: `**Solved exactly**\n${st.rounds} rounds of evaluate + improve`, 2: `**Solved: policy iteration**\n${st.rounds} rounds of exact evaluation + improvement`, 3: `**find_optimal_policy**: ${st.rounds} rounds\npolicy_eval_exact + policy_improvement` }); } },
+    { id: 'walk', type: 'button', wide: true, label: { 1: 'Walk the arrows', 2: 'Walk the policy', 3: 'Roll out π (seeded)' },
+      onClick: (S) => { const st = S.state; st.walkSeed = (st.walkSeed || 1) + 1; startWalk(S, st.walkSeed); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.sel = -1; st.rulerOn = true; st.showArrows = false; st.beadOn = true; st.sweepK = null;
+    st.cols = inst(S, new THREE.BoxGeometry(1, 1, 1), K.mat.plaster(), 64);
+    st.caps = inst(S, new THREE.BoxGeometry(1, 1, 1), K.mat.paint('#ffffff'), 64);
+    for (let i = 0; i < 64; i++) st.caps.setColorAt(i, _c.set('#ffffff'));
+    const arrowMat = new THREE.MeshStandardMaterial({ color: '#c49a4a', metalness: 0.35, roughness: 0.42 });
+    st.arrows = inst(S, new THREE.BoxGeometry(1, 1, 1), arrowMat, 64, false);
+    st.dots = inst(S, new THREE.BoxGeometry(1, 1, 1), arrowMat, 64, false);
+    st.walls = inst(S, new THREE.BoxGeometry(1, 1, 1), K.mat.paint('#5d5c68'), 16);
+    st.wallCaps = inst(S, new THREE.BoxGeometry(1, 1, 1), K.mat.brass(), 16);
+    st.pits = inst(S, new THREE.BoxGeometry(1, 1, 1), K.mat.paint('#8f2f2f'), 16, false);
+    st.ring = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.011, 8, 40), K.mat.brass());
+    st.ring.rotation.x = Math.PI / 2; st.ring.castShadow = true;
+    S.root.add(st.ring);
+    st.coin = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.02, 32), K.mat.paint(C.prob));
+    st.coin.rotation.set(Math.PI / 2, 0, 0.5); st.coin.castShadow = true;
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.008, 6, 32), K.mat.brass()); rim.rotation.x = Math.PI / 2; st.coin.add(rim);
+    S.root.add(st.coin);
+    st.bead = K.bead([0, 0, 0], C.data, 0.075);
+    S.root.add(st.bead);
+    st.trail = K.tube([], C.data, 0.011);
+    st.trail.mesh.userData.noFit = true;
+    S.root.add(st.trail.mesh);
+    st.flag = new THREE.Group(); st.trapFlag = new THREE.Group();
+    st.proxy = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ visible: false }));
+    S.root.add(st.proxy);
+    st.selAt = new THREE.Object3D(); S.root.add(st.selAt);
+    st.cliffAt = new THREE.Object3D(); S.root.add(st.cliffAt);
+    buildRuler(S);
+    // labels
+    st.startTag = K.label(st.ring, { 1: 'start', 2: 'start', 3: 'S (start)' }, { cls: 'tag rw', anchor: 'top', dy: 12 });
+    st.flagTag = K.label([0, 0, 0], { 1: '+1 flag', 2: 'goal +1', 3: 'G: +1' }, { cls: 'tag rw good', anchor: 'bottom', dy: -4 });
+    st.trapTag = K.label([0, 0, 0], { 1: '−1 trap', 2: 'trap −1', 3: 'T: −1' }, { cls: 'tag rw bad', anchor: 'bottom', dy: -4 });
+    st.cliffTag = K.label(st.cliffAt, { 1: 'cliff: −1, back to start', 2: 'cliff −1 → back to start', 3: 'C: cliff_reward −1, → S' }, { cls: 'tag rw bad', anchor: 'top', dy: 6 });
+    st.coinTag = K.label(st.coin, { 1: 'coin +0.1, comes back', 2: '+0.1, respawns', 3: '$: +0.1 per entry' }, { cls: 'tag rw coin', anchor: 'bottom', dy: -14 });
+    st.readout = K.label(st.selAt, '', { cls: 'readout', anchor: 'bottom', dy: -12 });
+    st.note = K.label(new THREE.Vector3(0.2, 1.95, -1.1), '', { cls: 'note', anchor: 'bottom', dy: -4 });
+    st.note.show(false); st.readout.show(false);
+    st.fig = K.figure();
+    S.root.add(st.fig.group);
+    st.fig.group.visible = false;
+    // tap a square to read its value
+    const tap = (hit) => { if (hit.instanceId == null) return; const s = S.state.tileStates[hit.instanceId]; if (s == null) return;
+      S.state.sel = s; S.state.selAt.position.copy(tileTop(S.state, s)).setY(S.state.hNow[s] + CAP + 0.02); readout(S); S.invalidate(); };
+    K.pick(st.caps, tap); K.pick(st.cols, tap);
+  },
+
+  rebuild(S, id) {
+    const st = S.state, ch = new Set(S.changed || [id]);
+    if (id === 'arrows') { st.showArrows = S.knobs.arrows; place(S); S.invalidate(); return; }
+    const boardChanged = !st.env || st.boardKey !== S.knobs.board;
+    if (st.walk) stopWalk(S);
+    solve(S);
+    if (boardChanged) { st.hNow = null; buildBoard(S); }
+    st.sweep = null; st.sweepK = null;
+    st.beadS = st.env.start;
+    if (ch.has('arrows') || id === '*') st.showArrows = S.knobs.arrows;
+    if (st.sel >= 0 && !'.S$GT'.includes(st.env.cells[st.sel] || '#')) st.sel = -1;
+    setValues(S, st.Vstar, { tween: id === '*' ? 420 : true });
+    if (id !== '*') {
+      note(S, null);
+      st.coinTag.show(st.coin.visible);
+      st.trapTag.show(st.trapS >= 0);
+      st.cliffTag.show(st.pitStates.length > 0);
+    }
+    if (boardChanged && !S.first) S.stage.refit();
+  },
+
+  frame(S, t) {
+    let busy = false;
+    busy = stepHeights(S, t) || busy;
+    busy = stepSweep(S, t) || busy;
+    busy = stepWalk(S, t) || busy;
+    return busy;
+  },
+
+  onTier(S) { readout(S); if (S.state.noteText) note(S, S.state.noteText); place(S); },
+
+  solids(S) {
+    const st = S.state, env = st.env, P = st.L.P, out = [];
+    const W = env.W * P + 0.16, D = env.H * P + 0.16;
+    out.push(J.primitives.cuboid({ size: [W, D, 0.06], center: [0, 0, -0.03] }));
+    for (const s of st.tileStates) {
+      const [x, z] = cellXZ(st, s), h = disp(st, st.Vstar[s]) + CAP;
+      out.push(J.primitives.cuboid({ size: [P * 0.9, P * 0.9, h], center: [x, -z, h / 2] }));
+      if (isLive(env, s) && !st.greedy.tie[s]) {
+        const a = st.greedy.pi[s], L = P * 0.34;
+        const tri = J.primitives.polygon({ points: [[L, 0], [-L * 0.6, L * 0.55], [-L * 0.6, -L * 0.55]] });
+        let g = J.extrusions.extrudeLinear({ height: 0.02 }, tri);
+        g = J.transforms.rotateZ(PHI[a], g);
+        out.push(J.transforms.translate([x, -z, h - 0.001], g));
+      }
+    }
+    const hs = new Float64Array(env.num_states);
+    for (const s of st.tileStates) hs[s] = disp(st, st.Vstar[s]);
+    for (const s of st.wallStates) { const [x, z] = cellXZ(st, s), wallH = wallHeight(st, s, hs); out.push(J.primitives.cuboid({ size: [P * 0.96, P * 0.96, wallH], center: [x, -z, wallH / 2] })); }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**A board game for one.** The blue bead is the agent. Every step costs 0.04, the green flag pays +1, the red cliff costs 1 and sends you back to start. The heights? Next beat.',
+        2: '**An MDP you can hold.** States: the 38 squares you can stand on. Actions: up, right, down, left. Rewards: −0.04 a step, +1 into the flag, −1 off the cliff (and back to start). The agent wants the most total reward. Each tile\'s height is what that\'s worth from there.',
+        3: 'ARENA\'s `GridWorld` from an ASCII map: `step_reward=-0.04`, `goal_reward=1.0`, `cliff_reward=-1.0` (ARENA\'s default −100 would dwarf the rest), `slipperiness=0`. `env.T[s, a, s\']` and `env.R[s, a, s\']` are (48, 4, 48). Heights: V*(s) from `find_optimal_policy`, γ = 0.99.',
+      },
+      cam: CAM.hero,
+      set: { board: 'cliff', gamma: 0.99, step: -0.04, slip: 0, coin: false, arrows: false },
+      enter(S) { scene(S, { figure: 'point', at: (S2) => S2.state.bead.getWorldPosition(new THREE.Vector3()) }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Height = how good it is to stand here.** Add up every reward still to come, each one shrunk ×0.99 per step of waiting. From the start: 8 steps of −0.04, then +1. Worth 0.61.',
+        2: '**Value V(s)**: the discounted sum of future rewards, r₁ + γr₂ + γ²r₃ + … From the start the best route is 9 moves: −0.04 × (1 + 0.99 + … + 0.99⁷) + 0.99⁸ × 1 = 0.614. Nearer the flag, taller. David Silver\'s line: value is how good it is to be in a state.',
+        3: 'V_π(s) = E_π[Σₖ γᵏ r_(t+k+1) | s_t = s], V* = max_π V_π. Deterministic here, so V*(s) = −0.04(1 − γ^(d−1))/(1 − γ) + γ^(d−1), d = moves to the flag: V*(start) = 0.6137 (d = 9). The flag\'s own V is 0: the episode is over once you\'re in.',
+      },
+      cam: CAM.low,
+      set: { board: 'cliff', gamma: 0.99, step: -0.04, slip: 0, coin: false, arrows: false },
+      enter(S) { scene(S, { sel: 'start' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**How the heights get made.** Start flat. Each sweep, every square asks: best move = reward now + 0.99 × the height where I land. The flag\'s news spreads back one square per sweep.',
+        2: '**Bellman backup**, all squares at once: V(s) ← max_a Σ T(s′|s,a)[R + γV(s′)]. From V = 0 the flag\'s +1 travels one square per sweep; the start first feels it on sweep 9. Repeat until nothing changes: that fixed point is V*. Sutton & Barto call it value iteration.',
+        3: 'Value iteration: V_(k+1) = 𝓑V_k, with 𝓑 the Bellman optimality operator from ARENA\'s proof, a γ-contraction in ‖·‖∞ (the note\'s largest change shrinks at least ×γ per sweep). `policy_eval_numerical` sweeps the same way for a fixed π; `find_optimal_policy` gets V* exactly.',
+      },
+      cam: CAM.hero,
+      set: { board: 'cliff', gamma: 0.99, step: -0.04, slip: 0, coin: false, arrows: false },
+      enter(S) { scene(S, { sel: 'start', figure: 'think', face: [0.4, 0.6, 0.6] }); startSweeps(S, { upTo: S.shot ? 5 : Infinity }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The rule: walk uphill.** Each brass arrow points at the best next square, and the bead just follows arrows. The last step drops into the flag: its own height is 0, because nothing is left to collect.',
+        2: '**Policy = greedy on the heights**: π(s) = argmax_a Σ T(s′|s,a)[R + γV(s′)]. With equal step costs that means the tallest neighbour, except at the end: the flag pays +1 on entry and V(flag) = 0 because the game ends there. Ties go to the first action, like np.argmax.',
+        3: 'ARENA\'s `policy_improvement`: `einsum(env.T, env.R + gamma * V, "s a s_next, s a s_next -> s a").argmax(axis=1)`. Greedy on V* is optimal (ARENA\'s proof). On this deterministic floor the walk\'s return equals V*(start) = 0.6137 exactly.',
+      },
+      cam: CAM.hero,
+      set: { board: 'cliff', gamma: 0.99, step: -0.04, slip: 0, coin: false, arrows: true },
+      enter(S) { scene(S, { arrows: true }); startWalk(S, 7); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Patience (γ) sets how far you see.** At 0.6, a reward 5 steps away counts 0.6⁵ ≈ 1/13. Far squares barely feel the flag: a flat plain and one steep hill. At 0.99 it is a long gentle ramp.',
+        2: '**Discount γ** weighs a reward k steps away by γᵏ; the rough horizon is 1/(1 − γ): 2.5 steps at γ = 0.6, 100 at 0.99. Far squares sit near −0.04/(1 − 0.6) = −0.1, plus a whisper of the flag. At γ = 0 only the square beside the flag knows it exists.',
+        3: 'γ is part of the task: V = Σγᵏr, effective horizon 1/(1 − γ). ARENA\'s toy MDP flips π_L to π_R at γ = ½. γ < 1 also taxes long routes like a step cost, and it is what makes (I − γP) invertible for `policy_eval_exact`.',
+      },
+      cam: CAM.side,
+      set: { board: 'cliff', gamma: 0.6, step: -0.04, slip: 0, coin: false, arrows: true },
+      enter(S) { scene(S, { arrows: true, sel: 'start' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Slippery floor.** Now a move goes where you meant only 70% of the time. By the cliff, one slip in ten drops you. So the best route swings wide round the back, and the edge squares sink.',
+        2: '**Slipperiness 0.3** (ARENA\'s Norvig setting): the chosen move happens with p = 0.7, each other direction 0.1. Squares by the cliff lose value (risk) and the arrows route round the far side: longer, safer. V(start) drops to −0.39. The walk samples real slips (seeded).',
+        3: 'Stochastic T: V*(s) = max_a Σ_s′ T(s′|s,a)[R + γV*(s′)] averages over slips. Sutton & Barto\'s cliff walk (Example 6.6) gets a similar detour from SARSA\'s ε-exploration; here it comes from the dynamics. Raise `step_reward` to −0.2 and the edge route wins again.',
+      },
+      cam: CAM.hero,
+      set: { board: 'cliff', gamma: 0.99, step: -0.04, slip: 0.3, coin: false, arrows: true },
+      enter(S) { scene(S, { arrows: true }); startWalk(S, 3); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**A coin that comes back.** +0.1 every time you step on it. Step off, step on, forever: worth about 3, more than the flag\'s 1. So the agent never finishes. That is reward hacking.',
+        2: '**Reward hacking.** At γ = 0.99, bouncing on the coin is worth (0.1 − 0.99 × 0.04)/(1 − 0.99²) = 3.04 > 1, so the optimal policy farms it (below γ ≈ 0.963 it finishes). OpenAI\'s CoastRunners boat circled respawning targets the same way. The fix today: better rewards, and testing for exploits.',
+        3: 'Settled: optimal ≠ intended when the reward is wrong, and this planner truly maximises it. Contested: Turner (2022), "reward is not the optimization target": a policy-gradient learner is shaped by reward rather than wanting it. For applied work the upshot is the same: probe for exploits.',
+      },
+      cam: CAM.high,
+      set: { board: 'cliff', gamma: 0.99, step: -0.04, slip: 0, coin: true, arrows: true },
+      enter(S) { scene(S, { arrows: true, figure: 'shrug', face: [0.5, 0.6, -0.2] }); startWalk(S, 5); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Your exercise board.** ARENA\'s 3 × 4 world: +1 top right, a −1 trap below it, a wall, a slippery floor. You will write the code that finds these arrows. Slide the step cost and watch routes flip.',
+        2: 'ARENA [2.1]: `policy_eval_numerical` (sweeps), `policy_eval_exact` (solve (I − γP)v = r), `policy_improvement` (argmax), `find_optimal_policy` (alternate them from π = all up). At −0.04 square 10 goes ↑ past the trap; above r* ≈ −0.027 it takes the long way.',
+        3: '`Norvig(penalty=-0.04)`: `GridWorld("...G\\n.#.T\\nS...", step_reward=penalty, slipperiness=0.3)`, γ 0.99. Exact step: `np.linalg.solve(np.eye(n) - gamma * P, r)`. Below a step reward of ≈ −0.351, square 11 dives into the trap.',
+      },
+      cam: CAM.norvig,
+      set: { board: 'norvig', gamma: 0.99, step: -0.04, slip: 0.3, coin: false, arrows: true },
+      enter(S) { scene(S, { arrows: true, sel: 10 }); startWalk(S, 2); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Your map app: height = minus the distance left, and each junction just asks its neighbours. Chess engines score positions the same way. Same trick: value flows back from the goal.',
+        2: 'One local rule, value flowing back from goals: GPS routing (Bellman-Ford: my distance = step + best neighbour\'s), dynamic programming in general, Go and chess (AlphaZero\'s value head; ARENA [2.5] trains one for Connect 4), and PPO\'s critic in week 10, which learns this V.',
+        3: 'Bellman (1957) dynamic programming: shortest paths (Bellman-Ford), Viterbi, edit distance. With γ → 1 and step −1, V* = −(moves to goal). TD errors look like dopamine responses (Schultz 1997). V(s) returns as PPO\'s critic (W10) and AlphaZero\'s value head.',
+      },
+      cam: CAM.wide,
+      set: { board: 'cliff', gamma: 0.99, step: -0.04, slip: 0, coin: false, arrows: true },
+      enter(S) { scene(S, { arrows: true, figure: 'cheer', face: [0.4, 0.6, 0.2] }); startWalk(S, 11); } },
+  ],
+
+  predict: [
+    { q: { 1: 'Patience γ = 0: the agent only cares about the very next reward. Which squares are worth anything?',
+        2: 'Set γ = 0. Which squares get a value above the step cost?',
+        3: 'γ = 0, step_reward −0.04. What does V* look like?' },
+      options: [{ t: 'Only the square right next to the flag', ok: true }, { t: 'All of them: a gentle ramp, just smaller' },
+        { t: 'Only the flag square itself' }, { t: 'None: everything is 0' }],
+      why: { 1: 'With no patience, a square is worth only what one move can grab. Only the square beside the flag can grab +1; everywhere else one move just costs 0.04. The arrows go blank: every move looks the same.',
+          2: 'V(s) = max_a E[r] when γ = 0. The square above the flag gets +1; every other square −0.04, identical (brass dots: all four moves tie). The flag itself is 0: terminal.',
+          3: 'γ = 0 ⇒ V*(s) = max_a Σ T R: +1 above G, −0.04 elsewhere; greedy π is all ties (np.argmax would say "up", into the back wall). Myopia removes the gradient the policy climbs.' },
+      show(S) {
+        S.setKnobs({ board: 'cliff', gamma: 0, step: -0.04, slip: 0, coin: false, arrows: true });
+        scene(S, { arrows: true, sel: 'nb' }); S.fly(CAM.hero);
+        return wait(S, 700);
+      } },
+    { q: { 1: 'Make the floor slippery (you go where you meant 70% of the time). Does the best route move away from the cliff?',
+        2: 'Slipperiness 0.3. Does the optimal path still hug the cliff edge?',
+        3: 'slipperiness=0.3, γ 0.99, step −0.04, cliff −1. Where does π* route from S?' },
+      options: [{ t: 'Yes: it swings round the far side of the board', ok: true }, { t: 'No: the edge is still the shortest way' },
+        { t: 'It walks a row back, then along the edge' }, { t: 'It jumps off the cliff on purpose' }],
+      why: { 1: 'Along the edge, every step has a 1-in-10 chance of a slip into the cliff. Going round the back is longer but safe, and here it wins clearly.',
+          2: 'Each edge step risks 0.1 × (fall −1 and lose your progress). The detour round the wall and along the back row costs more steps but almost no risk: V(start) −0.39 via the back, worse via the edge.',
+          3: 'π* goes up column 0, along row 0 and down the right side (the walk shows sampled slips). Q(edge route) < Q(detour) at slip 0.3; at step −0.2 the ordering flips back. Risk enters only through E over T.' },
+      show(S) {
+        S.setKnobs({ board: 'cliff', gamma: 0.99, step: -0.04, slip: 0.3, coin: false, arrows: true });
+        scene(S, { arrows: true }); S.fly(CAM.hero);
+        startWalk(S, 3); return walkDone(S);
+      } },
+    { q: { 1: 'A coin worth +0.1 that comes back every time. Patience 0.99. Does the agent ever reach the flag?',
+        2: 'Respawning coin (+0.1 each entry), γ = 0.99. Does the optimal policy finish?',
+        3: 'coin_reward 0.1 (re-collectable), γ 0.99, step −0.04. Does π* reach G?' },
+      options: [{ t: 'No: it bounces on the coin forever', ok: true }, { t: 'Yes: grabs the coin once, then finishes' },
+        { t: 'Yes: ignores the coin' }, { t: 'It gets stuck against a wall' }],
+      why: { 1: 'Two moves earn 0.1 minus a step: forever, that adds up to about 3. The flag pays 1, once. So the "best" agent never finishes. That is reward hacking.',
+          2: 'Loop value: (0.1 − 0.99 × 0.04)/(1 − 0.99²) = 3.04 beside the coin, versus at most 1 via the flag. With γ below about 0.963 the future counts less and it finishes instead.',
+          3: 'V(n) = c + γ(step + γV(n)) ⇒ V(n) = (c + γ·step)/(1 − γ²) = 3.035 > 1 = sup of finishing. The optimum is a 2-cycle: the reward, not the planner, is broken.' },
+      show(S) {
+        S.setKnobs({ board: 'cliff', gamma: 0.99, step: -0.04, slip: 0, coin: true, arrows: true });
+        scene(S, { arrows: true, sel: 'coin' }); S.fly(CAM.high);
+        startWalk(S, 5); return walkDone(S);
+      } },
+    { q: { 1: 'How much is the flag square itself worth?',
+        2: 'What is V at the goal square?',
+        3: 'V*(G) for the terminal goal, with R paid on entry?' },
+      options: [{ t: '0', ok: true }, { t: '+1' }, { t: 'The most on the board' }, { t: '−0.04' }],
+      why: { 1: 'Zero. Value counts rewards still to come, and once you are in, the game is over. The +1 belongs to the step in, so the square beside the flag is the tallest.',
+          2: 'V(G) = 0: G is absorbing with reward 0. The +1 is R(s, a, G), paid on the transition, so it shows up in the neighbours\' values, not in G\'s. That is why the flag sits in a pit.',
+          3: 'T(G|G,·) = 1, R = 0 ⇒ V(G) = γV(G) ⇒ 0. ARENA uses R(s, a, s′) (Sutton & Barto\'s convention); under Norvig\'s R(s) convention the goal\'s utility would be +1 instead.' },
+      show(S) {
+        S.setKnobs({ board: 'cliff', gamma: 0.99, step: -0.04, slip: 0, coin: false, arrows: false });
+        scene(S, { sel: 'goal' }); S.fly(CAM.low);
+        return wait(S, 700);
+      } },
+    { q: { 1: 'Start from a flat board and sweep. After how many sweeps does the start first feel the flag?',
+        2: 'Value iteration from V = 0: on which sweep does V(start) first change sign?',
+        3: 'V₀ = 0, V_(k+1) = 𝓑V_k. Smallest k with V_k(start) > 0?' },
+      options: [{ t: '9: one sweep per square of distance', ok: true }, { t: '1: every square sees the flag at once' },
+        { t: 'About 100, which is 1/(1 − γ)' }, { t: 'Never exactly, only in the limit' }],
+      why: { 1: 'Each sweep lets every square look one step further ahead. The start is 9 moves from the flag, so the news arrives on sweep 9.',
+          2: 'After k sweeps, V_k(s) is the best k-step return. The start needs 9 moves to reach the flag, so V_k(start) = −0.04(1 + … + 0.99^(k−1)) < 0 until k = 9, when it jumps to 0.614 = V*.',
+          3: 'V_k = optimal k-horizon value; d(start) = 9 ⇒ V_9(start) = V*(start) = 0.6137 exactly on a deterministic board, and ‖V_k − V*‖∞ ≤ γᵏ‖V₀ − V*‖∞ bounds the rest.' },
+      show(S) {
+        S.setKnobs({ board: 'cliff', gamma: 0.99, step: -0.04, slip: 0, coin: false, arrows: false });
+        scene(S, { sel: 'start' }); S.fly(CAM.hero);
+        startSweeps(S, { upTo: 9 }); return sweepsDone(S);
+      } },
+    { q: { 1: 'ARENA\'s exercise board with a harsh cost: −1 per step. From the bottom-right corner, where does the agent go?',
+        2: 'Norvig world, step reward −1. From the bottom-right square, what does π* do?',
+        3: '`Norvig(penalty=-1)`, γ 0.99: π*(11)?' },
+      options: [{ t: 'Straight up into the −1 trap', ok: true }, { t: 'The long way round to +1' },
+        { t: 'Left, then up past the trap to +1' }, { t: 'Nowhere: it bumps the wall' }],
+      why: { 1: 'Each step costs as much as the trap. Four more steps to the +1 cost far more than ending it now for −1. So it dives into the trap.',
+          2: 'Walking to +1 from there takes 4+ steps at −1 each (and slips); the trap ends everything for −1. π*(11) = ↑. ARENA\'s r* note: a harsh step cost makes the risky route worth it; at −1, even the trap.',
+          3: 'Q(11, ↑) ≈ −1.59 beats the walk; the switch happens at step reward ≈ −0.351 (bisection in the page\'s own solver). Same "r*" logic as ARENA\'s question, with the trap as the exit.' },
+      show(S) {
+        S.setKnobs({ board: 'norvig', gamma: 0.99, step: -1, slip: 0.3, coin: false, arrows: true });
+        scene(S, { arrows: true, sel: 11 }); S.fly(CAM.norvig);
+        return wait(S, 800);
+      } },
+  ],
+
+  where: { 1: 'Anywhere value flows back from a goal by one local rule: your map app (height = minus the distance left), chess engines scoring positions, and the critic that PPO trains in week 10.',
+    2: 'GPS routing (Bellman-Ford), dynamic programming, chess and Go evaluation (AlphaZero\'s value head), PPO\'s critic (week 10), and every reward-hacking story from CoastRunners to RLHF.',
+    3: 'Bellman\'s dynamic programming (shortest paths, Viterbi, edit distance), TD learning and dopamine (Schultz 1997), actor-critic methods (PPO, W10), AlphaZero\'s value head, reward misspecification in RLHF.' },
+  links: [
+    { label: 'Film · W9 RL', href: '../../intuition/films/w9-rl.html' },
+    { label: 'Week 9 pack', href: '../../index.html#week-09' },
+    { label: 'Demo · RL foundations & DQN', href: '../../index.html#demo/rl-foundations-dqn' },
+    { label: 'Case · policy evaluation', href: '../../index.html#cases/policy-evaluation' },
+    { label: 'Case · Q-learning', href: '../../index.html#cases/q-learning' },
+    { label: 'Case · multi-armed bandit', href: '../../index.html#cases/multi-armed-bandit' },
+    { label: 'Map · MDP', href: '../../index.html#map/node=markov-decision-process' },
+    { label: 'Map · value function', href: '../../index.html#map/node=value-function' },
+    { label: 'Map · Bellman equation', href: '../../index.html#map/node=bellman-equation' },
+    { label: 'Map · discount factor', href: '../../index.html#map/node=discount-factor' },
+    { label: 'Map · policy evaluation', href: '../../index.html#map/node=policy-evaluation' },
+    { label: 'Map · policy iteration', href: '../../index.html#map/node=policy-iteration' },
+    { label: 'Map · reward hacking', href: '../../index.html#map/node=reward-hacking' },
+    { label: 'Object · the pole and the Q-surface', href: 'd09-cartpole.html' },
+  ],
+  remix: 'Build a single-file three.js scene: a 6 × 8 gridworld from the ASCII map "........ / ..#..... / ..#.$... / ..#..... / ........ / SCCCCCCG" (S start, G goal +1 terminal, C cliff −1 and back to start, # wall, $ optional respawning coin +0.1), step reward −0.04, actions up/right/down/left, slipperiness p (chosen move 1 − p, others p/3). Build T and R as (48, 4, 48) arrays, solve V* by policy iteration with an exact linear solve (I − γP)v = r, and draw each square as a plaster column of height 0.45 + 0.95·V*(s) with a brass arrow for argmax_a Σ T(R + γV). Add sliders for γ, step reward and slip, a coin toggle, a "sweep once" button (V ← max_a Σ T(R + γV) from V = 0) and a seeded walk of the greedy policy with a running discounted return.',
+  credit: 'Board conventions, names and the Norvig world: ARENA [2.1] Intro to RL (GridWorld, policy_eval_numerical, policy_eval_exact, policy_improvement, find_optimal_policy), mirrored in the page; the cliff board is ours, after Sutton & Barto\'s cliff walk (Example 6.6) and Russell & Norvig\'s 3 × 4 world. "Value is how good it is to be in a state": David Silver\'s RL lectures. CoastRunners: Clark & Amodei, OpenAI (2016). "Reward is not the optimization target": Turner (2022). Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

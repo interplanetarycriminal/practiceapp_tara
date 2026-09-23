@@ -1,0 +1,815 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The activation shelf · Object Lessons</title>
+<meta name="description" content="run_with_cache hands you a cabinet: every activation of GPT-2 small in a named drawer, one index card per token. Shapes, shorthand, hooks and the KV cache, with the real names and shapes from ARENA.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+  /* row names on the label board, and the drawer read-out, in the code face */
+  .k-label.k-row{background:transparent; border:0; box-shadow:none; -webkit-backdrop-filter:none; backdrop-filter:none;
+    padding:0 2px; font:600 10px/1.1 var(--mono); color:var(--ink); letter-spacing:0}
+  .k-label.k-row b{color:var(--k-data); font-weight:700}
+  .k-label.k-row.k-on{color:var(--k-data)}
+  .k-label.k-key{font:500 11px/1.4 var(--mono); white-space:pre-wrap; max-width:min(330px, 88vw); width:max-content;
+    border-left:3px solid var(--k-data)}
+  .k-label.k-key b{font-weight:700}
+  .k-label.k-tag{min-width:0}              /* the kit's beat chip .k-tag sets min-width:52px; not for 3D tags */
+  .k-label.k-tag.k-fn{text-transform:none; letter-spacing:0}
+  .k-label.k-tag.k-col{text-transform:none; letter-spacing:0; font:700 10px/1.1 var(--mono); color:color-mix(in srgb, var(--k-brass) 55%, var(--ink));
+    background:color-mix(in srgb, var(--wash) 88%, transparent); padding:1px 4px; border-radius:4px}
+  .k-label.k-note{max-width:min(300px, 80vw)}
+  .k-label.k-tag.k-vert{writing-mode:vertical-rl; text-transform:none; letter-spacing:.02em; font:600 10px/1.1 var(--font)}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   12 · d06-shelf: "The activation shelf" (W6 deep, ARENA [1.2] TransformerLens)
+   The cabinet is the ActivationCache that run_with_cache returns for GPT-2 small:
+   rows = the 17 hook points of a block in computation order (bottom to top), columns =
+   blocks, one index card per token in every drawer. Names and shapes come from the
+   SHELF block, checked in node against the table ARENA prints from a real 35-token run
+   and against an independent Python implementation (see LEDGER.md).
+   ========================================================================= */
+
+// SHELF-BEGIN
+/* GPT-2 small as TransformerLens builds it (HookedTransformer "gpt2-small" config) and the
+   cache run_with_cache returns. Every name and shape here is checked in node against the
+   list ARENA prints from a real run (reference_text, 35 tokens) and against an independent
+   Python re-implementation (see LEDGER.md). */
+const CFG = { n_layers: 12, d_model: 768, n_heads: 12, d_head: 64, d_mlp: 3072, d_vocab: 50257, n_ctx: 1024 };
+const REAL_SEQ = 35;                       // ARENA's printed run: reference_gpt2.run_with_cache(tokens), tokens (1, 35)
+const dimSize = (d, seq) => ({ batch: 1, pos: seq, query_pos: seq, key_pos: seq, d_model: CFG.d_model,
+  head_index: CFG.n_heads, d_head: CFG.d_head, d_mlp: CFG.d_mlp, d_vocab: CFG.d_vocab, 1: 1 })[d];
+const mk = (key, short, ln, dims, where) => ({ key, short, ln, dims: dims.split(' '), where });
+// one block's 17 hook points, in the order the block computes (and the cache stores) them
+const BLOCK = [
+  mk('hook_resid_pre', 'resid_pre', null, 'batch pos d_model', 'attn'),
+  mk('ln1.hook_scale', 'scale', 'ln1', 'batch pos 1', 'attn'),
+  mk('ln1.hook_normalized', 'normalized', 'ln1', 'batch pos d_model', 'attn'),
+  mk('attn.hook_q', 'q', null, 'batch pos head_index d_head', 'attn'),
+  mk('attn.hook_k', 'k', null, 'batch pos head_index d_head', 'attn'),
+  mk('attn.hook_v', 'v', null, 'batch pos head_index d_head', 'attn'),
+  mk('attn.hook_attn_scores', 'attn_scores', null, 'batch head_index query_pos key_pos', 'attn'),
+  mk('attn.hook_pattern', 'pattern', null, 'batch head_index query_pos key_pos', 'attn'),
+  mk('attn.hook_z', 'z', null, 'batch pos head_index d_head', 'attn'),
+  mk('hook_attn_out', 'attn_out', null, 'batch pos d_model', 'attn'),
+  mk('hook_resid_mid', 'resid_mid', null, 'batch pos d_model', 'mlp'),
+  mk('ln2.hook_scale', 'scale', 'ln2', 'batch pos 1', 'mlp'),
+  mk('ln2.hook_normalized', 'normalized', 'ln2', 'batch pos d_model', 'mlp'),
+  mk('mlp.hook_pre', 'pre', null, 'batch pos d_mlp', 'mlp'),
+  mk('mlp.hook_post', 'post', null, 'batch pos d_mlp', 'mlp'),
+  mk('hook_mlp_out', 'mlp_out', null, 'batch pos d_model', 'mlp'),
+  mk('hook_resid_post', 'resid_post', null, 'batch pos d_model', 'mlp'),
+];
+const EMBEDS = [mk('hook_embed', 'embed', null, 'batch pos d_model', 'in'), mk('hook_pos_embed', 'pos_embed', null, 'batch pos d_model', 'in')];
+const FINAL = [mk('ln_final.hook_scale', 'scale', 'ln_final', 'batch pos 1', 'out'), mk('ln_final.hook_normalized', 'normalized', 'ln_final', 'batch pos d_model', 'out')];
+const LOGITS = mk('logits', 'logits', null, 'batch pos d_vocab', 'ret');     // the return value, not a cache entry
+const HOOKS = [...EMBEDS, ...BLOCK, ...FINAL];
+const hookById = new Map(HOOKS.map((h) => [h.key, h]));
+const isBlock = (h) => BLOCK.includes(h);
+
+// every cache key, in the order run_with_cache stores them
+function cacheKeys(n_layers = CFG.n_layers) {
+  const out = EMBEDS.map((h) => ({ name: h.key, h, layer: null }));
+  for (let l = 0; l < n_layers; l++) for (const h of BLOCK) out.push({ name: `blocks.${l}.${h.key}`, h, layer: l });
+  for (const h of FINAL) out.push({ name: h.key, h, layer: null });
+  return out;
+}
+const fullName = (h, layer) => (isBlock(h) ? `blocks.${layer}.${h.key}` : h.key);
+function shapeOf(h, seq, removeBatch = false) {
+  const dims = removeBatch ? h.dims.slice(1) : h.dims;
+  return { dims, sizes: dims.map((d) => dimSize(d, seq)) };
+}
+const numel = (sizes) => sizes.reduce((a, b) => a * b, 1);
+const perToken = (h, seq) => numel(shapeOf(h, seq).sizes) / seq;    // floats stored per position (batch 1)
+// the shorthand ARENA uses: cache["pattern", 0], cache["normalized", 0, "ln1"], cache["embed"];
+// ln_final is written out in full, as ARENA writes it: cache["ln_final.hook_scale"]
+function shorthand(h, layer) {
+  if (isBlock(h)) return h.ln ? `cache["${h.short}", ${layer}, "${h.ln}"]` : `cache["${h.short}", ${layer}]`;
+  if (h.ln === 'ln_final') return `cache["${h.key}"]`;
+  return `cache["${h.short}"]`;
+}
+function actName(h, layer) {
+  if (isBlock(h)) return h.ln ? `utils.get_act_name("${h.short}", ${layer}, "${h.ln}")` : `utils.get_act_name("${h.short}", ${layer})`;
+  return null;
+}
+function cacheFloats(seq, n_layers = CFG.n_layers) {
+  let s = 0;
+  for (const k of cacheKeys(n_layers)) s += numel(shapeOf(k.h, seq).sizes);
+  return s;
+}
+// KV cache, as ARENA's KeyValueCache: one tensor (n_layers, 2, batch, seq_len, n_heads, d_head)
+const kvShape = (L) => [CFG.n_layers, 2, 1, L, CFG.n_heads, CFG.d_head];
+const kvBytes = (L, bytes) => numel(kvShape(L)) * bytes;          // = 2 * 12 * 768 * L * bytes
+/* Work to run a P-token prompt and then feed s more tokens one at a time.
+   positions: token positions pushed through the 12 blocks (every matmul runs once per position).
+   qk: query-key dot products per head per layer, counted as ARENA's einsum computes them
+       (the full L x L grid, masked afterwards; with the cache, 1 new query x L keys). */
+function kvWork(P, s) {
+  let posWith = P, posWithout = P, qkWith = P * P, qkWithout = P * P;
+  for (let i = 1; i <= s; i++) { const L = P + i; posWith += 1; posWithout += L; qkWith += L; qkWithout += L * L; }
+  return { L: P + s, posWith, posWithout, qkWith, qkWithout };
+}
+const SHELF = { CFG, REAL_SEQ, BLOCK, EMBEDS, FINAL, LOGITS, HOOKS, hookById, cacheKeys, fullName, shapeOf, numel, perToken, shorthand, actName, cacheFloats, kvShape, kvBytes, kvWork };
+// SHELF-END
+
+/* ============================================================ layout */
+// A drawer's front is as wide as the floats each token stores there, on a square-root scale
+// (so 3072 reads twice as wide as 768, and a 1-float LayerNorm scale is a slot). Every drawer is
+// as deep as the sequence: it holds one index card per token.
+const W768 = 0.25;
+const wOf = (n) => Math.max(0.05, W768 * Math.sqrt(n / 768));
+const DH = 0.11, RP = 0.14, Y0 = 0.1;               // drawer front height, row pitch, lowest row
+const CPW = 0.64, GW = 0.26, LBW = 0.98, SIDE = 0.04;
+const ZF = 0.35;                                    // the plane of the drawer fronts
+const depthOf = (L) => 0.14 + 0.0095 * L;
+const RACK = 0.075;                                 // KV rack: row pitch on the plinth
+const zRack = (row) => ZF + 0.16 + row * RACK;
+const zTokens = (G, kv) => ZF + (kv ? 0.185 + 2 * G.n * RACK : 0.62);
+const NROW = 21;                                    // embed, pos_embed, 17 block rows, ln_final x2
+const yRow = (g) => Y0 + g * RP;                    // bottom of row g's drawer front
+const HEADS = new Set(['attn.hook_q', 'attn.hook_k', 'attn.hook_v', 'attn.hook_attn_scores', 'attn.hook_pattern', 'attn.hook_z']);
+const MASKED = new Set(['attn.hook_attn_scores', 'attn.hook_pattern']);
+const KVH = new Set(['attn.hook_k', 'attn.hook_v']);
+const MAX_NEW = 24;                                 // KV mode: tokens you can add after the prompt
+const COL = {
+  carcass: '#e9e1d3', board: '#e4dac8', rail: '#d9cfbd', empty: '#fbf8f2', filled: '#bcd0f5', sel: '#4f7fe0',
+  twin: '#8fb0ee', edited: '#c7b6f2', ghost: '#ede7dc', kv: '#5f8be0', divider: '#c9bfae', tray: '#efe7da',
+  card: '#6f97e3', cardP: C.prob, cardNew: C.data, token: '#7ea2e6', tokenNew: C.data, cube: '#7ea2e6',
+};
+const CAM = {
+  front: { pos: [2.0, 3.5, 11.0], target: [0, 1.6, 0.3] },          // far and narrow: little perspective
+  high: { pos: [3.1, 5.2, 10.3], target: [0, 1.5, 0.35] },
+  tray: { pos: [0.75, 2.75, 2.75], target: [0, 1.42, 0.55], fit: 1.1 },    // close-up on block 0's pattern drawer
+  kv: { pos: [3.3, 5.8, 10.1], target: [0, 1.2, 0.6] },
+};
+const f2 = (v) => v.toFixed(2);
+const int = (v) => Math.round(v).toLocaleString('en');
+const mb = (b) => (b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(2) + ' MB' : (b / 1e3).toFixed(1) + ' kB');
+const tup = (a) => `(${a.join(', ')}${a.length === 1 ? ',' : ''})`;
+const STATIC = () => ({ fill: Infinity, pull: 1, flash: 0, clip: 0, cube: 1 });
+const bytesOf = (k) => (k.dtype === 'fp16' ? 2 : 4);
+
+function layout(S) {
+  const k = S.knobs, st = S.state;
+  const n = k.layers, L = st.L;
+  const gap = n < CFG.n_layers;
+  const TW = SIDE * 2 + LBW + n * CPW + (gap ? GW : 0);
+  const x0 = -TW / 2, xLB = x0 + SIDE, xC0 = xLB + LBW;
+  const colX = (c) => xC0 + (c + 0.5) * CPW;
+  const xGap = xC0 + n * CPW + GW / 2;
+  const D = depthOf(L);
+  const xOut = gap ? xGap : colX(n - 1);
+  const yTop = yRow(NROW) + 0.02;
+  st.geo = { n, L, gap, TW, x0, xLB, xC0, colX, xGap, xOut, D, yTop };
+  const dr = [];
+  const add = (h, layer, x, g) => dr.push({ h, layer, x, g, y: yRow(g), w: wOf(perToken(h, L)), i: dr.length });
+  add(EMBEDS[0], null, colX(0), 0);
+  add(EMBEDS[1], null, colX(0), 1);
+  for (let c = 0; c < n; c++) BLOCK.forEach((h, r) => add(h, c, colX(c), r + 2));
+  add(FINAL[0], null, xOut, 19);
+  add(FINAL[1], null, xOut, 20);
+  st.drawers = dr;
+  // computation order: embeds, block 0 bottom to top, block 1, ..., the hidden blocks, ln_final, logits
+  const ord = [0, 1];
+  for (let c = 0; c < n; c++) for (let r = 0; r < 17; r++) ord.push(2 + c * 17 + r);
+  st.gapOrd = gap ? ord.length : -1;
+  if (gap) ord.push('gap');
+  ord.push(dr.length - 2, dr.length - 1, 'logits');
+  st.order = ord;
+  st.ordOf = new Map(ord.map((v, i) => [v, i]));
+  st.nOrd = ord.length;
+}
+const selIndex = (S) => {
+  const k = S.knobs, st = S.state;
+  return st.drawers.findIndex((d) => d.h.key === k.hook && (d.layer == null || d.layer === Math.min(k.layer, k.layers - 1)));
+};
+
+function compute(S) {
+  const st = S.state, k = S.knobs;
+  if (k.layer > k.layers - 1) S.setKnob('layer', k.layers - 1, { silent: true });
+  st.L = k.mode === 'kv' ? k.seq + st.s : k.seq;
+  layout(S);
+  st.sel = selIndex(S);
+  fitProxy(S);
+}
+
+/* An invisible box tells the kit's framing how big the object is (instanced drawers don't report
+   their extent). Beats reframe from scratch; knob changes only ever grow it. */
+function fitProxy(S, reframe = false) {
+  const st = S.state, G = st.geo;
+  const back = ZF - G.D - 0.08, front = ZF + 0.95, top = G.yTop + 0.5;
+  st.proxy.scale.set(G.TW + 0.1, top, front - back);
+  st.proxy.position.set(0, top / 2, (front + back) / 2);
+  st.proxy.updateMatrixWorld();
+  const size = [G.TW, G.yTop, front - back];
+  if (reframe || S.first || !st.fitSize) { st.fitSize = size; return; }
+  if (size.some((v, i) => v > st.fitSize[i] + 0.04)) { st.fitSize = size.map((v, i) => Math.max(v, st.fitSize[i])); S.stage.refit(); }
+}
+
+/* ============================================================ drawing */
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _c = new THREE.Color();
+function put(mesh, i, x, y, z, sx, sy, sz, hex) {
+  mesh.setMatrixAt(i, _m.compose(_p.set(x, y, z), _q.identity(), _s.set(sx, sy, sz)));
+  if (hex != null) mesh.setColorAt(i, _c.set(hex));
+}
+function done(...ms) { for (const m of ms) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; } }
+
+function frontHex(S, d) {
+  const st = S.state, k = S.knobs, A = st.A;
+  const o = st.ordOf.get(d.i);
+  if (k.mode === 'kv') return KVH.has(d.h.key) ? COL.kv : (A.flash > 0 && o < A.fill ? COL.filled : COL.ghost);
+  if (d.i === st.sel) return COL.sel;
+  if (st.twin === d.i) return COL.twin;
+  if (o >= A.fill) return COL.empty;
+  if (k.mode === 'hooks' && k.edit && st.clipOrd != null && o > st.clipOrd) return COL.edited;
+  return COL.filled;
+}
+// drawers pulled out: the selected one (cache and hooks modes) and its twin
+function pulled(S) {
+  const st = S.state, k = S.knobs;
+  if (k.mode === 'kv') return [];
+  const out = st.sel >= 0 ? [st.sel] : [];
+  if (st.twin != null && st.twin >= 0) out.push(st.twin);
+  return out;
+}
+
+function draw(S) {
+  const st = S.state, k = S.knobs, G = st.geo, A = st.A;
+  if (!G) return;
+  const D = G.D, zBack = ZF - D - 0.03;
+  // carcass: back, sides, top, bottom, label board, rails between rows, column dividers
+  let nc = 0;
+  const cx = 0, yT = G.yTop;
+  put(st.carcass, nc++, cx, yT / 2, zBack - 0.015, G.TW, yT, 0.03, COL.carcass);
+  put(st.carcass, nc++, G.x0 + SIDE / 2, yT / 2, ZF - D / 2 - 0.02, SIDE, yT, D + 0.04, COL.carcass);
+  put(st.carcass, nc++, G.x0 + G.TW - SIDE / 2, yT / 2, ZF - D / 2 - 0.02, SIDE, yT, D + 0.04, COL.carcass);
+  put(st.carcass, nc++, cx, yT + 0.015, ZF - D / 2 - 0.02, G.TW + 0.04, 0.03, D + 0.08, COL.carcass);
+  put(st.carcass, nc++, cx, 0.03, ZF - D / 2 - 0.02, G.TW, 0.06, D + 0.04, COL.carcass);
+  put(st.carcass, nc++, G.xLB + LBW / 2, yT / 2, ZF - D / 2 - 0.03, LBW, yT - 0.06, D, COL.board);
+  const xa = G.xC0, xb = G.x0 + G.TW - SIDE;
+  for (let g = 1; g < NROW; g++) put(st.carcass, nc++, (xa + xb) / 2, yRow(g) - (RP - DH) / 2, ZF - D / 2 - 0.02, xb - xa, 0.008, D, COL.rail);
+  for (let c = 1; c <= G.n; c++) { const x = G.xC0 + c * CPW; put(st.carcass, nc++, x, yT / 2, ZF - D / 2 - 0.02, 0.008, yT - 0.06, D, COL.rail); }
+  st.carcass.count = nc;
+
+  // drawer fronts, knobs, head dividers
+  const pulls = pulled(S);
+  let nf = 0, nk = 0, nd = 0;
+  const pullOf = (d) => (pulls.includes(d.i) ? (D - 0.03) * A.pull : 0);
+  for (const d of st.drawers) {
+    const z = ZF + pullOf(d), yc = d.y + DH / 2;
+    put(st.fronts, nf++, d.x, yc, z - 0.012, d.w - 0.012, DH, 0.024, frontHex(S, d));
+    put(st.knobs, nk++, d.x, yc, z + 0.006, 0.013, 0.013, 0.013);
+    if (HEADS.has(d.h.key)) for (let j = 1; j < 12; j++) put(st.divs, nd++, d.x - (d.w - 0.012) / 2 + j * (d.w - 0.012) / 12, yc, z + 0.001, 0.0032, DH * 0.74, 0.003);
+  }
+  st.fronts.count = nf; st.knobs.count = nk; st.divs.count = nd;
+  // the hidden blocks: ghost slots in the gap column, lit when the run passes
+  let ng = 0;
+  if (G.gap) {
+    const lit = A.fill > st.gapOrd && k.mode !== 'kv';
+    const hex = lit ? (k.mode === 'hooks' && k.edit && st.clipOrd != null && st.gapOrd > st.clipOrd ? COL.edited : COL.filled) : COL.ghost;
+    for (let r = 0; r < 17; r++) put(st.ghost, ng++, G.xGap, yRow(r + 2) + DH / 2, ZF - 0.01, GW - 0.08, DH * 0.8, 0.02, hex);
+  }
+  st.ghost.count = ng;
+
+  // pulled drawers: tray + one index card per token
+  let nt = 0, nCard = 0;
+  for (const i of pulls) {
+    const d = st.drawers[i], z0 = ZF + pullOf(d);
+    const len = D - 0.05, zc = z0 - 0.024 - len / 2;
+    put(st.trays, nt++, d.x, d.y + 0.006, zc, d.w - 0.012, 0.012, len, COL.tray);
+    put(st.trays, nt++, d.x - (d.w - 0.012) / 2 + 0.004, d.y + 0.03, zc, 0.008, 0.05, len);
+    put(st.trays, nt++, d.x + (d.w - 0.012) / 2 - 0.004, d.y + 0.03, zc, 0.008, 0.05, len);
+    const L = G.L, pitch = len / L, th = Math.min(0.012, pitch * 0.55), wIn = d.w - 0.034, hC = DH * 0.7;
+    const masked = MASKED.has(d.h.key);
+    for (let j = 0; j < L; j++) {
+      const fill = masked ? (j + 1) / L : 1;               // causal mask: query j sees keys 0..j
+      const w = Math.max(0.004, wIn * fill);
+      const z = z0 - 0.024 - len + (j + 0.5) * pitch;       // position 0 at the back, the newest at the front
+      put(st.cards, nCard++, d.x - wIn / 2 + w / 2, d.y + 0.012 + hC / 2, z, w, hC, th, d.h.key === 'attn.hook_pattern' ? COL.cardP : COL.card);
+    }
+  }
+  st.trays.count = nt; st.cards.count = nCard;
+
+  // tokens on the plinth in front (the input), and in KV mode the cache rack
+  let nTok = 0, nCube = 0;
+  const kv = k.mode === 'kv';
+  const avail = G.TW - LBW - 0.1, pitchT = Math.min(0.07, avail / G.L), xT0 = G.xC0 + 0.02;
+  const zTok = zTokens(G, kv);
+  for (let j = 0; j < G.L; j++) {
+    const isNew = kv && st.s > 0 && j === G.L - 1;
+    const sc = isNew ? A.cube : 1;
+    put(st.tokens, nTok++, xT0 + (j + 0.5) * pitchT, 0.012 * sc, zTok, pitchT * 0.78 * sc, 0.024 * sc, 0.1 * sc, isNew ? COL.tokenNew : COL.token);
+  }
+  st.rackRows = [];
+  if (kv) {
+    for (let c = 0; c < G.n; c++) for (let kvI = 0; kvI < 2; kvI++) {
+      const row = c * 2 + kvI, z = zRack(row);
+      put(st.rails, row, xT0 + avail / 2, 0.006, z, avail, 0.012, 0.06);
+      st.rackRows.push({ c, kvI, z });
+      for (let j = 0; j < G.L; j++) {
+        const isNew = st.s > 0 && j === G.L - 1, sc = isNew ? A.cube : 1;
+        put(st.cubes, nCube++, xT0 + (j + 0.5) * pitchT, 0.012 + 0.024 * sc, z, pitchT * 0.72 * sc, 0.045 * sc, 0.05 * sc, isNew ? COL.cardNew : kvI ? '#86a8ea' : '#7098e0');
+      }
+    }
+  }
+  st.rails.count = kv ? G.n * 2 : 0;
+  st.tokens.count = nTok; st.cubes.count = nCube;
+
+  // logits: the return value, a wide tray on top (not a drawer: it is not in the cache)
+  const wl = wOf(CFG.d_vocab);
+  st.logits.position.set(0, yT + 0.03, ZF - D / 2);
+  st.logits.scale.set(wl, 1, D);
+  st.logitsLit = A.fill > st.ordOf.get('logits') && !kv;
+  st.logits.material.color.set(st.logitsLit ? (k.mode === 'hooks' && k.edit && st.clipOrd != null ? '#cdbff0' : '#c7d6f3') : '#efe7da');
+
+  // hooks mode: a brass clip on the selected drawer
+  const clipOn = k.mode === 'hooks' && st.sel >= 0;
+  st.clip.visible = clipOn;
+  if (clipOn) {
+    const d = st.drawers[st.sel], sc = 1 + 0.35 * A.clip;
+    st.clip.position.set(d.x + d.w / 2 - 0.03, d.y + DH + 0.01, ZF + pullOf(d) + 0.01);
+    st.clip.scale.setScalar(sc);
+  }
+  done(st.carcass, st.fronts, st.knobs, st.divs, st.ghost, st.trays, st.cards, st.tokens, st.cubes, st.rails);
+  st.fronts.computeBoundingSphere(); st.fronts.computeBoundingBox && st.fronts.computeBoundingBox();
+  labels(S);
+  S.invalidate();
+}
+
+/* ============================================================ labels */
+const rowName = (h, T) => {
+  if (T === 3) return h.key;
+  if (h.ln === 'ln_final') return `ln_final ${h.short}`;
+  return h.ln ? `${h.short} · ${h.ln}` : h.short;
+};
+function keyText(S, d, T) {
+  const k = S.knobs, st = S.state, L = st.geo.L;
+  const nb = k.nobatch;
+  const sh = shapeOf(d.h, L, nb), full = fullName(d.h, d.layer);
+  const size = numel(sh.sizes);
+  const conv = L === REAL_SEQ ? '' : ' (conventional)';
+  if (T === 1) {
+    const per = perToken(d.h, L);
+    return `**${full}**\n${L} cards (one per token), ${int(per)} number${per === 1 ? '' : 's'} each\nshape ${tup(sh.sizes)}${conv}`;
+  }
+  const lines = [`cache["${full}"]`];
+  if (d.layer != null || d.h.ln !== 'ln_final') lines.push(`  = ${shorthand(d.h, d.layer)}`);
+  lines.push(`**${tup(sh.sizes)}**${conv}`, `  ${sh.dims.join(', ')}`);
+  if (T === 3) {
+    const an = actName(d.h, d.layer);
+    if (an) lines.push(`${an}`);
+    lines.push(`${int(size)} floats · ${mb(size * bytesOf(k))} ${k.dtype}`);
+  }
+  return lines.join('\n');
+}
+function labels(S) {
+  const st = S.state, k = S.knobs, G = st.geo, T = S.tier, A = st.A;
+  const kv = k.mode === 'kv';
+  // row names on the label board
+  const selRow = st.sel >= 0 ? st.drawers[st.sel].g : -1;
+  for (let g = 0; g < NROW; g++) {
+    const L = st.rowLabels[g];
+    const h = g < 2 ? EMBEDS[g] : g < 19 ? BLOCK[g - 2] : FINAL[g - 19];
+    L.move([G.xLB + LBW - 0.05, yRow(g) + DH / 2, ZF - 0.01]);
+    let t = rowName(h, T);
+    if (st.orderOn && g >= 2 && g < 19) t = `${g - 1} · ${t}`;
+    if (kv && KVH.has(h.key)) t = `**${t}**`;
+    L.set(t);
+    L.el.classList.toggle('k-on', g === selRow && !kv);
+  }
+  // column tags and the hidden blocks
+  st.colTags.forEach((L, c) => {
+    if (c >= G.n) { L.show(false); return; }
+    L.show(true).move([G.colX(c), yRow(19) + 0.02, ZF]).set(`blocks.${c}`);
+  });
+  st.gapTag.show(G.gap).move([G.xGap, yRow(10) + DH / 2, ZF + 0.02]).set(G.n === CFG.n_layers - 1 ? `blocks.11` : `blocks.${G.n}–11 ⋯`);
+  const wl = wOf(CFG.d_vocab);
+  st.logitsTag.show(!kv).move([G.x0 + G.TW * 0.72, G.yTop + 0.06, ZF]).set(
+    T === 1 ? `logits: handed back` : `logits ${tup(shapeOf(LOGITS, G.L, k.nobatch).sizes)}: returned`);
+  st.tokensTag.move([G.xC0 + 0.02, 0.03, zTokens(G, kv) + 0.06]).set(
+    kv ? `tokens: ${k.seq} prompt + ${st.s} new` : T === 1 ? `the ${G.L} tokens you feed in` : `tokens ${tup(k.nobatch ? [G.L] : [1, G.L])}`);
+  st.rackTags.forEach((L, i) => {
+    const r = st.rackRows[i];
+    if (!kv || !r) { L.show(false); return; }
+    L.show(true).move([G.xC0 - 0.02, 0.03, r.z]).set(`blocks.${r.c} ${r.kvI ? 'v' : 'k'}`);
+  });
+  // the read-out: the call, then the drawer you are holding
+  const R = st.readout;
+  if (st.readAt === 'drawer' && st.sel >= 0) { const d = st.drawers[st.sel]; R.move([d.x, d.y + DH + 0.45, ZF]); }
+  else R.move([0, G.yTop + 0.22, ZF - G.D / 2]);
+  if (kv) {
+    const shp = kvShape(G.L);
+    R.set(T === 1 ? `**Writing word by word**\nkept: keys and values, ${G.n === 1 ? 'one layer' : 'every layer'}, ${G.L} tokens`
+      : `**KeyValueCache ${tup(shp)}**\n(n_layers, 2, batch, seq_len, n_heads, d_head)`);
+  } else if (st.logitsSel) {
+    R.set(T === 1 ? `**logits** come back from the call itself;\nthe cache holds everything before them`
+      : `logits, cache = model.run_with_cache(tokens)\n**logits ${tup(shapeOf(LOGITS, G.L, k.nobatch).sizes)}**: the return value;\n"logits" is not a key of the cache`);
+  } else if (st.sel >= 0) {
+    const call = k.mode === 'hooks' ? (T === 1 ? 'run with a clip (hook) on this drawer' : 'model.run_with_hooks(tokens, fwd_hooks=[...])')
+      : (T === 1 ? 'one run fills every drawer' : `logits, cache = model.run_with_cache(tokens${k.nobatch ? ', remove_batch_dim=True' : ''})`);
+    R.set(`${call}\n${keyText(S, st.drawers[st.sel], T)}`);
+  }
+  note(S);
+  // the clip's hook function
+  st.hookTag.show(k.mode === 'hooks' && st.sel >= 0);
+  if (k.mode === 'hooks' && st.sel >= 0) {
+    const d = st.drawers[st.sel];
+    st.hookTag.move([d.x + d.w / 2 + 0.02, d.y + DH + 0.05, ZF + 0.02]).set(T === 1 ? (k.edit ? 'clip: swaps in an edit' : 'clip: reads') : `hook_function(${d.h.short === 'pattern' ? 'pattern' : 'activation'}, hook)`);
+  }
+}
+
+function note(S) {
+  const st = S.state, k = S.knobs, G = st.geo, T = S.tier, N = st.note, mode = st.noteMode;
+  if (!mode) { N.show(false); return; }
+  N.show(true).move(st.noteAt || [0, 0.02, ZF + 1.0]);
+  let t = '';
+  if (mode === 'cache') {
+    const n = cacheKeys().length, fl = cacheFloats(G.L), b = fl * bytesOf(k);
+    t = T === 1 ? `GPT-2 small has 12 blocks, so ${n} drawers in all;\nfor ${G.L} tokens they hold ${(fl / 1e6).toFixed(1)} million numbers`
+      : T === 2 ? `${n} entries = 12 blocks × 17 + 4\n${int(fl)} floats = ${mb(b)} (${k.dtype}, seq ${G.L})`
+      : `len(cache) = 12 × 17 + 4 = ${n}; Σ numel = ${int(fl)}\n= L(12(11·768 + 2 + 2·3072 + 24L) + 3·768 + 1), ${mb(b)} ${k.dtype}`;
+  } else if (mode === 'order') {
+    t = T === 1 ? `a block works bottom to top:\nnorm, attend, add back, norm, MLP, add back`
+      : T === 2 ? `resid_mid = resid_pre + attn_out\nresid_post = resid_mid + mlp_out\nblocks.1 resid_pre is blocks.0 resid_post`
+      : `x_mid = x + Attn(LN1(x)); x_post = x_mid + MLP(LN2(x_mid))\nblocks.{l+1}.hook_resid_pre == blocks.{l}.hook_resid_post`;
+  } else if (mode === 'hook') {
+    const d = st.sel >= 0 ? st.drawers[st.sel] : null;
+    if (!d) t = '';
+    else {
+      const name = fullName(d.h, d.layer), shp = tup(shapeOf(d.h, G.L).sizes);
+      t = T === 1 ? (k.edit ? `the clip swaps in an edit: every drawer\nafter it (violet) is computed from the edit` : `the clip only reads: nothing downstream changes`)
+        : T === 2 ? `fwd_hooks=[("${name}", hook_function)]\nit gets ${shp}; ${k.edit ? 'returns an edit: violet = recomputed' : 'returns None: read only'}`
+        : `hook_function(tensor ${shp}, hook: HookPoint)\nhook.name == "${name}", hook.layer() == ${d.layer ?? 'None'}\n${k.edit ? 'return tensor′ (same shape): downstream reruns on it' : 'return None: activation unchanged'}`;
+    }
+  } else if (mode === 'kv') {
+    const P = k.seq, w = kvWork(P, st.s), b = kvBytes(w.L, bytesOf(k)), b1k = kvBytes(1000, 2);
+    const step = st.s > 0;
+    t = T === 1 ? `${step ? `this word: 1 token through the model, not ${w.L}` : `the prompt runs once: ${P} tokens`}\nso far ${int(w.posWith)} token-runs (without the cache ${int(w.posWithout)})\nmemory ${mb(b)}${st.show1k ? ` · 1,000 tokens in fp16: ${mb(b1k)}` : ''}`
+      : T === 2 ? `${step ? `new token: 1 position, ${w.L} q·k per head (no cache: ${w.L}, ${int(w.L * w.L)})` : `prompt: ${P} positions, ${int(P * P)} q·k per head`}\ntotals: ${int(w.posWith)} vs ${int(w.posWithout)} positions · ${int(w.qkWith)} vs ${int(w.qkWithout)} q·k\n2 × 12 × 768 × ${w.L} × ${bytesOf(k)} B = ${mb(b)}${st.show1k ? `\n1,000 tokens, fp16: ${int(b1k)} B = ${mb(b1k)}` : ''}`
+      : `k, v = t.concat([cache[0], k], dim=1), ... ; pos offset ${w.L - 1}\npositions ${int(w.posWith)} vs ${int(w.posWithout)}; q·k ${int(w.qkWith)} vs ${int(w.qkWithout)} (per head·layer)\nKV ${int(b)} B (${k.dtype})${st.show1k ? `; L = 1000 fp16: ${int(b1k)} B` : ''}`;
+  } else if (mode === 'twin') {
+    t = T === 1 ? `the top drawer of block 0 and the bottom drawer\nof block 1 hold exactly the same numbers`
+      : `cache["resid_post", 0] and cache["resid_pre", 1]\nare the same tensor: one block's output is the next one's input`;
+  }
+  N.set(t);
+}
+
+/* ============================================================ animations */
+function tw(S, my, ms, fn, ez) { return S.tween(ms, (x) => { if (S.state.animId === my) { fn(x); draw(S); } }, ez); }
+const alive = (S, my) => S.state.animId === my;
+function newAnim(S) { const st = S.state; st.animId++; st.A = STATIC(); return st.animId; }
+const wait = (S, ms) => (S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)));
+
+// the forward pass fills the drawers in computation order; with a hook, it pauses at the clip
+async function runPass(S) {
+  const st = S.state, my = newAnim(S);
+  st.logitsSel = false;
+  st.clipOrd = S.knobs.mode === 'hooks' && st.sel >= 0 ? st.ordOf.get(st.sel) : null;
+  if (S.shot) { draw(S); return; }
+  st.A.fill = 0; st.A.pull = 0; draw(S);
+  const N = st.nOrd;
+  if (st.clipOrd != null) {
+    await tw(S, my, 180 + st.clipOrd * 55, (x) => { st.A.fill = x * (st.clipOrd + 1); });
+    if (!alive(S, my)) return;
+    await tw(S, my, 520, (x) => { st.A.clip = Math.sin(x * Math.PI); });
+    await tw(S, my, 180 + (N - st.clipOrd) * 55, (x) => { st.A.fill = st.clipOrd + 1 + x * (N - st.clipOrd); });
+  } else await tw(S, my, 2200, (x) => { st.A.fill = x * (N + 0.001); });
+  if (!alive(S, my)) return;
+  st.A.fill = Infinity;
+  await tw(S, my, 420, (x) => { st.A.pull = x; }, K.ease.out);
+}
+async function pullOut(S) {
+  const st = S.state, my = newAnim(S);
+  if (S.shot) { draw(S); return; }
+  st.A.pull = 0; draw(S);
+  await tw(S, my, 420, (x) => { st.A.pull = x; }, K.ease.out);
+}
+// one generation step with the KV cache: the stack runs for the new token only, k and v grow by a card
+async function kvStep(S) {
+  const st = S.state, k = S.knobs;
+  if (k.mode !== 'kv') { S.setKnob('mode', 'kv'); return; }
+  if (st.s >= MAX_NEW) { K.toast(`That's ${MAX_NEW} new tokens: Start over to run the prompt again`); return; }
+  st.s += 1; compute(S);
+  const my = newAnim(S);
+  if (S.shot) { draw(S); return; }
+  st.A.cube = 0; st.A.flash = 1; st.A.fill = 0; draw(S);
+  await tw(S, my, 700, (x) => { st.A.fill = x * (st.nOrd + 0.001); });
+  await tw(S, my, 380, (x) => { st.A.cube = x; st.A.flash = 1 - x; }, K.ease.back);
+  if (alive(S, my)) { st.A = STATIC(); draw(S); }
+}
+async function kvSteps(S, n) { for (let i = 0; i < n; i++) { if (S.shot) { S.state.s += 1; } else await kvStep(S); } if (S.shot) { compute(S); newAnim(S); draw(S); } }
+
+/* scene configuration shared by beats and predictions */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.noteMode = o.note || null;
+  st.noteAt = o.noteAt || null;
+  st.readAt = o.readAt || null;
+  st.orderOn = !!o.order;
+  st.twin = null; st.twinKey = o.twin || null;
+  st.show1k = !!o.show1k;
+  st.logitsSel = false;
+  if (o.fig) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || [1.38, 0, 0.78], o.face || [0, 0.8, 0.2]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.fig, { at: typeof o.at === 'function' ? o.at(S) : o.at });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+}
+function applyTwin(S) {
+  const st = S.state;
+  st.twin = null;
+  if (st.twinKey === 'resid') {
+    st.twin = st.drawers.findIndex((d) => d.h.key === 'hook_resid_post' && d.layer === 0);
+  }
+}
+const drawerPos = (S, key, layer) => {
+  const d = S.state.drawers.find((q) => q.h.key === key && (q.layer == null || q.layer === layer));
+  return d ? [d.x, d.y + DH / 2, ZF] : [0, 1, ZF];
+};
+
+/* ============================================================ run() */
+const HOOK_OPTS = [...EMBEDS, ...BLOCK, ...FINAL].map((h) => [h.key, h.ln === 'ln_final' ? h.key : isBlock(h) ? `blocks.L.${h.key}` : h.key]);
+
+run({
+  id: 'd06-shelf', num: '12', week: 6, kind: 'deep',
+  title: 'The activation shelf',
+  subtitle: 'run_with_cache hands you this shelf: every activation, in a drawer shaped like its tensor.',
+  back2d: '#week-06',
+  film: 'deep-w06-sampling',
+  plinth: { r: 1.65, h: 0.14 },
+
+  knobs: [
+    { id: 'layers', type: 'range', label: { 1: 'Blocks shown', 2: 'Blocks shown (of 12)', 3: 'layers shown (n_layers = 12)' }, min: 1, max: 2, step: 1, value: 2, fmt: (v) => `${v} of 12` },
+    { id: 'seq', type: 'range', label: { 1: 'Tokens in the prompt', 2: 'Sequence length', 3: 'seq_len' }, min: 1, max: 64, step: 1, value: 35,
+      fmt: (v) => (v === REAL_SEQ ? '35 · ARENA run' : String(v)) },
+    { id: 'mode', type: 'select', label: { 1: 'What to show', 2: 'Mode', 3: 'mode' }, value: 'cache', wide: true,
+      options: [['cache', 'run_with_cache: the full shelf'], ['hooks', 'run_with_hooks: a clip on one drawer'], ['kv', 'KV cache: generate token by token']] },
+    { id: 'hook', type: 'select', label: { 1: 'Drawer', 2: 'Hook point', 3: 'hook name' }, value: 'attn.hook_pattern', wide: true, options: HOOK_OPTS },
+    { id: 'layer', type: 'range', label: { 1: 'Block', 2: 'Layer', 3: 'layer' }, min: 0, max: 1, step: 1, value: 0, fmt: (v) => `blocks.${v}` },
+    { id: 'nobatch', type: 'toggle', label: { 1: 'Drop the batch of 1', 2: 'remove_batch_dim', 3: 'remove_batch_dim=True' }, value: false },
+    { id: 'edit', type: 'toggle', label: { 1: 'Clip edits (not just reads)', 2: 'Hook edits the activation', 3: 'hook returns a tensor' }, value: true },
+    { id: 'dtype', type: 'select', label: { 1: 'Number size', 2: 'dtype', 3: 'dtype' }, value: 'fp32', options: [['fp32', 'float32 (4 bytes)'], ['fp16', 'float16 (2 bytes)']] },
+    { id: 'go', type: 'button', label: { 1: 'Run the model', 2: 'Run forward', 3: 'forward pass' }, onClick: (S) => { if (S.knobs.mode === 'kv') S.setKnob('mode', 'cache'); else runPass(S); } },
+    { id: 'next', type: 'button', label: { 1: 'Next word', 2: 'Next token (KV)', 3: 'generate 1 token' }, onClick: (S) => { scene(S, { note: 'kv' }); kvStep(S); } },
+    { id: 'reset', type: 'button', label: { 1: 'Start over', 2: 'Start over', 3: 'reset' }, onClick: (S) => { S.state.s = 0; compute(S); fitProxy(S, true); newAnim(S); draw(S); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.animId = 0; st.A = STATIC(); st.s = 0; st.fitSize = null; st.twin = null;
+    const box = new THREE.BoxGeometry(1, 1, 1);
+    const inst = (geo, mat, n, shadow = true) => {
+      const m = new THREE.InstancedMesh(geo, mat, n);
+      m.castShadow = shadow; m.receiveShadow = true; m.frustumCulled = false; m.userData.noFit = true;
+      for (let i = 0; i < n; i++) { m.setMatrixAt(i, _m.identity()); m.setColorAt(i, _c.set('#ffffff')); }
+      m.count = 0; S.root.add(m); return m;
+    };
+    st.carcass = inst(box, K.mat.plaster('#ffffff'), 36);
+    st.fronts = inst(box, K.mat.paint('#ffffff'), 17 * 2 + 4);
+    st.knobs = inst(new THREE.SphereGeometry(1, 12, 8), K.mat.brass(), 17 * 2 + 4, false);
+    st.divs = inst(box, K.mat.paint(COL.divider), 6 * 2 * 11, false);
+    st.ghost = inst(box, K.mat.plaster('#ffffff'), 17, false);
+    st.trays = inst(box, K.mat.plaster(COL.tray), 6, true);
+    st.cards = inst(box, K.mat.paint('#ffffff'), 2 * (64 + MAX_NEW), true);
+    st.tokens = inst(box, K.mat.paint('#ffffff'), 64 + MAX_NEW, true);
+    st.cubes = inst(box, K.mat.paint('#ffffff'), 4 * (64 + MAX_NEW), true);
+    st.rails = inst(box, K.mat.brass(), 4, false);
+    st.logits = new THREE.Mesh(new THREE.BoxGeometry(1, 0.05, 1).translate(0, 0.025, 0), K.mat.plaster('#efe7da'));
+    st.logits.castShadow = true; st.logits.userData.noFit = true; S.root.add(st.logits);
+    const rim = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.012, 1.02).translate(0, 0.056, 0), K.mat.brass());
+    rim.userData.noFit = true; st.logits.add(rim);
+    // the clip: a small brass clamp
+    st.clip = new THREE.Group();
+    const brass = K.mat.brass();
+    for (const [x, y, z, sx, sy, sz] of [[0, 0.03, 0, 0.05, 0.012, 0.05], [0, 0.0, 0.022, 0.05, 0.07, 0.01], [0, 0.0, -0.022, 0.05, 0.07, 0.01], [0, 0.085, 0, 0.012, 0.1, 0.012]]) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), brass); m.position.set(x, y, z); m.castShadow = true; st.clip.add(m);
+    }
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.007, 8, 20), brass); ring.position.set(0, 0.15, 0); st.clip.add(ring);
+    st.clip.traverse((o) => { o.userData.noFit = true; });
+    S.root.add(st.clip);
+    st.proxy = new THREE.Mesh(box, new THREE.MeshBasicMaterial({ visible: false }));
+    S.root.add(st.proxy);
+    // labels
+    st.rowLabels = [];
+    for (let g = 0; g < NROW; g++) st.rowLabels.push(K.label([0, 0, 0], '', { cls: 'row', anchor: 'right', dx: -2, dy: 0, prio: 1 }));
+    st.colTags = [0, 1].map(() => K.label([0, 0, 0], '', { cls: 'tag col', anchor: 'bottom', dy: -2 }));
+    st.gapTag = K.label([0, 0, 0], '', { cls: 'tag vert', anchor: 'center' });
+    st.logitsTag = K.label([0, 0, 0], '', { cls: 'tag col', anchor: 'center', prio: 0.5 });
+    st.tokensTag = K.label([0, 0, 0], '', { cls: 'tag col', anchor: 'top', dy: 4 });
+    st.rackTags = Array.from({ length: 4 }, () => K.label([0, 0, 0], '', { cls: 'tag col', anchor: 'right', dx: -4, dy: 0 }));
+    st.readout = K.label([0, 0, 0], '', { cls: 'readout key', anchor: 'bottom', dy: -4 });
+    st.note = K.label([0, 0, 0], '', { cls: 'note', anchor: 'top', dy: 6 });
+    st.hookTag = K.label([0, 0, 0], '', { cls: 'tag col fn', anchor: 'left', dx: 4, dy: 0, prio: 1.5 });
+    st.fig = K.figure();
+    st.fig.group.visible = false;
+    S.root.add(st.fig.group);
+    // tap a drawer to read it; tap the tray for the logits
+    S.stage.pick(st.fronts, (hit) => {
+      const d = st.drawers && st.drawers[hit.instanceId];
+      if (!d) return;
+      const k = S.knobs;
+      if (k.mode === 'kv') { K.toast('KV mode keeps only k and v: switch Mode to read other drawers'); return; }
+      st.logitsSel = false;
+      S.setKnobs({ hook: d.h.key, layer: d.layer ?? k.layer });
+    });
+    S.stage.pick(st.logits, () => { if (S.knobs.mode !== 'kv') { st.logitsSel = true; draw(S); } });
+  },
+
+  rebuild(S, id) {
+    const st = S.state, k = S.knobs;
+    const ch = S.changed || [];
+    if (id === '*' && !S.first && ch.length && ch.every((c) => c === 'hook' || c === 'layer')) id = 'select';   // a tap
+    if (id === '*') {                              // a beat or a prediction: its enter()/show() sets the scene
+      st.animId++; st.A = STATIC(); st.s = 0;
+      compute(S); fitProxy(S, true); applyTwin(S); draw(S);
+      return;
+    }
+    if (id === 'mode' || id === 'seq') { st.s = 0; if (id === 'mode') st.noteMode = k.mode === 'kv' ? 'kv' : k.mode === 'hooks' ? 'hook' : 'cache'; }
+    if (id === 'layers' || id === 'seq' || id === 'mode') { compute(S); applyTwin(S); newAnim(S); draw(S); return; }
+    if (id === 'select' || id === 'hook' || id === 'layer') {
+      compute(S); applyTwin(S);
+      if (k.mode === 'hooks') { runPass(S); return; }
+      pullOut(S); return;
+    }
+    if (id === 'edit' && k.mode === 'hooks') { runPass(S); return; }
+    draw(S);
+  },
+
+  frame() { return false; },
+  onTier(S) { labels(S); },
+
+  solids(S) {
+    const st = S.state, G = st.geo, out = [];
+    const cube = (x, y, z, sx, sy, sz) => J.primitives.cuboid({ size: [sx, sz, sy], center: [x, -z, y] });   // three (x,y,z) -> JSCAD (x,-z,y)
+    const D = G.D;
+    out.push(cube(0, G.yTop / 2, ZF - D / 2 - 0.02, G.TW, G.yTop, D + 0.04));
+    for (const d of st.drawers) out.push(cube(d.x, d.y + DH / 2, ZF + 0.012, d.w - 0.012, DH, 0.024));
+    out.push(cube(0, G.yTop + 0.03, ZF - D / 2, wOf(CFG.d_vocab), 0.05, D));
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**One run of the model fills a cabinet.** Every in-between result gets its own labelled drawer, filed in the order it was made. The answer (logits) comes out on top: it is handed back, not filed.',
+        2: '`logits, cache = model.run_with_cache(tokens)`: the cache is a dict of every activation, keyed by hook name. 17 per block (2 of GPT-2 small\'s 12 blocks shown) plus embed, pos_embed and ln_final. The logits are the return value, not a cache key.',
+        3: '`ActivationCache`: HookPoint name → tensor, 12 × 17 + 4 = 208 keys for GPT-2 small, float32 by default (live size by the plinth). `logits` is returned separately. Shapes here are the ones ARENA prints from its 35-token run.',
+      },
+      cam: CAM.front,
+      set: { mode: 'cache', layers: 2, seq: 35, hook: 'attn.hook_pattern', layer: 0, nobatch: false, dtype: 'fp32' },
+      enter(S) { scene(S, { note: 'cache', fig: 'point', at: (S2) => drawerPos(S2, 'hook_resid_pre', 0) }); runPass(S); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Read a column bottom to top and you watch one block think:** normalise, look around (attention), add that back, normalise, think alone (MLP), add that back. The next block starts where it ends.',
+        2: 'The shelf order is the compute order: `resid_pre` → ln1 → q, k, v → `attn_scores` → `pattern` → z → `attn_out`, added back as `resid_mid`; then ln2 → MLP `pre` → `post` → `mlp_out`, added back as `resid_post`. That is the residual stream: each part reads it, then adds.',
+        3: 'Pre-LN block: x_mid = x + Attn(LN1(x)), x_post = x_mid + MLP(LN2(x_mid)). Hook order is execution order, so a hook at `resid_mid` sees attention done and the MLP not yet run. `hook_resid_pre` of block l+1 is `hook_resid_post` of block l.',
+      },
+      cam: CAM.front,
+      set: { mode: 'cache', layers: 2, seq: 35, hook: 'hook_resid_mid', layer: 0, nobatch: false },
+      enter(S) { scene(S, { note: 'order', order: true }); pullOut(S); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Tap any drawer to read its label.** Each holds one card per word. In the attention drawer, card n says how much word n looks at each word so far, so the cards grow into a wedge.',
+        2: '`pattern` is (batch, head_index, query_pos, key_pos) = (1, 12, 35, 35): per query, 12 probability rows over earlier keys (the causal mask zeroes the rest, hence the wedge). q, k, v and z are (1, 35, 12, 64): 12 heads × 64 = 768 per token.',
+        3: 'TransformerLens order is (batch, pos, head_index, d_head) for q/k/v/z but (batch, head_index, query_pos, key_pos) for scores and pattern: index heads at dim 1 there, dim 2 here. `hook_attn_scores` is masked with −inf before `hook_pattern`\'s softmax.',
+      },
+      cam: CAM.tray,
+      set: { mode: 'cache', layers: 2, seq: 35, hook: 'attn.hook_pattern', layer: 0, nobatch: false },
+      enter(S) { scene(S, { note: null, readAt: 'drawer' }); pullOut(S); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Every drawer has a long name and a nickname.** You can ask for block 0\'s attention drawer by its full address, or just by "pattern, block 0". Same drawer.',
+        2: '`cache["pattern", 0]` is shorthand for `cache["blocks.0.attn.hook_pattern"]`: it calls `utils.get_act_name("pattern", 0)`. LayerNorm hooks need the norm: `cache["normalized", 0, "ln1"]`. `remove_batch_dim=True` drops the leading 1 (on here).',
+        3: '`get_act_name(name, layer, layer_type)`; aliases like "attn" → "pattern". With `remove_batch_dim=True` the hint shapes become ARENA\'s `[nhead, seqQ, seqK]` and `[seqQ, nhead, headsize]`. ln_final has no layer: ARENA writes `cache["ln_final.hook_scale"]` in full.',
+      },
+      cam: CAM.front,
+      set: { mode: 'cache', layers: 2, seq: 35, hook: 'ln1.hook_normalized', layer: 0, nobatch: true },
+      enter(S) { scene(S, { note: null }); pullOut(S); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**A hook is a clip on one drawer that acts while the model runs.** It can just read, or swap in something else. Swap, and every drawer filled after it (violet) changes; the ones before cannot.',
+        2: '`run_with_hooks(tokens, fwd_hooks=[(name, fn)])` calls `fn(activation, hook)` as the pass reaches that point. Return nothing to read; return a same-shaped tensor to replace it, and everything downstream (violet) is computed from your edit. Patching and steering are this.',
+        3: 'fwd_hooks: (name or name filter, fn); fn(tensor, hook: HookPoint) → tensor | None; `reset_hooks_end=True` removes them after the run. Interventions are edits here: activation patching (another run\'s value), ablation (zero or mean), steering (add a direction).',
+      },
+      cam: CAM.front,
+      set: { mode: 'hooks', layers: 2, seq: 35, hook: 'attn.hook_pattern', layer: 1, edit: true, nobatch: false },
+      enter(S) { scene(S, { note: 'hook', fig: 'lean', figAt: [1.8, 0, 0.95], face: [0.6, 0.8, 0.2] }); runPass(S); } },
+
+    { tag: 'library',
+      cap: {
+        1: '**Writing word by word, the model keeps just two drawers per block: keys and values.** Everything else is thrown out and redone for the new word only. Most of the work saved, for some memory.',
+        2: 'With a KV cache each new token runs alone: its query meets every cached key. Per token that is 1 position through the stack (not L) and L dot products per head (not L × L); only k and v, (1, L, 12, 64) per layer, are kept. Memory 2 × 12 × 768 × L × bytes (live).',
+        3: 'ARENA\'s `KeyValueCache`: one tensor (n_layers, 2, batch, seq_len, n_heads, d_head); new k, v are concatenated on seq and pos_embed is offset by n_cached_tokens. Attention is O(L) per step, O(N·L) per sequence, vs O(N·L²) recomputing everything.',
+      },
+      cam: CAM.kv,
+      set: { mode: 'kv', layers: 2, seq: 12, dtype: 'fp32' },
+      enter(S) { scene(S, { note: 'kv' }); kvSteps(S, 3); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Anywhere in-between results are kept instead of redone: a lab notebook of every measurement, a browser that keeps pages it already fetched, a cook\'s chopped-and-ready bowls.',
+        2: 'This is memoisation (dynamic programming): compute once, file it under a name, reuse it. Browser and CPU caches, build systems and spreadsheets do the same. PyTorch has `register_forward_hook`; activation checkpointing makes the opposite trade: recompute to save memory.',
+        3: 'Named intermediate caches: memoisation/DP tables, CPU and HTTP caches, incremental builds. In ML: forward hooks (PyTorch, TransformerLens, nnsight), gradient checkpointing (trade compute for memory), paged KV caches (vLLM) and prefix caching in LLM serving.',
+      },
+      cam: CAM.high,
+      set: { mode: 'cache', layers: 2, seq: 35, hook: 'hook_resid_post', layer: 1, nobatch: false },
+      enter(S) { scene(S, { note: 'cache', fig: 'cheer' }); pullOut(S); } },
+  ],
+
+  predict: [
+    { q: { 1: 'One sentence of 10 tokens, 12 attention heads. What shape is block 0\'s attention drawer, cache["pattern", 0]?',
+        2: 'Batch 1, seq 10, GPT-2 small. Shape of `cache["pattern", 0]`?',
+        3: 'Shape of `cache["blocks.0.attn.hook_pattern"]` for tokens of shape (1, 10)?' },
+      options: [{ t: '(1, 12, 10, 10)', ok: true }, { t: '(1, 10, 12, 64)' }, { t: '(12, 10)' }, { t: '(1, 10, 768)' }],
+      why: { 1: 'One sentence, 12 heads, and for each of the 10 words a row of 10 numbers: how much it looks at each word. Watch the drawer: 10 cards, each one a little fuller.',
+        2: '(batch, head_index, query_pos, key_pos) = (1, 12, 10, 10): every head scores every query against every key. (1, 10, 12, 64) is q, k, v or z. Same rule as ARENA\'s printed 35-token run; 10 is conventional.',
+        3: 'hook_pattern: [batch, head_index, query_pos, key_pos]. Heads come before positions here, unlike hook_q/k/v/z ([batch, pos, head_index, d_head]). Seq 10 is not a printed run, but the convention is fixed.' },
+      show(S) {
+        S.setKnobs({ mode: 'cache', layers: 2, seq: 10, hook: 'attn.hook_pattern', layer: 0, nobatch: false });
+        scene(S, { note: null, readAt: 'drawer' }); S.fly(CAM.tray);
+        return pullOut(S);
+      } },
+    { q: { 1: 'When the model writes one word at a time with a cache, what does it keep from earlier words?',
+        2: 'What does a KV cache store between generation steps?',
+        3: 'Contents of ARENA\'s `KeyValueCache` between steps?' },
+      options: [{ t: 'Keys and values, for every layer', ok: true }, { t: 'The attention patterns' }, { t: 'All 17 activations of every block' }, { t: 'Only the last layer\'s output' }],
+      why: { 1: 'A new word needs to look back at old words, and for that it only needs their keys (to score) and values (to collect). Everything else it can redo for itself.',
+        2: 'A new query must dot with all old keys and mix all old values; nothing else about old positions is needed, because causal attention never lets them change. So per layer k and v, (1, L, 12, 64) each.',
+        3: '(n_layers, 2, batch, seq_len, n_heads, d_head): k at [:, 0], v at [:, 1]. Queries of old positions are never reused and patterns change shape each step (new key column), so neither is cached.' },
+      show(S) {
+        S.setKnobs({ mode: 'kv', layers: 2, seq: 12, dtype: 'fp32' });
+        scene(S, { note: 'kv' }); S.fly(CAM.kv);
+        return kvSteps(S, 2);
+      } },
+    { q: { 1: 'GPT-2 small, 1,000 tokens, numbers stored in 2 bytes each. How much memory do the kept keys and values take?',
+        2: 'KV cache for GPT-2 small at 1,000 tokens in fp16?',
+        3: 'KV cache bytes: GPT-2 small, L = 1000, fp16?' },
+      options: [{ t: 'About 37 MB', ok: true }, { t: 'About 1.5 MB' }, { t: 'About 440 MB' }, { t: 'About 3 GB' }],
+      why: { 1: 'Per word: 12 blocks × (keys + values) × 768 numbers × 2 bytes ≈ 37 thousand bytes. Times 1,000 words ≈ 37 MB. Small for GPT-2, huge for big models with long chats.',
+        2: '2 (k and v) × 12 layers × 768 (12 heads × 64) × 1,000 × 2 B = 36,864,000 B ≈ 36.9 MB. It grows linearly with length, so long contexts are limited by it, not by the weights.',
+        3: 'numel(12, 2, 1, 1000, 12, 64) × 2 B = 36,864,000 B (36.9 MB, 35.2 MiB). Linear in L, n_layers and d_model; that is why GQA/MQA share k and v across heads.' },
+      show(S) {
+        S.setKnobs({ mode: 'kv', layers: 2, seq: 12, dtype: 'fp16' });
+        scene(S, { note: 'kv', show1k: true }); S.fly(CAM.kv);
+        return kvSteps(S, 1);
+      } },
+    { q: { 1: 'Inside one block, is the middle drawer "resid_mid" filled before or after the MLP runs?',
+        2: '`hook_resid_mid`: before or after the MLP?',
+        3: '`blocks.0.hook_resid_mid` sits between which two sublayers?' },
+      options: [{ t: 'Before: after attention, before the MLP', ok: true }, { t: 'After the MLP' }, { t: 'Before attention' }, { t: 'It is the average of the two' }],
+      why: { 1: 'The block first looks around (attention) and adds that in: that sum is resid_mid. Then the MLP reads it. Count up the column.',
+        2: 'resid_mid = resid_pre + attn_out; the MLP reads LN2(resid_mid) and adds mlp_out to give resid_post. So it is the midpoint: attention done, MLP not yet.',
+        3: 'x_mid = x + Attn(LN1(x)) is hooked as hook_resid_mid; the MLP consumes LN2(x_mid). A hook there patches the MLP\'s input and the residual after attention.' },
+      show(S) {
+        S.setKnobs({ mode: 'cache', layers: 2, seq: 35, hook: 'hook_resid_mid', layer: 0, nobatch: false });
+        scene(S, { note: 'order', order: true }); S.fly(CAM.front);
+        return pullOut(S);
+      } },
+    { q: { 1: 'Block 0\'s top drawer (resid_post) and block 1\'s bottom drawer (resid_pre): how do their contents compare?',
+        2: '`cache["resid_post", 0]` versus `cache["resid_pre", 1]`?',
+        3: 'blocks.0.hook_resid_post vs blocks.1.hook_resid_pre?' },
+      options: [{ t: 'Identical: one block\'s output is the next one\'s input', ok: true }, { t: 'resid_pre has the LayerNorm applied' }, { t: 'They differ by the attention output' }, { t: 'Different shapes' }],
+      why: { 1: 'Nothing happens between blocks. The last result of block 0 is handed straight to block 1, and both drawers keep a copy.',
+        2: 'Block 1 receives block 0\'s resid_post unchanged, so the two keys hold equal tensors (1, 35, 768). LayerNorm happens inside the block, at ln1.',
+        3: 'hook_resid_post(l) and hook_resid_pre(l+1) record the same tensor at the block boundary (ARENA uses either). The LN is inside at blocks.{l}.ln1.' },
+      show(S) {
+        S.setKnobs({ mode: 'cache', layers: 2, seq: 35, hook: 'hook_resid_pre', layer: 1, nobatch: false });
+        scene(S, { note: 'twin', twin: 'resid' }); applyTwin(S); S.fly(CAM.front);
+        return pullOut(S);
+      } },
+  ],
+
+  where: { 1: 'Anywhere in-between results are kept instead of redone: a lab notebook of every measurement, a browser that keeps pages it already fetched, a cook\'s bowls of chopped ingredients.',
+    2: 'Memoisation and dynamic programming (compute once, file by name), browser and CPU caches, build systems and spreadsheets; PyTorch forward hooks; activation checkpointing makes the opposite trade (recompute to save memory).',
+    3: 'Memoisation/DP tables, CPU and HTTP caches, incremental builds; forward hooks (PyTorch, TransformerLens, nnsight); gradient checkpointing; paged and prefix KV caches in LLM serving (vLLM).' },
+  links: [
+    { label: 'Film · sampling, deep', href: '../../intuition/films/deep-w06-sampling.html' },
+    { label: 'Film · W6 sampling', href: '../../intuition/films/w6-sampling.html' },
+    { label: 'Week 6 pack', href: '../../index.html#week-06' },
+    { label: 'Demo · residual stream bus', href: '../../index.html#demo/residual-stream-bus' },
+    { label: 'Case · TransformerLens', href: '../../index.html#cases/transformerlens' },
+    { label: 'Case · hooks', href: '../../index.html#cases/hooks' },
+    { label: 'Case · KV caching', href: '../../index.html#cases/kv-caching' },
+    { label: 'Map · TransformerLens', href: '../../index.html#map/node=transformerlens' },
+    { label: 'Map · hooks', href: '../../index.html#map/node=hooks' },
+    { label: 'Map · activation cache', href: '../../index.html#map/node=activation-cache' },
+    { label: 'Map · KV cache', href: '../../index.html#map/node=kv-cache' },
+  ],
+  remix: 'Build a single-file three.js scene: a plaster apothecary cabinet on a round plinth that is the ActivationCache from TransformerLens\'s run_with_cache on GPT-2 small. Rows, bottom to top, are the 17 hook points of a block in computation order (hook_resid_pre, ln1.hook_scale, ln1.hook_normalized, attn.hook_q, k, v, attn_scores, pattern, z, hook_attn_out, hook_resid_mid, ln2 scale and normalized, mlp.hook_pre, mlp.hook_post, hook_mlp_out, hook_resid_post) with hook_embed and hook_pos_embed below and ln_final on top; columns are blocks.0, blocks.1 and a gap for the other ten. Drawer width is √(floats per token), depth is seq_len, and a pulled drawer holds one index card per token (the pattern drawer\'s cards form the causal wedge). Tap a drawer for its full key, its shorthand cache["pattern", 0] and its shape with dim names; a hooks mode clips a drawer and tints everything downstream violet; a KV mode keeps only k and v, grows a rack of cubes per token and counts work with and without the cache. Logits sit on top as a tray: returned, not cached.',
+  credit: 'Names and shapes: ARENA [1.2] TransformerLens exercises (the activation table printed from `reference_gpt2.run_with_cache`, `utils.get_act_name`, `run_with_hooks`) and ARENA [1.1]\'s `KeyValueCache`, checked in node against that table and an independent Python count. Card-catalogue picture after the library index. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>
