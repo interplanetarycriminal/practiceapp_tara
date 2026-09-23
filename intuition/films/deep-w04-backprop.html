@@ -193,11 +193,8 @@
 
   /* =============== chapters =============== */
   function ch(start, dur, name, cap, draw) { return { name: name, start: start, dur: dur, cap: cap, draw: draw }; }
-  var chapters = [
-    ch(0, 22, 'a recipe on every bowl', {
-      1: 'A paper kitchen. The cake came out <b>salty</b>. The baker wants to share out the blame to every ingredient, fairly, in one sweep. Trick: as each bowl is made, it keeps a little <b>recipe card</b>.',
-      2: 'The forward pass builds the graph as it goes. Every new tensor carries a <b>Recipe</b>: which function made it, and from which parent tensors. Leaves (a, b) have no recipe.',
-      3: 'L = log(a·b)·a with a=2, b=3. Each op wrapper computes the NumPy result and, if any input requires_grad, attaches Recipe(func, args, kwargs, parents). Graph = recipes linked by parents.' },
+  var base = [
+    ch(0, 22, 'a recipe on every bowl', null,
       function (ctx, t, l, W, H) {
         kitchen(ctx, W, H, t); var r = R(W, H), g = G0; fridgeNote(ctx, W, H, l);
         var app = { a: 1, b: 1.8, c: 5, d: 9, L: 13 };
@@ -211,10 +208,7 @@
         var n = l < 5 ? 1 : l < 9 ? 2 : l < 13 ? 3 : 4, lines = [['a = 2.0   b = 3.0            (leaves)', P.peach], ['c = a * b        = ' + f3(g.c.array), P.sky], ['d = log(c)       = ' + f3(g.d.array), P.lav], ['L = d * a        = ' + f3(g.L.array), P.pink]];
         panel(ctx, W, H, lines.slice(0, n), { seed: 'fwd' });
       }),
-    ch(22, 20, 'Recipe and BACK_FUNCS', {
-      1: 'Zoom into bowl c\'s card. It says what made it (multiply), the numbers it used, and which bowls it came from. And a second, shared cookbook says, for each recipe, how much a nudge in each ingredient moves the result.',
-      2: '<b>Recipe</b> has four fields. <b>args</b> keeps the raw numbers (for the maths later); <b>parents</b> keeps the actual tensors (for walking the graph). <b>BACK_FUNCS</b> maps (func, argnum) to its backward function.',
-      3: 'BackwardFuncLookup: back_funcs[(forward_fn, arg_position)] = back_fn. multiply_back0(grad_out, out, x, y) = grad_out·y; log_back(grad_out, out, x) = grad_out/x. Local slopes only; the chain is backprop\'s job.' },
+    ch(22, 20, 'Recipe and BACK_FUNCS', null,
       function (ctx, t, l, W, H) {
         kitchen(ctx, W, H, t); var p = por(W, H), r = R(W, H, null, p ? 250 : 190), g = G0; title(ctx, W, H, 'every tensor carries its Recipe', ramp(l, 0, 1));
         EDGES(g).forEach(function (e) { edge(ctx, W, H, r, e[0], e[1]); });
@@ -231,10 +225,7 @@
         else lines = [['BACK_FUNCS.get_back_func(np.multiply, 0)', P.butter], ['  -> multiply_back0: grad_out * y'], ['BACK_FUNCS.get_back_func(np.multiply, 1)', P.butter], ['  -> multiply_back1: grad_out * x'], ['BACK_FUNCS.get_back_func(np.log, 0)', P.butter], ['  -> log_back:       grad_out / x']];
         panel(ctx, W, H, lines, { seed: 'rec' + (l < 8 ? 'c' : l < 13 ? 'd' : 'bf'), bg: 'rgba(22,26,53,.94)' });
       }),
-    ch(42, 20, 'blame flows backward', {
-      1: 'Start at the salty cake with blame 1. Walk backwards. Each bowl hands blame to its ingredients: <b>its own blame × how sensitive it was</b> to that ingredient. The lantern carries it.',
-      2: '<b>Chain rule</b>, one edge at a time. The number arriving at a bowl is ∂L/∂(that bowl). Multiply by the local slope from BACK_FUNCS, pass it on. Nothing is ever recomputed.',
-      3: 'in_grad = back_fn(outgrad, node.array, *node.recipe.args, **node.recipe.kwargs). L→d: 1·a = 2. L→a: 1·d = log 6 ≈ 1.792. d→c: 2/6 ≈ 0.333. Each is an exact partial, not an estimate.' },
+    ch(42, 20, 'blame flows backward', null,
       function (ctx, t, l, W, H) {
         kitchen(ctx, W, H, t); var r = R(W, H), g = G0; fridgeNote(ctx, W, H);
         var S = g.steps.filter(function (s) { return !s.leaf; }), k = clamp((l - 1.5) / 5.5, 0, 3), i = Math.min(2, Math.floor(k)), fr = k - Math.floor(k);
@@ -247,10 +238,7 @@
         var loc = s1.in_grad / s1.g;
         panel(ctx, W, H, [['node ' + s1.node.name + '  (outgrad ' + f3(s1.g) + ')', P.chalk], [fn + ' -> ' + s1.parent.name, P.butter], ['grad_' + s1.parent.name + ' = ' + f3(s1.g) + ' × ' + f3(loc) + ' = ' + f3(s1.in_grad), P.mint]], { seed: 'chain' });
       }),
-    ch(62, 26, 'used twice: +=', {
-      1: 'Flour went in <b>twice</b>: into c and straight into the cake. So it gets blame down <b>both</b> paths, and they <b>add</b>. Overwrite instead of add and you silently lose one path.',
-      2: 'Fan-out: a feeds c and L. Its total gradient is the <b>sum</b> over every path. That is why backprop does grads[parent] = grads[parent] + in_grad, and why .grad accumulates.',
-      3: 'Multivariable chain rule: ∂L/∂a = Σ over children. Here 1.792 + 3·(1/3) = 2.792 = log 6 + 1. Finite difference (L(a+h)−L(a−h))/2h agrees to 1e-8. PyTorch accumulates into .grad for the same reason (hence zero_grad).' },
+    ch(62, 26, 'used twice: +=', null,
       function (ctx, t, l, W, H, api) {
         kitchen(ctx, W, H, t); var g = G0, T = 62 + l;
         // predict pause, only when the film plays through it
@@ -302,10 +290,7 @@
           panel(ctx, W, H, lines2, { seed: 'xx' + lines2.length });
         }
       }),
-    ch(88, 20, 'the to-do list', {
-      1: 'In what order do we visit bowls? Rule: a bowl may pass on blame only when <b>all</b> the bowls that used it have reported. Our little egg keeps the to-do list.',
-      2: '<b>Topological sort</b>: order the graph so every node comes after all its consumers. Depth-first search does it: visit parents first, append yourself, then reverse. Get the order wrong and a gets 1.792, not 2.792.',
-      3: 'sorted_computational_graph(end_node) = reversed DFS post-order over recipe.parents: [L, d, c, b, a]. Each backward function then runs exactly once, on a finished outgrad. Cycles are impossible: a tensor cannot be its own ancestor.' },
+    ch(88, 20, 'the to-do list', null,
       function (ctx, t, l, W, H) {
         kitchen(ctx, W, H, t); var p = por(W, H), r = p ? R(W, H, 82, 250) : { x: W * .05, y: 70, w: W * .55, h: H - 190 }, g = G0;
         EDGES(g).forEach(function (e) { edge(ctx, W, H, r, e[0], e[1], null, 2, .7); });
@@ -323,10 +308,7 @@
         if (l > 14.5) lines.push(['right order:               a.grad = ' + f3(g.a.grad) + '  ✓', P.mint]);
         panel(ctx, W, H, lines, { seed: 'topo' + lines.length, y: p ? null : H - 70 });
       }),
-    ch(108, 20, 'unbroadcast', {
-      1: 'Sometimes one pinch of salt is sprinkled on <b>every</b> row of cake. Blame comes back per row; the single pinch must collect it all. So we <b>add up</b> the blame over the copies.',
-      2: 'Broadcasting copies a small array across a bigger shape. The backward pass must sum grad_out back over those copied axes, so the gradient has the <b>same shape</b> as the original. That is <b>unbroadcast</b>.',
-      3: 'ARENA unbroadcast(broadcasted, original): step 1, sum and drop the prepended dims; step 2, sum (keepdims=True) over dims that were 1. Shapes here: (2,3)→(3,) and (2,3)→(2,1).' },
+    ch(108, 20, 'unbroadcast', null,
       function (ctx, t, l, W, H) {
         kitchen(ctx, W, H, t); var p = por(W, H), cs = clamp(Math.min(W / 11, H / 14), 26, 44), sz = W < 500 ? 13 : 15;
         var A = l < 10, ll = A ? l : l - 10;
@@ -357,10 +339,7 @@
           : [['# step 2: sum dims that were 1', P.chalk], ['grad_s = grad_out.sum(axis=1,', P.butter], ['                    keepdims=True)', P.butter], ['       = [[' + UB_col[0][0] + '], [' + UB_col[1][0] + ']]   shape (2,1) ✓', P.mint, c3]];
         panel(ctx, W, H, lines, { seed: 'ub' + A });
       }),
-    ch(128, 16, 'matmul backward by shapes', {
-      1: 'The biggest recipe in any network is a matrix multiply. Its backward rule looks scary, but the <b>shapes</b> only allow one answer. Match the shapes and you have the formula.',
-      2: 'out = X @ W. The gradient for X must be shaped like X (2,3), and grad_out is (2,4): the only way is grad_out @ Wᵀ. For W (3,4): Xᵀ @ grad_out. Real numbers, with L = out.sum() so grad_out is all ones.',
-      3: 'matmul2d_back0 = grad_out @ y.T; matmul2d_back1 = x.T @ grad_out. ∂L/∂X_ij = Σ_k G_ik W_jk. Checked: finite difference on X[0,1] gives ' + f3(fdMX(0, 1)) + ' = grad_X[0,1].' },
+    ch(128, 16, 'matmul backward by shapes', null,
       function (ctx, t, l, W, H) {
         kitchen(ctx, W, H, t); var p = por(W, H), cs = clamp(Math.min((W - 30) / 12.5, H / 16), 20, 34), sz = W < 500 ? 12 : 14;
         title(ctx, W, H, 'out = X @ W,  L = out.sum()', 1);
@@ -380,10 +359,7 @@
         if (y3 + cs * 3 < H - 70) row(y3, [[MGW, P.butter, 'grad_W (3,4)'], '=', [Tr(MX), P.peach, 'Xᵀ (3,2)'], '@', [MG, P.pink, 'grad_out']], ramp(l, 6, 7));
         panel(ctx, W, H, [['matmul2d_back0 = grad_out @ y.T   (2,4)@(4,3)', P.butter], ['matmul2d_back1 = x.T @ grad_out   (3,2)@(2,4)', P.butter, ramp(l, 6, 7)], ['check X[0,1]: ' + f3(MGX[0][1]) + '  finite diff ' + fdMX(0, 1).toFixed(3) + ' ✓', P.mint, ramp(l, 9, 10)]], { seed: 'mmp' });
       }),
-    ch(144, 18, 'your backprop', {
-      1: 'Honest bit: "blame" is only <b>slope</b>, what a tiny nudge would do, not who is at fault. Then the kitchen folds into the few lines you will write on Saturday.',
-      2: 'Where the story stops: real autograd is vectorised, runs on GPUs, and is <b>memory-bound</b>: every Recipe keeps its args alive until backward. Below: your whole backprop, every piece you just watched.',
-      3: 'Gradients are local linear answers; big changes need the full model. Frameworks free saved tensors after use and fuse ops. Your loop: pop outgrad, leaf → accumulate .grad, else BACK_FUNCS per parent, add into grads.' },
+    ch(144, 18, 'your backprop', null,
       function (ctx, t, l, W, H) {
         kitchen(ctx, W, H, t); var p = por(W, H);
         if (l < 5.5) {
@@ -398,6 +374,111 @@
         title(ctx, W, H, 'your backprop, in full', 1); drawCode(ctx, t, l, W, H);
       })
   ];
+
+  /* ---------------- pass 2: scenes split into short caption beats (same animation, local-time offsets) ---------------- */
+  function byName(n) { for (var i = 0; i < base.length; i++) if (base[i].name === n) return base[i]; }
+  /* the baker: a chalk stick figure in the top-right corner who acts each beat */
+  function baker(ctx, t, l, W, H, pose, o) {
+    if (!F.stick || !pose) return;
+    var ph = W < 500, s = ph ? 50 : 70, x = W - (ph ? 28 : 52), y = ph ? 112 : 150;
+    o = o || {}; F.stick(ctx, x, y, s, t, { pose: pose, t0: t - l + (o.at || .15), face: -1, look: o.look || { x: W * .45, y: H * .45 }, scarf: P.peach, color: P.chalk, edge: '#23264a' });
+  }
+  function split(scene, parts) {
+    var acc = 0;
+    return parts.map(function (p) {
+      var off = acc; acc += p.dur;
+      return { name: p.name, dur: p.dur, need: p.need, cap: p.cap, draw: function (ctx, t, l, W, H, api) {
+        scene.draw(ctx, t, l + off, W, H, api);
+        if (p.credit) { ctx.save(); var cf = W < 500 ? 10.5 : 12; ctx.font = '600 ' + cf + 'px system-ui,sans-serif'; ctx.textBaseline = 'top'; var cw = ctx.measureText(p.credit).width; ctx.fillStyle = 'rgba(18,20,44,.72)'; ctx.fillRect(4, 3, cw + 10, cf + 7); ctx.fillStyle = 'rgba(253,250,240,.85)'; ctx.fillText(p.credit, 9, 6); ctx.restore(); }
+        var ps = typeof p.pose === 'function' ? p.pose(l) : p.pose;
+        if (ps) baker(ctx, t, l, W, H, ps.pose || ps, ps.pose ? ps : null);
+      } };
+    });
+  }
+  function seq(list) { var s0 = 0; list.forEach(function (c) { c.start = s0; s0 += c.dur; }); return list; }
+
+  var chapters = seq([].concat(
+    split(byName('a recipe on every bowl'), [
+      { name: 'a salty cake', dur: 11, need: 'core', pose: function (l) { return l < 4 ? { pose: 'recoil', at: .6 } : { pose: 'think', at: 4 }; }, cap: {
+        1: 'A paper kitchen. The cake came out <b>salty</b>: that\'s the loss. The baker wants to share the blame out to every ingredient, fairly, in one backward sweep.',
+        2: 'Cake = L = log(a·b)·a, with ingredients a = 2 and b = 3. Blame for an ingredient = ∂L/∂(ingredient): how much the saltiness moves if you nudge it a tiny bit.',
+        3: 'L = log(a·b)·a, a = 2, b = 3: c = a·b = 6, d = log 6 ≈ 1.792, L = d·a ≈ 3.58. Goal: ∂L/∂a and ∂L/∂b, exactly, in one reverse pass.' } },
+      { name: 'recipe cards', dur: 11, need: 'exercise', pose: 'write', credit: 'framing: Andrej Karpathy, micrograd (Zero to Hero)', cap: {
+        1: 'The trick: as each bowl is made, it keeps a little <b>recipe card</b>: what was done, and to which bowls. Later the cards let us walk the kitchen backwards without redoing anything.',
+        2: 'The forward pass builds the graph as it goes. Every new tensor carries a <b>Recipe</b>: which function made it, from which parents. Karpathy\'s micrograd: each value remembers its children.',
+        3: 'Each op wrapper computes the NumPy result and, if any input requires_grad, attaches Recipe(func, args, kwargs, parents). The graph = recipes linked by parents.' } }
+    ]),
+    split(byName('Recipe and BACK_FUNCS'), [
+      { name: 'one card, close up', dur: 10, need: 'exercise', pose: 'point', cap: {
+        1: 'Zoom into bowl c\'s card. It says what made it (multiply), the numbers it used (2 and 3), and which bowls it came from (a and b).',
+        2: '<b>Recipe</b> has four fields: func, args, kwargs, parents. <b>args</b> keeps the raw numbers (for the maths later); <b>parents</b> keeps the actual tensors (for walking the graph).',
+        3: 'Recipe(func=np.multiply, args=(2, 3), kwargs={}, parents={0: a, 1: b}). parents is keyed by argument position, so backward knows which slot each came from.' } },
+      { name: 'the cookbook', dur: 10, need: 'exercise', pose: 'think', cap: {
+        1: 'A second, shared cookbook says, for each kind of recipe and each ingredient slot: if this ingredient moves by 1, how much does the result move? A local exchange rate.',
+        2: '<b>BACK_FUNCS</b> maps (func, argnum) → backward function. For c = x·y: nudge x by 1 and c moves by y, so back0 = grad_out·y. For log x the slope is 1/x: grad_out/x.',
+        3: 'BackwardFuncLookup: back_funcs[(forward_fn, arg_position)] = back_fn(grad_out, out, *args). Local slopes only; chaining them together is backprop\'s job.' } }
+    ]),
+    split(byName('blame flows backward'), [
+      { name: 'blame flows backward', dur: 10, need: 'core', pose: 'push', cap: {
+        1: 'Start at the salty cake with blame 1. Walk backwards. Each bowl hands blame to its ingredients: <b>its own blame × its exchange rate</b> for that ingredient.',
+        2: '<b>Chain rule</b>, one edge at a time. The number arriving at a bowl is ∂L/∂(that bowl). Multiply by the local slope from BACK_FUNCS and pass it on. Nothing is recomputed.',
+        3: 'in_grad = back_fn(outgrad, node.array, *node.recipe.args, **node.recipe.kwargs). L→d: 1·a = 2. L→a: 1·d = log 6 ≈ 1.792.' } },
+      { name: 'why rates multiply', dur: 10, need: 'core', pose: 'point', cap: {
+        1: 'Why multiply? If c moves by 1, d = log c moves by 1/6. Each unit of d moves the cake by 2. So a unit of c moves the cake by 2 × 1/6 = 1/3. Rates multiply along a path.',
+        2: 'd→c: ∂L/∂c = ∂L/∂d · ∂d/∂c = 2 · (1/c) = 2/6 ≈ 0.333. Every number is an exact partial derivative, not an estimate, and each costs one multiply.',
+        3: 'Reverse mode: one backward sweep gives ∂L/∂(every node) for a small constant multiple of the forward cost. That\'s what makes training a billion weights feasible.' } }
+    ]),
+    split(byName('used twice: +='), [
+      { name: 'used twice: +=', dur: 16, need: 'core', credit: 'framing: Andrej Karpathy, micrograd (Zero to Hero)', pose: function (l) { return l < 8 ? 'reach' : { pose: 'point', at: 8 }; }, cap: {
+        1: 'Flour (a) went in <b>twice</b>: into c and straight into the cake. So blame comes back down <b>both</b> paths and <b>adds</b>. Overwrite instead of add and you silently lose one path.',
+        2: 'Why add? Nudge a and <b>both</b> uses change, and both changes reach the cake. Total = sum over paths: ∂L/∂a = 1.792 + 3·(1/3) = 2.792. Hence grads[parent] += in_grad.',
+        3: 'Multivariable chain rule: ∂L/∂a = Σ over children; finite difference agrees to 1e-8. Karpathy hits this exact bug in micrograd (b = a + a) and fixes it with +=. Hence zero_grad.' } },
+      { name: 'predict: x * x', dur: 10, need: 'core', pose: function (l) { return l < 5 ? 'think' : { pose: 'cheer', at: 5 }; }, cap: {
+        1: 'Your turn. One bowl, x = 3, fills <b>both</b> slots of one multiply: y = x·x. When blame flows back, what should x.grad be? Guess before the film tells you.',
+        2: 'Same rule, tighter case: both argument slots of one multiply point at the same parent. Each slot\'s back function fires, and what arrives at x must be combined.',
+        3: 'backprop(y) runs multiply_back0 and multiply_back1, both with parent x. Compare with the finite difference ((3+h)² − (3−h)²)/2h.' } }
+    ]),
+    split(byName('the to-do list'), [
+      { name: 'the to-do list', dur: 10, need: 'exercise', pose: 'think', cap: {
+        1: 'In what order do we visit bowls? Rule: a bowl may pass on blame only once <b>every</b> bowl that used it has reported. Otherwise it would pass on half its blame.',
+        2: '<b>Topological sort</b>: order nodes so each is processed after all its consumers. Get it wrong and a is processed too early: it gets 1.792, not 2.792.',
+        3: 'sorted_computational_graph(end_node): DFS over recipe.parents, post-order, then reverse: [L, d, c, b, a]. Each backward runs once, on a finished outgrad.' } },
+      { name: 'the egg\'s list', dur: 10, need: 'library', pose: 'write', cap: {
+        1: 'The little egg keeps the to-do list: tick a bowl off only when all its users are done. After this week, that list is kept for you inside <code>loss.backward()</code>.',
+        2: 'Depth-first search: visit parents first, append yourself, then reverse the list. A library call for life after [0.4]; worth building once so you trust it.',
+        3: 'No cycles are possible: every op makes a new tensor, so none can be its own ancestor. The sort is O(nodes + edges).' } }
+    ]),
+    split(byName('unbroadcast'), [
+      { name: 'unbroadcast', dur: 10, need: 'exercise', pose: 'reach', cap: {
+        1: 'Sometimes one pinch of salt is sprinkled on <b>every</b> row of cake. Blame comes back per row, but there was only one pinch, so it collects the blame from all rows: <b>add it up</b>.',
+        2: 'Broadcasting copies a small array across a bigger shape. Each copy got blame, and the original moved all copies at once, so its gradient = the sum over the copies.',
+        3: 'ARENA unbroadcast(broadcasted, original): 1) sum and drop the prepended dims; 2) sum with keepdims=True over dims that were 1. Here (2,3)→(3,) and (2,3)→(2,1).' } },
+      { name: 'grad shape = input shape', dur: 10, need: 'core', pose: 'point', cap: {
+        1: 'A rule for your whole career: <b>a gradient always has the same shape as the thing it\'s for</b>. If the shapes don\'t match, something was copied and needs summing.',
+        2: 'That\'s <b>unbroadcast</b>: sum grad_out over the copied axes until it has the original\'s shape. The same "copies add" rule as flour used twice, just along an axis.',
+        3: 'Broadcast = implicit fan-out along an axis, so its backward is a sum over that axis. A shape mismatch in backward is almost always a missing unbroadcast.' } }
+    ]),
+    split(byName('matmul backward by shapes'), [
+      { name: 'matmul by shapes', dur: 8, need: 'core', pose: 'lean-in', cap: {
+        1: 'The biggest recipe in any network is a matrix multiply. Its backward rule looks scary, but the <b>shapes</b> only allow one answer. Match the shapes and you have the formula.',
+        2: 'out = X @ W: X (2,3), W (3,4), out (2,4). X\'s gradient must be (2,3), grad_out is (2,4). The only matmul that makes (2,3) from those: grad_out @ Wᵀ.',
+        3: '∂L/∂X_ij = Σ_k G_ik W_jk = (G Wᵀ)_ij. Shape matching is a sanity check, not a proof, but for matmul it lands on the right formula.' } },
+      { name: 'and for W', dur: 8, need: 'exercise', pose: 'point', cap: {
+        1: 'Same trick for W: its gradient must be shaped like W (3,4). From X (2,3) and grad_out (2,4), only Xᵀ @ grad_out fits. Shapes first, formula second.',
+        2: 'For W (3,4): Xᵀ (3,2) @ grad_out (2,4) = (3,4). Real numbers here, with L = out.sum() so grad_out is all ones.',
+        3: 'matmul2d_back0 = grad_out @ y.T; matmul2d_back1 = x.T @ grad_out. Checked: finite difference on X[0,1] gives ' + f3(fdMX(0, 1)) + ' = grad_X[0,1].' } }
+    ]),
+    split(byName('your backprop'), [
+      { name: 'where it stops', dur: 9, need: 'core', pose: 'shrug', cap: {
+        1: 'Honest bit: "blame" is only <b>slope</b>, what a tiny nudge would do, not who is at fault. And a real kitchen has billions of bowls, each holding a whole tensor.',
+        2: 'Real autograd is vectorised, runs on GPUs, and is <b>memory-bound</b>: every Recipe keeps its args alive until backward. That\'s why training needs far more memory than inference.',
+        3: 'Gradients are local linear answers; big changes need the full model. Frameworks free saved tensors after use, fuse ops, and can recompute instead of storing (checkpointing).' } },
+      { name: 'your backprop', dur: 9, need: 'exercise', pose: 'type', cap: {
+        1: 'The kitchen folds into the few lines you\'ll write in [0.4]: walk the to-do list, hand each bowl\'s blame to its parents via the cookbook, and <b>add</b>, never overwrite.',
+        2: 'Your loop: pop outgrad; if leaf, accumulate into .grad; else for each parent, in_grad = BACK_FUNCS(func, argnum)(...), then grads[parent] += in_grad.',
+        3: 'Each piece is one idea: Recipe (forward), BACK_FUNCS (local slopes), sorted_computational_graph (order), += (fan-out), unbroadcast (shapes).' } }
+    ])
+  ));
   function drawCode(ctx, t, l, W, H) {
     var ll = l - 5.5, code = [
       ['def backprop(end_node, end_grad=None):', P.lav],
@@ -472,7 +553,8 @@
       { label: 'Week 4 pack', href: '../../index.html#week-04' },
       { label: 'Map: topological sort', href: '../../index.html#map/node=topological-sort' },
       { label: 'Map: unbroadcast', href: '../../index.html#map/node=unbroadcast' },
-      { label: 'Case: backprop & topo order', href: '../../index.html#cases/backprop-and-topological-order' }
+      { label: 'Case: backprop & topo order', href: '../../index.html#cases/backprop-and-topological-order' },
+      { label: 'Karpathy: Zero to Hero', href: 'https://karpathy.ai/zero-to-hero.html' }
     ]
   });
 })();

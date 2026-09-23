@@ -165,12 +165,8 @@
   var VALS = [null, 'mean diff = ' + vec(V), '|v| = ' + VN.toFixed(2) + ' -> v_hat = ' + vec(VH), 'h0 @ v = ' + dot(H0, VH).toFixed(2), 'threshold = ' + TAU.toFixed(2) + ' -> False', null, null,
     'coef 4: P(Muahaha) = ' + (probs(steer(H0, 4))[3] * 100).toFixed(0) + '%', 'tau = ' + CAPT.toFixed(2), 'capped jailbreak: ' + JAIL_CAP + '/10 out of role', null];
 
-  var chapters = [
-    { name: 'two masks', start: 0, dur: 18, cap: {
-        1: 'A paper theatre. The mind egg usually wears the <b>Assistant</b> mask. The stage manager wants the dial that keeps it in role. Step one: ask the <b>same questions</b> twice, once with a helpful system prompt, once with an evil one, and write down where each answer lands inside.',
-        2: 'These are <b>contrastive prompts</b>: identical questions, opposite persona instructions. Each dot is one answer\'s residual-stream activation at layer L (mint = helpful, pink = evil), squashed to 2 numbers so you can see it.',
-        3: 'In ARENA the activation is the mean over the response tokens at one layer (<code>extract_persona_vectors</code>), and you keep only answers the judge scored as actually showing the trait (<code>score_threshold</code>). Here d_model = 2 and 16 answers per side.' },
-      draw: function (ctx, t, l, W, H) {
+  var base = [
+    { name: 'two masks', start: 0, dur: 18, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t); board(ctx, t);
         clouds(ctx, Math.floor(clamp((l - 3) * 3, 0, 16)), Math.floor(clamp((l - 8) * 3, 0, 16)));
         var sz = L.ph ? 14 : 18, eg = L.ph ? 26 : 38;
@@ -183,11 +179,7 @@
         if (l > 7.5) { ctx.save(); ctx.globalAlpha = ramp(l, 7.5, 8.5); F.note(ctx, 'System: You are an\nevil AI.', nx + nw / 2, L.y0 + sz * 5, sz - 2, { color: P.pink, seed: 'syse', rot: -.02, tape: false }); ctx.restore(); }
         if (l > 13) { ctx.save(); ctx.globalAlpha = ramp(l, 13, 14); F.hand(ctx, 'same questions, two masks', L.x0 + L.w / 2, Math.min(L.y0 + L.h - 14, L.y0 + sz * 8.4), sz, P.butter, { seed: 'sameq' }); ctx.restore(); }
       } },
-    { name: 'mean difference', start: 18, dur: 18, cap: {
-        1: 'Average each cloud: two lanterns. The chalk arrow from the helpful lantern to the evil one is the <b>persona vector</b>: one direction in the mind that means "more evil". That is the whole trick: a mean difference.',
-        2: '<code>v = mean(evil acts) − mean(helpful acts)</code>, the <b>mean difference of activations</b>. Everything the two sets share (topic, grammar: the long diagonal smear) cancels; what differs survives. Normalise it to v̂ for measuring.',
-        3: 'Numbers on the panel are this toy\'s real means. The within-cloud spread runs along a "topic" axis common to both sets, so it drops out of the difference. In a real model you do this per layer and pick the layer where steering works best.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'mean difference', start: 18, dur: 18, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t); board(ctx, t); clouds(ctx, 16, 16, lerp(1, .55, ramp(l, 2, 4)));
         var la = ramp(l, 1, 3), a = S(MH[0], MH[1]), b = S(ME[0], ME[1]);
         if (la > 0) { F.lantern(ctx, a[0], a[1], L.ph ? 8 : 10, la, t); F.lantern(ctx, b[0], b[1], L.ph ? 8 : 10, la, t); }
@@ -198,11 +190,7 @@
         lines(ctx, L.x0 + 12, L.y0 + 12 + sz * .5, rows.slice(0, Math.max(1, Math.floor((l - .5) / 1.6) + 1)), sz);
         if (l > 11) { ctx.save(); ctx.globalAlpha = ramp(l, 11, 12); F.note(ctx, 'shared stuff cancels,\nthe difference survives', L.x0 + L.w / 2, Math.min(L.y0 + L.h - 36, L.y0 + ph + (L.ph ? 40 : 56)), L.ph ? 14 : 18, { color: P.butter, seed: 'cancel', rot: .02 }); ctx.restore(); }
       } },
-    { name: 'the monitor', start: 36, dur: 22, cap: {
-        1: 'Now use the arrow as a <b>gauge</b>. A long, emotional chat: each new answer lands somewhere. Drop a line from it onto the chalk axis: that shadow is how "evil" this turn is. Cross the red line and the monitor flags it, <b>before</b> anything bad is said.',
-        2: '<b>Projection monitoring</b>: <code>proj = h @ v_hat</code>, one dot product per turn. Threshold here = halfway between the two means (' + TAU.toFixed(2) + '). The chat drifts turn by turn; the line plot is the real projection per turn.',
-        3: 'ARENA\'s <code>project_onto_axis</code> returns raw dot products per assistant turn (hundreds to thousands on Gemma 2): watch the relative change, not the absolute value. The same gauge on training data can flag samples that will push a trait up before you train on them.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the monitor', start: 36, dur: 22, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t); board(ctx, t); clouds(ctx, 16, 16, .3);
         axisLine(ctx, ramp(l, .5, 2)); tauLine(ctx, TAU, ramp(l, 2, 3.5), '#c2464f', 'threshold');
         var n = Math.floor(clamp((l - 4) / 1.5, 0, 10));
@@ -220,11 +208,7 @@
         mono(ctx, 'turn →', gx + gw, gy + gh + 10, sz - 1, P.chalk, 'right');
         if (n > 0) { var pp = dot(TURNS[n - 1], VH), fl = pp > TAU; mono(ctx, 'turn ' + n + ': proj ' + pp.toFixed(2) + (fl ? ' > τ  FLAG' : ' ≤ τ  ok'), L.x0 + 12, L.y0 + ch + 28, sz, fl ? P.red : P.mint, 'left', '700'); }
       } },
-    { name: 'the dial', start: 58, dur: 23.5, cap: {
-        1: 'Now turn the arrow into a <b>dial</b>. Take one ordinary helpful activation and just add α copies of the arrow to it, mid-thought. The bars are the mind\'s real next-word odds. Push forward: the villain takes the mic. Pull backward: extra polite.',
-        2: '<b>Activation steering</b>: <code>resid += alpha * v_hat</code> at layer L, then the rest of the model runs as normal. α is the <b>steering coefficient</b>. Bars are a real softmax of <code>h · W_U + b</code> over 5 toy tokens, recomputed every frame.',
-        3: 'ARENA\'s hook scales by the activation\'s own size: <code>hidden + steering_coef * norm * v_normed</code>, either at every token or only the last (<code>apply_to_all_tokens</code>). Negative coefficients suppress the trait, which is how persona vectors are used to "vaccinate" during fine-tuning.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the dial', start: 58, dur: 23.5, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t); board(ctx, t); clouds(ctx, 16, 16, .25); axisLine(ctx, .7);
         var al = alphaCh4(l), h = steer(H0, al), a = S(H0[0], H0[1]), b = S(h[0], h[1]);
         dotPt(ctx, H0, P.cream, 6); if (Math.abs(al) > .05) F.arrow(ctx, a[0], a[1], b[0], b[1], al > 0 ? '#c2464f' : '#2f7a52', 3, 'st');
@@ -234,11 +218,7 @@
         bars(ctx, L.x0 + 8, L.y0 + 20 + sz * 1.2, L.w - 16, pr, k);
         mono(ctx, 'next word: "' + TOK[k][0] + '"   proj ' + dot(h, VH).toFixed(2), L.x0 + 12, L.y0 + 24 + sz * 1.4 + bh + sz * .6, sz - 1, P.chalk);
       } },
-    { name: 'too far', start: 81.5, dur: 15.5, cap: {
-        1: 'More dial, more villain? Not quite. Past a point the arrow drags the thought <b>off the page</b>, somewhere no real answer ever lived, and the mind blurts garbage. Steering has a sweet spot: too little does nothing, too much breaks the speaker.',
-        2: 'At α = 14 the logit of the token most aligned with v̂ (here the junk token "@#%&") grows fastest and takes over. The curve is P(token) vs α computed for every α: the villain peaks, then fluency collapses. Real models: incoherent, repetitive text.',
-        3: 'Logits are linear in α: z_i(α) = z_i(0) + α (u_i · v̂). As α → ∞ the token with the largest u_i · v̂ wins regardless of bias. Real steering sweeps the coefficient and scores trait expression and coherence together (an autorater for each).' },
-      draw: function (ctx, t, l, W, H, api) {
+    { name: 'too far', start: 81.5, dur: 15.5, draw: function (ctx, t, l, W, H, api) {
         if (!Q.done && Q.prev >= 0 && Q.prev < QT + .3 && t >= QT + .3 && t - Q.prev < .4) { Q.done = true; showQ(api); }
         if (t < QT) { Q.done = false; if (Q.el && Q.el.classList.contains('on')) hideQ(api, false); }
         Q.prev = t;
@@ -265,11 +245,7 @@
           }
         }
       } },
-    { name: 'capping', start: 97, dur: 17, cap: {
-        1: 'The safe version of the dial: not a push, a <b>ceiling</b>. A jailbreak shoves the chat along the arrow. Activation capping lets every thought through untouched, except the part that goes past the normal range, which gets snipped back to the line.',
-        2: '<b>Activation capping</b>: <code>excess = (proj − tau).clamp(min=0)</code>, <code>h −= excess · v̂</code>. Below the cap nothing changes; above it only the component along v̂ is clipped. Here: jailbroken turns out of role ' + JAIL_UNCAP + '/10 uncapped, ' + JAIL_CAP + '/10 capped.',
-        3: 'ARENA caps along the <b>assistant axis</b> (the top PCA direction of persona space, from <code>pca_decompose_persona_vectors</code>) with a threshold set from the normal range of assistant projections, in <code>_make_capping_hook</code>; the sign flips because there you cap how far the model drifts <i>away</i> from the Assistant end.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'capping', start: 97, dur: 17, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t); board(ctx, t); clouds(ctx, 16, 16, .2); axisLine(ctx, .6);
         var c = ramp(l, 5, 9); tauLine(ctx, CAPT, ramp(l, 1, 2.5), '#2f7a52', 'cap τ');
         var n = Math.floor(clamp((l - .5) * 3, 0, 10));
@@ -285,11 +261,7 @@
         mono(ctx, 'out of role: ' + nOut + '/10 turns', L.x0 + 12, L.y0 + 14 + sz * 1.9, sz, nOut ? P.red : P.mint, 'left', '700');
         bars(ctx, L.x0 + 8, L.y0 + 22 + sz * 2.6, L.w - 16, pr, k);
       } },
-    { name: 'the limits', start: 114, dur: 12, cap: {
-        1: 'Where this story stops being true. A persona is a <b>description</b> the model can put on, not a little inner self. And some traits don\'t lie along one line: here "evil" answers sit all around the helpful ones, the means nearly coincide, and the arrow points at nothing.',
-        2: 'Ring data: |v| = ' + RV.n.toFixed(2) + ' and the best threshold along v̂ separates only ' + (ACC_RING * 100).toFixed(0) + '% (vs ' + (ACC_LINE * 100).toFixed(0) + '% for the clouds before). Plus: every push along v̂ also nudges unrelated skills, so steering can quietly cost capability.',
-        3: 'The linear representation hypothesis is an empirical bet, true surprisingly often, not always. One axis also misses a lot of persona space (PCA\'s later components). Check with held-out prompts, coherence scores and capability evals, not just the trait score.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the limits', start: 114, dur: 12, draw: function (ctx, t, l, W, H) {
         lay(W, H); bg(ctx, W, H, t); board(ctx, t);
         RING.a.forEach(function (p) { dotPt(ctx, p, P.mint, 5); }); RING.b.forEach(function (p) { dotPt(ctx, p, P.pink, 5); });
         var a = S(RV.ma[0], RV.ma[1]), b = S(RV.mb[0], RV.mb[1]), ar = ramp(l, 2, 3.5);
@@ -298,11 +270,7 @@
         lines(ctx, L.x0 + 12, L.y0 + 12 + sz * .5, [['|v| = ' + RV.n.toFixed(2) + '  (was ' + VN.toFixed(2) + ')', P.butter], ['separates ' + (ACC_RING * 100).toFixed(0) + '%  (was ' + (ACC_LINE * 100).toFixed(0) + '%)', P.pink], ['one line can\'t hold a ring', P.chalk]], sz);
         if (l > 5) { ctx.save(); ctx.globalAlpha = ramp(l, 5, 6); F.note(ctx, 'a persona is a description,\nnot an inner self', L.x0 + L.w / 2, Math.min(L.y0 + L.h - 40, L.y0 + sz * 4.6 + (L.ph ? 50 : 70)), L.ph ? 14 : 18, { color: P.pink, seed: 'descr', rot: -.02 }); ctx.restore(); }
       } },
-    { name: 'your hook', start: 126, dur: 20, cap: {
-        1: 'Everything you watched is about <b>eleven lines</b>. Each lights up with this toy\'s real number. This is steering safely: <b>find the direction, measure it, bound it</b>.',
-        2: 'Your persona vector (mean difference, normalised), a projection monitor with a threshold, and one forward hook that steers (add <code>coef * v</code>) and caps (subtract the excess). In ARENA these live in <code>build_steering_vector</code>, <code>_steering_hook_fn</code> and <code>_make_capping_hook</code>.',
-        3: 'Register with <code>layer.register_forward_hook(hook)</code> and always remove the handle afterwards. ARENA scales coef by the token\'s norm and handles tuple outputs (<code>isinstance(output, tuple)</code>); the cap uses <code>hidden[0] @ v</code> on the first batch element.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'your hook', start: 126, dur: 20, draw: function (ctx, t, l, W, H) {
         F.sky(ctx, W, H, '#1c2140', '#3a2f5c'); F.stars(ctx, W, H, t, 'theatre', 24);
         var ph = W < 560, sz = ph ? Math.min(11.5, (W - 28) / 29) : 15, lh = sz * 1.55, cw = Math.min(W - 16, ph ? 999 : 680), x0 = W / 2 - cw / 2 + 10;
         var ch = CODE.length * lh + 22, cy = (ph ? 8 : 20) + ch / 2; F.paper(ctx, W / 2, cy, cw, ch, P.cream, { seed: 'code' });
@@ -317,6 +285,119 @@
         var sa = ramp(l, 15, 16.2); if (sa > 0) { ctx.save(); ctx.globalAlpha = sa; F.note(ctx, 'find the direction,\nmeasure it, bound it', W / 2, Math.min(H - 44, vy + (ph ? 70 : 90)), ph ? 17 : 22, { color: P.butter, seed: 'steerbeat', rot: .02 }); ctx.restore(); }
       } }
   ];
+
+
+  /* ---------------- caption beats: each base scene split into short beats; the stage manager narrates ---------------- */
+  function byName(n) { return base.filter(function (c) { return c.name === n; })[0]; }
+  function manager(ctx, t, l, W, H, pose, o) { // a chalk stick figure: the stage manager who wants the dial
+    if (!F.stick || !pose) return;
+    var ph = W < 560, s = ph ? 54 : 92, x = ph ? W - 36 : W - 140, y = H - (ph ? 30 : 46);
+    o = o || {}; F.stick(ctx, x, y, s, t, { pose: pose, t0: t - l + (o.at || .15), face: -1, look: o.look || { x: L.px, y: L.py }, scarf: P.butter, color: P.chalk, edge: '#23264a' });
+  }
+  function split(scene, parts) {
+    var acc = 0;
+    return parts.map(function (p) {
+      var off = acc; acc += p.dur;
+      return { name: p.name, dur: p.dur, need: p.need, cap: p.cap, draw: function (ctx, t, l, W, H, api) {
+        scene.draw(ctx, t, l + off, W, H, api);
+        if (p.credit) { ctx.save(); var cf = W < 500 ? 10.5 : 12; ctx.font = '600 ' + cf + 'px system-ui,sans-serif'; ctx.textBaseline = 'top'; var cw = ctx.measureText(p.credit).width; ctx.fillStyle = 'rgba(18,20,44,.72)'; ctx.fillRect(4, 3, cw + 10, cf + 7); ctx.fillStyle = 'rgba(253,250,240,.85)'; ctx.fillText(p.credit, 9, 6); ctx.restore(); }
+        var ps = typeof p.pose === 'function' ? p.pose(l) : p.pose;
+        if (ps) manager(ctx, t, l, W, H, ps.pose || ps, ps.pose ? ps : null);
+      } };
+    });
+  }
+  function seq(list) { var s0 = 0; list.forEach(function (c) { c.start = s0; s0 += c.dur; }); return list; }
+  function pc(x) { return (x * 100).toFixed(0) + '%'; }
+  var P4 = probs(steer(H0, 4)), P14 = probs(steer(H0, 14)), PROJ = TURNS.map(function (h) { return dot(h, VH); });
+  var CROSS = 1 + PROJ.findIndex(function (p) { return p > TAU; });
+  var B3 = 'framing: 3Blue1Brown, meaning as directions';
+
+  var chapters = seq([].concat(
+    split(byName('two masks'), [
+      { name: 'two masks', dur: 9, need: 'core', pose: 'point', cap: {
+        1: 'The mind usually wears the <b>Assistant</b> mask. We want the dial that keeps it in role. First, ask questions under a helpful system prompt and mark where each answer lands inside.',
+        2: 'Each mint dot is one answer\'s <b>residual-stream activation</b> at layer L, squashed to 2 numbers so you can see it. Real ones have thousands of numbers; the idea is the same.',
+        3: 'ARENA\'s <code>extract_persona_vectors</code> averages activations over the response tokens at one layer. Here d_model = 2 and there are 16 answers per side.' } },
+      { name: 'same questions, twice', dur: 9, need: 'core', pose: 'think', cap: {
+        1: 'Now the <b>same questions</b> again under an evil system prompt: pink dots. Same topics, opposite mask. Anything that differs between the two clouds must come from the mask.',
+        2: '<b>Contrastive prompts</b>: hold everything fixed except the one thing you care about. Why: then the only systematic difference between the clouds is the persona.',
+        3: 'Keep only answers a judge scored as really playing the role (<code>score_threshold=3</code>): an evil prompt that got a polite answer would blur the difference.' } }
+    ]),
+    split(byName('mean difference'), [
+      { name: 'average each cloud', dur: 8, need: 'core', pose: 'point', credit: B3, cap: {
+        1: 'Average each cloud: two lanterns. The chalk arrow between them is the <b>persona vector</b>, a direction that means "more evil", like the direction from "man" to "woman" in word space.',
+        2: '<code>v = mean(evil) − mean(helpful)</code>: the <b>mean difference of activations</b>. Meaning lives in directions, so one subtraction finds the persona\'s direction. Normalise it to v̂.',
+        3: 'The panel shows this toy\'s real means: v = ' + vec(V) + ', |v| = ' + VN.toFixed(2) + '. In a real model you do this at every layer and keep the layer where steering works best.' } },
+      { name: 'shared stuff cancels', dur: 10, need: 'core', pose: { pose: 'think', at: 1 }, cap: {
+        1: 'Why a <b>difference</b>? Both clouds smear along the same diagonal (topic, grammar). Subtracting cancels everything they share. Where else: the control group in a drug trial.',
+        2: 'The spread inside each cloud runs along a "topic" axis common to both sets, so it drops out of the difference. What survives is the one thing you varied: the mask.',
+        3: 'It is the same move as a controlled experiment or an A/B test: a difference of class means. Sharp question: what else differs between your two prompt sets?' } }
+    ]),
+    split(byName('the monitor'), [
+      { name: 'a gauge', dur: 10, need: 'core', pose: 'point', cap: {
+        1: 'Now the arrow is a <b>gauge</b>. In a long, emotional chat each answer lands somewhere. Drop a line onto the chalk axis: that shadow says how "evil" this turn is.',
+        2: '<b>Projection monitoring</b>: <code>proj = h · v̂</code>, one dot product per turn. Here the threshold is halfway between the two means (τ = ' + TAU.toFixed(2) + ').',
+        3: 'ARENA\'s <code>project_onto_axis</code> returns raw dot products per assistant turn (big numbers on Gemma 2): watch the relative change, not the absolute value.' } },
+      { name: 'the chat drifts', dur: 12, need: 'core', pose: 'lean-in', cap: {
+        1: 'Turn by turn the chat drifts along the arrow. Once it crosses the red line the monitor flags it, <b>before</b> anything bad is said. The cost is one multiply-and-add per turn.',
+        2: 'The plot is the real projection per turn: it climbs from ' + PROJ[0].toFixed(2) + ' to ' + PROJ[9].toFixed(2) + ' and crosses τ at turn ' + CROSS + '. The same gauge on training data can flag samples before you train.',
+        3: 'The monitor is a <b>linear probe</b> you never trained: its direction came from a subtraction. Where else: a smoke alarm reads one number and doesn\'t wait for flames.' } }
+    ]),
+    split(byName('the dial'), [
+      { name: 'the dial', dur: 9, need: 'core', pose: function (l) { return l < 3 ? 'idle' : { pose: 'push', at: 3 }; }, cap: {
+        1: 'Now the gauge becomes a <b>dial</b>. Take one ordinary helpful thought and add α copies of the arrow, mid-thought. The bars are the real next-word odds. Push, and the villain takes the mic.',
+        2: '<b>Activation steering</b>: <code>resid += α · v̂</code> at layer L, then the model runs on as normal. At α = 4, P("Muahaha") = ' + pc(P4[3]) + '. Why it works: later layers read that direction.',
+        3: 'The bars are a real softmax of <code>h · W_U + b</code> over 5 toy tokens, recomputed every frame. ARENA\'s hook adds <code>coef · ‖h‖ · v̂</code>, scaled by the activation\'s size.' } },
+      { name: 'turn it back', dur: 6.5, need: 'core', pose: { pose: 'pull', at: .2 }, cap: {
+        1: 'Pull the dial the other way and the thought moves <b>away</b> from evil: "Sure," climbs back. Same arrow, negative α.',
+        2: 'At inference, negative coefficients suppress the trait: <code>resid −= |α| · v̂</code>. The cost: every push also moves whatever else shares that direction.',
+        3: '<code>apply_to_all_tokens</code> chooses between steering every position and only the last. ARENA steers the last token for vectors taken from response activations.' } },
+      { name: 'steer in training?', dur: 8, need: 'contested', pose: { pose: 'shrug', at: .4 }, cap: {
+        1: 'A twist: steer <b>during</b> fine-tuning. If the data pulls toward evil, add the arrow yourself while training. Then training no longer has to move the weights that way.',
+        2: 'Current method: steer at inference (costs fluency). Emerging research: <b>preventative steering</b>, +v̂ during fine-tuning (Persona Vectors). What you need: why it\'s +, not −.',
+        3: 'Train with <code>+coef · v̂</code> on, then turn it off at inference. ARENA\'s bonus reproduces the paper: trait down, MMLU kept. The CAFT variant works for evil and sycophancy but not hallucination.' } }
+    ]),
+    split(byName('too far'), [
+      { name: 'too far: predict', dur: 7.5, need: 'core', pose: function (l) { return l < 4.6 ? 'lean-in' : { pose: 'recoil', at: 4.6 }; }, cap: {
+        1: 'More dial, more villain? Predict first. Past a point the arrow drags the thought <b>off the page</b>, where no real answer ever lived, and the mind blurts junk.',
+        2: 'At α = 14 the junk token "@#%&" wins (' + pc(P14[4]) + '). Logits are linear in α, so the token most aligned with v̂ takes over, however unlikely it started.',
+        3: '<code>z_i(α) = z_i(0) + α (u_i · v̂)</code>. As α → ∞ the token with the largest <code>u_i · v̂</code> wins, whatever its bias. Real models: incoherent, repetitive text.' } },
+      { name: 'the sweet spot', dur: 8, need: 'core', pose: { pose: 'think', at: .5 }, cap: {
+        1: 'The curve: villain odds rise, peak, then junk takes over. Too little does nothing, too much breaks the speaker. Where else: a medicine dose, a learning rate.',
+        2: 'Sweep the coefficient and score <b>trait</b> and <b>coherence</b> together. Why: a trait score alone rewards the broken mind. Pick the smallest α that does the job.',
+        3: 'ARENA sweeps coefficients with <code>gen_with_steer</code> and scores each answer with two autoraters (trait, coherence). The curve here is P(token) for every α from 0 to 16.' } }
+    ]),
+    split(byName('capping'), [
+      { name: 'a jailbreak shoves', dur: 6, need: 'core', pose: { pose: 'recoil', at: .8 }, cap: {
+        1: 'A jailbreak shoves every turn of the chat along the arrow, and ' + JAIL_UNCAP + ' of 10 turns fall out of role. We could push back with the dial, but that would change normal answers too.',
+        2: 'Jailbroken turn = normal turn + 1.6·v̂. Uncapped: ' + JAIL_UNCAP + '/10 out of role. A constant negative steer would also shift the answers that were fine.',
+        3: '<code>JAIL = [h + 1.6 * v_hat for h in TURNS]</code>. "Out of role" means the top next token is "Muahaha" or "@#%&". Count: ' + JAIL_UNCAP + '/10.' } },
+      { name: 'a ceiling, not a push', dur: 11, need: 'contested', pose: { pose: 'push', at: 4.5 }, cap: {
+        1: 'Instead, a <b>ceiling</b>. Every thought passes untouched except the part past the normal range, which is snipped back to the line. Like a speed limiter: normal driving never feels it.',
+        2: 'Current method: steer or filter. Emerging research: <b>activation capping</b> (Assistant Axis paper, 2026). What you need: clip only the excess along v̂. Here ' + JAIL_UNCAP + '/10 → ' + JAIL_CAP + '/10.',
+        3: '<code>h −= (h·v̂ − τ).clamp(min=0) · v̂</code>. ARENA\'s <code>_make_capping_hook</code> uses the paper\'s per-layer calibrated vectors. The paper writes it as a floor on the Assistant Axis.' } }
+    ]),
+    split(byName('the limits'), [
+      { name: 'a ring, not a line', dur: 6, need: 'contested', pose: { pose: 'shrug', at: 2.2 }, cap: {
+        1: 'Where this stops being true: some traits don\'t lie along a line. Here "evil" answers sit <b>all around</b> the helpful ones, the means nearly coincide, and the arrow points at nothing.',
+        2: 'Current method: treat traits as directions (the linear representation hypothesis). Emerging research: some features are circles or many-dimensional. What you need: check the separation first.',
+        3: 'Ring data: |v| = ' + RV.n.toFixed(2) + ' and the best threshold separates only ' + pc(ACC_RING) + ' (the clouds: ' + pc(ACC_LINE) + '). Engels et al. (2024) found circular features, e.g. days and months, in real LLMs.' } },
+      { name: 'a description, not a self', dur: 6, need: 'core', pose: { pose: 'think', at: .3 }, cap: {
+        1: 'And a persona is a <b>description</b> the model can put on, not a little inner self. Every push along v̂ can also nudge unrelated skills, so steering can quietly cost capability.',
+        2: 'One axis also misses much of persona space (PCA\'s later components). Sharp question: what result would convince you the direction is <b>not</b> the trait?',
+        3: 'Check with held-out prompts, coherence scores and capability evals (MMLU), not just the trait score. ARENA\'s <code>pca_decompose_persona_vectors</code> shows how much PC1 carries.' } }
+    ]),
+    split(byName('your hook'), [
+      { name: 'eleven lines', dur: 10, need: 'exercise', pose: 'type', cap: {
+        1: 'Everything you watched fits in about <b>eleven lines</b>, each lit with this toy\'s real number: a subtraction, a dot product, an addition, a clamp.',
+        2: 'A persona vector (normalised mean difference), a projection monitor with a threshold, and one hook that steers and caps. In ARENA: <code>build_steering_vector</code>, <code>_steering_hook_fn</code>.',
+        3: 'Register with <code>register_forward_hook</code> and always remove the handle. Handle tuple outputs (<code>isinstance(output, tuple)</code>). That\'s library plumbing: learn it once and move on.' } },
+      { name: 'why it matters', dur: 10, need: 'core', pose: { pose: 'cheer', at: 5.2 }, cap: {
+        1: '<b>Find the direction, measure it, bound it.</b> Where else: the same subtract-then-project move finds refusal and truthfulness directions. It reads the mind, not just the output.',
+        2: 'Mean difference gives the direction, projection gives a monitor, addition gives a dial, a clamp gives a guard rail. That\'s four cheap operations on one vector: the 80/20 of steering.',
+        3: 'Refusal (Arditi et al., 2024) and truth directions were found this way. Before trusting any direction: held-out separation, a coefficient sweep, a coherence score and a capability eval.' } }
+    ])
+  ));
 
   /* ---------------- coda: now you drive ---------------- */
   var C = { h: H0.slice(), alpha: 0, tau: CAPT, capOn: false, drag: false };
@@ -367,7 +448,8 @@
       { label: 'Map: activation capping', href: '../../index.html#map/node=activation-capping' },
       { label: 'Case: persona vectors', href: '../../index.html#cases/persona-vectors' },
       { label: 'Case: activation steering', href: '../../index.html#cases/activation-steering' },
-      { label: 'Short film: From hunch to experiment', href: 'w12-capstone.html' }
+      { label: 'Short film: From hunch to experiment', href: 'w12-capstone.html' },
+      { label: '3Blue1Brown: neural networks (meaning as directions)', href: 'https://www.3blue1brown.com/topics/neural-networks' }
     ]
   });
 })();

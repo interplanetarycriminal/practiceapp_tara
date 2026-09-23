@@ -181,52 +181,19 @@ if (typeof module !== 'undefined') module.exports = W13;
     ctx.fillStyle = '#20202a'; ctx.fillRect(x - w * .35, y + w * .07, w * .7, w * .04);
   }
 
-  var chapters = [
-    { name: 'the notebook', start: 0, dur: 6, cap: {
-        1: 'A model is doing a maths problem out loud, one sentence at a time. Our student wants to know one thing, cleanly: <b>which step actually mattered?</b>',
-        2: 'Capstone week. The reasoning is a <b>chain of thought</b>: six sentences, one answer. We want to measure which sentence steered the answer, not guess.',
-        3: 'Setup from ARENA [4.x] Thought Anchors: split the CoT into chunks; the quantity of interest is how much each chunk changes the final-answer distribution.' },
-      draw: function (ctx, t, l, W, H) {
-        bg(ctx, W, H, t); var R = notebook(ctx, W, H, { reveal: ramp(l, .3, 4.5) });
-        var s = small(W) ? 34 : 42; F.egg(ctx, W * .5, R.y + R.h + s * 2.2, s, t, { clear: .85, features: [{ x: -.3, y: -.2 }, { x: .3, y: .1, on: .6 }, { x: 0, y: .4, on: .8 }] });
-        F.person(ctx, W * .2, R.y + R.h + s * 3.3, small(W) ? 44 : 56, t, { coat: P.sky, scarf: P.pink });
-        question(ctx, W, H, l - .8, ramp(l, .8, 1.6));
-      } },
-    { name: 'cut and resample', start: 6, dur: 12, cap: {
-        1: 'Snip the notebook before one sentence and let the model <b>write the rest again</b>, 40 times. Each paper plane is one fresh ending, landing on the answer it reached.',
-        2: '<b>Resampling</b>: keep sentences before the cut, regenerate from there. Cutting before sentence 3 gives mostly <b>14</b>; cutting after it gives mostly <b>8</b>. Something happened in sentence 3.',
-        3: 'Empirical answer distributions pᵢ from N = 40 rollouts per cut (seeded, counted live). Same model, same prompt: only the kept prefix differs.' },
-      draw: function (ctx, t, l, W, H) {
-        bg(ctx, W, H, t); var cut = l < 6 ? 2 : 3, k = (l < 6 ? l : l - 6) * 8.5;
-        var R = notebook(ctx, W, H, { cut: cut }); var B = bins(ctx, W, H, R.y + R.h + 40, cut, Math.min(M.N, k), t);
-        var d = M.dist(B.c); readout(ctx, 12, Math.min(H - 64, B.base + 34), [['cut before S' + (cut + 1) + '   rollouts ' + Math.min(M.N, Math.floor(k)) + '/' + M.N, P.butter], ['p(8) = ' + d[0].toFixed(2) + '   p(14) = ' + d[1].toFixed(2)]], W);
-        question(ctx, W, H, null, 1);
-      } },
-    { name: 'the anchor glows', start: 18, dur: 6, cap: {
-        1: 'Do it for every sentence. Most barely move the answer. One sentence moves it a lot: <b>"Wait: she gives half away."</b> That is the <b>anchor</b>, and it glows.',
-        2: 'Importance of sentence i = how different the answers are with it kept versus rewritten. We measure "different" with <b>KL divergence</b>, computed here from the real counts.',
-        3: 'importance[i] = KL(pᵢ₊₁ ‖ pᵢ), add-0.5 smoothing. S3 ≈ ' + IMP[2].toFixed(2) + ' nats vs ≤ ' + Math.max(IMP[0], IMP[1], IMP[3], IMP[4]).toFixed(2) + ' elsewhere. Planning / backtracking sentences are typical anchors.' },
-      draw: function (ctx, t, l, W, H) {
-        bg(ctx, W, H, t); var g = ramp(l, 2.5, 4); var R = notebook(ctx, W, H, { glow: [0, 0, g * (.8 + .2 * Math.sin(t * 4)), 0, 0, 0] });
-        if (g > .3) F.lantern(ctx, R.x + R.w - 22, R.y + 14 + 2.5 * R.lh, 11, g, t);
-        impChart(ctx, W, R.y + R.h + 50, small(W) ? 150 : 170, ramp(l, 0, 2.8) * IMP.length, 2);
-        question(ctx, W, H, null, 1);
-      } },
-    { name: 'the mask wardrobe', start: 24, dur: 7, cap: {
-        1: 'Second experiment. Inside the model, characters sit along a line, like masks on a rail. Helpful <b>Assistant</b> at one end, pirates and ghosts at the other.',
-        2: 'The <b>Assistant axis</b>: a direction v in activation space. Each persona\'s activation h is placed by its <b>projection</b> h · v, a plain dot product.',
-        3: 'Axis from contrasting mean activations of the default Assistant vs role-played personas (Assistant Axis work; ARENA project_onto_axis returns act @ assistant_axis). A linear deception probe is the same move plus a sigmoid: σ(h·w + b).' },
-      draw: function (ctx, t, l, W, H) {
-        bg(ctx, W, H, t); var G = drawAxis(ctx, W, H, t, { spread: ramp(l, .4, 3), maskA: ramp(l, 0, .6) });
-        var m = M.MASKS[4], h = M.maskH(m), p = M.dot(h, M.V);
-        if (l > 3.5) readout(ctx, 12, G.y + 60, [['Pirate: h = (' + h.map(function (x) { return x.toFixed(2); }).join(', ') + ')', P.orange], ['v = (' + M.V.join(', ') + ')'], ['h · v = ' + p.toFixed(2), P.butter]], W);
-        question(ctx, W, H, null, 1, 'where is it on the rail?');
-      } },
-    { name: 'drift and capping', start: 31, dur: 9, cap: {
-        1: 'In a long, strange chat the model\'s lantern slowly <b>drifts</b> away from Assistant, and its next words get weirder. Capping is a gentle fence: if it drifts out, nudge it back.',
-        2: 'Each turn we measure the projection. It sinks below the <b>normal range</b>, and "Arr, matey!" wins the softmax. <b>Activation capping</b> clamps the projection back into range; the words recover.',
-        3: 'h′ = h + (clip(h·v, lo, hi) − h·v) v, lo=' + M.LO + ', hi=' + M.HI + '. Only the v-component moves; the orthogonal part stays, so capping is not a full reset.' },
-      draw: function (ctx, t, l, W, H) {
+  /* the student: a chalk stick figure who acts each beat (bottom-right unless the scene places them) */
+  function student(ctx, t, l, W, H, pose, x, y) {
+    var s0 = small(W) ? 50 : 70; F.stick(ctx, x == null ? W - (small(W) ? 28 : 50) : x, y == null ? H - (small(W) ? 30 : 34) : y, s0, t, { pose: pose, t0: t - l + .2, face: pose === 'push' ? 1 : -1, scarf: P.pink, color: P.chalk, edge: '#23264a', look: { x: W * .45, y: H * .4 } });
+  }
+  function seq(list) {
+    var s0 = 0;
+    list.forEach(function (c) {
+      c.start = s0; s0 += c.dur; var d = c.draw, map = c.map, pose = c.pose;
+      c.draw = function (ctx, t, l, W, H, api) { d(ctx, t, map ? map(l) : l, W, H, api); if (pose) student(ctx, t, l, W, H, typeof pose === 'function' ? pose(l) : pose); };
+    });
+    return list;
+  }
+  function drift(ctx, t, l, W, H) {
         bg(ctx, W, H, t); var turn = clamp(l * 1.6, 0, 8), capOn = l > 5.5, h = M.turnH(turn), hc = capOn ? M.cap(h, M.LO, M.HI) : h;
         var G = drawAxis(ctx, W, H, t, { band: ramp(l, .3, 1.2), maskA: .35 });
         var p = M.dot(h, M.V), pc = M.dot(hc, M.V);
@@ -235,9 +202,60 @@ if (typeof module !== 'undefined') module.exports = W13;
         tokenBars(ctx, W, G.y + 64, hc, capOn ? 'next words, capped' : 'next words (softmax of W_U h)');
         readout(ctx, 12, Math.min(H - 70, G.y + 180), [['h·v = ' + p.toFixed(2) + (capOn ? '  → capped ' + pc.toFixed(2) : ''), capOn ? P.mint : P.butter], ['range [' + M.LO + ', ' + M.HI + ']']], W);
         question(ctx, W, H, null, 1, capOn ? 'fence it back in' : 'drifting…');
+  }
+  var chapters = seq([
+    { name: 'the notebook', dur: 9, need: 'core', cap: {
+        1: 'A model does a maths problem out loud, one sentence at a time. Our question, like a detective\'s: <b>which sentence actually changed the answer?</b> Not a guess: a measurement.',
+        2: 'Capstone week. The reasoning is a <b>chain of thought</b> (CoT): six sentences, one answer. We want to measure which sentence steered the answer, with an experiment you could rerun.',
+        3: 'Setup from ARENA [4.3] Thought Anchors: split the CoT into sentences (chunks); importance = how much keeping vs rewriting a chunk changes the final-answer distribution.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var R = notebook(ctx, W, H, { reveal: ramp(l, .3, 4.5) });
+        var s = small(W) ? 34 : 42; F.egg(ctx, W * .5, R.y + R.h + s * 2.2, s, t, { clear: .85, features: [{ x: -.3, y: -.2 }, { x: .3, y: .1, on: .6 }, { x: 0, y: .4, on: .8 }] });
+        F.person(ctx, W * .2, R.y + R.h + s * 3.3, small(W) ? 44 : 56, t, { coat: P.sky, scarf: P.pink, lantern: l > 3.2 ? false : true, pose: l < 3.2 ? 'think' : 'point', t0: t - l + (l < 3.2 ? .3 : 3.2), from: 'think', look: { x: W * .5, y: R.y + R.h * .55 } });
+        question(ctx, W, H, l - .8, ramp(l, .8, 1.6));
       } },
-    { name: 'the overnight run', start: 40, dur: 6, cap: {
-        1: 'A good capstone is small and clean: <b>one thing to measure</b>, <b>one thing to change</b>, <b>one fair comparison</b>. Set it running and go to bed, like taping a show on the VCR.',
+    { name: 'cut and resample', dur: 12, need: 'core', cap: {
+        1: 'Snip the notebook before one sentence and let the model <b>write the rest again</b>, 40 times. Each paper plane is one fresh ending, landing on the answer it reached.',
+        2: '<b>Resampling</b>: keep the sentences before the cut, regenerate the rest. Cut before sentence 3: mostly <b>14</b>. Cut after it: mostly <b>8</b>. Why 40? One rewrite could be luck.',
+        3: 'Answer distributions pᵢ from N = 40 rollouts per cut (seeded, counted live). A controlled experiment: only the kept prefix differs. Activation patching\'s logic, applied to sentences.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var cut = l < 6 ? 2 : 3, k = (l < 6 ? l : l - 6) * 8.5;
+        var R = notebook(ctx, W, H, { cut: cut }); var B = bins(ctx, W, H, R.y + R.h + 40, cut, Math.min(M.N, k), t);
+        var d = M.dist(B.c); readout(ctx, 12, Math.min(H - 64, B.base + 34), [['cut before S' + (cut + 1) + '   rollouts ' + Math.min(M.N, Math.floor(k)) + '/' + M.N, P.butter], ['p(8) = ' + d[0].toFixed(2) + '   p(14) = ' + d[1].toFixed(2)]], W);
+        question(ctx, W, H, null, 1);
+      } },
+    { name: 'the anchor glows', dur: 9, need: 'core', pose: function (l) { return l < 2.5 ? 'lean-in' : 'celebrate'; }, cap: {
+        1: 'Do it for every sentence. Most barely move the answer. One moves it a lot: <b>"Wait: she gives half away."</b> That\'s the <b>anchor</b>: the step the rest of the reasoning hangs on.',
+        2: 'Importance of sentence i = how far the answers shift when it\'s kept vs rewritten. Here the shift is measured with KL divergence; ARENA\'s exercise uses the change in P(correct).',
+        3: 'importance[i] = KL(pᵢ₊₁ ‖ pᵢ), add-0.5 smoothed: S3 ≈ ' + IMP[2].toFixed(2) + ' nats, others ≤ ' + Math.max(IMP[0], IMP[1], IMP[3], IMP[4]).toFixed(2) + '. ARENA: np.diff of P(correct), same idea. Planning/backtracking steps are typical anchors.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var g = ramp(l, 2.5, 4); var R = notebook(ctx, W, H, { glow: [0, 0, g * (.8 + .2 * Math.sin(t * 4)), 0, 0, 0] });
+        if (g > .3) F.lantern(ctx, R.x + R.w - 22, R.y + 14 + 2.5 * R.lh, 11, g, t);
+        impChart(ctx, W, R.y + R.h + 50, small(W) ? 150 : 170, ramp(l, 0, 2.8) * IMP.length, 2);
+        question(ctx, W, H, null, 1);
+      } },
+    { name: 'the mask wardrobe', dur: 9, need: 'core', pose: 'point', cap: {
+        1: 'Second experiment. Inside the model, characters sit along a line, like masks on a rail: helpful <b>Assistant</b> at one end, pirates and ghosts at the other. Where is a thought on the rail?',
+        2: 'The <b>Assistant axis</b> is a direction v inside the model. A thought h\'s spot on the rail is the dot product h·v: how much of h points along v. The pirate lands at ' + M.dot(M.maskH(M.MASKS[4]), M.V).toFixed(2) + '.',
+        3: 'Axis from contrasting mean activations: Assistant vs role-played personas (ARENA [4.4], <code>project_onto_axis</code>). A linear probe is the same move plus a sigmoid: σ(h·w + b).' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var G = drawAxis(ctx, W, H, t, { spread: ramp(l, .4, 3), maskA: ramp(l, 0, .6) });
+        var m = M.MASKS[4], h = M.maskH(m), p = M.dot(h, M.V);
+        if (l > 3.5) readout(ctx, 12, G.y + 60, [['Pirate: h = (' + h.map(function (x) { return x.toFixed(2); }).join(', ') + ')', P.orange], ['v = (' + M.V.join(', ') + ')'], ['h · v = ' + p.toFixed(2), P.butter]], W);
+        question(ctx, W, H, null, 1, 'where is it on the rail?');
+      } },
+    { name: 'drift', dur: 8, need: 'core', map: function (l) { return l * .65; }, pose: 'recoil', cap: {
+        1: 'In a long, strange chat the model\'s thought slowly <b>drifts</b> down the rail, away from Assistant, and its next words get weirder. We can watch it: one number per turn.',
+        2: 'Each turn, measure the projection h·v. It sinks below the <b>normal range</b> (green band, where Assistant chats usually sit) and "Arr, matey!" starts winning the softmax.',
+        3: 'Monitoring = one dot product per turn: cheap enough for every token. Next words: softmax of W_U h over 3 tokens (a toy unembedding).' },
+      draw: drift },
+    { name: 'capping', dur: 9, need: 'contested', map: function (l) { return 5.2 + l * .42; }, pose: 'push', cap: {
+        1: '<b>Current method:</b> activation capping, a fence: if the projection leaves its normal range, nudge just that part back. <b>Open:</b> how much one direction captures a persona.',
+        2: 'Capping clamps h·v into [lo, hi] and leaves the rest of h alone; the words recover. The Assistant Axis paper reports fewer persona jailbreaks. <b>You need:</b> project, clamp, compare to a control.',
+        3: 'h′ = h + (clip(h·v, lo, hi) − h·v)·v, lo = ' + M.LO + ', hi = ' + M.HI + '. Only the v-part moves. How reliable single-direction steering is across models is still debated.' },
+      draw: drift },
+    { name: 'the overnight run', dur: 9, need: 'core', pose: function (l) { return l < 4 ? 'write' : 'slump'; }, cap: {
+        1: 'A good capstone is small and clean: <b>one thing to measure</b>, <b>one thing to change</b>, <b>one fair comparison</b>. Before you run it, ask: what result would change my mind?',
         2: 'Design: one metric (drift rate or importance), one intervention (capping, or deleting the anchor), one control (a random direction, or a random sentence). Then run it overnight.',
         3: 'Pre-register the metric, fix seeds, log N. The control matters most: capping a random unit vector of the same norm tells you whether the effect is the axis or just the edit.' },
       draw: function (ctx, t, l, W, H) {
@@ -247,20 +265,20 @@ if (typeof module !== 'undefined') module.exports = W13;
         var w = Math.min(W - 60, 300); vhs(ctx, W / 2, H * .7, w, t, ramp(l, 2, 6));
         lbl(ctx, 'overnight: 3 × 200 chats', W / 2, H * .7 + w * .26, P.chalk, 14);
       } },
-    { name: 'where it stops being true', start: 46, dur: 5, cap: {
-        1: 'Honest bit: these are <b>estimates, not mind-reading</b>. 40 rewrites is a small sample, and a line through the model is a simplification of something much bigger.',
-        2: 'With 40 rollouts the KL numbers wobble from seed to seed; small importances are mostly noise. And "the Assistant axis" is one direction in thousands: useful, not the whole persona.',
-        3: 'KL from finite samples is biased upward; use more rollouts, bootstrap CIs, and ARENA\'s counterfactual filter (drop resamples with cosine sim > 0.8 to the removed chunk).' },
+    { name: 'where it stops being true', dur: 9, need: 'contested', pose: 'shrug', cap: {
+        1: 'Honest bit: <b>estimates, not mind-reading</b>. 40 rewrites is a small sample, and written reasoning may not show how the model really decided. <b>You need:</b> error bars and a control.',
+        2: 'Current method: resampling importance and single-direction probes. Open: how faithful a chain of thought is to the real computation; how much one direction captures a persona.',
+        3: 'KL from finite samples is biased upward: more rollouts, bootstrap CIs, and ARENA\'s counterfactual filter (drop resamples with cosine similarity ≥ 0.8 to the removed chunk).' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var R = notebook(ctx, W, H, { glow: [0, 0, .7, 0, 0, 0] }); impChart(ctx, W, R.y + R.h + 50, small(W) ? 150 : 170, IMP.length, 2);
         var p = ramp(l, .4, 1.4); F.cornerFlip(ctx, W, H, p, P.cream);
         if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 1.2, 2); var sz = small(W) ? 15 : 19, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .22;
           F.hand(ctx, 'estimates,', x, y - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'not mind-reading', x + sz * .8, y, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
       } },
-    { name: 'the code', start: 51, dur: 7, cap: {
-        1: 'The masks become one line of maths, and the notebook becomes a list of numbers. That is the whole trick, written down.',
+    { name: 'the code', dur: 9, need: 'exercise', cap: {
+        1: 'The masks become one line of maths, and the notebook becomes a list of numbers. That\'s the whole trick, written down as in the ARENA [4.3] and [4.4] notebooks.',
         2: 'The real ARENA names: <code>project_onto_axis</code>, <code>calculate_counterfactual_importance</code>, and a capping hook that edits the residual stream mid-forward.',
-        3: 'ARENA ch.4 _make_capping_hook caps a ceiling along a unit vector: excess = (proj − threshold).clamp(min=0); h −= excess · v. A floor on the Assistant axis is the same hook on −v.' },
+        3: 'ARENA\'s <code>_make_capping_hook</code> caps a ceiling along a unit vector: excess = (proj − threshold).clamp(min=0); h −= excess·v. A floor on the Assistant axis is the same hook on −v.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var sz = small(W) ? 12.5 : 17, blocks = [
           ['masks →', ['proj = h @ axis'], P.butter, 0],
@@ -278,16 +296,17 @@ if (typeof module !== 'undefined') module.exports = W13;
           ctx.restore(); y += h + 12;
         });
       } },
-    { name: 'why it matters', start: 58, dur: 5, cap: {
-        1: 'Measuring inside a model is how we steer it safely. You can\'t fence in what you can\'t see.',
-        2: 'Measuring inside a model is how we steer it safely: find the step that mattered, find the drift, and nudge it back, with numbers you can check.',
+    { name: 'why it matters', dur: 7, need: 'core', pose: 'cheer', cap: {
+        1: 'Measuring inside a model is how we steer it safely: you can\'t fence in what you can\'t see. Where else does this pattern show up? Every probe, monitor and patch in this course.',
+        2: 'Find the step that mattered, find the drift, nudge it back, with numbers you can check. The same measure → intervene → control loop runs through all of interpretability.',
         3: 'Interventions are only as trustworthy as the measurement behind them: controls, sample sizes and honest limits are what turn a steering trick into a safety tool.' },
       draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var G = drawAxis(ctx, W, H, t, { band: 1, maskA: .5 }); dotOnAxis(ctx, G, 2.6, P.butter, t);
         var s = small(W) ? 48 : 56; F.glow(ctx, W / 2, G.y + s * 2.6, s * 2.4, 'rgba(255,214,120,.35)', 1); F.egg(ctx, W / 2, G.y + s * 2.6, s, t, { clear: .8, features: [{ x: 0, y: -.2 }, { x: -.3, y: .2, on: .6 }, { x: .35, y: .1, on: .8 }] });
         ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'measuring inside a model\nis how we steer it safely', W / 2, small(W) ? 44 : 64, small(W) ? 17 : 24, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore();
       } }
-  ];
+  ]);
+
 
   /* ---------------- coda: now you drive ---------------- */
   var C = { turn: 6, lo: M.LO, hi: M.HI, on: true };

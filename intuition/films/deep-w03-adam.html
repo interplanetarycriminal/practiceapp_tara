@@ -181,12 +181,8 @@
   var LR = { sgd: .45, adam: .15 };
   var RATE = 7;
 
-  var chapters = [
-    { name: 'one lr for all', start: 0, dur: 18, cap: {
-        1: 'A paper ball wants the <b>valley floor</b> (the lantern) before sunrise. It can only feel the slope under it. Plain gradient descent uses <b>one step size</b> for every direction, and this ravine is steep one way and nearly flat the other.',
-        2: 'SGD: <code>p -= lr * g</code>. The slope across the ravine is ~40× steeper than along it, so any lr small enough not to bounce off the walls crawls along the floor. One lr can\'t suit both axes.',
-        3: 'f = 0.05(x−3)² + 2(y − 0.35 sin x)². Curvature ≈4 across, 0.1 along. SGD needs lr < 2/4; at lr 0.45 the across factor is 1−0.45·4 = −0.8 (bounce) and along 1−0.045 = 0.955 (crawl).' },
-      draw: function (ctx, t, l, W, H) {
+  var base = [
+    { name: 'one lr for all', start: 0, dur: 18, draw: function (ctx, t, l, W, H) {
         fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, 0); drawLand(ctx, W, H, t);
         var T = R('sgd', 'sgd', { lr: LR.sgd, n: 90 }), k = Math.max(0, (l - 4) * RATE), q = pos(T, k), i = Math.min(T.length - 1, Math.floor(k) + 1);
         trail(ctx, T, k, P.butter); ball(ctx, q, 9);
@@ -194,11 +190,7 @@
         var g = grad(q.x, q.y);
         botReadout(ctx, W, H, [['SGD  lr=0.45   step ' + Math.floor(k), P.butter], ['g = (' + fx(g[0]) + ', ' + fx(g[1]) + ')'], ['loss ' + f(q.x, q.y).toFixed(3)]]);
       } },
-    { name: 'a ruler each', start: 18, dur: 20, cap: {
-        1: 'Adam gives every parameter its own <b>ruler</b>: √v, the typical size of that parameter\'s recent gradients. It divides each gradient by its ruler, so every step comes out about the same size. Watch: we multiply the whole loss by 100, then by 0.01.',
-        2: 'Multiply the loss by k: every gradient scales by k. SGD\'s steps scale too (×100 flies off, ×0.01 freezes). Adam\'s path stays put: m̂ and √v̂ both scale by k, so k cancels in m̂/√v̂.',
-        3: 'v is an EMA of g², so √v̂ is a per-coordinate RMS gradient. The update m̂/(√v̂+ε) is dimensionless and invariant to rescaling each coordinate\'s gradient (up to ε). Same reason one lr ≈ 1e-3 works across very different layers.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'a ruler each', start: 18, dur: 20, draw: function (ctx, t, l, W, H) {
         fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, .1); drawLand(ctx, W, H, t);
         var e = l < 3 ? 0 : l < 8 ? 2 * ramp(l, 3, 8) : l < 14 ? lerp(2, -2, ramp(l, 8.5, 13.5)) : lerp(-2, 0, ramp(l, 15, 19)), k = Math.pow(10, e);
         var Sg = run('sgd', START[0], START[1], { lr: .2, scale: k, n: 40 }), Ad = run('adam', START[0], START[1], { lr: LR.adam, scale: k, n: 40 });
@@ -218,11 +210,7 @@
         });
         botReadout(ctx, W, H, [['SGD  lr=0.2 ' + (sd > 0 ? 'diverged' : 'loss ' + Sg[40].L.toFixed(3)), P.orange], ['Adam lr=0.15 ends at (' + Ad[40].x.toFixed(2) + ', ' + Ad[40].y.toFixed(2) + ')', P.lav]]);
       } },
-    { name: 'noisy batches', start: 38, dur: 16, cap: {
-        1: 'Real training never sees the true slope: each <b>minibatch</b> gives a noisy guess (thin pink arrows). Adam\'s m is a running average of those guesses (thick yellow arrow): the jitter mostly cancels, the real downhill adds up.',
-        2: 'm = average of g, β₁ = 0.9 (memory ≈ 10 steps). v = average of g², β₂ = 0.999 (≈ 1000 steps). Noise inflates v, so a noisy parameter gets a bigger ruler and steps more cautiously.',
-        3: 'E[g²] = (E g)² + Var g, so m̂/√v̂ ≈ signal / √(signal² + noise²): a per-coordinate signal-to-noise ratio. With pure noise, |m̂/√v̂| ≈ √((1−β₁)/(1+β₁)) ≈ 0.23. Here σ = 1.5 per axis.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'noisy batches', start: 38, dur: 16, draw: function (ctx, t, l, W, H) {
         fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, .2); drawLand(ctx, W, H, t);
         var T = R('noisy', 'adam', { lr: LR.adam, noise: 1.5, seed: 'batch', n: 130 }), k = l * RATE, q = pos(T, k), i = Math.min(T.length - 1, Math.floor(k) + 1), s = T[i];
         trail(ctx, T, k, P.lav, 2.5);
@@ -234,11 +222,7 @@
         if (l < 4) { ctx.save(); ctx.globalAlpha = ramp(l, .3, 1) * (1 - ramp(l, 3.2, 4)); F.note(ctx, 'every batch lies a little', W / 2, W < 500 ? 30 : 40, W < 500 ? 15 : 19, { color: P.pink, seed: 'lies', rot: .02 }); ctx.restore(); }
         botReadout(ctx, W, H, [['batch g  (' + fx(s.g[0], 1) + ', ' + fx(s.g[1], 1) + ')', P.pink], ['m̂       (' + fx(s.mh[0]) + ', ' + fx(s.mh[1]) + ')', P.butter], ['√v̂      (' + Math.sqrt(s.vh[0]).toFixed(2) + ', ' + Math.sqrt(s.vh[1]).toFixed(2) + ')   t=' + i, P.mint]]);
       } },
-    { name: 'step one', start: 54, dur: 26, cap: {
-        1: 'The cold start. On step 1, m and v begin at <b>zero</b>, so the averages are far too small. Adam fixes that by dividing by (1 − β^t). Guess first: how big is the very first step?',
-        2: 'Bias correction: <code>m_hat = m / (1 - beta1**t)</code>, <code>v_hat = v / (1 - beta2**t)</code>. At t = 1 this gives m̂ = g and v̂ = g² exactly, so the first step is lr·sign(g) on every axis: size lr, whatever the gradient.',
-        3: 'Uncorrected: m/√v = 0.1/√0.001 = 3.16 → step 3.16·lr. Correct m but not v: 31.6·lr. Both: 1·lr. The m correction is gone by t ≈ 50 (0.9⁵⁰ ≈ 0.005); the v correction lasts thousands of steps (1 − 0.999¹⁰⁰⁰ = 0.63).' },
-      draw: function (ctx, t, l, W, H, api) {
+    { name: 'step one', start: 54, dur: 26, draw: function (ctx, t, l, W, H, api) {
         if (!Q.done && Q.prev >= 0 && Q.prev < QT && t >= QT && t - Q.prev < .4) { Q.done = true; showQ(api); }
         if (t < QT - 1) { Q.done = false; if (Q.el && Q.el.classList.contains('on')) hideQ(api, false); }
         Q.prev = t;
@@ -254,7 +238,7 @@
           ['v̂ = v/(1−0.999)', (V1[0] / .001).toFixed(2), (V1[1] / .001).toFixed(2), 9.4, P.ink],
           ['m̂/(√v̂+ε)', BOTH[0].toFixed(2), BOTH[1].toFixed(2), 10.6, '#2f7a52'],
           ['m̂ only fixed', MONLY[0].toFixed(1), MONLY[1].toFixed(1), 12.6, '#b3443c']];
-        var lh = sz * 1.45, ch = rows.length * lh + sz * 1.6, cy = (ph ? 10 : 16) + ch / 2;
+        var lh = sz * 1.45, ch = rows.length * lh + sz * 1.6, cy = (ph ? 26 : 30) + ch / 2; // room above for the credit line
         card(ctx, W / 2, cy, cw, ch, 'stepone');
         rows.forEach(function (r, j) {
           var a = r[3] ? ramp(l, r[3], r[3] + .6) : 1; if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
@@ -284,11 +268,7 @@
           ctx.restore();
         }
       } },
-    { name: 'epsilon', start: 80, dur: 14, cap: {
-        1: 'ε is a tiny number (10⁻⁸) added under the division. Its job: stop <b>0/0</b> when a gradient is exactly zero, and stop almost-zero gradients being blown up into full-size steps.',
-        2: 'For a steady gradient, step/lr = |g| / (|g| + ε). Normal gradients (≫10⁻⁸): ε is invisible, step = lr. Gradients near 10⁻⁸: the step fades out. g = 0 exactly: 0/(0 + ε) = 0, not NaN.',
-        3: 'ε sets a floor on the ruler: below |g| ~ ε Adam acts like momentum-SGD with lr/ε. It lives outside the sqrt in ARENA/PyTorch: <code>v_hat.sqrt() + eps</code>. In low precision (fp16) 1e-8 can underflow, which is why people raise it.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'epsilon', start: 80, dur: 14, draw: function (ctx, t, l, W, H) {
         fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, .5); drawLand(ctx, W, H, t, .25);
         var ph = W < 500, pw = Math.min(W - 20, 560), phh = ph ? 250 : 300, px = W / 2 - pw / 2, py = ph ? 12 : 20;
         card(ctx, W / 2, py + phh / 2, pw, phh, 'epsplot');
@@ -308,11 +288,7 @@
         var ny = py + phh + (ph ? 30 : 38);
         ctx.save(); ctx.globalAlpha = ramp(l, 8, 9); F.note(ctx, 'g = 0 exactly:  0/(0+ε) = 0,  not NaN', W / 2, ny, ph ? 13 : 17, { color: P.butter, seed: 'nan', font: F.MONO }); ctx.restore();
       } },
-    { name: 'AdamW', start: 94, dur: 22, cap: {
-        1: 'Weight decay gently pulls every weight back toward zero. Adam\'s old way hid that pull <b>inside the gradient</b>, so it got divided by the ruler too: busy weights barely felt it, quiet weights got squeezed. AdamW pulls <b>outside</b>, the same for everyone.',
-        2: 'Adam + L2: <code>g = g + wd * theta</code> then normalise → pull ≈ lr·wd·θ/√v̂, different for each weight. AdamW: <code>theta *= 1 - lr * wd</code> → every weight shrinks by the same fraction lr·wd per step.',
-        3: 'Two weights, θ = 2, wd = 0.1, lr = 0.01, steady gradients 10 and 0.1. L2 pull = lr·wd·θ/|g+wd·θ|: 1.96e-4 vs 6.67e-3 (34× apart). AdamW: 2.0e-3 for both. Loshchilov & Hutter 2019: decoupling restores what weight decay means under adaptive scaling.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'AdamW', start: 94, dur: 22, draw: function (ctx, t, l, W, H) {
         fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, .65); drawLand(ctx, W, H, t, .2);
         var ph = W < 500, sz = ph ? 12.5 : 15, lr = .01, th = 2, wd = .1 * ramp(l, 2, 6), cw = Math.min(W - 20, 600), x0 = W / 2 - cw / 2 + 14;
         var ws = [{ n: 'busy weight', g: 10, c: P.orange }, { n: 'quiet weight', g: .1, c: P.teal }];
@@ -338,11 +314,7 @@
         }
         var ra = ramp(l, 13, 14); if (ra > 0) { ctx.save(); ctx.globalAlpha = ra; F.hand(ctx, 'L2 squeezes the quiet weight ' + (l2[1] / l2[0]).toFixed(0) + '× harder', W / 2, Math.min(H - 24, cy + ch / 2 + (ph ? 118 : 150)), ph ? 15 : 20, P.butter, { outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: 'sq' }); ctx.restore(); }
       } },
-    { name: 'the limit', start: 116, dur: 10, cap: {
-        1: 'Where this story stops being true: Adam\'s rulers point along the <b>axes</b>. Tilt the same ravine 45° and they can\'t see it: same valley, about 4× slower. Real networks have billions of axes, ravines everywhere, and no single floor.',
-        2: 'Adam is diagonal preconditioning: one scale per coordinate, no rotation. Left: axis-aligned ravine, loss < 0.01 in ~19 steps. Right: the identical ravine rotated 45°, ~73 steps. Both computed live, Adam lr = 0.15.',
-        3: 'Diagonal preconditioners fix axis-aligned ill-conditioning only. Full-matrix / Kronecker methods (Shampoo, Muon\'s orthogonalised updates) attack the off-diagonal part. And in 10⁹ dims there are many equally low floors, not one.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the limit', start: 116, dur: 10, draw: function (ctx, t, l, W, H) {
         fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, .8); drawLand(ctx, W, H, t, .35);
         var ph = W < 500, bw = ph ? (W - 36) / 2 : Math.min(300, (W - 80) / 2), bh = bw, gap = ph ? 12 : 30, y0 = ph ? 24 : 30;
         [0, Math.PI / 4].forEach(function (thr, j) {
@@ -357,11 +329,7 @@
         });
         var fa = ramp(l, 5.5, 6.5); if (fa > 0) { ctx.save(); ctx.globalAlpha = fa; F.note(ctx, 'really: 10⁹ axes,\nravines everywhere,\nno single floor', W / 2, Math.min(H - 60, y0 + bh + 110), ph ? 15 : 19, { color: P.pink, seed: 'real', rot: -.02 }); ctx.restore(); }
       } },
-    { name: 'your step()', start: 126, dur: 20, cap: {
-        1: 'Everything you just watched is <b>nine lines</b>. Each line lights up with the real step-1 number for the steep axis. Optimisers decide <b>which solution</b> a model lands in, and so what you\'ll find when you look inside it.',
-        2: 'Your torch-style Adam(W) step, in ARENA [0.3] order: decay, then m, v, bias correction, update. Keep t starting at 1 (ARENA sets <code>self.t = 1</code>) and run it under <code>@t.inference_mode()</code>.',
-        3: 'ARENA\'s Adam folds decay in as <code>g = g + self.lmda * theta</code>; AdamW swaps that for <code>theta *= 1 - self.lr * self.lmda</code>. Same m/v/m_hat/v_hat lines. Test with <code>tests.test_adam</code> / <code>tests.test_adamw</code>.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'your step()', start: 126, dur: 20, draw: function (ctx, t, l, W, H) {
         fit(W, H, TOP(W, H), BOT(W, H)); bg(ctx, W, H, t, 1); drawLand(ctx, W, H, t, .2);
         var ph = W < 500, sz = ph ? 11.2 : 15, lh = sz * 1.55, lines = CODE, cw = Math.min(W - 16, ph ? 999 : 640), x0 = W / 2 - cw / 2 + 10;
         var ch = lines.length * lh + 22, cy = (ph ? 8 : 16) + ch / 2; card(ctx, W / 2, cy, cw, ch, 'code');
@@ -375,6 +343,110 @@
         var sa = ramp(l, 15, 16.2); if (sa > 0) { ctx.save(); ctx.globalAlpha = sa; F.note(ctx, 'optimisers decide which\nsolution a model lands in', W / 2, Math.min(H - 44, cy + ch / 2 + (ph ? 90 : 110)), ph ? 16 : 21, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore(); }
       } }
   ];
+
+  /* ---------------- pass 2: each scene above is split into short caption beats ----------------
+     split(scene, parts): every part re-uses the scene's draw with a local-time offset (or map),
+     so the animation is unchanged while captions stay short enough for a phone. */
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  function byName(n) { for (var i = 0; i < base.length; i++) if (base[i].name === n) return base[i]; }
+  /* the narrator: a small ink stick figure in the bottom-right corner who acts each beat */
+  function narrator(ctx, t, l, W, H, pose, o) {
+    if (!F.stick || !pose) return;
+    var ph = W < 500, s = ph ? 50 : 72, x = W - (ph ? 30 : 50), y = H - (ph ? 34 : 40);
+    o = o || {}; F.stick(ctx, x, y, s, t, { pose: pose, t0: t - l + (o.at || .15), face: o.face || -1, look: o.look || (pose === 'point' ? { x: W * .5, y: H * .22 } : null), scarf: P.lav, from: o.from, color: P.chalk, edge: '#23264a' });
+  }
+  function split(scene, parts) {
+    var acc = 0;
+    return parts.map(function (p) {
+      var off = acc; acc += p.span || p.dur;
+      return { name: p.name, dur: p.dur, need: p.need, cap: p.cap, draw: function (ctx, t, l, W, H, api) {
+        scene.draw(ctx, t, p.lmap ? p.lmap(l) : l + off, W, H, api);
+        if (p.credit) { ctx.save(); var cf = W < 500 ? 10.5 : 12; ctx.font = '600 ' + cf + 'px system-ui,sans-serif'; ctx.textBaseline = 'top'; var cw = ctx.measureText(p.credit).width; ctx.fillStyle = 'rgba(18,20,44,.72)'; ctx.fillRect(4, 3, cw + 10, cf + 7); ctx.fillStyle = 'rgba(253,250,240,.85)'; ctx.fillText(p.credit, 9, 6); ctx.restore(); }
+        var ps = typeof p.pose === 'function' ? p.pose(l, W, H) : p.pose;
+        if (ps) narrator(ctx, t, l, W, H, ps.pose || ps, ps.pose ? ps : null);
+      } };
+    });
+  }
+
+  var chapters = seq([].concat(
+    split(byName('one lr for all'), [
+      { name: 'the ravine', dur: 9, need: 'core', pose: 'point', cap: {
+        1: 'Our hero is a paper ball that wants the lantern on the valley floor. It can only feel the slope under it. This valley is a <b>ravine</b>: steep walls, an almost flat floor.',
+        2: 'The loss f(x, y) over two weights. Across the ravine the slope changes ~40× faster than along it (curvature 4 vs 0.1). <b>Curvature</b> = how fast the slope itself changes.',
+        3: 'f = 0.05(x−3)² + 2(y − 0.35 sin x)². Hessian eigenvalues ≈ 4 across, 0.1 along: condition number κ ≈ 40, the ratio that makes plain gradient descent slow.' } },
+      { name: 'one lr for all', dur: 9, need: 'core', pose: function (l) { return l < 4 ? 'lean-in' : 'shrug'; }, cap: {
+        1: 'Plain gradient descent uses <b>one step size</b> for every direction. Big enough to move along the floor? It bounces off the walls. Small enough for the walls? It crawls.',
+        2: 'SGD: p ← p − lr·g. Each step multiplies the distance from the floor by (1 − lr × curvature). lr 0.45: across 1 − 0.45×4 = −0.8 (bounce), along 1 − 0.045 = 0.955 (crawl).',
+        3: 'Stability needs lr < 2/λ_max = 0.5, and the floor shrinks like (1 − lr·λ_min)ᵗ. With one global lr, steps to converge grow with κ = λ_max/λ_min ≈ 40.' } }
+    ]),
+    split(byName('a ruler each'), [
+      { name: 'a ruler each', dur: 10, need: 'core', pose: 'point', lmap: function (l) { return Math.min(l, 2.9); }, cap: {
+        1: 'Adam\'s idea: give every weight its own <b>ruler</b>, √v: the typical size of that weight\'s recent gradients. Divide the gradient by its ruler and every step comes out about the same size.',
+        2: 'v = running average of g², so √v is the typical gradient size (root-mean-square). m ÷ √v is "direction ÷ typical size": a plain number near ±1, so each step ≈ lr.',
+        3: 'Card, step 10: √v̂ is 1.48 along vs 3.26 across, yet m̂/√v̂ is −0.80 vs −0.57: both order 1. m̂/(√v̂+ε) is dimensionless, one scale per coordinate.' } },
+      { name: 'the ×100 test', dur: 17, need: 'core', lmap: function (l) { return l + 3; }, pose: function (l) { return l > 2 && l < 6 ? 'recoil' : l > 12 ? 'cheer' : 'lean-in'; }, cap: {
+        1: 'Test: multiply the whole loss by 100, then by 0.01. The orange ball (SGD) flies off, then freezes. Adam\'s lilac path doesn\'t budge: its ruler grows and shrinks with the slope.',
+        2: 'Scale the loss by k and every gradient scales by k. SGD\'s step scales by k too. Adam\'s m and √v both scale by k, so k cancels in m ÷ √v. That\'s why lr ≈ 1e-3 works across layers.',
+        3: 'Invariant to per-coordinate gradient rescaling (up to ε). Not tuning-free: lr still sets the absolute step size, and lr schedules still matter.' } }
+    ]),
+    split(byName('noisy batches'), [
+      { name: 'noisy batches', dur: 8, need: 'core', pose: 'lean-in', credit: 'framing: Andrew Ng, Deep Learning Specialization', cap: {
+        1: 'Real training never feels the true slope. Each <b>minibatch</b> gives a noisy guess (thin pink arrows). Adam\'s m averages them (thick yellow arrow): jitter cancels, downhill adds up.',
+        2: 'm is an <b>exponentially weighted average</b> of g: old gradients fade by β₁ = 0.9 per step, so it spans ~1/(1 − 0.9) = 10 of them, like a 10-day average temperature. Wobbles cancel.',
+        3: 'EMA window ≈ 1/(1−β): ~10 steps for m, ~1000 for v. Same trick elsewhere: BatchNorm\'s running_mean is an EMA (momentum 0.1, week 2). Noise here: σ = 1.5, seeded.' } },
+      { name: 'noise grows the ruler', dur: 8, need: 'core', pose: 'think', cap: {
+        1: 'Noise also lengthens the ruler: a weight whose gradients jump around gets a bigger √v, so it steps more carefully. A weight with a steady slope gets full-size steps.',
+        2: 'Why? v averages g², and avg(g²) = (avg g)² + spread². So √v grows with noise, and m ÷ √v acts like signal ÷ √(signal² + noise²): big steps only when the signal is clear.',
+        3: 'E[g²] = (E g)² + Var g ⇒ m̂/√v̂ is SNR-like. Pure noise gives |m̂/√v̂| ≈ √((1−β₁)/(1+β₁)) ≈ 0.23. A useful reading, not a theorem about deep nets.' } }
+    ]),
+    split(byName('step one'), [
+      { name: 'step one: predict', dur: 11, need: 'exercise', pose: 'think', credit: 'framing: Andrew Ng, Deep Learning Specialization', cap: {
+        1: 'The cold start: m and v begin at <b>zero</b>, so after one step they\'re far too small (m is only 10% of g). Guess first: how big is Adam\'s very first step?',
+        2: 'Step 1 starts from m = 0, v = 0, so m = 0.1·g and v = 0.001·g². Predict, then watch the card fill in row by row with the real numbers.',
+        3: 't = 1, β₁ = 0.9, β₂ = 0.999, lr = 0.1. m₁ = (1−β₁)g, v₁ = (1−β₂)g². Every row is computed live from g = (−2.04, −5.86).' } },
+      { name: 'step one: the fix', dur: 15, need: 'exercise', credit: 'framing: Andrew Ng, Deep Learning Specialization', pose: function (l) { return l > 1.4 && l < 4.5 ? 'recoil' : 'point'; }, cap: {
+        1: 'Answer: exactly lr on each axis. The averages start at 0, so early ones are too small; dividing by (1 − β<sup>t</sup>) is the warm-up fix. The plot shows it fading as steps go by.',
+        2: 'Bias correction: m̂ = m/(1 − β₁ᵗ), v̂ = v/(1 − β₂ᵗ). At t = 1, m̂ = g and v̂ = g², so step = ±lr. Skip it: 3.16× too big. Fix m only: 31.6×.',
+        3: 'The m correction is gone by t ≈ 50 (0.9⁵⁰ ≈ 0.005); v\'s lasts thousands of steps (1 − 0.999¹⁰⁰⁰ = 0.63). ARENA: <code>self.t</code> starts at 1.' } }
+    ]),
+    split(byName('epsilon'), [
+      { name: 'epsilon', dur: 14, need: 'library', pose: function (l) { return l > 8 ? 'shrug' : 'lean-in'; }, cap: {
+        1: 'ε (epsilon) is a tiny number, 10⁻⁸, added to the ruler. It only matters when a gradient is almost exactly zero, where it stops a 0 ÷ 0. Library detail: leave it at the default.',
+        2: 'step/lr = |g| ÷ (|g| + ε). Normal gradients (≫ 10⁻⁸): ε is invisible. Near 10⁻⁸ the step fades out; g = 0 gives 0/(0 + ε) = 0, not NaN.',
+        3: 'ARENA/PyTorch: <code>v_hat.sqrt() + eps</code>, outside the sqrt. In fp16, 1e-8 underflows to 0, one reason people raise it. Otherwise leave it.' } }
+    ]),
+    split(byName('AdamW'), [
+      { name: 'weight decay', dur: 11, need: 'exercise', pose: 'pull', cap: {
+        1: '<b>Weight decay</b> gently pulls every weight toward zero each step, so the model doesn\'t lean on huge weights. Old Adam put that pull <b>inside the gradient</b>, so the ruler divided it too.',
+        2: 'Adam + L2: g = g + wd·θ, then everything is divided by √v. A weight with big gradients (big ruler) barely feels the pull; a quiet weight (small ruler) gets squeezed hard.',
+        3: 'Two weights, θ = 2, wd = 0.1, lr = 0.01, steady |g| of 10 and 0.1. L2 pull ≈ lr·wd·θ/|g + wd·θ|: 1.96e-4 vs 6.67e-3, 34× apart.' } },
+      { name: 'AdamW', dur: 11, need: 'exercise', pose: function (l) { return l > 6 ? 'cheer' : 'pull'; }, cap: {
+        1: 'AdamW moves the pull <b>outside</b>: every weight shrinks by the same small fraction, then takes its usual Adam step. Busy or quiet, same pull. The whole fix is one line.',
+        2: 'AdamW: θ ← θ·(1 − lr·wd), then the usual Adam step. Here every weight shrinks by lr·wd = 0.1% per step, whatever its ruler. AdamW is the default for training transformers.',
+        3: 'AdamW pull = lr·wd·θ = 2.0e-3 for both. Loshchilov & Hutter (2019), decoupled decay. ARENA: <code>theta *= 1 - self.lr * self.lmda</code>, before m and v.' } }
+    ]),
+    split(byName('the limit'), [
+      { name: 'the limit', dur: 8, need: 'contested', pose: 'lean-in', cap: {
+        1: 'Where the story stops: Adam\'s rulers only point along the <b>axes</b>, one per weight. Tilt the same ravine 45° and they can\'t see it: same valley, about 4× slower.',
+        2: 'Adam rescales each coordinate separately (a "diagonal" fix). Left: ravine along the axes, loss < 0.01 in 19 steps. Right: the same ravine turned 45°, 73 steps. Both live.',
+        3: 'Diagonal preconditioning fixes axis-aligned ill-conditioning only; a rotated Hessian defeats it. Adam lr = 0.15 on both.' } },
+      { name: 'what comes next?', dur: 8, span: 8, need: 'contested', pose: 'shrug', cap: {
+        1: '<b>Current method:</b> AdamW, one ruler per weight, trains most big models. <b>Emerging:</b> optimisers that also handle tilted ravines, like Muon or Shampoo. <b>You need:</b> AdamW.',
+        2: 'Current: AdamW. Emerging: Shampoo (matrix-shaped rulers) and Muon (orthogonalised updates for 2-D weights) report speed-ups that depend on tuning and scale. Exercise: AdamW.',
+        3: 'Full-matrix/Kronecker preconditioners target the off-diagonal part; Muon is ARENA [0.3]\'s bonus. Real nets: 10⁹ axes and many equally low floors, not one.' } }
+    ]),
+    split(byName('your step()'), [
+      { name: 'your step()', dur: 10, need: 'exercise', pose: 'type', cap: {
+        1: 'Everything you just watched is <b>nine lines</b>. Each line lights up with its real step-1 number for the steep axis, so you can check your own code against it.',
+        2: 'Your Adam(W) step in ARENA [0.3] order: decay, m, v, bias correction, update. <code>m.copy_(...)</code> writes in place so the optimiser keeps its memory between steps.',
+        3: 'Run under <code>@t.inference_mode()</code>; t starts at 1 (<code>self.t = 1</code>). Step-1 check: with wd = 0 the update on every axis is exactly ±lr.' } },
+      { name: 'what you keep', dur: 10, need: 'core', pose: 'cheer', cap: {
+        1: 'After Saturday this is one line for life: <code>torch.optim.AdamW(...)</code>. What you keep: one ruler per weight, a memory of ~10 steps for direction and ~1000 for size.',
+        2: 'Career takeaway: lr is the main knob; the β₁, β₂, ε defaults are fine almost always; use AdamW when you want weight decay. Optimisers shape which solution a model lands in.',
+        3: 'ARENA\'s Adam folds decay in as <code>g = g + self.lmda * theta</code>; AdamW swaps it for <code>theta *= 1 - self.lr * self.lmda</code>. Tests: <code>tests.test_adam</code>, <code>tests.test_adamw</code>.' } }
+    ])
+  ));
+  QT = chapters.filter(function (c) { return c.name === 'step one: predict'; })[0].start + 4.2;
 
   /* rotated-ravine mini runs for 'the limit' (q = 0.05u² + 2w², u,w rotated by thr) */
   var ROT = {};
@@ -461,7 +533,8 @@
       { label: 'Map: AdamW vs Adam', href: '../../index.html#map/node=adamw-vs-adam' },
       { label: 'Map: weight decay', href: '../../index.html#map/node=weight-decay' },
       { label: 'Case: AdamW vs Adam', href: '../../index.html#cases/adamw-vs-adam' },
-      { label: 'Short film: Which way is down?', href: 'w3-optimisers.html' }
+      { label: 'Short film: Which way is down?', href: 'w3-optimisers.html' },
+      { label: 'Andrew Ng: Deep Learning Specialization', href: 'https://www.coursera.org/specializations/deep-learning' }
     ]
   });
 })();
