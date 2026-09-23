@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Stencils and shortcuts</title>
+<meta name="theme-color" content="#1c2140">
+<style>
+#predict{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(18,20,44,.55);z-index:5;padding:14px;box-sizing:border-box}
+#predict.on{display:flex}
+#predict .card{background:#fbf6ea;color:#2a2934;border-radius:6px;max-width:360px;width:100%;padding:14px 14px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);font:15px/1.35 system-ui,-apple-system,'Segoe UI',sans-serif;transform:rotate(-.6deg)}
+#predict .q{font:700 18px 'Comic Neue','Segoe Print','Bradley Hand','Chalkboard SE','Comic Sans MS',cursive;margin:0 0 4px}
+#predict .sub{font-size:13px;color:#5a5566;margin:0 0 10px;font-family:ui-monospace,Menlo,Consolas,monospace}
+#predict button.opt{display:block;width:100%;text-align:left;margin:0 0 7px;padding:9px 10px;border-radius:8px;border:1.5px solid #c8b8ea;background:#fff;color:#2a2934;font:14px ui-monospace,Menlo,Consolas,monospace;cursor:pointer;min-height:40px}
+#predict button.opt:hover,#predict button.opt:focus{background:#f7e3a0;outline:none}
+#predict button.skipq{background:none;border:0;color:#6b5a9a;text-decoration:underline;font:inherit;font-size:14px;cursor:pointer;padding:4px 0;min-height:32px}
+</style>
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /* ================= the real maths (all computed, nothing typed) ================= */
+  // cross-correlation, like torch conv2d (no kernel flip)
+  function xcorr(img, k, stride, pad) {
+    var n = img.length, kk = k.length, s = stride || 1, p = pad || 0, o = Math.floor((n + 2 * p - kk) / s) + 1, out = [];
+    for (var i = 0; i < o; i++) { out.push([]); for (var j = 0; j < o; j++) {
+      var sum = 0; for (var a = 0; a < kk; a++) for (var b = 0; b < kk; b++) { var r = i * s + a - p, c = j * s + b - p; if (r >= 0 && c >= 0 && r < n && c < n) sum += img[r][c] * k[a][b]; }
+      out[i].push(sum); } }
+    return out;
+  }
+  function outSize(L, k, s, p) { return Math.floor((L + 2 * p - k) / s) + 1; }
+
+  // Ch1: a 6x6 photo with a vertical edge (a cat's ear against the sky), Sobel kernel
+  var IMG = [[0, 0, 1, 3, 3, 3], [0, 0, 1, 3, 3, 2], [0, 1, 2, 3, 2, 2], [0, 1, 3, 3, 2, 1], [0, 0, 2, 3, 3, 2], [0, 0, 1, 2, 3, 3]];
+  var SOBEL = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]];
+  var OUT1 = xcorr(IMG, SOBEL, 1, 0);
+
+  // Ch2: 3 input channels (R,G,B) 4x4, Conv2d(3, 2, kernel_size=3): weight (2,3,3,3)
+  var RGB = [
+    [[2, 1, 0, 1], [3, 2, 1, 0], [1, 3, 2, 1], [0, 1, 3, 2]],
+    [[1, 0, 1, 2], [0, 1, 2, 1], [1, 2, 1, 0], [2, 1, 0, 1]],
+    [[0, 1, 1, 0], [1, 0, 1, 1], [2, 1, 0, 1], [1, 2, 1, 0]]];
+  var WT = [
+    [[[1, 0, -1], [1, 0, -1], [1, 0, -1]], [[0, 1, 0], [1, -2, 1], [0, 1, 0]], [[0, 0, 0], [0, 1, 0], [0, 0, 0]]],
+    [[[1, 1, 1], [0, 0, 0], [-1, -1, -1]], [[0, 0, 0], [0, 1, 0], [0, 0, 0]], [[1, 0, 0], [0, 1, 0], [0, 0, 1]]]];
+  var BIAS = [0.5, -1];
+  function partial(o, c, i, j) { return xcorr(RGB[c], WT[o][c], 1, 0)[i][j]; }
+  function outCh(o, i, j) { return partial(o, 0, i, j) + partial(o, 1, i, j) + partial(o, 2, i, j) + BIAS[o]; }
+
+  // Ch4-5: BatchNorm2d on ONE channel, batches of 4 images x 2 pixels, eps 1e-5, momentum 0.1
+  function gauss(r) { var u = Math.max(1e-9, r()), v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(6.2831853 * v); }
+  var BN = (function () {
+    var r = F.rng('bn-batches'), rm = 0, rv = 1, hist = [{ rm: rm, rv: rv }], batches = [];
+    for (var b = 0; b < 40; b++) {
+      var xs = []; for (var i = 0; i < 8; i++) xs.push(Math.round((3 + 1.5 * gauss(r)) * 10) / 10);
+      var mean = xs.reduce(function (a, v) { return a + v; }, 0) / 8, vr = xs.reduce(function (a, v) { return a + (v - mean) * (v - mean); }, 0) / 8;
+      rm = .9 * rm + .1 * mean; rv = .9 * rv + .1 * vr;
+      batches.push({ xs: xs, mean: mean, var: vr }); hist.push({ rm: rm, rv: rv });
+    }
+    return { batches: batches, hist: hist };
+  })();
+  var GAM = 1.5, BET = .2, EPS = 1e-5;
+  function bnApply(x, mean, vr) { return GAM * (x - mean) / Math.sqrt(vr + EPS) + BET; }
+  // eval: the same photo (2 pixels) in two different batches, then eval mode
+  var ME = [4.1, 2.3];
+  var MATES = [[1.2, 2.0, 0.8, 1.5, 2.2, 1.1], [5.5, 6.1, 4.8, 5.9, 6.4, 5.2]];
+  function stats(xs) { var m = xs.reduce(function (a, v) { return a + v; }, 0) / xs.length, v = xs.reduce(function (a, u) { return a + (u - m) * (u - m); }, 0) / xs.length; return [m, v]; }
+  var TRAIN_OUT = MATES.map(function (mt) { var s = stats(ME.concat(mt)); return { m: s[0], v: s[1], y: ME.map(function (x) { return bnApply(x, s[0], s[1]); }) }; });
+  var RUN = BN.hist[40], EVAL_OUT = ME.map(function (x) { return bnApply(x, RUN.rm, RUN.rv); });
+
+  // Ch6: 34 floors of real gradient factors (seeded), computed as products
+  function factors(seed, n, lo, hi) { var r = F.rng(seed), a = []; for (var i = 0; i < n; i++) a.push(lo + (hi - lo) * r()); return a; }
+  var PLAIN = factors('plain-floors', 34, .75, 1.03);      // plain floor: the layer carries everything, d out/d in ~ 0.9
+  var BRANCH = factors('branch-floors', 34, -.12, .1);     // residual branch: small, BatchNorm keeps it tame
+  function cum(a, plus) { var out = [1], p = 1; for (var i = 0; i < a.length; i++) { p *= (plus ? 1 + a[i] : a[i]); out.push(p); } return out; }
+  var CP = cum(PLAIN, false), CR = cum(BRANCH, true);
+  // the same residual stack but with no identity (+1 removed): gradient through branches only
+  var CB = cum(BRANCH.map(function (c) { return Math.abs(c); }), false);
+  var SUMC = BRANCH.reduce(function (a, v) { return a + v; }, 0);
+
+  // Ch7: ResNet34 shapes via the formula
+  var R34 = (function () {
+    var rows = [], L = 224;
+    var a = outSize(L, 7, 2, 3); rows.push(['Conv2d(3, 64, 7, stride=2, padding=3)', '64 × ' + a + ' × ' + a, 1]);
+    var b = outSize(a, 3, 2, 1); rows.push(['MaxPool2d(3, stride=2, padding=1)', '64 × ' + b + ' × ' + b, 0]);
+    var L2 = b, nb = [3, 4, 6, 3], of = [64, 128, 256, 512], fs = [1, 2, 2, 2], convs = 1;
+    for (var g = 0; g < 4; g++) { L2 = outSize(L2, 3, fs[g], 1); convs += 2 * nb[g]; rows.push(['BlockGroup(' + nb[g] + ', ' + [64].concat(of)[g] + ', ' + of[g] + ', ' + fs[g] + ')', of[g] + ' × ' + L2 + ' × ' + L2, 2 * nb[g], fs[g] > 1]); }
+    rows.push(['AveragePool + Linear(512, 1000)', '1000 logits', 1]); convs += 1;
+    return { rows: rows, depth: convs };
+  })();
+
+  /* ================= drawing helpers ================= */
+  function mono(ctx, s, x, y, sz, color, align, weight) { ctx.save(); ctx.font = (weight || '600') + ' ' + sz + 'px ' + F.MONO; ctx.fillStyle = color || P.ink; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle'; ctx.fillText(s, x, y); ctx.restore(); }
+  function card(ctx, cx, cy, w, h, seed, color) { F.paper(ctx, cx, cy, w, h, color || P.cream, { seed: seed, rot: 0 }); }
+  function fmt(v, d) { var s = (+v).toFixed(d == null ? 0 : d); return s === '-0' ? '0' : s; }
+  function heat(v, lo, hi) { var u = clamp((v - lo) / (hi - lo), 0, 1); return 'rgb(' + Math.round(lerp(38, 253, u)) + ',' + Math.round(lerp(42, 226, u)) + ',' + Math.round(lerp(82, 150, u)) + ')'; }
+  function div(v, m) { var u = clamp(v / m, -1, 1); return u >= 0 ? 'rgb(' + Math.round(lerp(251, 242, u)) + ',' + Math.round(lerp(246, 153, u)) + ',' + Math.round(lerp(234, 90, u)) + ')' : 'rgb(' + Math.round(lerp(251, 124, -u)) + ',' + Math.round(lerp(246, 198, -u)) + ',' + Math.round(lerp(234, 192, -u)) + ')'; }
+  // grid of numbers: cells[i][j], cell size cs, colour fn
+  function grid(ctx, x, y, cells, cs, col, o) {
+    o = o || {}; var n = cells.length, m = cells[0].length, fs = o.fs || Math.max(9, cs * .42);
+    for (var i = 0; i < n; i++) for (var j = 0; j < m; j++) {
+      var X = x + j * cs, Y = y + i * cs, v = cells[i][j]; ctx.fillStyle = v == null ? 'rgba(255,255,255,.25)' : col(v); ctx.fillRect(X + 1, Y + 1, cs - 2, cs - 2);
+      if (v != null && !o.noNum) { var dark = o.darkText ? o.darkText(v) : true; mono(ctx, fmt(v, o.d), X + cs / 2, Y + cs / 2 + 1, fs, dark ? P.ink : P.chalk, 'center'); }
+      if (v == null) { ctx.save(); ctx.strokeStyle = 'rgba(42,41,52,.35)'; ctx.setLineDash([2, 3]); ctx.strokeRect(X + 2, Y + 2, cs - 4, cs - 4); ctx.restore(); mono(ctx, '0', X + cs / 2, Y + cs / 2 + 1, fs * .9, 'rgba(42,41,52,.4)', 'center'); }
+    }
+  }
+  function box(ctx, x, y, w, h, color, lw) { ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = lw || 3; ctx.strokeRect(x, y, w, h); ctx.restore(); }
+  function bg(ctx, W, H, t, warm) {
+    var d = clamp(warm || 0, 0, 1); F.sky(ctx, W, H, d > .5 ? '#2b2f5c' : '#1c2140', d > .5 ? '#6a5a8e' : '#3a3f78'); F.stars(ctx, W, H, t, 'stencil', 40);
+  }
+  function title(ctx, W, s, y, color) { var ph = W < 500; F.note(ctx, s, W / 2, y || (ph ? 26 : 34), ph ? 15 : 19, { color: color || P.butter, seed: 'tt' + s.length, rot: -.015 }); }
+  function hnote(ctx, s, x, y, sz, color, seed) { F.hand(ctx, s, x, y, sz, color || P.butter, { outline: 4, outlineColor: 'rgba(20,20,50,.85)', seed: seed || 'h' }); }
+  function lay(W) { var ph = W < 500; return { ph: ph, cw: Math.min(W - 16, 640) }; }
+
+  /* ================= predict, then watch (never gated) ================= */
+  var QT = 47.5, Q = { done: false, prev: -1, choice: null, el: null };
+  var QOPTS = [['a', '(1, 64, 16, 16)'], ['b', '(1, 64, 13, 13)'], ['c', '(1, 3, 16, 16)'], ['d', '(1, 64, 32, 32)']];
+  function buildQ(api) {
+    if (Q.el) return Q.el;
+    var d = document.createElement('div'); d.id = 'predict';
+    d.innerHTML = '<div class="card"><p class="q">Predict: what shape comes out?</p><p class="sub">x.shape = (1, 3, 32, 32)<br>Conv2d(3, 64, kernel_size=7, stride=2, padding=3)(x)</p>' +
+      QOPTS.map(function (o) { return '<button class="opt" data-c="' + o[0] + '">' + o[1] + '</button>'; }).join('') +
+      '<button class="skipq">just show me &#9654;</button></div>';
+    api.root.querySelector('.stage').appendChild(d);
+    d.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    [].forEach.call(d.querySelectorAll('button'), function (b) {
+      b.onclick = function (e) { e.stopPropagation(); Q.choice = b.dataset.c || 'skip'; hideQ(api, true); if (b.dataset.c) api.audio.blip(b.dataset.c === 'a' ? 880 : 520); };
+    });
+    Q.el = d; return d;
+  }
+  function isPlaying(api) { return api.root.querySelector('.pp').getAttribute('aria-label') === 'Pause'; }
+  function showQ(api) { var d = buildQ(api); d.classList.add('on'); if (isPlaying(api)) api.root.querySelector('.pp').click(); }
+  function hideQ(api, resume) { if (!Q.el) return; Q.el.classList.remove('on'); if (resume && !isPlaying(api)) api.root.querySelector('.pp').click(); }
+
+  /* ================= chapters ================= */
+  var chapters = [
+    { name: 'nine products', start: 0, dur: 18, cap: {
+        1: 'A paper art school has a 34-floor studio tower. Floor 1 gets a photo; the top floor must say "cat". Floor 1\'s tool is a <b>stencil</b>: a 3×3 grid of numbers laid on the photo. Multiply the 9 pairs, add them up, write one number. Slide, repeat.',
+        2: 'This stencil is a Sobel kernel: −1, −2, −1 on the left, +1, +2, +1 on the right. Where the photo goes dark → bright left-to-right (the edge of an ear), the sum is big. Flat sky gives 0.',
+        3: 'PyTorch\'s conv2d is really cross-correlation (no kernel flip). Output[i,j] = Σₐ Σ_b x[i+a, j+b]·w[a,b]. A 6×6 input and 3×3 kernel give 4×4: every output is one dot product of 9 numbers.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, 0); var L = lay(W), ph = L.ph;
+        title(ctx, W, 'will the message survive the climb?', ph ? 24 : 32, P.butter);
+        var cs = ph ? 36 : 48, gx = ph ? W / 2 - 3 * cs : W / 2 - 6 * cs - 30, gy = ph ? 64 : 90;
+        var ch = 6 * cs + 20;
+        card(ctx, gx + 3 * cs, gy + 3 * cs, 6 * cs + 20, ch, 'img');
+        grid(ctx, gx, gy, IMG, cs, function (v) { return heat(v, 0, 3); }, { darkText: function (v) { return v >= 2; } });
+        var k = clamp(Math.floor((l - 2.5) / .8), 0, 15), i = Math.floor(k / 4), j = k % 4;
+        if (l > 1.5) {
+          box(ctx, gx + j * cs, gy + i * cs, 3 * cs, 3 * cs, P.orange, 3.5);
+          for (var a = 0; a < 3; a++) for (var b = 0; b < 3; b++) mono(ctx, (SOBEL[a][b] > 0 ? '+' : '') + SOBEL[a][b], gx + (j + b) * cs + cs - 4, gy + (i + a) * cs + 8, ph ? 9 : 11, '#b3443c', 'right', '700');
+        }
+        // output map
+        var ox = ph ? W / 2 - 2 * cs * .8 : W / 2 + 60, oy = ph ? gy + 6 * cs + 34 : gy + cs, oc = cs * .8;
+        card(ctx, ox + 2 * oc, oy + 2 * oc, 4 * oc + 16, 4 * oc + 16, 'out1', '#f3ecff');
+        var shown = OUT1.map(function (row, r) { return row.map(function (v, c) { return (l > 2.5 && r * 4 + c <= k) ? v : null; }); });
+        grid(ctx, ox, oy, shown, oc, function (v) { return div(v, 9); }, {});
+        if (l > 1.5) box(ctx, ox + j * oc, oy + i * oc, oc, oc, P.orange, 3);
+        // the nine products, spelled out
+        var terms = [], sum = 0; for (a = 0; a < 3; a++) for (b = 0; b < 3; b++) { var pv = IMG[i + a][j + b] * SOBEL[a][b]; sum += pv; if (SOBEL[a][b]) terms.push(IMG[i + a][j + b] + '·' + (SOBEL[a][b] > 0 ? SOBEL[a][b] : '(' + SOBEL[a][b] + ')')); }
+        var ry = ph ? oy + 4 * oc + 40 : gy + 6 * cs + 40, sz = ph ? 12 : 15;
+        if (l > 2) {
+          var t1 = terms.slice(0, 3).join(' + '), t2 = terms.slice(3).join(' + ');
+          card(ctx, W / 2, ry + sz * 1.4, Math.min(W - 16, 520), sz * 4.2, 'sum');
+          mono(ctx, t1 + ' +', W / 2, ry + sz * .5, sz, P.ink, 'center'); mono(ctx, t2 + '  (+ 3 zeros)', W / 2, ry + sz * 1.6, sz, P.ink, 'center');
+          mono(ctx, '= ' + sum + (sum >= 6 ? '   edge!' : sum === 0 ? '   flat' : ''), W / 2, ry + sz * 2.8, sz + 1, sum >= 6 ? '#b3443c' : '#2f7a52', 'center', '700');
+        }
+        if (!ph) mono(ctx, 'input 6×6', gx + 3 * cs, gy - 16, 13, P.chalk, 'center'), mono(ctx, 'output 4×4', ox + 2 * oc, oy - 16, 13, P.chalk, 'center');
+      } },
+    { name: 'a stack of stencils', start: 18, dur: 20, cap: {
+        1: 'Real photos have 3 layers of paper: red, green, blue. So one "stencil" is really a <b>stack</b> of three 3×3 grids, one per colour. Each grid scores its own colour; the three scores are <b>added</b> into one number. A second stack makes a second feature map.',
+        2: 'Conv2d(3, 2, kernel_size=3): weight shape (out_channels=2, in_channels=3, 3, 3). Output channel o at (i,j) = Σ over c of (x[c] ⋆ w[o,c])[i,j] + bias[o]. Every output channel looks at every input channel.',
+        3: 'Parameters: 2·3·3·3 + 2 = 56. The in_channels sum is why ResNet34\'s 3×3 convs at 512 channels have 512·512·9 ≈ 2.4M weights each. A 1×1 conv is the pure "mix channels" case: a Linear applied at every pixel.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .1); var L = lay(W), ph = L.ph;
+        var step = clamp(Math.floor((l - 2) / 2.2), 0, 7), o = step >= 4 ? 1 : 0, pos = step % 4, i = Math.floor(pos / 2), j = pos % 2;
+        var cs = ph ? 22 : 32, gw = 4 * cs, gap = ph ? 14 : 30, tot = 3 * gw + 2 * gap, x0 = W / 2 - tot / 2, y0 = ph ? 70 : 90;
+        var names = ['R', 'G', 'B'], cols = [[P.pink, '#e8747c'], [P.mint, '#5f9e74'], [P.sky, '#5a7fc0']];
+        mono(ctx, 'x: (in_channels=3, 4, 4)', W / 2, y0 - 40, ph ? 12 : 14, P.chalk, 'center', '700');
+        var parts = [];
+        for (var c = 0; c < 3; c++) {
+          var gx = x0 + c * (gw + gap); card(ctx, gx + gw / 2, y0 + gw / 2, gw + 10, gw + 10, 'ch' + c, cols[c][0]);
+          grid(ctx, gx, y0, RGB[c], cs, function (v) { return 'rgba(255,255,255,' + (.25 + v * .22) + ')'; }, {});
+          box(ctx, gx + j * cs, y0 + i * cs, 3 * cs, 3 * cs, P.orange, 3);
+          mono(ctx, names[c], gx + gw / 2, y0 - 16, ph ? 12 : 14, P.chalk, 'center', '700');
+          // weight slice under it
+          var kc = ph ? 17 : 24, ky = y0 + gw + 34, kx = gx + gw / 2 - 1.5 * kc;
+          card(ctx, gx + gw / 2, ky + 1.5 * kc, 3 * kc + 8, 3 * kc + 8, 'k' + c + o, '#fbf6ea');
+          grid(ctx, kx, ky, WT[o][c], kc, function (v) { return div(v, 2); }, { fs: ph ? 9.5 : 12 });
+          var pv = partial(o, c, i, j); parts.push(pv);
+          var pa = ramp(l, 2.5, 3.2); if (pa > 0) { ctx.save(); ctx.globalAlpha = pa; mono(ctx, '= ' + fmt(pv), gx + gw / 2, ky + 3 * kc + 18, ph ? 13 : 16, cols[c][1] === '#5f9e74' ? '#9fe0b6' : cols[c][0], 'center', '700'); ctx.restore(); }
+        }
+        mono(ctx, 'w[' + o + ', c]  (a 3×3 slice per channel)', W / 2, y0 + gw + 18, ph ? 10.5 : 12, 'rgba(253,250,240,.75)', 'center');
+        var sy = y0 + gw + 34 + 3 * (ph ? 17 : 24) + (ph ? 46 : 58), sz = ph ? 13 : 16;
+        var total = parts[0] + parts[1] + parts[2] + BIAS[o];
+        card(ctx, W / 2, sy + sz * 1.3, Math.min(W - 16, 560), sz * 4, 'tot');
+        mono(ctx, 'out[' + o + '][' + i + ',' + j + '] = ' + fmt(parts[0]) + ' + ' + fmt(parts[1]) + ' + ' + fmt(parts[2]) + ' + bias ' + fmt(BIAS[o], 1), W / 2, sy + sz * .6, sz, P.ink, 'center');
+        mono(ctx, '= ' + fmt(total, 1), W / 2, sy + sz * 1.9, sz + 2, '#6b2f7a', 'center', '700');
+        // the two output maps
+        var oc = ph ? 30 : 40, oy = sy + sz * 4 + 18, ox = W / 2 - (2 * oc * 2 + 30) / 2;
+        for (var q = 0; q < 2; q++) {
+          var X = ox + q * (2 * oc + 30); card(ctx, X + oc, oy + oc, 2 * oc + 10, 2 * oc + 10, 'om' + q, '#f3ecff');
+          var cells = [[0, 0], [0, 0]].map(function (r, a) { return r.map(function (z, b) { var idx = q * 4 + a * 2 + b; return idx <= step ? outCh(q, a, b) : null; }); });
+          grid(ctx, X, oy, cells, oc, function (v) { return div(v, 8); }, { d: 1, fs: ph ? 11 : 13 });
+          if (q === o) box(ctx, X + j * oc, oy + i * oc, oc, oc, P.orange, 3);
+          mono(ctx, 'out ch ' + q, X + oc, oy + 2 * oc + 14, ph ? 11 : 13, P.chalk, 'center');
+        }
+        var wa = ramp(l, 14, 15); if (wa > 0 && oy + 2 * oc + 50 < H - 10) { ctx.save(); ctx.globalAlpha = wa; hnote(ctx, 'weight: (2, 3, 3, 3)', W / 2, oy + 2 * oc + 44, ph ? 16 : 20, P.butter, 'wshape'); ctx.restore(); }
+      } },
+    { name: 'stride & padding', start: 38, dur: 24, cap: {
+        1: 'Two dials on every stencil. <b>Padding</b> adds a ring of zeros so the edge pixels get a full look. <b>Stride</b> is how far the stencil hops: stride 2 skips every other spot, so the map comes out half the size. One formula tells you the size before you run anything.',
+        2: 'L_out = ⌊(L_in + 2·padding − kernel_size) / stride⌋ + 1. 7×7, k=3, p=1, s=1 → 7 (shape-preserving). Same with stride 2 → 4. MaxPool2d uses the same formula but keeps only the loudest number in each window.',
+        3: 'ResNet34\'s stem: Conv2d(3, 64, kernel_size=7, stride=2, padding=3) then MaxPool2d(kernel_size=3, stride=2, padding=1): 224 → 112 → 56. The floor means a stride that doesn\'t fit just drops the last partial window.' },
+      draw: function (ctx, t, l, W, H, api) {
+        if (!Q.done && Q.prev >= 0 && Q.prev < QT && t >= QT && t - Q.prev < .4) { Q.done = true; showQ(api); }
+        if (t < QT - 1) { Q.done = false; if (Q.el && Q.el.classList.contains('on')) hideQ(api, false); }
+        Q.prev = t;
+        bg(ctx, W, H, t, .2); var L = lay(W), ph = L.ph, sz = ph ? 12.5 : 16;
+        var s = l < 5 ? 1 : 2, pad = 1, k = 3, n = 7, o = outSize(n, k, s, pad);
+        var lt = l < 5 ? l : l - 5, ns = o * o, idx = clamp(Math.floor(lt / (l < 5 ? .1 : .5)), 0, ns - 1), oi = Math.floor(idx / o), oj = idx % o;
+        var cs = ph ? 28 : 36, N = n + 2, gx = W / 2 - N * cs / 2, gy = ph ? 50 : 64;
+        var showGrid = l < 9.5;
+        if (showGrid) {
+          card(ctx, W / 2, gy + N * cs / 2, N * cs + 14, N * cs + 14, 'padgrid');
+          var cells = []; var src = F.rng('padimg'); for (var a = 0; a < N; a++) { cells.push([]); for (var b = 0; b < N; b++) cells[a].push(a === 0 || b === 0 || a === N - 1 || b === N - 1 ? null : Math.floor(src() * 4)); }
+          grid(ctx, gx, gy, cells, cs, function (v) { return heat(v, 0, 4); }, { darkText: function (v) { return v >= 2; } });
+          box(ctx, gx + oj * s * cs, gy + oi * s * cs, 3 * cs, 3 * cs, P.orange, 3.5);
+          mono(ctx, 'padding=1 ring of zeros', W / 2, gy + N * cs + 18, ph ? 11.5 : 13, P.chalk, 'center');
+        }
+        var fy = showGrid ? gy + N * cs + 40 : (ph ? 110 : 130);
+        var rowsF = [];
+        rowsF.push(['L_out = ⌊(L_in + 2·p − k) / s⌋ + 1', '#6b5a9a']);
+        if (showGrid) rowsF.push(['⌊(' + n + ' + 2·' + pad + ' − ' + k + ') / ' + s + '⌋ + 1 = ' + o, s === 1 ? '#2f7a52' : '#b3443c']);
+        else {
+          var a1 = outSize(32, 7, 2, 3);
+          rowsF.push(['x: (1, 3, 32, 32)', P.ink]);
+          if (l > QT - 38 + .2) {
+            rowsF.push(['⌊(32 + 2·3 − 7) / 2⌋ + 1', P.ink]); rowsF.push(['= ⌊15.5⌋ + 1 = ' + a1, '#2f7a52']);
+            rowsF.push(['out: (1, 64, ' + a1 + ', ' + a1 + ')   channels = out_channels', '#6b2f7a']);
+          }
+          if (l > 16) { var a2 = outSize(a1, 3, 2, 1); rowsF.push(['MaxPool2d(3, stride=2, padding=1)', '#6b5a9a']); rowsF.push(['⌊(' + a1 + ' + 2 − 3) / 2⌋ + 1 = ' + a2, '#2f7a52']); }
+        }
+        var lh = sz * 1.55, cw = Math.min(W - 16, 560), chh = rowsF.length * lh + 18; card(ctx, W / 2, fy + chh / 2, cw, chh, 'formula' + rowsF.length);
+        rowsF.forEach(function (r, q) { mono(ctx, r[0], W / 2 - cw / 2 + 14, fy + 9 + lh * (q + .5), q === 0 ? sz : sz, r[1], 'left', q === 0 || /=/.test(r[0]) ? '700' : '500'); });
+        if (!showGrid && l > QT - 38 + .6) {
+          var gt = Q.choice === 'a' ? 'you called it: 16 × 16' : Q.choice && Q.choice !== 'skip' ? 'real answer: (1, 64, 16, 16)' : '(1, 64, 16, 16)';
+          F.note(ctx, gt, W / 2, fy - (ph ? 22 : 28), ph ? 15 : 18, { color: P.mint, seed: 'ans' });
+        }
+        if (!showGrid && l > 16.5) {
+          // max-pool: the loudest lantern in a 3x3 window
+          var py = fy + chh + (ph ? 22 : 30), pc = ph ? 30 : 38, px = W / 2 - 1.5 * pc - (ph ? 50 : 70), win = [[.2, 1.4, .3], [.9, 3.1, .6], [.1, .8, 2.2]];
+          if (py + 3 * pc < H - 8) {
+            card(ctx, W / 2, py + 1.5 * pc, Math.min(W - 16, 360), 3 * pc + 16, 'pool', '#f3ecff');
+            grid(ctx, px, py, win, pc, function (v) { return heat(v, 0, 3.2); }, { d: 1, fs: ph ? 11 : 13, darkText: function (v) { return v > 1.5; } });
+            box(ctx, px + pc, py + pc, pc, pc, P.orange, 3);
+            F.lantern(ctx, px + 3 * pc + (ph ? 50 : 70), py + 1.2 * pc, ph ? 12 : 15, 1, t);
+            mono(ctx, 'max = 3.1', px + 3 * pc + (ph ? 50 : 70), py + 2.5 * pc, ph ? 12 : 14, P.ink, 'center', '700');
+          }
+        }
+      } },
+    { name: 'BatchNorm: train', start: 62, dur: 22, cap: {
+        1: 'Between floors sit <b>caretakers</b>. In training, each caretaker looks at the whole batch passing through, finds its average and spread for this channel, and rescales everything to mean 0, spread 1. Then two learned knobs (weight, bias) set the level the next floor gets.',
+        2: 'mean and var over dims (0, 2, 3), var with unbiased=False. x̂ = (x − mean)/√(var + eps), y = weight·x̂ + bias. Each training batch also nudges the buffers: running_mean = 0.9·running_mean + 0.1·mean (momentum 0.1).',
+        3: 'running_mean starts at 0 and running_var at 1 (registered buffers, not Parameters: no gradients, but saved in state_dict). After k batches the start value still has weight 0.9ᵏ: after 10 batches that is 35%, after 40 about 1.5%.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .3); var L = lay(W), ph = L.ph, sz = ph ? 12 : 15;
+        var bi = clamp(Math.floor((l - 1) / 2.6), 0, 5), B = BN.batches[bi], h = BN.hist[bi + 1];
+        var cw = Math.min(W - 16, 600), x0 = W / 2 - cw / 2 + 12, y0 = ph ? 14 : 22, lh = sz * 1.5;
+        var rows = [
+          ['batch ' + (bi + 1) + '  (4 images × 2 pixels, one channel)', '#6b5a9a', '700'],
+          ['x    ' + B.xs.map(function (v) { return v.toFixed(1); }).join(' '), P.ink],
+          ['mean ' + B.mean.toFixed(3) + '    var ' + B.var.toFixed(3), P.ink, '700'],
+          ['x̂    ' + B.xs.map(function (v) { return ((v - B.mean) / Math.sqrt(B.var + EPS)).toFixed(1); }).join(' '), '#2f7a52'],
+          ['y = 1.5·x̂ + 0.2 (weight, bias)', '#6b5a9a'],
+          ['running_mean ' + BN.hist[bi].rm.toFixed(3) + ' → ' + h.rm.toFixed(3), '#b3443c', '700'],
+          ['running_var  ' + BN.hist[bi].rv.toFixed(3) + ' → ' + h.rv.toFixed(3), '#b3443c', '700']];
+        if (ph) rows[1] = ['x  ' + B.xs.map(function (v) { return v.toFixed(1); }).join(' '), P.ink], rows[3] = ['x̂  ' + B.xs.map(function (v) { return ((v - B.mean) / Math.sqrt(B.var + EPS)).toFixed(1); }).join(' '), '#2f7a52'];
+        var ch = rows.length * lh + 16; card(ctx, W / 2, y0 + ch / 2, cw, ch, 'bntrain');
+        rows.forEach(function (r, q) { mono(ctx, r[0], x0, y0 + 8 + lh * (q + .5), q === 1 || q === 3 ? sz - (ph ? 1 : 0) : sz, r[1], 'left', r[2] || '500'); });
+        // running mean chart across 40 batches
+        var py = y0 + ch + (ph ? 16 : 24), pw = cw, phh = ph ? 170 : 200, px = W / 2 - pw / 2;
+        card(ctx, W / 2, py + phh / 2, pw, phh, 'rmplot', '#f3ecff');
+        var gx0 = px + 36, gx1 = px + pw - 14, gy0 = py + phh - 24, gy1 = py + 26, vmax = 6;
+        ctx.strokeStyle = 'rgba(42,41,52,.4)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx0, gy1); ctx.lineTo(gx0, gy0); ctx.lineTo(gx1, gy0); ctx.stroke();
+        mono(ctx, '0', gx0 - 6, gy0, 11, '#5a5566', 'right'); mono(ctx, '3', gx0 - 6, lerp(gy0, gy1, .5), 11, '#5a5566', 'right');
+        [0, 10, 20, 30, 40].forEach(function (b) { mono(ctx, '' + b, gx0 + (gx1 - gx0) * b / 40, gy0 + 11, 11, '#5a5566', 'center'); });
+        var nb = l < 16 ? bi + 1 : Math.round(lerp(6, 40, ramp(l, 16, 20.5)));
+        ctx.fillStyle = P.orange; for (var b = 0; b < nb; b++) { ctx.beginPath(); ctx.arc(gx0 + (gx1 - gx0) * (b + 1) / 40, lerp(gy0, gy1, BN.batches[b].mean / vmax), 3, 0, 6.283); ctx.fill(); }
+        ctx.strokeStyle = '#b3443c'; ctx.lineWidth = 3; ctx.beginPath(); for (b = 0; b <= nb; b++) { var X = gx0 + (gx1 - gx0) * b / 40, Y = lerp(gy0, gy1, BN.hist[b].rm / vmax); if (b) ctx.lineTo(X, Y); else ctx.moveTo(X, Y); } ctx.stroke();
+        mono(ctx, 'dots: batch mean   line: running_mean = ' + BN.hist[nb].rm.toFixed(2), px + 12, py + 12, ph ? 11 : 13, '#6b2f7a', 'left', '700');
+      } },
+    { name: 'BatchNorm: eval', start: 84, dur: 16, cap: {
+        1: 'At exam time the caretakers stop looking at the crowd. In <b>eval mode</b> they use the averages they wrote down in training (the running buffers). Why it matters: in training mode, your photo\'s output depends on <b>who else is in the batch</b>.',
+        2: 'Same photo, pixels (4.1, 2.3). In a batch with dim photos it comes out bright; with bright photos, dark. model.eval() swaps in running_mean / running_var: one fixed answer. Forgetting model.eval() is a classic silent bug.',
+        3: 'Train mode with a batch of one 1×1 image: var = 0, so x̂ = 0 and y = bias whatever the input (PyTorch raises for that case). Eval-mode BN is just a fixed per-channel affine map, which is why it can be folded into the previous conv at deployment.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .35); var L = lay(W), ph = L.ph, sz = ph ? 12 : 15, cw = Math.min(W - 16, 600), x0 = W / 2 - cw / 2 + 12, y0 = ph ? 14 : 22, lh = sz * 1.5;
+        var blocks = [
+          { a: .3, col: '#fbf6ea', rows: [['model.train(), batch A (dim mates)', '#6b5a9a', '700'], ['mates ' + MATES[0].join(' '), P.ink], ['mean ' + TRAIN_OUT[0].m.toFixed(2) + '  var ' + TRAIN_OUT[0].v.toFixed(2), P.ink], ['my y = (' + TRAIN_OUT[0].y.map(function (v) { return v.toFixed(2); }).join(', ') + ')', '#b3443c', '700']] },
+          { a: 4, col: '#fbf6ea', rows: [['model.train(), batch B (bright mates)', '#6b5a9a', '700'], ['mates ' + MATES[1].join(' '), P.ink], ['mean ' + TRAIN_OUT[1].m.toFixed(2) + '  var ' + TRAIN_OUT[1].v.toFixed(2), P.ink], ['my y = (' + TRAIN_OUT[1].y.map(function (v) { return v.toFixed(2); }).join(', ') + ')', '#b3443c', '700']] },
+          { a: 8.5, col: '#e4f3ea', rows: [['model.eval(): running stats (after 40 batches)', '#2f7a52', '700'], ['running_mean ' + RUN.rm.toFixed(2) + '  running_var ' + RUN.rv.toFixed(2), P.ink], ['my y = (' + EVAL_OUT.map(function (v) { return v.toFixed(2); }).join(', ') + ')  every time', '#2f7a52', '700']] }];
+        var y = y0 + (ph ? 26 : 30);
+        F.note(ctx, 'same photo: pixels (4.1, 2.3)', W / 2, y0 + (ph ? 12 : 14), ph ? 14 : 17, { color: P.butter, seed: 'same' });
+        blocks.forEach(function (bk, q) {
+          var a = ramp(l, bk.a, bk.a + .7); var ch = bk.rows.length * lh + 14; if (a > 0) {
+            ctx.save(); ctx.globalAlpha = a; card(ctx, W / 2, y + ch / 2, cw, ch, 'ev' + q, bk.col);
+            bk.rows.forEach(function (r, k) { mono(ctx, r[0], x0, y + 7 + lh * (k + .5), ph && k === 0 ? sz - .5 : sz, r[1], 'left', r[2] || '500'); }); ctx.restore(); }
+          y += ch + (ph ? 10 : 14);
+        });
+        var fa = ramp(l, 12, 12.8); if (fa > 0 && y + 30 < H) { ctx.save(); ctx.globalAlpha = fa; hnote(ctx, 'forgot model.eval()? results wobble', W / 2, y + (ph ? 18 : 24), ph ? 15 : 20, P.pink, 'forgot'); ctx.restore(); }
+      } },
+    { name: '34 floors', start: 100, dur: 24, cap: {
+        1: 'Now the climb. Learning sends a message <b>down</b> the tower: "change like this". Each plain floor passes on about 0.9× of it, and 34 of those multiply. With a <b>shortcut</b> lift, each floor passes on 1 + (its small nudge), so the message keeps a direct route.',
+        2: 'Plain: dL/dx₀ = Π aᵢ, with aᵢ from 0.75 to 1.03 (real seeded draws). Residual: out = F(x) + x, so each factor is 1 + cᵢ with small cᵢ. Watch both products computed floor by floor.',
+        3: 'Expand Π(1 + cᵢ) = 1 + Σcᵢ + Σcᵢcⱼ + …: the "1" is a path that skips every branch. Remove it and the gradient must go through all 34 branches: Π|cᵢ| is astronomically small. Real Jacobians are matrices, but the same bookkeeping holds.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .45); var L = lay(W), ph = L.ph, sz = ph ? 12 : 15;
+        var k = clamp(Math.floor(lerp(0, 34, ramp(l, 2, 14))), 0, 34);
+        var tw = ph ? (W - 40) / 2 : Math.min(260, (W - 120) / 2), top = ph ? 50 : 60, fh = ph ? Math.min(13, (H - 250) / 34) : Math.min(14, (H - 250) / 34), th = fh * 34;
+        [['plain', CP, P.butter, PLAIN, false], ['with shortcut', CR, P.mint, BRANCH, true]].forEach(function (tw0, q) {
+          var cx = W / 2 + (q ? 1 : -1) * (tw / 2 + (ph ? 8 : 30));
+          mono(ctx, tw0[0], cx, top - 16, ph ? 13 : 16, P.chalk, 'center', '700');
+          card(ctx, cx, top + th / 2, tw, th + 10, 'tower' + q, '#e9e0cf');
+          for (var f = 0; f < 34; f++) {
+            var yy = top + th - (f + 1) * fh, lit = f >= 34 - k, val = tw0[1][34 - f], bright = lit ? clamp(Math.log10(Math.max(1e-6, val)) / 2 + 1, 0, 1) : 0;
+            ctx.fillStyle = lit ? 'rgb(' + Math.round(lerp(70, 250, bright)) + ',' + Math.round(lerp(62, 214, bright)) + ',' + Math.round(lerp(96, 120, bright)) + ')' : 'rgba(42,41,52,.12)'; ctx.fillRect(cx - tw / 2 + 6, yy + 1, tw - 12, fh - 2);
+            if (fh >= 11 && lit && (f % 3 === 0 || f === 34 - k)) mono(ctx, (tw0[4] ? '×(1' + (tw0[3][33 - f] >= 0 ? '+' : '') + tw0[3][33 - f].toFixed(2) + ')' : '×' + tw0[3][33 - f].toFixed(2)), cx, yy + fh / 2, Math.min(10.5, fh - 1.5), bright > .5 ? P.ink : P.chalk, 'center');
+          }
+          var lv = tw0[1][k], ly = top + th + (ph ? 24 : 30);
+          F.lantern(ctx, cx, ly + 4, ph ? 11 : 14, clamp(Math.log10(Math.max(1e-6, lv)) / 2 + 1, .05, 1), t);
+          mono(ctx, 'gradient ×' + (lv < .01 ? lv.toExponential(1) : lv.toFixed(3)), cx, ly + (ph ? 28 : 34), ph ? 12.5 : 15, tw0[2], 'center', '700');
+        });
+        mono(ctx, 'floors passed: ' + k, W / 2, top + th + (ph ? 70 : 84), ph ? 12 : 14, P.chalk, 'center');
+        var ea = ramp(l, 15, 16); if (ea > 0) {
+          ctx.save(); ctx.globalAlpha = ea; var ny = Math.min(H - (ph ? 70 : 60), top + th + (ph ? 100 : 118)), nz = ph ? 12 : 15;
+          F.note(ctx, 'Π(1+cᵢ) = 1 + Σcᵢ + … = ' + CR[34].toFixed(3) + '\nwithout the 1:  Π|cᵢ| = ' + CB[34].toExponential(1), W / 2, ny, nz, { color: P.cream, seed: 'expand', font: F.MONO });
+          ctx.restore();
+        }
+      } },
+    { name: 'ResNet34 floor plan', start: 124, dur: 14, cap: {
+        1: 'The real tower. Four groups of residual blocks: 3, 4, 6, 3. At the start of groups 2 to 4 the floor halves the picture and doubles the channels, so x no longer fits through the lift door: that lift gets its own little 1×1 stencil and caretaker. <b>Where the story stops being true:</b> the shortcut mostly makes deep nets <b>trainable</b>, it isn\'t just about brightness.',
+        2: 'ResidualBlock(in_feats, out_feats, first_stride): right = nn.Identity() if first_stride == 1 and in_feats == out_feats, else Conv2d(in, out, kernel_size=1, stride=first_stride) + BatchNorm2d(out). 1 stem conv + 2·(3+4+6+3) + 1 Linear = 34.',
+        3: 'He et al. 2015: a plain 56-layer net had higher <i>training</i> error than a 20-layer one: an optimisation failure, not overfitting. Residuals let a block start near the identity. And with big branches Π(1+cᵢ) can explode: BatchNorm keeps cᵢ tame.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .6); var L = lay(W), ph = L.ph, sz = ph ? 11.5 : 15, cw = Math.min(W - 16, 620), x0 = W / 2 - cw / 2 + 12, y0 = ph ? 14 : 22, lh = sz * (ph ? 2.5 : 1.9);
+        var rows = [['x: (3, 224, 224)', '3 × 224 × 224', 0]].concat(R34.rows);
+        var ch = rows.length * lh + 16; card(ctx, W / 2, y0 + ch / 2, cw, ch, 'r34');
+        rows.forEach(function (r, q) {
+          var a = ramp(l, .3 + q * .7, .9 + q * .7); if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+          var yy = y0 + 8 + lh * (q + .5);
+          if (ph) { mono(ctx, r[0], x0, yy - sz * .45, sz, P.ink, 'left', '600'); mono(ctx, '→ ' + r[1] + (r[2] ? '   ' + r[2] + ' layer' + (r[2] > 1 ? 's' : '') : ''), x0 + 12, yy + sz * .55, sz - .5, r[3] ? '#b3443c' : '#2f7a52', 'left', '700'); }
+          else { mono(ctx, r[0], x0, yy, sz, P.ink); mono(ctx, r[1], x0 + cw * .62, yy, sz, r[3] ? '#b3443c' : '#2f7a52', 'left', '700'); if (r[2]) mono(ctx, r[2] + '', x0 + cw - 30, yy, sz, '#6b5a9a', 'right'); }
+          ctx.restore();
+        });
+        var ny = y0 + ch + (ph ? 24 : 32);
+        var da = ramp(l, 5, 5.8); if (da > 0) { ctx.save(); ctx.globalAlpha = da; F.note(ctx, 'red rows: first block has the downsample\nright = Conv2d(in, out, 1, stride=2) + BatchNorm2d', W / 2, ny + (ph ? 8 : 10), ph ? 11.5 : 14, { color: '#f6d0cc', seed: 'ds', font: F.MONO, tape: false }); ctx.restore(); }
+        mono(ctx, 'depth = ' + R34.depth, W / 2, ny + (ph ? 52 : 62), ph ? 14 : 17, P.butter, 'center', '700');
+        // where the story stops being true
+        var p = ramp(l, 8.5, 9.6); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) {
+          ctx.save(); ctx.globalAlpha = ramp(l, 9.3, 10); var m = Math.min(W, H), s2 = ph ? 12 : 16, x = W - m * .34, y = H - m * .22;
+          F.hand(ctx, 'really: a 56-layer plain net', x - s2, y - s2 * 3.6, s2, P.ink, { seed: 'r1', rot: -.75 });
+          F.hand(ctx, 'trained WORSE than 20 layers.', x - s2 * .2, y - s2 * 2.2, s2, P.ink, { seed: 'r2', rot: -.75 });
+          F.hand(ctx, 'shortcuts fix optimisation', x + s2 * .7, y - s2 * .8, s2, '#b3443c', { seed: 'r3', rot: -.75 });
+          ctx.restore();
+        }
+      } },
+    { name: 'your forward()', start: 138, dur: 12, cap: {
+        1: 'Everything you just watched is three lines. The left branch is two stencil floors with caretakers; the right branch is the lift; add them, then ReLU. And the lift is the thing we\'ll read inside transformers: the <b>residual stream</b> is the same highway, and it\'s where interpretability looks and steers.',
+        2: 'ARENA [0.2] ResidualBlock.forward: <code>x_left = self.left(x)</code>, <code>x_right = self.right(x)</code>, <code>return self.relu(x_left + x_right)</code>. Shapes shown for the first block of group 2: 64 → 128 channels, first_stride=2.',
+        3: 'self.left = Sequential(Conv2d(in, out, 3, stride=first_stride, padding=1), BatchNorm2d, ReLU, Conv2d(out, out, 3, 1, 1), BatchNorm2d). Test with <code>tests.test_residual_block(ResidualBlock)</code>; load pretrained weights by matching the declaration order.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .8); var L = lay(W), ph = L.ph, sz = ph ? 11 : 15, lh = sz * 1.6, cw = Math.min(W - 12, 660), x0 = W / 2 - cw / 2 + 10;
+        var ch = CODE.length * lh + 20, cy = (ph ? 10 : 18) + ch / 2; card(ctx, W / 2, cy, cw, ch, 'code');
+        var hl = HLS[clamp(Math.floor((l - 1.2) / 1.8), 0, HLS.length - 1)];
+        CODE.forEach(function (s, j) {
+          var y = cy - ch / 2 + 11 + j * lh + lh / 2 - 1;
+          if (l > 1.2 && j === hl) { ctx.fillStyle = 'rgba(247,227,160,.85)'; ctx.fillRect(x0 - 6, y - lh / 2 + 1, cw - 8, lh - 2); }
+          mono(ctx, s, x0, y, sz, s.indexOf('#') >= 0 ? '#6b5a9a' : P.ink, 'left', j === hl ? '700' : '500');
+        });
+        if (l > 1.2 && VALS[hl]) F.note(ctx, VALS[hl], W / 2, cy + ch / 2 + (ph ? 26 : 34), ph ? 12.5 : 16, { color: P.mint, seed: 'v' + hl, font: F.MONO, tape: false });
+        var sa = ramp(l, 8, 9); if (sa > 0) { ctx.save(); ctx.globalAlpha = sa; F.note(ctx, 'the residual highway is the same\none we\'ll read in transformers', W / 2, Math.min(H - 44, cy + ch / 2 + (ph ? 92 : 112)), ph ? 15 : 20, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore(); }
+      } }
+  ];
+
+  var CODE = [
+    'class ResidualBlock(nn.Module):',
+    '  def __init__(self, in_feats, out_feats, first_stride=1):',
+    '    ...  # self.left, self.right, self.relu',
+    '  def forward(self, x: Tensor) -> Tensor:',
+    '    x_left = self.left(x)',
+    '    x_right = self.right(x)',
+    '    return self.relu(x_left + x_right)'];
+  var HLS = [3, 4, 5, 6];
+  var VALS = { 3: 'x: (1, 64, 56, 56)', 4: 'x_left: (1, 128, 28, 28)  two 3×3 floors', 5: 'x_right: (1, 128, 28, 28)  1×1 conv, stride 2', 6: 'out: (1, 128, 28, 28)  d out/dx = I + d left/dx' };
+  if (window.innerWidth < 500) { CODE[1] = '  def __init__(self, in_feats,'; CODE.splice(2, 0, '        out_feats, first_stride=1):'); CODE[3] = '    ...  # left, right, relu'; CODE[4] = '  def forward(self, x):'; HLS = [4, 5, 6, 7]; VALS = { 4: VALS[3], 5: VALS[4], 6: VALS[5], 7: 'out: (1, 128, 28, 28)' }; }
+
+  /* ================= coda: now you drive ================= */
+  var C = { depth: 34, short: true, a: .9, c: .1, seed: 1, paint: [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]] };
+  function codaFactors() { var r = F.rng('coda' + C.seed), pl = [], br = []; for (var i = 0; i < 34; i++) { var u = r(), v = r(); pl.push(C.a * (0.85 + .3 * u)); br.push(C.c * (2 * v - 1)); } return { pl: pl, br: br }; }
+  function codaGrad() { var fz = codaFactors(), g = [1]; for (var i = 0; i < C.depth; i++) g.push(g[i] * (C.short ? 1 + fz.br[i] : fz.pl[i])); return g; }
+  function slider(name, label, min, max, step, val) { return '<label style="display:flex;align-items:center;gap:6px;min-width:0">' + label + ' <input data-k="' + name + '" type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + val + '" style="flex:1;min-width:50px"> <b data-v="' + name + '" style="min-width:2.6em;font-variant-numeric:tabular-nums"></b></label>'; }
+  var KS = { sobel: [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], horiz: [[-1, -2, -1], [0, 0, 0], [1, 2, 1]], blur: [[1, 1, 1], [1, 1, 1], [1, 1, 1]], sharpen: [[0, -1, 0], [-1, 5, -1], [0, -1, 0]] };
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      hideQ(api, false);
+      panel.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:4px 12px;font-size:13px;align-items:center">' +
+        slider('depth', 'floors', 1, 34, 1, C.depth) + slider('a', 'plain ×', .5, 1.2, .01, C.a) + slider('c', 'branch ±', 0, .6, .01, C.c) +
+        '<label style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-k="short"' + (C.short ? ' checked' : '') + '> shortcuts (+x)</label>' +
+        '<select aria-label="Kernel" style="font:inherit;border-radius:8px;padding:4px;min-height:30px"><option value="sobel">stencil: vertical edge</option><option value="horiz">stencil: horizontal edge</option><option value="blur">stencil: blur</option><option value="sharpen">stencil: sharpen</option></select>' +
+        '</div><div style="font-size:12px;opacity:.8;margin-top:2px">Tap a stencil cell to change it (−2…+2). Tap the tower to reroll the floors.</div>';
+      [].forEach.call(panel.querySelectorAll('input[type=range]'), function (inp) {
+        var k = inp.dataset.k, out = panel.querySelector('[data-v=' + k + ']');
+        var upd = function () { C[k] = +inp.value; out.textContent = k === 'depth' ? C.depth : C[k].toFixed(2); };
+        upd(); inp.oninput = upd;
+      });
+      panel.querySelector('input[type=checkbox]').onchange = function (e) { C.short = e.target.checked; };
+      var sel = panel.querySelector('select'); sel.onchange = function () { C.paint = KS[sel.value].map(function (r) { return r.slice(); }); };
+    },
+    down: function (x, y, api) {
+      var g = coda._geo; if (!g) return;
+      if (x >= g.kx && x < g.kx + 3 * g.kc && y >= g.ky && y < g.ky + 3 * g.kc) {
+        var j = Math.floor((x - g.kx) / g.kc), i = Math.floor((y - g.ky) / g.kc), v = C.paint[i][j] + 1; if (v > 2) v = -2; C.paint[i][j] = v; api.audio.blip(520 + 60 * v); return;
+      }
+      if (x >= g.tx && x < g.tx + g.tw && y >= g.ty && y < g.ty + g.th) { C.seed++; api.audio.blip(700); }
+    },
+    draw: function (ctx, t, W, H, api) {
+      bg(ctx, W, H, t, .9); var ph = W < 500, geo = {};
+      // left / top: the paintable stencil and its live feature map on the photo
+      var kc = ph ? 30 : 40, pc = ph ? 17 : 26, ky = ph ? 12 : Math.max(30, H * .3), kx = ph ? 14 : Math.max(20, W / 2 - 360);
+      card(ctx, kx + 1.5 * kc, ky + 1.5 * kc, 3 * kc + 10, 3 * kc + 10, 'ck', P.cream);
+      grid(ctx, kx, ky, C.paint, kc, function (v) { return div(v, 3); }, { fs: ph ? 13 : 16 });
+      geo.kx = kx; geo.ky = ky; geo.kc = kc;
+      var fm = xcorr(IMG, C.paint, 1, 0), mx = 1; fm.forEach(function (r) { r.forEach(function (v) { mx = Math.max(mx, Math.abs(v)); }); });
+      var fx = kx + 3 * kc + (ph ? 14 : 30), fy = ky + (3 * kc - 4 * pc) / 2;
+      card(ctx, fx + 2 * pc, fy + 2 * pc, 4 * pc + 8, 4 * pc + 8, 'cfm', '#f3ecff');
+      grid(ctx, fx, fy, fm, pc, function (v) { return div(v, mx); }, { fs: ph ? 9 : 11 });
+      mono(ctx, 'photo ⋆ your stencil', fx + 2 * pc, fy + 4 * pc + 14, ph ? 10.5 : 12, P.chalk, 'center');
+      // right / below: the tower with gradient per floor
+      var g = codaGrad(), tx = ph ? 14 : W / 2 + 20, ty = ph ? ky + 3 * kc + 34 : 30, tw = ph ? W - 28 : Math.min(420, W / 2 - 50), th = ph ? H - ty - 20 : H - 60;
+      geo.tx = tx; geo.ty = ty; geo.tw = tw; geo.th = th; coda._geo = geo;
+      card(ctx, tx + tw / 2, ty + th / 2, tw, th, 'ctower', '#e9e0cf');
+      var bw = (tw - 60) / 34, base = ty + th - 36, top = ty + 34, lg = function (v) { return lerp(base, top, clamp((Math.log10(Math.max(1e-8, v)) + 6) / 8, 0, 1)); };
+      [1e-6, 1e-4, 1e-2, 1, 100].forEach(function (v) { var Y = lg(v); ctx.strokeStyle = 'rgba(42,41,52,.15)'; ctx.beginPath(); ctx.moveTo(tx + 40, Y); ctx.lineTo(tx + tw - 10, Y); ctx.stroke(); mono(ctx, v >= 1 ? '' + v : '1e' + Math.round(Math.log10(v)), tx + 36, Y, 10, '#5a5566', 'right'); });
+      for (var i = 0; i <= C.depth; i++) { var X = tx + 46 + i * bw, Y = lg(g[i]); ctx.fillStyle = C.short ? P.teal : P.orange; ctx.fillRect(X, Y, Math.max(2, bw - 2), base - Y); }
+      var last = g[C.depth];
+      mono(ctx, (C.short ? 'with shortcuts' : 'plain') + ': gradient reaching floor 1 = ' + (last < .01 || last > 1e3 ? last.toExponential(2) : last.toFixed(3)), tx + 12, ty + 16, ph ? 11.5 : 13, P.ink, 'left', '700');
+      mono(ctx, 'floors from the top (loss) →  1 … ' + C.depth, tx + tw / 2, base + 18, 11, '#5a5566', 'center');
+    }
+  };
+
+  window.__deep = { OUT1: OUT1, out00: outCh(0, 0, 0), BN: BN, TRAIN_OUT: TRAIN_OUT, EVAL_OUT: EVAL_OUT, CP34: CP[34], CR34: CR[34], CB34: CB[34], R34: R34, q: outSize(32, 7, 2, 3) };
+
+  F.play({
+    title: 'Deep dive · Stencils and shortcuts',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Week 2 pack', href: '../../index.html#week-02' },
+      { label: 'Demo: convolutions & CNNs', href: '../../index.html#demo/convolutions-cnn' },
+      { label: 'Map: convolution', href: '../../index.html#map/node=convolution' },
+      { label: 'Map: residual block', href: '../../index.html#map/node=residual-block' },
+      { label: 'Map: ResNet34', href: '../../index.html#map/node=resnet34' },
+      { label: 'Map: BatchNorm', href: '../../index.html#map/node=batchnorm' },
+      { label: 'Case: convolutions', href: '../../index.html#cases/convolutions' },
+      { label: 'Case: ResNets', href: '../../index.html#cases/resnets' },
+      { label: 'Case: BatchNorm', href: '../../index.html#cases/batchnorm' },
+      { label: 'Short film: week 2', href: 'w2-cnns.html' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
