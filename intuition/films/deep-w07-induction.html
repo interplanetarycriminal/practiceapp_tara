@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Taking an induction head apart</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp, rng = F.rng;
+
+  /* ===MODEL=== a real 2-layer, attention-only toy transformer built from explicit weight matrices.
+     Residual stream d=63 in named subspaces: TOK [0,16) | POS [16,30) | PREV [30,46) | OUT [46,62) | ONE (a constant 'I am a real token' feature) | BOS flag.
+     L0 head (previous-token head, "0.7"): W_Q0 reads POS(i), W_K0 reads POS(j) shifted, so W_QK0 prefers j=i-1.
+       W_V0 reads TOK, W_O0 writes PREV: W_OV0 = W_V0 W_O0 stamps "the token before me was A".
+     L1 head (induction head, "1.4"): W_Q1 reads TOK, W_K1 reads PREV (K-composition).
+       W_V1 reads TOK (plus a little noise), W_O1 writes OUT. W_U reads OUT through W_E^T (so the direct path is silent). */
+  var M = (function () {
+    var V = 12, DT = 16, NP = 14, DH = 16, o = { TOK: 0, POS: 16, PREV: 30, OUT: 46, ONE: 62, BOS: 63 }, D = 64;
+    var r = rng('deep7');
+    function gauss() { return Math.sqrt(-2 * Math.log(r() + 1e-9)) * Math.cos(6.2832 * r()); }
+    function zeros(a, b) { var m = []; for (var i = 0; i < a; i++) { m.push(new Float64Array(b)); } return m; }
+    function mm(A, B) { var n = A.length, k = B.length, p = B[0].length, C = zeros(n, p); for (var i = 0; i < n; i++) for (var j = 0; j < k; j++) { var a = A[i][j]; if (a) for (var l = 0; l < p; l++) C[i][l] += a * B[j][l]; } return C; }
+    function T(A) { var C = zeros(A[0].length, A.length); for (var i = 0; i < A.length; i++) for (var j = 0; j < A[0].length; j++) C[j][i] = A[i][j]; return C; }
+    function fro(A) { var s = 0; for (var i = 0; i < A.length; i++) for (var j = 0; j < A[0].length; j++) s += A[i][j] * A[i][j]; return Math.sqrt(s); }
+    // token embeddings W_E (V+1 rows, last is BOS): random unit vectors inside TOK
+    var W_E = zeros(V + 1, D);
+    for (var v = 0; v <= V; v++) { var n = 0, e = []; for (var k = 0; k < DT; k++) { e.push(gauss()); n += e[k] * e[k]; } n = Math.sqrt(n); if (v < V) { for (k = 0; k < DT; k++) W_E[v][o.TOK + k] = e[k] / n; W_E[v][o.ONE] = 1; } else W_E[v][o.BOS] = 1; }
+    var W_pos = zeros(NP, D); for (var p = 0; p < NP; p++) W_pos[p][o.POS + p] = 1;
+    var bP = Math.sqrt(9), bI = Math.sqrt(9);
+    var W_Q0 = zeros(D, DH), W_K0 = zeros(D, DH), W_V0 = zeros(D, DH), W_O0 = zeros(DH, D);
+    for (p = 0; p < NP && p < DH; p++) { W_Q0[o.POS + p][p] = bP; if (p + 1 < DH) W_K0[o.POS + p][p + 1] = bP; }
+    W_K0[o.POS + 0][0] = bP; // BOS rests on itself
+    for (k = 0; k < DT; k++) { W_V0[o.TOK + k][k] = 1; W_O0[k][o.PREV + k] = 1; }
+    var W_Q1 = zeros(D, DH + 1), W_K1 = zeros(D, DH + 1), W_V1 = zeros(D, DH + 1), W_O1 = zeros(DH + 1, D);
+    W_Q1[o.ONE][DH] = Math.sqrt(5); W_K1[o.POS][DH] = Math.sqrt(5); // attention sink: with no match, rest on BOS
+    for (k = 0; k < DT; k++) { W_Q1[o.TOK + k][k] = bI; W_K1[o.PREV + k][k] = bI; W_O1[k][o.OUT + k] = 1; for (var l = 0; l < DH; l++) W_V1[o.TOK + k][l] = (k === l ? 1 : 0) + .12 * gauss(); }
+    var GAM = 7, W_U = zeros(D, V); for (v = 0; v < V; v++) for (k = 0; k < DT; k++) W_U[o.OUT + k][v] = GAM * W_E[v][o.TOK + k];
+    var W_OV0 = mm(W_V0, W_O0), W_QK1 = mm(W_Q1, T(W_K1)), W_OV1 = mm(W_V1, W_O1);
+    var WE = W_E.slice(0, V);
+    var fullOV = mm(mm(WE, W_OV1), W_U);                       // W_E W_OV W_U : (V, V)
+    var Kcomp = mm(mm(WE, W_QK1), T(mm(WE, W_OV0)));            // W_E W_QK^1 (W_E W_OV^0)^T : query tok x key tok
+    function top1(A) { var c = 0; for (var i = 0; i < A.length; i++) { var b = 0; for (var j = 1; j < A[i].length; j++) if (A[i][j] > A[i][b]) b = j; if (b === i) c++; } return c / A.length; }
+    function comp(WA, WB) { return fro(mm(WA, WB)) / (fro(WA) * fro(WB)); }
+    var R = zeros(D, D), rr = rng('randhead'); for (var i = 0; i < D; i++) for (var j = 0; j < D; j++) R[i][j] = Math.sqrt(-2 * Math.log(rr() + 1e-9)) * Math.cos(6.2832 * rr());
+    var compK = comp(W_OV0, T(W_QK1)), compRand = comp(R, T(W_QK1)), compQ = comp(W_OV0, W_QK1);
+    function softmax(xs) { var m = -1e9, i; for (i = 0; i < xs.length; i++) m = Math.max(m, xs[i]); var s = 0, e = []; for (i = 0; i < xs.length; i++) { e.push(Math.exp(xs[i] - m)); s += e[i]; } for (i = 0; i < e.length; i++) e[i] /= s; return e; }
+    function rowdot(x, Wm, col) { var s = 0; for (var k = 0; k < x.length; k++) if (x[k]) s += x[k] * Wm[k][col]; return s; }
+    function proj(x, Wm) { var out = new Float64Array(Wm[0].length); for (var k = 0; k < x.length; k++) if (x[k]) for (var l = 0; l < out.length; l++) out[l] += x[k] * Wm[k][l]; return out; }
+    function head(X, WQ, WK, WV, WO, scale) {
+      var L = X.length, Q = X.map(function (x) { return proj(x, WQ); }), K = X.map(function (x) { return proj(x, WK); }), Vv = X.map(function (x) { return proj(x, WV); }), A = [], out = [];
+      for (var i = 0; i < L; i++) {
+        var sc = []; for (var j = 0; j <= i; j++) { var s = 0; for (var l = 0; l < Q[i].length; l++) s += Q[i][l] * K[j][l]; sc.push(s); }
+        var a = softmax(sc); A.push(a);
+        var dh = WV[0].length, z = new Float64Array(dh); for (j = 0; j <= i; j++) for (l = 0; l < dh; l++) z[l] += a[j] * Vv[j][l];
+        var w = proj(z, WO); for (l = 0; l < D; l++) w[l] *= scale; out.push(w);
+      }
+      return { A: A, out: out };
+    }
+    // run(tokens incl. BOS at 0, ablate = scale on the L0 head output)
+    function run(toks, s0) {
+      if (s0 == null) s0 = 1;
+      var X = toks.map(function (t, i) { var x = new Float64Array(D); for (var k = 0; k < D; k++) x[k] = W_E[t][k] + W_pos[i][k]; return x; });
+      var h0 = head(X, W_Q0, W_K0, W_V0, W_O0, s0); X = X.map(function (x, i) { var y = new Float64Array(D); for (var k = 0; k < D; k++) y[k] = x[k] + h0.out[i][k]; return y; });
+      var h1 = head(X, W_Q1, W_K1, W_V1, W_O1, 1); X = X.map(function (x, i) { var y = new Float64Array(D); for (var k = 0; k < D; k++) y[k] = x[k] + h1.out[i][k]; return y; });
+      var loss = [], pred = [];
+      for (var i = 0; i < toks.length - 1; i++) {
+        var lg = []; for (var v = 0; v < V; v++) lg.push(rowdot(X[i], W_U, v)); var pr = softmax(lg), b = 0; for (v = 1; v < V; v++) if (pr[v] > pr[b]) b = v;
+        loss.push(-Math.log(pr[toks[i + 1]])); pred.push(b);
+      }
+      var n = (toks.length - 1) / 2, sc = 0, c = 0; for (i = n + 1; i < toks.length; i++) { sc += h1.A[i][i - n + 1]; c++; }
+      var s0sc = 0; for (i = 1; i < toks.length; i++) s0sc += h0.A[i][i - 1]; s0sc /= toks.length - 1;
+      var lp = 0, lr = 0; for (i = 0; i < n; i++) lp += loss[i]; for (i = n; i < 2 * n; i++) lr += loss[i];
+      return { A0: h0.A, A1: h1.A, loss: loss, pred: pred, ind: sc / c, prev: s0sc, lossPlay: lp / n, lossRerun: lr / n, n: n };
+    }
+    function repTokens(seed, n) { var q = rng(seed), a = []; for (var i = 0; i < n; i++) a.push(Math.floor(q() * V)); return [V].concat(a, a); }
+    return { V: V, D: D, NP: NP, o: o, W_E: W_E, W_OV0: W_OV0, W_QK1: W_QK1, fullOV: fullOV, Kcomp: Kcomp, top1: top1, compK: compK, compQ: compQ, compRand: compRand, run: run, repTokens: repTokens, GAM: GAM };
+  })();
+  /* ===END MODEL=== */
+
+  /* ---------------- the tape: repeated random tokens, as in generate_repeated_tokens ---------------- */
+  var VOC = ['Furby', 'Nokia', 'Snake', 'VHS', 'MSN', 'Win98', 'modem', 'Zip', 'Sega', 'Pogs', 'Tetris', 'Kazaa'];
+  var SEQ = 6, TOK = M.repTokens('tape3', SEQ), RUN = M.run(TOK, 1), RUN0 = M.run(TOK, 0);
+  function nm(t) { return t === M.V ? 'BOS' : VOC[t]; }
+  function ph(W) { return W < 600; }
+  function bg(ctx, W, H, t) { F.sky(ctx, W, H, P.night, '#2b2f5c'); F.stars(ctx, W, H, t, 'deep7', 46); }
+  function lbl(ctx, text, x, y, color, sz, o) { o = o || {}; F.hand(ctx, text, x, y, sz || 15, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.85)', seed: text, align: o.align, reveal: o.reveal, rot: o.rot }); }
+  function readout(ctx, x, y, lines, W, right) {
+    var sz = W < 500 ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    if (right) x = x - w - 22;
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.92)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+    return lines.length * sz * 1.3 + 12;
+  }
+  // tape geometry: row 0 = BOS + first pass, row 1 = rerun (aligned under the same token)
+  var G = { x0: 0, cw: 0, ch: 0, y: [0, 0] };
+  function layout(W, H, n, top) { var cols = n + 1; G.cw = Math.min(78, (W - 24) / cols); G.ch = Math.min(46, G.cw * .78); G.x0 = (W - G.cw * cols) / 2; G.y = [top, top + G.ch + 12]; }
+  function cardXY(i, n) { n = n || SEQ; if (i <= n) return [G.x0 + G.cw * (i + .5), G.y[0] + G.ch / 2]; return [G.x0 + G.cw * (i - n + .5), G.y[1] + G.ch / 2]; }
+  function drawTape(ctx, W, toks, a, hi, n) {
+    n = n || (toks.length - 1) / 2; ctx.save(); ctx.globalAlpha = a == null ? 1 : a;
+    var fs = Math.max(10, Math.min(15, G.cw * .23));
+    for (var i = 0; i < toks.length; i++) {
+      var p = cardXY(i, n), col = i === 0 ? P.lav : i <= n ? P.butter : P.mint;
+      if (hi && hi[i]) { F.glow(ctx, p[0], p[1], G.cw * .7, 'rgba(247,227,160,.8)', hi[i]); }
+      F.paper(ctx, p[0], p[1], G.cw - 5, G.ch - 4, col, { seed: 'c' + i, rot: ((i * 37) % 7 - 3) * .006, shadow: true, blur: 4, lift: 2 });
+      F.hand(ctx, nm(toks[i]), p[0], p[1], fs, P.ink, { seed: 'n' + i });
+    }
+    F.hand(ctx, 'play', G.x0 - 2, G.y[0] - 9, 11, P.butter, { align: 'left', seed: 'play' });
+    F.hand(ctx, 'rerun', G.x0 + G.cw + 2, G.y[1] + G.ch + 9, 11, P.mint, { align: 'left', seed: 'rr' });
+    ctx.restore();
+  }
+  // heatmaps. mode 'attn': 0..1 on a causal grid. mode 'div': diverging, scaled by vmax.
+  function heat(ctx, x, y, s, A, o) {
+    o = o || {}; var L = A.length, c = s / L, vmax = o.vmax || 1; ctx.save(); ctx.globalAlpha = o.a == null ? 1 : o.a;
+    F.paper(ctx, x + s / 2, y + s / 2, s + 14, s + 14, P.cream, { seed: 'heat' + (o.seed || ''), rot: .006 });
+    for (var i = 0; i < L; i++) for (var j = 0; j < A[i].length || j < L; j++) {
+      var v = A[i][j];
+      if (o.mode === 'div') {
+        var u = clamp(v / vmax, -1, 1);
+        ctx.fillStyle = u >= 0 ? 'rgb(' + Math.round(lerp(247, 226, u)) + ',' + Math.round(lerp(240, 104, u)) + ',' + Math.round(lerp(225, 92, u)) + ')'
+          : 'rgb(' + Math.round(lerp(247, 90, -u)) + ',' + Math.round(lerp(240, 140, -u)) + ',' + Math.round(lerp(225, 210, -u)) + ')';
+      } else {
+        if (v == null) { ctx.fillStyle = 'rgba(42,41,52,.08)'; }
+        else { var w = clamp(v, 0, 1); ctx.fillStyle = 'rgb(' + Math.round(lerp(247, 214, w)) + ',' + Math.round(lerp(240, 84, w)) + ',' + Math.round(lerp(225, 104, w)) + ')'; }
+      }
+      ctx.fillRect(x + j * c + .5, y + i * c + .5, c - 1, c - 1);
+    }
+    if (o.row != null) { ctx.strokeStyle = P.ink; ctx.lineWidth = 2; ctx.strokeRect(x - 1, y + o.row * c, s + 2, c); }
+    if (o.col != null) { ctx.strokeStyle = P.ink; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.strokeRect(x + o.col * c, y - 1, c, s + 2); ctx.setLineDash([]); }
+    if (o.title) lbl(ctx, o.title, x + s / 2, y - 18, o.tc || P.chalk, o.ts || 14);
+    if (o.xl) lbl(ctx, o.xl, x + s / 2, y + s + 16, P.chalk, 11);
+    if (o.yl) lbl(ctx, o.yl, x - 12, y + s / 2, P.chalk, 11, { rot: -Math.PI / 2 });
+    ctx.restore();
+  }
+  function tri(A) { return A.map(function (row, i) { var r = []; for (var j = 0; j < A.length; j++) r.push(j <= i ? row[j] : null); return r; }); }
+  function blendA(A, B, u) { return A.map(function (row, i) { return row.map(function (v, j) { return lerp(v, B[i][j], u); }); }); }
+  function stats(Mx) { var d = 0, off = 0, n = Mx.length; for (var i = 0; i < n; i++) for (var j = 0; j < n; j++) { if (i === j) d += Mx[i][j] / n; else off += Mx[i][j] / (n * n - n); } return { d: d, off: off }; }
+  var OVS = stats(M.fullOV), KCS = stats(M.Kcomp);
+  // block norms of W_OV0 over the named subspaces: which band writes into which
+  var BANDS = [['TOK', M.o.TOK, 16], ['POS', M.o.POS, 14], ['PREV', M.o.PREV, 16], ['OUT', M.o.OUT, 16]];
+  var OV0B = BANDS.map(function (a) { return BANDS.map(function (b) { var s = 0; for (var i = 0; i < a[2]; i++) for (var j = 0; j < b[2]; j++) { var v = M.W_OV0[a[1] + i][b[1] + j]; s += v * v; } return Math.sqrt(s) / 4; }); });
+  // per-token loss chart (loss[i] = loss predicting token i+1), with the ln(12) "pure guessing" line
+  function lossChart(ctx, R, a, x, y, w, h) {
+    ctx.save(); ctx.globalAlpha = a; var L = R.loss.length, c = w / L, top = 4.2;
+    F.paper(ctx, x + w / 2, y + h / 2 + 4, w + 20, h + 34, 'rgba(22,26,53,.85)', { seed: 'lc', shadow: false });
+    for (var i = 0; i < L; i++) { var bh = h * clamp(R.loss[i] / top, 0, 1); ctx.fillStyle = i < R.n ? 'rgba(232,116,124,.95)' : 'rgba(125,181,138,.95)'; ctx.fillRect(x + i * c + 2, y + h - bh, c - 4, bh); }
+    var gy = y + h - h * Math.log(12) / top; ctx.strokeStyle = P.butter; ctx.setLineDash([5, 4]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, gy); ctx.lineTo(x + w, gy); ctx.stroke(); ctx.setLineDash([]);
+    F.hand(ctx, 'ln 12: guessing', x + w, gy - 9, 11, P.butter, { align: 'right', seed: 'ln' });
+    F.hand(ctx, 'first pass', x + w * .25, y + h + 12, 11, P.pink, { seed: 'fp' }); F.hand(ctx, 'rerun', x + w * .75, y + h + 12, 11, P.mint, { seed: 'rrn' });
+    ctx.restore();
+  }
+  function codeNote(ctx, lines, x, y, sz, a, seed, color) {
+    ctx.save(); ctx.globalAlpha = a; ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l).width); });
+    var h = lines.length * sz * 1.4 + 16; F.paper(ctx, x + w / 2 + 12, y + h / 2, w + 24, h, color || P.cream, { seed: seed || 'code', rot: -.004 });
+    ctx.fillStyle = P.ink; ctx.textBaseline = 'top'; lines.forEach(function (l, i) { ctx.fillStyle = l.charAt(0) === '#' ? '#7a6f8f' : P.ink; ctx.fillText(l, x + 12, y + 8 + i * sz * 1.4); });
+    ctx.restore(); return { w: w + 24, h: h };
+  }
+  function fitMono(ctx, lines, maxW, big) { var sz = big; ctx.save(); for (; sz > 8; sz -= .5) { ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l).width); }); if (w + 26 <= maxW) break; } ctx.restore(); return sz; }
+  function cartridge(ctx, x, y, w, h, title, sub, col, a) {
+    ctx.save(); ctx.globalAlpha = a; var r = F.gameboy(ctx, x, y, w, h, { label: sub, body: col });
+    F.hand(ctx, title, r.x + r.w / 2, r.y + r.h / 2, Math.min(18, r.w / 7), '#2f3a1e', { seed: title }); ctx.restore();
+  }
+
+  /* ---------------- predict, then watch (never gated) ---------------- */
+  var PRED = { el: null, asked: false, choice: null, lastT: 0 };
+  var PRED_T = 97;
+  function predUI(api) {
+    if (PRED.el) return PRED.el;
+    var d = document.createElement('div');
+    d.setAttribute('role', 'dialog'); d.setAttribute('aria-label', 'Predict, then watch');
+    d.style.cssText = 'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92%,440px);background:#f7f0e1;color:#2a2934;border-radius:10px;padding:14px 14px 10px;box-shadow:0 10px 30px rgba(0,0,0,.5);display:none;z-index:5;font:15px/1.35 system-ui,sans-serif';
+    d.innerHTML = '<div style="font:700 18px ' + F.HAND + ';margin-bottom:8px">Predict, then watch: if W_OV were the identity, what would the head do?</div>' +
+      ['copy the token it looks at', 'predict the token before it', 'blur everything to an average'].map(function (s, i) { return '<button data-c="' + i + '" style="display:block;width:100%;text-align:left;margin:6px 0;padding:9px 10px;border:0;border-radius:8px;background:#f7e3a0;color:#2a2934;font:inherit;cursor:pointer">' + s + '</button>'; }).join('') +
+      '<button data-c="skip" style="display:block;margin:8px 0 0 auto;padding:6px 10px;border:0;border-radius:8px;background:#b9e3cc;color:#2a2934;font:inherit;cursor:pointer">just show me &#9654;</button>';
+    d.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    [].forEach.call(d.querySelectorAll('button'), function (b) { b.onclick = function (e) { e.stopPropagation(); PRED.choice = b.dataset.c; d.style.display = 'none'; api.audio.blip(b.dataset.c === '0' ? 988 : 660); var pp = api.root.querySelector('.pp'); if (pp && pp.getAttribute('aria-label') === 'Play') pp.click(); }; });
+    api.root.querySelector('.stage').appendChild(d); PRED.el = d; return d;
+  }
+  function predTick(t, api) {
+    var d = predUI(api), prev = PRED.lastT; PRED.lastT = t;
+    if (!PRED.asked && prev < PRED_T && t >= PRED_T && t - prev < .5) {
+      PRED.asked = true; d.style.display = 'block';
+      var pp = api.root.querySelector('.pp'); if (pp && pp.getAttribute('aria-label') === 'Pause') pp.click();
+    }
+    if (d.style.display === 'block' && (t < PRED_T - .6 || t > PRED_T + .6)) d.style.display = 'none';
+  }
+
+  /* ---------------- chapters ---------------- */
+  var chapters = [
+    { name: 'the rerun', start: 0, dur: 18, cap: {
+        1: 'A tape of <b>random words</b>, played twice. The first time, the model can only guess. The second time it gets it almost right. Let us find the machine that does that.',
+        2: 'Repeated random tokens: <code>[BOS] A B C D E F A B C D E F</code>. Loss is high on the first pass and falls on the rerun. Every number is computed live by a real 2-layer toy model.',
+        3: 'Same set-up as ARENA <code>generate_repeated_tokens</code>: BOS then a random half repeated. Toy: attention-only, 2 layers, d_model = 64, d_vocab = 12. ln(12) = 2.48 nats is pure guessing; the red bars sit at or above it, the green ones drop.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var top = ph(W) ? 150 : 170; layout(W, H, SEQ, top);
+        // the VHS label with the question
+        var lw = Math.min(W - 40, 420), ly = ph(W) ? 58 : 70;
+        ctx.save(); ctx.globalAlpha = ramp(l, 0, 1);
+        F.paper(ctx, W / 2, ly, lw, 66, '#3a3f6e', { seed: 'vhs', rot: -.01 });
+        F.paper(ctx, W / 2, ly, lw * .86, 40, P.cream, { seed: 'vhsl', rot: .01, shadow: false });
+        F.hand(ctx, 'how does it know what comes next?', W / 2, ly, Math.min(18, lw / 19), P.ink, { seed: 'q', reveal: ramp(l, .4, 2.5) });
+        ctx.restore();
+        drawTape(ctx, W, TOK, ramp(l, 1, 2.5));
+        var cw2 = Math.min(W - 44, 460), chy = G.y[1] + G.ch + 36; lossChart(ctx, RUN, ramp(l, 3, 5), (W - cw2) / 2, chy, cw2, ph(W) ? 90 : 110);
+        var y = chy + (ph(W) ? 90 : 110) + 36;
+        if (l > 5) readout(ctx, W / 2 - (ph(W) ? 150 : 170), y, [
+          ['loss, first pass: ' + RUN.lossPlay.toFixed(2) + ' nats', P.pink],
+          ['loss, rerun:      ' + RUN.lossRerun.toFixed(2) + ' nats', P.mint],
+          ['guessing = ln 12 = ' + Math.log(12).toFixed(2), P.chalk]], W);
+        var es = Math.min(W, H) * .1; F.egg(ctx, W - es * 1.3, H - es * 1.6, es, t, { clear: .3 + .2 * ramp(l, 8, 12) });
+        if (l > 9) lbl(ctx, 'the mind egg: 2 layers,', W - es * 1.3 - es * 1.5, H - es * 3.4, P.butter, 13, { align: 'right' });
+        if (l > 9) lbl(ctx, 'attention only', W - es * 1.3 - es * 1.5, H - es * 3.4 + 17, P.butter, 13, { align: 'right' });
+      } },
+    { name: 'two heads', start: 18, dur: 20, cap: {
+        1: 'Inside, two readers do the work. The first always looks one word back. The second looks at a slanted line: the word <b>after</b> the last time it saw the current word.',
+        2: 'Layer 0 has a <b>previous-token head</b>: its pattern is the sub-diagonal. Layer 1 has an <b>induction head</b>: a stripe offset by <code>seq_len - 1</code>, looking at what followed the earlier copy.',
+        3: 'Rows = destination, columns = source, <code>cache["pattern", layer][head]</code>. Induction score = mean of <code>pattern.diagonal(offset=1-seq_len)</code>. The prev-token score is the mean of the -1 diagonal. Both computed from the forward pass shown.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W), s = pw ? Math.min((W - 60) / 2, H * .3) : Math.min(W * .26, H * .5), gap = pw ? 30 : 90;
+        var x1 = (W - 2 * s - gap) / 2, x2 = x1 + s + gap, y = pw ? 150 : 170;
+        var cw = pw ? s : Math.min(220, s), chh = cw * .56;
+        cartridge(ctx, x1 + (s - cw) / 2, y - chh - 36, cw, chh, 'HEAD 0.7', 'PREV-TOKEN', '#cfcbd8', ramp(l, 0, 1));
+        cartridge(ctx, x2 + (s - cw) / 2, y - chh - 36, cw, chh, 'HEAD 1.4', 'INDUCTION', '#e7c9d2', ramp(l, 1.5, 2.5));
+        heat(ctx, x1, y, s, tri(RUN.A0), { a: ramp(l, .5, 2), title: 'layer 0 pattern', seed: 'a' });
+        var st = ramp(l, 3, 6); heat(ctx, x2, y, s, tri(RUN.A1), { a: ramp(l, 2, 3.5), title: 'layer 1 pattern', seed: 'b' });
+        // trace the stripe
+        if (l > 6) { var c = s / RUN.A1.length, k = ramp(l, 6, 9); ctx.save(); ctx.strokeStyle = P.teal; ctx.lineWidth = 3; ctx.setLineDash([6, 5]);
+          ctx.beginPath(); ctx.moveTo(x2 + (1.5) * c, y + (SEQ + 1) * c); ctx.lineTo(x2 + (1.5 + (SEQ - 1) * k + .5) * c, y + (SEQ + 1 + (SEQ - 1) * k + .5) * c); ctx.stroke(); ctx.restore(); }
+        var ry = y + s + 26;
+        if (l > 4) readout(ctx, x1 - 4, ry, [['prev score ' + RUN.prev.toFixed(2), P.butter]], W);
+        if (l > 8) readout(ctx, x2 - 4, ry, [['induction ' + RUN.ind.toFixed(2), P.teal]], W);
+        if (l > 11) { var sz = pw ? 15 : 19; F.note(ctx, pw ? 'one looks back,\none looks where\nthe past went next' : 'one looks back, one looks where the past went next', W / 2, Math.min(H - 60, ry + (pw ? 110 : 90)), sz, { color: P.pink, seed: 'two', rot: -.02, reveal: ramp(l, 11, 13) }); }
+      } },
+    { name: 'the stamp', start: 38, dur: 22, cap: {
+        1: 'Head 0.7 is a rubber stamp. At every position it copies the word <b>just before</b> into a spare corner of that position\'s memory: "the word before me was Snake".',
+        2: 'The prev-token head reads the <b>token</b> part of position i-1 and writes it into a spare part of position i\'s residual stream. That write is its OV circuit: <code>W_OV = W_V W_O</code>.',
+        3: 'Block norms of the real <code>W_OV^0 = W_V W_O</code> (64x64) over named subspaces: only TOK -> PREV is lit. The QK side (<code>W_QK = W_Q W_K^T</code>) reads positions only, so it attends i -> i-1 whatever the tokens are. Real models use a messier basis; ARENA checks this with <code>pos_by_pos_pattern</code>.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W);
+        // two residual columns: position j-1 and j
+        var j = 3, colW = pw ? 92 : 120, bh = pw ? 40 : 48, cx1 = pw ? W * .24 : W * .2, cx2 = pw ? W * .62 : W * .42, top = pw ? 40 : 60;
+        var names = ['TOK', 'POS', 'PREV', 'OUT'], cols = [P.butter, P.sky, P.pink, P.mint];
+        [cx1, cx2].forEach(function (cx, k) {
+          ctx.save(); ctx.globalAlpha = ramp(l, 0, 1.5);
+          F.paper(ctx, cx, top + 2 * bh + 20, colW + 16, 4 * bh + 40, 'rgba(247,240,225,.14)', { seed: 'col' + k, shadow: false });
+          lbl(ctx, 'pos ' + (j - 1 + k), cx, top - 2, P.chalk, 14);
+          for (var b = 0; b < 4; b++) {
+            var y = top + 18 + b * bh, lit = b === 0 || b === 1 || (b === 2 && k === 1 && l > 6);
+            F.paper(ctx, cx, y + bh / 2, colW, bh - 6, lit ? cols[b] : 'rgba(247,240,225,.35)', { seed: 'band' + b + k, shadow: false });
+            F.hand(ctx, names[b], cx - colW / 2 + 8, y + bh / 2 - 7, 11, P.ink, { align: 'left', seed: 'bn' + b });
+            var txt = b === 0 ? nm(TOK[j - 1 + k]) : b === 1 ? '#' + (j - 1 + k) : b === 2 && k === 1 && l > 6 ? 'before: ' + nm(TOK[j - 1]) : '';
+            if (txt) F.hand(ctx, txt, cx + 4, y + bh / 2 + 6, pw ? 12 : 14, P.ink, { seed: 'bt' + b + k });
+          }
+          ctx.restore();
+        });
+        // the plane: TOK of j-1 flies into PREV of j
+        var fp = ramp(l, 3, 6.5); if (fp > 0 && fp < 1) { var x = lerp(cx1 + colW * .3, cx2 - colW * .3, fp), y = lerp(top + 18 + bh / 2, top + 18 + 2.5 * bh, fp) - Math.sin(fp * Math.PI) * 40; F.plane(ctx, x, y, 14, .3 + fp * .4, P.cream); }
+        if (l > 2) F.arrow(ctx, cx1 + colW / 2 + 4, top + 18 + bh / 2, cx2 - colW / 2 - 6, top + 18 + 2.5 * bh, 'rgba(243,179,195,.6)', 2, 'st');
+        // block norm grid of W_OV0
+        var gs = pw ? Math.min(W - 120, 170) : Math.min(230, H * .38), gx = pw ? (W - gs) / 2 + 16 : W * .66, gy = pw ? top + 4 * bh + 90 : top + 30;
+        if (l > 8) {
+          var a = ramp(l, 8, 9.5); heat(ctx, gx, gy, gs, OV0B, { mode: 'div', vmax: 1, a: a, title: 'W_OV = W_V W_O  (layer 0)', seed: 'ov0', ts: pw ? 13 : 15 });
+          ctx.save(); ctx.globalAlpha = a; var c = gs / 4;
+          for (var i = 0; i < 4; i++) { F.hand(ctx, names[i], gx - 6, gy + (i + .5) * c, 10, P.chalk, { align: 'right', seed: 'ry' + i }); F.hand(ctx, names[i], gx + (i + .5) * c, gy + gs + 14, 10, P.chalk, { seed: 'cx' + i }); }
+          F.hand(ctx, 'reads', gx - 30, gy - 12, 10, P.butter, { seed: 'rd' }); F.hand(ctx, 'writes', gx + gs + 4, gy + gs + 14, 10, P.butter, { align: 'left', seed: 'wr' });
+          ctx.restore();
+        }
+        if (l > 13) { var ry = pw ? gy + gs + 34 : gy + gs + 40; readout(ctx, pw ? 16 : gx - 10, ry, [['|TOK->PREV| = ' + OV0B[0][2].toFixed(2), P.pink], ['every other block = ' + OV0B[1][0].toFixed(2), P.chalk]], W); }
+      } },
+    { name: 'QK: where to look', start: 60, dur: 22, cap: {
+        1: 'Now head 1.4 asks every earlier position: "was the word <b>before you</b> the same as me?" A stamp that matches lights up, and the head looks there.',
+        2: 'The <b>QK circuit</b> decides where to look: the query reads my token, the key reads head 0.7\'s stamp. Bright diagonal = "attend where the previous token was me".',
+        3: 'Full K-composition circuit: <code>W_E W_QK^1 (W_E W_OV^0)^T</code>, query side straight from the embedding, key side routed through the prev-token head. ARENA <code>find_K_comp_full_circuit</code>; <code>top_1_acc(K_comp_circuit.T)</code> is the fraction of tokens whose max key is itself.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W); layout(W, H, SEQ, pw ? 28 : 34);
+        var q = SEQ + 1 + Math.floor(Math.max(0, l - 4) / 3) % SEQ, tgt = q - SEQ + 1, hi = {}; hi[q] = 1; hi[tgt] = .8;
+        drawTape(ctx, W, TOK, 1, l > 4 ? hi : null);
+        if (l > 4) { var a = cardXY(q), b = cardXY(tgt); ctx.save(); ctx.globalAlpha = .4 + .6 * RUN.A1[q][tgt]; F.arrow(ctx, a[0], a[1] - G.ch / 2, b[0] + 4, b[1] + G.ch / 2 + 2, P.teal, 1 + 3 * RUN.A1[q][tgt], 'qk' + q); ctx.restore(); }
+        var s = pw ? Math.min(W - 70, H * .42) : Math.min(H * .55, W * .34), x = pw ? (W - s) / 2 + 8 : W * .18, y = G.y[1] + G.ch + 48;
+        var row = l > 4 ? TOK[q] : null;
+        heat(ctx, x, y, s, M.Kcomp, { mode: 'div', vmax: 9, a: ramp(l, 1, 2.5), row: row, title: 'W_E W_QK (W_E W_OV)^T', seed: 'kc', xl: 'key token (via the stamp)', yl: 'query token', ts: pw ? 13 : 15 });
+        var rx = pw ? 14 : x + s + 50, ry = pw ? y + s + 30 : y + 10;
+        if (l > 7) readout(ctx, rx, ry, [
+          ['query: ' + nm(TOK[q]) + ' at pos ' + q, P.teal],
+          ['looks at pos ' + tgt + ' (' + nm(TOK[tgt]) + '): ' + RUN.A1[q][tgt].toFixed(2), P.butter],
+          ['diag mean ' + KCS.d.toFixed(1) + ', off-diag ' + KCS.off.toFixed(2), P.chalk],
+          ['top_1_acc = ' + M.top1(M.Kcomp).toFixed(2), P.mint]], W);
+      } },
+    { name: 'OV: what to copy', start: 82, dur: 22, cap: {
+        1: 'Looking is half the job. Whatever the head looks at, it then <b>repeats</b> as its guess. That copying is a separate machine from the looking.',
+        2: 'The <b>OV circuit</b> decides what gets moved: <code>W_E W_OV W_U</code>. Bright diagonal = "attend to Snake, push up the logit for Snake": a copying head.',
+        3: 'Full OV circuit <code>W_E @ OV_circuit @ W_U</code> with <code>OV_circuit = FactoredMatrix(W_V, W_O)</code>, d_vocab x d_vocab. Here W_V is identity plus 12% noise, and it still wins every row: <code>top_1_acc</code> is the fraction where the best logit sits on the diagonal (ARENA ~0.39 for 1.4 alone, higher once 1.10 is added).' },
+      draw: function (ctx, t, l, W, H, api) {
+        bg(ctx, W, H, t); predTick(t, api); var pw = ph(W);
+        var s = pw ? Math.min(W - 70, H * .46) : Math.min(H * .62, W * .34), x = pw ? (W - s) / 2 + 8 : W * .14, y = pw ? 50 : 60;
+        var col = Math.floor(l / 2.5) % M.V;
+        heat(ctx, x, y, s, M.fullOV, { mode: 'div', vmax: 7, a: ramp(l, 0, 1.5), col: l > 3 ? col : null, title: 'full OV circuit  W_E W_OV W_U', seed: 'ov', xl: 'logit on output token', yl: 'attended token', ts: pw ? 13 : 15 });
+        if (l > 3) { ctx.save(); var c = s / M.V; F.hand(ctx, nm(col), x + (col + .5) * c, y - 36, 12, P.butter, { seed: 'cn' + col }); ctx.restore(); }
+        var rx = pw ? 14 : x + s + 50, ry = pw ? y + s + 34 : y + 20, ans = PRED.choice;
+        if (l > 5) readout(ctx, rx, ry, [
+          ['diagonal mean ' + OVS.d.toFixed(2), P.pink], ['off-diagonal  ' + OVS.off.toFixed(2), P.sky], ['top_1_acc = ' + M.top1(M.fullOV).toFixed(2), P.mint]], W);
+        if (l > 15.2) {
+          var msg = ans === '0' ? 'yes: it copies what it looks at' : ans === '1' || ans === '2' ? 'close, but no: it copies what it looks at' : 'identity OV = copy what you look at';
+          var sz = pw ? 15 : 19; F.note(ctx, msg, pw ? W / 2 : rx + 170, pw ? Math.min(H - 40, ry + 110) : ry + 150, sz, { color: P.butter, seed: 'ans', reveal: ramp(l, 15.2, 16.5), rot: -.02 });
+        }
+      } },
+    { name: 'K-composition', start: 104, dur: 18, cap: {
+        1: 'The trick is teamwork. Head 1.4 cannot see "the word before" on its own. It reads the stamp that head 0.7 left behind. One head\'s output becomes the next head\'s question to ask.',
+        2: '<b>K-composition</b>: layer 0\'s OV output feeds layer 1\'s <b>keys</b>. Measured from weights alone, the score is double a random head\'s; Q-composition is zero.',
+        3: '<code>get_comp_score(W_A, W_B) = ||W_A W_B||_F / (||W_A||_F ||W_B||_F)</code> with <code>W_A = W_OV^0</code>, <code>W_B = W_QK^1.T</code> for K-comp. Baseline: a random Gaussian W_A. The rank-16 identity blocks cap the score at 1/4 here; ARENA subtracts a similar random baseline.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W);
+        // diagram: head 0.7 -> residual PREV -> head 1.4 key
+        var bw = pw ? 130 : 170, bh = pw ? 50 : 60, y1 = pw ? 60 : 80, y2 = pw ? 210 : 250, xa = pw ? W * .28 : W * .25, xb = pw ? W * .72 : W * .55;
+        ctx.save(); ctx.globalAlpha = ramp(l, 0, 1.5);
+        F.paper(ctx, xa, y1, bw, bh, P.lav, { seed: 'h0' }); F.hand(ctx, 'head 0.7: OV', xa, y1, pw ? 14 : 17, P.ink, { seed: 'h0t' });
+        F.paper(ctx, W / 2, (y1 + y2) / 2, pw ? W - 40 : W * .6, 26, 'rgba(243,179,195,.8)', { seed: 'bus', shadow: false }); F.hand(ctx, 'residual stream: PREV band', W / 2, (y1 + y2) / 2, 12, P.ink, { seed: 'bus' });
+        F.paper(ctx, xb, y2, bw, bh * 1.2, P.mint, { seed: 'h1' }); F.hand(ctx, 'head 1.4', xb + bw * .25, y2 - 12, pw ? 14 : 17, P.ink, { seed: 'h1t' });
+        F.hand(ctx, 'Q     K     V', xb, y2 + 12, pw ? 12 : 14, P.ink, { seed: 'qkv', font: F.MONO });
+        ctx.restore();
+        var f = ramp(l, 2, 5); if (f > 0) { F.arrow(ctx, xa, y1 + bh / 2 + 2, lerp(xa, W / 2 - 20, f), lerp(y1 + bh / 2 + 2, (y1 + y2) / 2 - 14, f), P.pink, 3, 'k1'); }
+        var g = ramp(l, 5, 8); if (g > 0) { F.arrow(ctx, W / 2 + 10, (y1 + y2) / 2 + 14, lerp(W / 2 + 10, xb + (pw ? 0 : 2), g), lerp((y1 + y2) / 2 + 14, y2 - bh * .6 - 2, g), P.teal, 3, 'k2'); lbl(ctx, 'into the KEY', xb - (pw ? 70 : 90), (y1 + y2) / 2 + 40, P.teal, 13); }
+        // composition score bars
+        if (l > 8) {
+          var bars = [['K-comp (0.7 -> 1.4)', M.compK, P.teal], ['Q-comp (0.7 -> 1.4)', M.compQ, P.pink], ['random W_A', M.compRand, P.chalk]];
+          var bx = pw ? 20 : W * .2, by = y2 + bh + (pw ? 40 : 60), maxw = pw ? W - 150 : W * .4, k = ramp(l, 8, 10);
+          lbl(ctx, 'get_comp_score', bx, by - 16, P.butter, 14, { align: 'left' });
+          bars.forEach(function (b, i) { var yy = by + i * 34; ctx.fillStyle = 'rgba(247,240,225,.12)'; ctx.fillRect(bx, yy, maxw, 22); ctx.fillStyle = b[2]; ctx.fillRect(bx, yy, maxw * clamp(b[1] / .3, 0, 1) * k, 22);
+            lbl(ctx, b[0], bx + 6, yy + 11, 12, P.chalk, { align: 'left' }); ctx.save(); ctx.font = '600 13px ' + F.MONO; ctx.fillStyle = P.chalk; ctx.fillText((b[1] * k).toFixed(3), bx + maxw + 8, yy + 16); ctx.restore(); });
+        }
+      } },
+    { name: 'ablate the stamp', start: 122, dur: 18, cap: {
+        1: 'Proof by removal: switch off the stamp and the second head goes blind. The slanted line fades and the rerun is as hard as the first time.',
+        2: 'Zero-ablate head 0.7: the stripe vanishes and rerun loss climbs back to guessing. <b>Where this story stops being true:</b> real models are not this tidy.',
+        3: 'Ablation scale s multiplies head 0.7\'s output before layer 1; the whole forward pass reruns every frame. In ARENA\'s 2L model both 1.4 and 1.10 do induction, heads are polysemantic, and bigger models have many (and backup) induction heads, so single-head ablations understate the job.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W), sc = 1 - ramp(l, 2, 8), R = M.run(TOK, sc);
+        var s = pw ? Math.min(W - 90, H * .4) : Math.min(H * .55, W * .3), x = pw ? (W - s) / 2 : W * .2, y = pw ? 44 : 60;
+        heat(ctx, x, y, s, tri(R.A1), { title: 'layer 1 pattern', seed: 'ab' });
+        var rx = pw ? 14 : x + s + 50, ry = pw ? y + s + 26 : y + 10;
+        readout(ctx, rx, ry, [['head 0.7 output x ' + sc.toFixed(2), P.pink], ['induction score ' + R.ind.toFixed(2), P.teal], ['rerun loss ' + R.lossRerun.toFixed(2) + ' nats', P.mint]], W);
+        var p = ramp(l, 10.5, 12); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 11.5, 12.5); var sz = pw ? 13 : 17, cx = W - Math.min(W, H) * .3, cy = H - Math.min(W, H) * .24;
+          F.hand(ctx, 'real models: many heads', cx - sz, cy - sz * 1.5, sz, P.ink, { seed: 'w1', rot: -.62 }); F.hand(ctx, 'share this job, messily', cx + sz * .3, cy, sz, P.ink, { seed: 'w2', rot: -.62 }); ctx.restore(); }
+      } },
+    { name: 'your code', start: 140, dur: 18, cap: {
+        1: 'The tape turns into the code you write in week 7. One fully understood circuit is proof that <b>steering by understanding</b> is possible: first read the mind, then nudge it.',
+        2: 'Stripe = induction score from <code>cache["pattern", 1]</code>; copier = <code>FactoredMatrix</code> full OV circuit. <b>One fully understood circuit is proof that steering by understanding is possible.</b>',
+        3: 'Pattern shape <code>[batch, head, dest, src]</code>; diagonal offset <code>1 - seq_len</code>; <code>full_OV_circuit[indices, indices].AB</code> samples without building the whole matrix. Knowing the circuit tells you which weights to edit and what the side effects will be.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W);
+        var code = [
+          '# the stripe (induction score)',
+          'pattern = cache["pattern", 1]',
+          'stripe = pattern.diagonal(',
+          '    dim1=-2, dim2=-1, offset=1 - seq_len)',
+          'score = stripe.mean((0, -1))  # per head',
+          '',
+          '# the copier (full OV circuit)',
+          'OV = FactoredMatrix(W_V[1, 4], W_O[1, 4])',
+          'full_OV_circuit = W_E @ OV @ W_U',
+          'top_1_acc(full_OV_circuit)'];
+        var n = Math.round(code.length * ramp(l, .5, 6)), shown = code.slice(0, n), sz = fitMono(ctx, code, W - 20, pw ? 13 : 17);
+        codeNote(ctx, shown.length ? shown : [' '], pw ? 10 : (W - 560) / 2, pw ? 20 : 40, sz, 1, 'code');
+        if (l > 7) readout(ctx, pw ? 12 : (W - 560) / 2, pw ? 20 + code.length * sz * 1.4 + 34 : 40 + code.length * sz * 1.4 + 40, [['toy: score = ' + RUN.ind.toFixed(2) + ', top_1_acc = ' + M.top1(M.fullOV).toFixed(2), P.mint]], W);
+        if (l > 9) { var szz = pw ? 15 : 20; F.note(ctx, pw ? 'one fully understood circuit\nis proof that steering by\nunderstanding is possible' : 'one fully understood circuit is proof\nthat steering by understanding is possible', W / 2, H - (pw ? 80 : 90), szz, { color: P.pink, seed: 'steer', rot: -.015, reveal: ramp(l, 9, 12) }); }
+      } }
+  ];
+
+  /* ---------------- coda: now you drive ---------------- */
+  var C = { n: 6, s0: 1, seed: 1, toks: null, R: null, q: 0 };
+  function codaRun() { C.R = M.run(C.toks, C.s0); }
+  function codaNew() { for (var k = 0; k < 60; k++) { C.toks = M.repTokens('coda' + C.seed + '_' + C.n + '_' + k, C.n); if (new Set(C.toks.slice(1, C.n + 1)).size === C.n) break; } C.q = C.n + 1 + (C.seed % C.n); codaRun(); }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;font-size:13px">' +
+        '<span>seq_len</span><input type="range" min="3" max="6" step="1" value="' + C.n + '" aria-label="Sequence length"><b class="v1"></b>' +
+        '<span>head 0.7 on</span><input type="range" min="0" max="1" step="0.01" value="' + C.s0 + '" aria-label="Previous-token head output scale"><b class="v2"></b></div>' +
+        '<div style="font-size:12px;opacity:.85;margin-top:2px">Tap a first-pass word to change it (the rerun follows). Tap a rerun word to make it the query. <button class="nt" style="min-height:24px;font-size:12px">new tape</button></div>';
+      var ins = panel.querySelectorAll('input'), v1 = panel.querySelector('.v1'), v2 = panel.querySelector('.v2');
+      var upd = function (fresh) { var n = +ins[0].value; C.s0 = +ins[1].value; v1.textContent = n; v2.textContent = C.s0.toFixed(2); if (n !== C.n || fresh || !C.toks) { C.n = n; codaNew(); } else codaRun(); };
+      ins[0].oninput = function () { upd(true); }; ins[1].oninput = function () { upd(false); };
+      panel.querySelector('.nt').onclick = function () { C.seed++; upd(true); api.audio.blip(660); };
+      upd(!C.toks);
+    },
+    down: function (x, y, api) {
+      var n = C.n; for (var i = 1; i < C.toks.length; i++) { var p = cardXY(i, n); if (Math.abs(x - p[0]) < G.cw / 2 && Math.abs(y - p[1]) < G.ch / 2) {
+        if (i <= n) { C.toks[i] = (C.toks[i] + 1) % M.V; C.toks[i + n] = C.toks[i]; codaRun(); api.audio.blip(520 + 40 * C.toks[i]); }
+        else { C.q = i; api.audio.blip(880); }
+        return; } }
+    },
+    draw: function (ctx, t, W, H) {
+      bg(ctx, W, H, t); var pw = ph(W), n = C.n, R = C.R; layout(W, H, n, 26);
+      var q = clamp(C.q, n + 1, 2 * n), tgt = q - n + 1, hi = {}; hi[q] = 1; hi[tgt] = R.A1[q][tgt];
+      drawTape(ctx, W, C.toks, 1, hi, n);
+      var a = cardXY(q, n), b = cardXY(tgt, n); ctx.save(); ctx.globalAlpha = .35 + .65 * R.A1[q][tgt]; F.arrow(ctx, a[0], a[1] - G.ch / 2, b[0] + 4, b[1] + G.ch / 2 + 2, P.teal, 1 + 3 * R.A1[q][tgt], 'cq'); ctx.restore();
+      var top = G.y[1] + G.ch + 50, s = pw ? Math.min((W - 50) / 2, H - top - 150) : Math.min(H - top - 40, W * .26), hx = pw ? 16 : Math.max(16, W / 2 - (s + 50 + Math.min(300, W * .25)) / 2);
+      heat(ctx, hx, top, s, tri(R.A1), { title: 'layer 1 stripe', ts: 13, seed: 'cs' });
+      // QK row for the query token and OV column for the attended token, as bar strips
+      var bx = hx + s + (pw ? 22 : 50), bw = pw ? W - bx - 12 : Math.min(300, W * .25), rowq = M.Kcomp[C.toks[q]], colv = M.fullOV.map(function (r) { return r[C.toks[tgt + 0]]; });
+      function strip(vals, yy, title, color, mark) {
+        lbl(ctx, title, bx, yy - 12, color, 12, { align: 'left' }); var c = bw / vals.length, mx = 9;
+        for (var i = 0; i < vals.length; i++) { var h = 34 * clamp(vals[i] / mx, -.3, 1); ctx.fillStyle = i === mark ? color : 'rgba(247,240,225,.45)'; ctx.fillRect(bx + i * c + 1, yy + 36 - Math.max(h, 0), c - 2, Math.abs(h) + 1); }
+        return yy + 50;
+      }
+      var yy = strip(rowq, top + 8, 'QK row: ' + nm(C.toks[q]) + ' seeks stamp', P.teal, C.toks[q]);
+      yy = strip(colv, yy + 16, 'OV column: pushes ' + nm(C.toks[tgt]), P.pink, C.toks[tgt]);
+      var ly = pw ? top + s + 24 : yy + 20, lx = pw ? 12 : bx;
+      readout(ctx, lx, ly, [['induction score ' + R.ind.toFixed(2), P.teal], ['loss play ' + R.lossPlay.toFixed(2) + ' | rerun ' + R.lossRerun.toFixed(2), P.mint], ['predicts next: ' + nm(R.pred[q]), P.butter]], W);
+    }
+  };
+
+  F.play({
+    title: 'W7 deep dive · Taking an induction head apart',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: induction heads & patching', href: '../../index.html#demo/induction-heads-patching' },
+      { label: 'Week 7 pack', href: '../../index.html#week-07' },
+      { label: 'Map: induction heads', href: '../../index.html#map/node=induction-heads' },
+      { label: 'Map: K-composition', href: '../../index.html#map/node=k-composition' },
+      { label: 'Map: OV circuit', href: '../../index.html#map/node=ov-circuit' },
+      { label: 'Map: FactoredMatrix', href: '../../index.html#map/node=factored-matrix' },
+      { label: 'Case: induction heads', href: '../../index.html#cases/induction-heads' },
+      { label: 'Case: QK/OV circuits', href: '../../index.html#cases/qk-ov-circuits' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
