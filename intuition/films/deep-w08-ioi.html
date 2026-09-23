@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>The IOI detective story</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp, rng = F.rng;
+
+  /* ===MODEL=== a hand-built toy IOI circuit, run for real every time it is asked.
+     Keys are BOS plus the three names. Features: token (Mary/John), DUP (which name is repeated, per position),
+     INHIB (which name to ignore, at END), logits (Mary, John) at END.
+     3.0 duplicate-token + 5.5 induction: at each name, attend to an earlier copy of itself, write DUP = that name.
+     7.9 + 8.6 S-inhibition: at END, attend where DUP is loud (S2), copy DUP into INHIB.
+     9.9 + 9.6 name movers: at END, score each name alpha - delta * INHIB.name, copy the attended name to the logits.
+     10.10 backup name mover: same query, but its BOS score grows with how much the name movers already wrote (self-repair). */
+var M = (function () {
+  // names: 0 = Mary, 1 = John. Residual features per position: tok e (2), DUP (2); at END: INHIB (2), logits (2).
+  var CLEAN = ['When','Mary','and','John','went','to','the','store',',','John','gave','a','drink','to'];
+  var CORR  = CLEAN.slice(); CORR[9] = 'Mary';
+  var NAMES = { Mary: 0, John: 1 };
+  var HEADS = [
+    { id: '3.0', role: 'duplicate token', kind: 'dt', beta: 3.0, w: 1.0 },
+    { id: '5.5', role: 'induction', kind: 'dt', beta: 2.0, w: 0.7 },
+    { id: '7.9', role: 'S-inhibition', kind: 'si', gamma: 4, w: 0.8 },
+    { id: '8.6', role: 'S-inhibition', kind: 'si', gamma: 4, w: 1.2 },
+    { id: '9.9', role: 'name mover', kind: 'nm', alpha: 2.5, delta: 4, k: 3.0 },
+    { id: '9.6', role: 'name mover', kind: 'nm', alpha: 2.5, delta: 4, k: 2.0 },
+    { id: '10.10', role: 'backup name mover', kind: 'bnm', alpha: 2.5, delta: 4, rho: 1.3, k: 3.0 }
+  ];
+  function softmax(s) { var m = Math.max.apply(null, s), e = s.map(function (v) { return Math.exp(v - m); }), z = e.reduce(function (a, b) { return a + b; }, 0); return e.map(function (v) { return v / z; }); }
+  function enc(words) { return words.map(function (w) { return w in NAMES ? NAMES[w] : -1; }); }
+  function oh(n) { return n === 0 ? [1, 0] : n === 1 ? [0, 1] : [0, 0]; }
+  // opt.patch[id] = cached out from another run (activation patching, all positions)
+  // opt.scale[id] = multiply output (0 = zero-ablate)
+  // opt.inhibForNM = INHIB vector the name movers' queries read (path patching: S-inh -> NM queries only)
+  function run(words, opt) {
+    opt = opt || {}; var tk = enc(words), N = tk.length, END = N - 1, names = [];
+    for (var i = 0; i < N; i++) if (tk[i] >= 0) names.push(i);
+    var DUP = []; for (i = 0; i < N; i++) DUP.push([0, 0]);
+    var out = {}, att = {};
+    function fin(h, o) { if (opt.patch && opt.patch[h.id]) o = opt.patch[h.id]; var s = opt.scale && opt.scale[h.id] != null ? opt.scale[h.id] : 1; out[h.id] = o; return o.map ? o.map(function (r) { return r.map ? r.map(function (v) { return v * s; }) : r * s; }) : o; }
+    HEADS.forEach(function (h) { if (h.kind !== 'dt') return;
+      var o = [], A = {}; for (var i = 0; i < N; i++) {
+        o.push([0, 0]); if (tk[i] < 0) continue; var keys = [-1], sc = [0];
+        names.forEach(function (j) { if (j < i) { keys.push(j); sc.push(tk[j] === tk[i] ? h.beta : 0); } });
+        var a = softmax(sc); A[i] = { keys: keys, a: a };
+        keys.forEach(function (j, q) { if (j >= 0 && tk[j] === tk[i]) { var e = oh(tk[j]); o[i][0] += h.w * a[q] * e[0]; o[i][1] += h.w * a[q] * e[1]; } });
+      }
+      att[h.id] = A; o = fin(h, o); for (i = 0; i < N; i++) { DUP[i][0] += o[i][0]; DUP[i][1] += o[i][1]; } });
+    var INHIB = [0, 0];
+    HEADS.forEach(function (h) { if (h.kind !== 'si') return;
+      var keys = [-1], sc = [1]; names.forEach(function (j) { keys.push(j); sc.push(h.gamma * (DUP[j][0] + DUP[j][1])); });
+      var a = softmax(sc), o = [0, 0]; keys.forEach(function (j, q) { if (j >= 0) { o[0] += h.w * a[q] * DUP[j][0]; o[1] += h.w * a[q] * DUP[j][1]; } });
+      att[h.id] = { keys: keys, a: a }; o = fin(h, o); INHIB[0] += o[0]; INHIB[1] += o[1]; });
+    var qI = opt.inhibForNM || INHIB, L = [0, 0], nmOut = [0, 0];
+    function mover(h, bosScore, inh) {
+      var keys = [-1], sc = [bosScore]; names.forEach(function (j) { var e = oh(tk[j]); keys.push(j); sc.push(h.alpha - h.delta * (inh[0] * e[0] + inh[1] * e[1])); });
+      var a = softmax(sc), o = [0, 0]; keys.forEach(function (j, q) { if (j >= 0) { var e = oh(tk[j]); o[0] += h.k * a[q] * e[0]; o[1] += h.k * a[q] * e[1]; } });
+      att[h.id] = { keys: keys, a: a }; return fin(h, o);
+    }
+    HEADS.forEach(function (h) { if (h.kind !== 'nm') return; var o = mover(h, 0, qI); nmOut[0] += o[0]; nmOut[1] += o[1]; });
+    L[0] += nmOut[0]; L[1] += nmOut[1];
+    HEADS.forEach(function (h) { if (h.kind !== 'bnm') return; var o = mover(h, h.rho * (Math.abs(nmOut[0]) + Math.abs(nmOut[1])), INHIB); L[0] += o[0]; L[1] += o[1]; });
+    return { tk: tk, names: names, DUP: DUP, INHIB: INHIB, L: L, ld: L[0] - L[1], out: out, att: att, nm: nmOut };
+  }
+  var clean = run(CLEAN), corr = run(CORR);
+  function metric(ld) { return (ld - corr.ld) / (clean.ld - corr.ld); }
+  var patchRes = HEADS.map(function (h) { var p = {}; p[h.id] = clean.out[h.id]; var r = run(CORR, { patch: p }); return { id: h.id, role: h.role, ld: r.ld, m: metric(r.ld) }; });
+  var pathSI = run(CORR, { inhibForNM: clean.INHIB });
+  var noNM = run(CLEAN, { scale: { '9.9': 0, '9.6': 0 } });
+  var noNMfrozen = run(CLEAN, { scale: { '9.9': 0, '9.6': 0 }, patch: { '10.10': clean.out['10.10'] } });
+  return { CLEAN: CLEAN, CORR: CORR, HEADS: HEADS, run: run, clean: clean, corr: corr, metric: metric, patchRes: patchRes, pathSI: pathSI, noNM: noNM, noNMfrozen: noNMfrozen };
+})();
+  /* ===END MODEL=== */
+
+  var C0 = M.clean, K0 = M.corr, PR = M.patchRes, HID = {}; M.HEADS.forEach(function (h, i) { HID[h.id] = i; });
+  var ROLEC = { dt: P.sky, si: P.pink, nm: P.butter, bnm: P.mint };
+  var bothSI = M.run(M.CORR, { patch: { '7.9': C0.out['7.9'], '8.6': C0.out['8.6'] } });
+  var best = PR.slice(0, 6).reduce(function (a, b) { return b.m > a.m ? b : a; });
+  function ph(W) { return W < 600; }
+  function bg(ctx, W, H, t) { F.sky(ctx, W, H, P.night, '#2b2f5c'); F.stars(ctx, W, H, t, 'ioi', 40); }
+  function lbl(ctx, text, x, y, color, sz, o) { o = o || {}; F.hand(ctx, text, x, y, sz || 15, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.85)', seed: text, align: o.align, reveal: o.reveal, rot: o.rot }); }
+  function readout(ctx, x, y, lines, W, right) {
+    var sz = W < 500 ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    if (right) x = x - w - 22;
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.92)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+    return lines.length * sz * 1.3 + 12;
+  }
+  function codeNote(ctx, lines, x, y, sz, a, seed, color) {
+    ctx.save(); ctx.globalAlpha = a; ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l).width); });
+    var h = lines.length * sz * 1.4 + 16; F.paper(ctx, x + w / 2 + 12, y + h / 2, w + 24, h, color || P.cream, { seed: seed || 'code', rot: -.004 });
+    ctx.fillStyle = P.ink; ctx.textBaseline = 'top'; lines.forEach(function (l, i) { ctx.fillStyle = l.charAt(0) === '#' ? '#7a6f8f' : P.ink; ctx.fillText(l, x + 12, y + 8 + i * sz * 1.4); });
+    ctx.restore(); return { w: w + 24, h: h };
+  }
+  function fitMono(ctx, lines, maxW, big) { var sz = big; ctx.save(); for (; sz > 8; sz -= .5) { ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l).width); }); if (w + 26 <= maxW) break; } ctx.restore(); return sz; }
+  /* ---------------- the bar and its sentence ---------------- */
+  function sentence(ctx, W, y, words, a, hiPos) {
+    var pw = ph(W), sz = pw ? 15 : 20, lines = pw ? [words.slice(0, 9), words.slice(9)] : [words]; ctx.save(); ctx.globalAlpha = a;
+    var idx = 0;
+    lines.forEach(function (ln, li) {
+      ctx.font = '600 ' + sz + 'px ' + F.HAND; var ws = ln.map(function (w) { return ctx.measureText(w).width + 12; }), tot = ws.reduce(function (p, q) { return p + q; }, 0) + (li === lines.length - 1 ? 50 : 0), x = (W - tot) / 2;
+      ln.forEach(function (w, k) {
+        var i = idx + k, isName = w === 'Mary' || w === 'John', cx = x + ws[k] / 2, cy = y + li * sz * 1.9;
+        if (isName) { if (hiPos && hiPos[i]) F.glow(ctx, cx, cy, ws[k], 'rgba(247,227,160,.9)', hiPos[i]); F.paper(ctx, cx, cy, ws[k] - 2, sz * 1.5, w === 'Mary' ? P.pink : P.sky, { seed: 'w' + i, rot: (i % 3 - 1) * .02, blur: 3, lift: 2 }); }
+        F.hand(ctx, w, cx, cy, sz, isName ? P.ink : P.chalk, { seed: 'wt' + i, outline: isName ? 0 : 3, outlineColor: 'rgba(20,20,50,.8)' }); x += ws[k];
+      });
+      if (li === lines.length - 1) { F.paper(ctx, x + 24, y + li * sz * 1.9, 44, sz * 1.5, 'rgba(247,240,225,.25)', { seed: 'blank', shadow: false }); F.hand(ctx, '?', x + 24, y + li * sz * 1.9, sz, P.butter, { seed: 'qm' }); }
+      idx += ln.length;
+    });
+    ctx.restore(); return y + lines.length * sz * 1.9;
+  }
+  function seesaw(ctx, x, y, w, ld, a) {
+    ctx.save(); ctx.globalAlpha = a; var ang = -Math.atan(ld / 18) * .8;
+    ctx.fillStyle = P.peach; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - 18, y + 30); ctx.lineTo(x + 18, y + 30); ctx.closePath(); ctx.fill();
+    ctx.translate(x, y); ctx.rotate(ang); F.paper(ctx, 0, -4, w, 10, '#c7a47a', { seed: 'beam', shadow: false });
+    F.paper(ctx, -w / 2 + 34, -24, 60, 30, P.pink, { seed: 'sm' }); F.hand(ctx, 'Mary', -w / 2 + 34, -24, 15, P.ink, { seed: 'smt' });
+    F.paper(ctx, w / 2 - 34, -24, 60, 30, P.sky, { seed: 'sj' }); F.hand(ctx, 'John', w / 2 - 34, -24, 15, P.ink, { seed: 'sjt' });
+    ctx.restore();
+  }
+  /* ---------------- the circuit board: heads placed above the position they work at ---------------- */
+  var G = {};
+  function geo(W, H, top, bottom) {
+    var pw = ph(W); G.pw = pw; G.tokY = bottom; G.bw = pw ? 64 : 84; G.bh = pw ? 34 : 40;
+    var cw = pw ? W : Math.min(W, 960), ox = (W - cw) / 2; G.tx = [ox + cw * .14, ox + cw * .38, ox + cw * .62, ox + cw * .86];
+    var span = bottom - top; G.ly = { dt: bottom - span * .3, si: bottom - span * .55, nm: bottom - span * .8, logit: top };
+    if (pw) { G.pos = { '3.0': [W * .5, G.ly.dt], '5.5': [W * .5 + G.bw + 6, G.ly.dt], '7.9': [W * .63, G.ly.si], '8.6': [W * .63 + G.bw + 6, G.ly.si],
+      '9.9': [W * .44, G.ly.nm], '9.6': [W * .44 + G.bw + 6, G.ly.nm], '10.10': [W * .2, G.ly.nm] }; return; }
+    G.pos = {
+      '3.0': [G.tx[2] - G.bw * .56, G.ly.dt], '5.5': [G.tx[2] + G.bw * .56, G.ly.dt],
+      '7.9': [G.tx[3] - G.bw * .56, G.ly.si], '8.6': [G.tx[3] + G.bw * .56 - (pw ? 8 : 0), G.ly.si],
+      '9.9': [G.tx[3] - G.bw * 1.12 - 6, G.ly.nm], '9.6': [G.tx[3] - (pw ? 4 : 0), G.ly.nm], '10.10': [G.tx[1] + (pw ? 0 : 10), G.ly.nm] };
+  }
+  var TOKW = ['Mary', 'John', 'John', 'to'], TOKP = [1, 3, 9, 13], TOKN = ['IO', 'S1', 'S2', 'END'];
+  function board(ctx, W, t, o) {
+    o = o || {}; var R = o.R || C0, words = o.words || M.CLEAN, a = o.a == null ? 1 : o.a, pw = G.pw; ctx.save(); ctx.globalAlpha = a;
+    // wires (attention edges), drawn live from the attention weights
+    function wire(fromXY, toXY, w, col, seed) { if (w < .03) return; ctx.save(); ctx.globalAlpha = a * clamp(.25 + w, 0, 1); F.arrow(ctx, fromXY[0], fromXY[1], toXY[0], toXY[1], col, 1 + 4 * w, seed); ctx.restore(); }
+    var show = o.show || { dt: 1, si: 1, nm: 1, bnm: 1 };
+    if (show.dt) { var A = R.att['3.0'][9]; if (A) A.keys.forEach(function (j, q) { if (j === 3) wire([G.tx[1], G.tokY - 16], [G.pos['3.0'][0], G.pos['3.0'][1] + G.bh / 2], A.a[q] * show.dt, P.sky, 'dt'); }); }
+    if (show.si) ['7.9', '8.6'].forEach(function (id) { var A = R.att[id]; A.keys.forEach(function (j, q) { if (j === 9) wire([G.tx[2] + 8, G.ly.dt - G.bh / 2], [G.pos[id][0], G.pos[id][1] + G.bh / 2], A.a[q] * show.si, P.pink, 's' + id); }); });
+    if (show.nm) ['9.9', '9.6', '10.10'].forEach(function (id) { var A = R.att[id]; if (id === '10.10' && !show.bnm) return; A.keys.forEach(function (j, q) { if (j >= 0) { var ti = TOKP.indexOf(j); wire([G.tx[ti], G.tokY - 16], [G.pos[id][0], G.pos[id][1] + G.bh / 2], A.a[q] * show.nm, words[j] === 'Mary' ? P.pink : P.sky, 'n' + id + j); } }); });
+    // token slips
+    TOKP.forEach(function (p, i) { var w = words[p], col = w === 'Mary' ? P.pink : w === 'John' ? P.sky : P.lav;
+      F.paper(ctx, G.tx[i], G.tokY, pw ? 58 : 76, 30, col, { seed: 'tk' + i, rot: (i - 1.5) * .015 }); F.hand(ctx, w, G.tx[i], G.tokY, pw ? 14 : 16, P.ink, { seed: 'tkt' + i + w });
+      F.hand(ctx, TOKN[i], G.tx[i], G.tokY + 24, 11, P.butter, { seed: 'tn' + i }); });
+    // heads
+    M.HEADS.forEach(function (h) { var p = G.pos[h.id]; if (o.onlyKinds && o.onlyKinds.indexOf(h.kind) < 0) return;
+      var g = o.glow ? o.glow[h.id] || 0 : 0, off = o.off && o.off[h.id];
+      if (g > 0) F.glow(ctx, p[0], p[1], G.bw * .9, 'rgba(247,227,160,.85)', clamp(g, 0, 1) * (.8 + .2 * Math.sin(t * 4)));
+      F.paper(ctx, p[0], p[1], G.bw, G.bh, off ? 'rgba(120,120,140,.7)' : ROLEC[h.kind], { seed: 'hd' + h.id, rot: ((h.id.length * 7) % 5 - 2) * .01, blur: 4, lift: 2 });
+      F.hand(ctx, h.id, p[0], p[1] - (pw ? 4 : 5), pw ? 14 : 17, P.ink, { seed: 'hid' + h.id, font: F.MONO });
+      F.hand(ctx, h.kind === 'dt' ? (h.id === '3.0' ? 'dup-token' : 'induction') : h.kind === 'si' ? 'S-inhib' : h.kind === 'nm' ? 'name mover' : 'backup', p[0], p[1] + (pw ? 9 : 11), pw ? 9 : 11, P.ink, { seed: 'hr' + h.id });
+      if (off) { ctx.strokeStyle = P.red; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(p[0] - G.bw / 2, p[1] - G.bh / 2); ctx.lineTo(p[0] + G.bw / 2, p[1] + G.bh / 2); ctx.stroke(); }
+      if (o.tag && o.tag[h.id] != null) lbl(ctx, o.tag[h.id], p[0], p[1] - G.bh / 2 - 10, P.butter, 12);
+    });
+    ctx.restore();
+  }
+  function hitHead(x, y) { var hit = null; M.HEADS.forEach(function (h) { var p = G.pos[h.id]; if (p && Math.abs(x - p[0]) < G.bw / 2 + 4 && Math.abs(y - p[1]) < G.bh / 2 + 4) hit = h.id; }); return hit; }
+  function metricBar(ctx, x, y, w, m, a, label, col) {
+    ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = 'rgba(247,240,225,.12)'; ctx.fillRect(x, y, w, 20);
+    var z = x + w * .2, s = w * .7; ctx.fillStyle = col || P.butter; var v = clamp(m, -.25, 1.4); ctx.fillRect(Math.min(z, z + s * v), y + 2, Math.abs(s * v), 16);
+    ctx.strokeStyle = 'rgba(247,240,225,.5)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(z, y - 4); ctx.lineTo(z, y + 24); ctx.moveTo(z + s, y - 4); ctx.lineTo(z + s, y + 24); ctx.stroke(); ctx.setLineDash([]);
+    if (label) lbl(ctx, label, x - 6, y + 10, P.chalk, 12, { align: 'right' });
+    ctx.font = '600 12px ' + F.MONO; ctx.fillStyle = P.chalk; ctx.fillText(m.toFixed(2), x + w + 6, y + 15); ctx.restore();
+  }
+
+  /* ---------------- predict, then watch (never gated) ---------------- */
+  var PRED = { el: null, asked: false, choice: null, lastT: 0 };
+  var PRED_T = 66;
+  function predUI(api) {
+    if (PRED.el) return PRED.el;
+    var d = document.createElement('div');
+    d.setAttribute('role', 'dialog'); d.setAttribute('aria-label', 'Predict, then watch');
+    d.style.cssText = 'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92%,440px);background:#f7f0e1;color:#2a2934;border-radius:10px;padding:14px 14px 10px;box-shadow:0 10px 30px rgba(0,0,0,.5);display:none;z-index:5;font:15px/1.35 system-ui,sans-serif';
+    d.innerHTML = '<div style="font:700 18px ' + F.HAND + ';margin-bottom:8px">Predict, then watch: patched alone, clean into corrupted, which head recovers the most?</div>' +
+      ['name mover 9.9 (it says the name)', 'S-inhibition 8.6 (it says who to ignore)', 'duplicate-token 3.0 (it spots the repeat)'].map(function (s, i) { return '<button data-c="' + i + '" style="display:block;width:100%;text-align:left;margin:6px 0;padding:9px 10px;border:0;border-radius:8px;background:#f7e3a0;color:#2a2934;font:inherit;cursor:pointer">' + s + '</button>'; }).join('') +
+      '<button data-c="skip" style="display:block;margin:8px 0 0 auto;padding:6px 10px;border:0;border-radius:8px;background:#b9e3cc;color:#2a2934;font:inherit;cursor:pointer">just show me &#9654;</button>';
+    d.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    [].forEach.call(d.querySelectorAll('button'), function (b) { b.onclick = function (e) { e.stopPropagation(); PRED.choice = b.dataset.c; d.style.display = 'none'; api.audio.blip(b.dataset.c === '2' ? 988 : 660); var pp = api.root.querySelector('.pp'); if (pp && pp.getAttribute('aria-label') === 'Play') pp.click(); }; });
+    api.root.querySelector('.stage').appendChild(d); PRED.el = d; return d;
+  }
+  function predTick(t, api) {
+    var d = predUI(api), prev = PRED.lastT; PRED.lastT = t;
+    if (!PRED.asked && prev < PRED_T && t >= PRED_T && t - prev < .5) {
+      PRED.asked = true; d.style.display = 'block';
+      var pp = api.root.querySelector('.pp'); if (pp && pp.getAttribute('aria-label') === 'Pause') pp.click();
+    }
+    if (d.style.display === 'block' && (t < PRED_T - .6 || t > PRED_T + .6)) d.style.display = 'none';
+  }
+
+  /* ---------------- chapters ---------------- */
+  var chapters = [
+    { name: 'the case', start: 0, dur: 18, cap: {
+        1: 'A paper bar. <b>"When Mary and John went to the store, John gave a drink to ..."</b> Everyone knows the answer is Mary. The mind egg knows too. The case: <b>who inside it decided?</b>',
+        2: 'Indirect object identification (IOI). The score is the <b>logit difference</b>: <code>logit(Mary) - logit(John)</code> at the final token, a seesaw. Positive means the model backs the right name.',
+        3: 'IO = Mary, S = John (named twice: S1, S2), END = "to". ARENA <code>logits_to_ave_logit_diff</code> averages this over a batch of prompts. The toy here is hand-built, 7 heads with GPT-2 small\'s head names, run for real: clean logit diff = ' + C0.ld.toFixed(2) + '.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W);
+        // the coaster with the question
+        var cr = pw ? 58 : 70, cx = pw ? W / 2 : W * .2, cy = pw ? 70 : 110;
+        ctx.save(); ctx.globalAlpha = ramp(l, 0, 1); F.blob(ctx, cx, cy, cr, P.cream, { seed: 'coaster' }); ctx.restore();
+        F.hand(ctx, 'who gets the drink,', cx, cy - 10, pw ? 12 : 14, P.ink, { seed: 'q1', reveal: ramp(l, .5, 2) });
+        F.hand(ctx, 'and who decided?', cx, cy + 10, pw ? 12 : 14, P.ink, { seed: 'q2', reveal: ramp(l, 1.5, 3) });
+        var y = sentence(ctx, W, pw ? 170 : 260, M.CLEAN, ramp(l, 2.5, 4));
+        var ld = C0.ld * ramp(l, 7, 10);
+        seesaw(ctx, W / 2, y + 100, Math.min(W - 60, 360), ld, ramp(l, 5, 6.5));
+        if (l > 7) readout(ctx, W / 2 - (pw ? 110 : 110), y + 170, [['logit(Mary) = ' + (C0.L[0] * ramp(l, 7, 10)).toFixed(2), P.pink], ['logit(John) = ' + C0.L[1].toFixed(2), P.sky], ['logit diff  = ' + ld.toFixed(2), P.butter]], W);
+        var es = Math.min(W, H) * .09; F.egg(ctx, W - es * 1.4, pw ? H - es * 1.5 : es * 1.8, es, t, { clear: .3 });
+      } },
+    { name: 'the suspects', start: 18, dur: 24, cap: {
+        1: 'Three gangs of heads pass notes up the building. The <b>duplicate-token</b> head spots that John came up twice. The <b>S-inhibition</b> heads carry "ignore John" to the end. The <b>name movers</b> say whoever is left: Mary.',
+        2: 'The circuit, drawn from live attention weights. <b>Duplicate token</b> (3.0) and <b>induction</b> (5.5) heads at S2 attend to S1. <b>S-inhibition</b> heads (7.9, 8.6) at END attend to S2. <b>Name movers</b> (9.9, 9.6) at END attend to Mary and copy her into the logits.',
+        3: 'Toy wiring: DUP at S2 = ' + C0.DUP[9][1].toFixed(2) + ' "John"; INHIB at END = ' + C0.INHIB[1].toFixed(2) + ' "John"; the name movers\' query scores are <code>alpha - delta * INHIB·name</code>, so John\'s key is pushed down and 9.9 puts ' + (C0.att['9.9'].a[1] * 100).toFixed(0) + '% of its attention on Mary. Names match Wang et al. (2022) and ARENA [1.4.1].' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W); geo(W, H, pw ? 70 : 80, H - (pw ? 110 : 120));
+        var s = { dt: ramp(l, 2, 5), si: ramp(l, 8, 11), nm: ramp(l, 14, 17), bnm: 0 };
+        var kinds = ['dt']; if (l > 7) kinds.push('si'); if (l > 13) kinds.push('nm');
+        board(ctx, W, t, { show: s, onlyKinds: kinds, a: ramp(l, 0, 1.5), glow: { '3.0': s.dt * (l < 8), '8.6': s.si * (l < 14), '9.9': s.nm } });
+        // paper planes carrying the notes
+        var fp = (l % 6) / 6;
+        if (l > 5 && l < 8) { F.plane(ctx, lerp(G.tx[2], G.pos['7.9'][0], fp * 2 % 1), lerp(G.ly.dt, G.ly.si, fp * 2 % 1), 12, -.6, P.cream); }
+        if (l > 10 && l < 14) lbl(ctx, 'note: "ignore John"', W / 2, G.ly.si - G.bh - 10, P.pink, pw ? 13 : 15);
+        if (l > 17) { var lg = [G.tx[3] - G.bw * .56, G.ly.logit]; F.paper(ctx, lg[0], lg[1], pw ? 150 : 190, 34, P.cream, { seed: 'lg' }); F.hand(ctx, 'logits: Mary ' + C0.L[0].toFixed(1) + ' | John ' + C0.L[1].toFixed(1), lg[0], lg[1], pw ? 12 : 14, P.ink, { seed: 'lgt', font: F.MONO });
+          F.arrow(ctx, G.pos['9.9'][0], G.pos['9.9'][1] - G.bh / 2, lg[0] - 20, lg[1] + 18, P.butter, 3, 'up'); }
+        if (l > 6 && l < 13) readout(ctx, 12, pw ? 12 : 16, [['3.0 at S2 -> S1: ' + C0.att['3.0'][9].a[2].toFixed(2), P.sky]], W);
+        if (l >= 13) readout(ctx, 12, pw ? 12 : 16, [['8.6 at END -> S2: ' + C0.att['8.6'].a[3].toFixed(2), P.pink], ['9.9 at END -> Mary: ' + C0.att['9.9'].a[1].toFixed(2), P.butter]], W);
+      } },
+    { name: 'the alibi', start: 42, dur: 16, cap: {
+        1: 'To test a suspect you need a second bar where the answer flips. Swap one word: "... <b>Mary</b> gave a drink to". Now the answer is John, and the seesaw tips the other way.',
+        2: '<b>Clean</b> vs <b>corrupted</b> prompts: same template, the second subject swapped, so the answer flips. Corrupted logit diff = ' + K0.ld.toFixed(2) + '. The ruler between them is the <b>patching metric</b>: 0 = corrupted, 1 = clean.',
+        3: 'ARENA <code>ioi_metric</code>: "a linear function of logit diff, calibrated so that it equals 0 when performance is same as on corrupted input, and 1 when performance is same as on clean input": <code>(patched - corrupted) / (clean - corrupted)</code>. It is linear, so 0.5 means half-way, not half-probability.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W), sw = ramp(l, 2, 4);
+        var y1 = sentence(ctx, W, pw ? 36 : 50, M.CLEAN, 1, null);
+        lbl(ctx, 'clean', 14, pw ? 14 : 22, P.mint, 13, { align: 'left' });
+        var y2 = sentence(ctx, W, y1 + (pw ? 34 : 40), M.CORR, ramp(l, 1, 2), { 9: sw });
+        lbl(ctx, 'corrupted', 14, y1 + (pw ? 10 : 16), P.red, 13, { align: 'left' });
+        var sy = y2 + 50, sww = Math.min((W - 50) / 2, 300);
+        seesaw(ctx, W / 2 - sww / 2 - 8, sy, sww, C0.ld, ramp(l, 3, 4)); seesaw(ctx, W / 2 + sww / 2 + 8, sy, sww, K0.ld * ramp(l, 4, 6), ramp(l, 3, 4));
+        // the ruler
+        var rx = pw ? 60 : W / 2 - 240, rw = pw ? W - 120 : 480, ry = sy + 80;
+        if (l > 7) {
+          ctx.save(); ctx.globalAlpha = ramp(l, 7, 8.5); F.paper(ctx, rx + rw / 2, ry, rw + 30, 36, P.butter, { seed: 'ruler' });
+          for (var k = 0; k <= 10; k++) { var x = rx + rw * k / 10; ctx.strokeStyle = P.ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, ry - 16); ctx.lineTo(x, ry - (k % 5 ? 8 : 2)); ctx.stroke(); }
+          F.hand(ctx, '0 = corrupted', rx, ry + 30, 12, P.red, { seed: 'r0', outline: 3, outlineColor: 'rgba(20,20,50,.8)' }); F.hand(ctx, '1 = clean', rx + rw, ry + 30, 12, P.mint, { seed: 'r1', outline: 3, outlineColor: 'rgba(20,20,50,.8)' }); ctx.restore();
+          var probe = (Math.sin((l - 8) * .8) + 1) / 2, pld = lerp(K0.ld, C0.ld, probe);
+          F.lantern(ctx, rx + rw * probe, ry - 34, 12, probe, t);
+          readout(ctx, W / 2 - (pw ? 160 : 190), ry + 50, [['clean ' + C0.ld.toFixed(2) + '   corrupted ' + K0.ld.toFixed(2), P.chalk], ['logit diff ' + pld.toFixed(2) + ' -> metric ' + M.metric(pld).toFixed(2), P.butter]], W);
+        }
+      } },
+    { name: 'patch each suspect', start: 58, dur: 28, cap: {
+        1: 'The line-up. Run the swapped bar, but hand <b>one head</b> its note from the real bar. If the seesaw swings back to Mary, that head was carrying the evidence. Before you look: which one wins?',
+        2: '<b>Activation patching</b>: run the corrupted prompt, overwrite one head\'s output (all positions) with its value from the clean cache, measure the metric. Seven real forward passes, one per bar.',
+        3: 'ARENA <code>get_act_patch_attn_head_out_all_pos</code> with <code>patch_head_vector</code> on <code>hook_z</code>. It is a chain, so fixing an early link repairs everything downstream: toy best = ' + best.id + ' at ' + best.m.toFixed(2) + '. Both S-inhibition heads together: ' + M.metric(bothSI.ld).toFixed(2) + '. In GPT-2 the brightest cells are the name movers and S-inhibition heads.' },
+      draw: function (ctx, t, l, W, H, api) {
+        bg(ctx, W, H, t); predTick(t, api); var pw = ph(W);
+        geo(W, H, pw ? 40 : 50, pw ? H * .46 : H * .5);
+        var n = Math.floor(ramp(l, 9.5, 17) * 7 + 1e-6), cur = l > 9.5 && n < 7 ? n : -1, R = K0;
+        if (cur >= 0 && l > 9.5) { var pp = {}; pp[M.HEADS[cur].id] = C0.out[M.HEADS[cur].id]; R = M.run(M.CORR, { patch: pp }); }
+        var gl = {}, tag = {}; for (var i = 0; i < n; i++) tag[PR[i].id] = PR[i].m.toFixed(2); if (cur >= 0) gl[M.HEADS[cur].id] = 1;
+        board(ctx, W, t, { R: R, words: M.CORR, glow: gl, tag: tag, a: ramp(l, 0, 1), show: { dt: 1, si: 1, nm: 1, bnm: 1 } });
+        var bx = pw ? 110 : W / 2 - 150, bw = pw ? W - 170 : 300, by = G.tokY + 66;
+        lbl(ctx, 'patching metric, head patched alone', pw ? W / 2 : W / 2, by - 16, P.butter, pw ? 13 : 15);
+        for (i = 0; i < 7; i++) metricBar(ctx, bx, by + i * 28, bw, i < n ? PR[i].m : 0, i < n ? 1 : .35, PR[i].id + ' ' + (PR[i].role === 'backup name mover' ? 'backup' : PR[i].role.replace('duplicate token', 'dup-token')), ROLEC[M.HEADS[i].kind]);
+        if (cur >= 0) readout(ctx, W - 12, 8, [['patching ' + M.HEADS[cur].id + ': logit diff ' + R.ld.toFixed(2), P.butter]], W, true);
+        if (l > 18) { var ans = PRED.choice, msg = ans === '2' ? 'you called it: the earliest link wins' : ans != null && ans !== 'skip' ? 'close: the earliest link edges it' : 'the earliest link edges it';
+          F.note(ctx, msg + ' (' + best.id + ': ' + best.m.toFixed(2) + ')', W / 2, Math.min(H - 30, by + 7 * 28 + 30), pw ? 14 : 17, { color: P.butter, seed: 'ans', reveal: ramp(l, 18, 19.5), rot: -.015 }); }
+      } },
+    { name: 'follow one wire', start: 86, dur: 20, cap: {
+        1: 'Patching a whole head is like swapping a whole witness. Sharper: swap <b>one message</b> between two witnesses. Give the name movers the clean "ignore John" note, and change nothing else.',
+        2: '<b>Path patching</b>: patch only the edge <b>S-inhibition -> name mover queries</b>. Every other reader of the S-inhibition output (here the backup head) still sees the corrupted version. That one wire recovers ' + M.metric(M.pathSI.ld).toFixed(2) + '.',
+        3: 'Sender = heads 7.9 + 8.6, receiver = the <code>q</code> input of 9.9 and 9.6. ARENA does it in three runs: cache clean, run corrupted with senders patched and everything else frozen, then patch the receivers\' inputs (<code>get_path_patch_head_to_heads</code>, <code>receiver_input="q"</code>). Edge 3.0 -> name movers directly: 0, because name movers never read DUP.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W); geo(W, H, pw ? 50 : 60, H - (pw ? 230 : 220));
+        var on = ramp(l, 4, 7), R = on > .5 ? M.pathSI : K0;
+        board(ctx, W, t, { R: R, words: M.CORR, a: 1, glow: { '7.9': on, '8.6': on, '9.9': on, '9.6': on } });
+        // the single wire, drawn as a string of paper planes
+        if (l > 2) { var a1 = G.pos['8.6'], b1 = G.pos['9.6']; ctx.save(); ctx.strokeStyle = P.butter; ctx.lineWidth = 4; ctx.setLineDash([8, 6]); ctx.lineDashOffset = -t * 30; ctx.beginPath(); ctx.moveTo(a1[0], a1[1] - G.bh / 2); ctx.quadraticCurveTo(a1[0] - 70, (a1[1] + b1[1]) / 2, b1[0], b1[1] + G.bh / 2); ctx.stroke(); ctx.restore();
+          var fp = (l * .5) % 1; F.plane(ctx, lerp(a1[0], b1[0], fp) - Math.sin(fp * Math.PI) * 40, lerp(a1[1], b1[1], fp), 11, -1.2, P.cream);
+          lbl(ctx, 'q only', (a1[0] + b1[0]) / 2 - 60, (a1[1] + b1[1]) / 2, P.butter, 13); }
+        var by = G.tokY + 50, bx = pw ? 150 : W / 2 - 140, bw = pw ? W - 210 : 280;
+        if (l > 7) metricBar(ctx, bx, by, bw, M.metric(M.pathSI.ld), ramp(l, 7, 8), 'wire S-inh -> NM q', P.butter);
+        if (l > 9) metricBar(ctx, bx, by + 30, bw, M.metric(bothSI.ld), ramp(l, 9, 10), 'whole S-inh heads', P.pink);
+        if (l > 11) metricBar(ctx, bx, by + 60, bw, 0, ramp(l, 11, 12), 'wire 3.0 -> NM', P.sky);
+        if (l > 13) F.note(ctx, pw ? 'the evidence travels\nalong one wire' : 'the evidence travels along one wire', W / 2, by + (pw ? 112 : 110), pw ? 14 : 17, { color: P.pink, seed: 'wire', reveal: ramp(l, 13, 15) });
+      } },
+    { name: 'the backup crew', start: 106, dur: 20, cap: {
+        1: 'The twist every detective hates: arrest the name movers and the answer is <b>still mostly right</b>. A quiet backup head notices nobody said the name, and says it instead.',
+        2: 'Zero-ablate 9.9 and 9.6. With the backup frozen the logit diff would fall to ' + M.noNMfrozen.ld.toFixed(2) + '; for real it is ' + M.noNM.ld.toFixed(2) + '. <b>Backup name movers</b> self-repair, so ablations understate importance. <b>Where the story stops being true:</b> this toy covers one template.',
+        3: 'In the toy, 10.10\'s BOS score is <code>rho * |name mover output|</code>: when the movers go quiet it stops resting on BOS and copies Mary. GPT-2 small\'s real circuit has 26 heads, including negative name movers (10.7, 11.10) that push against the answer; and it explains this IOI template, not GPT-2 as a whole.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W); geo(W, H, pw ? 110 : 70, H - (pw ? 150 : 170));
+        var k = 1 - ramp(l, 2, 6), R = M.run(M.CLEAN, { scale: { '9.9': k, '9.6': k } }), Rf = M.run(M.CLEAN, { scale: { '9.9': k, '9.6': k }, patch: { '10.10': C0.out['10.10'] } });
+        board(ctx, W, t, { R: R, words: M.CLEAN, off: k < .05 ? { '9.9': 1, '9.6': 1 } : null, glow: { '10.10': clamp(1 - R.att['10.10'].a[0], 0, 1) } });
+        var by = G.tokY + 50;
+        readout(ctx, pw ? 12 : W / 2 - 180, pw ? 8 : by, [['name movers x ' + k.toFixed(2), P.butter], ['10.10 attention on BOS ' + R.att['10.10'].a[0].toFixed(2), P.mint], ['logit diff, backup frozen ' + Rf.ld.toFixed(2), P.chalk], ['logit diff, for real     ' + R.ld.toFixed(2), P.pink]], W);
+        var p = ramp(l, 13, 14.5); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 14, 15); var sz = pw ? 12 : 16, cx = W - Math.min(W, H) * .3, cy = H - Math.min(W, H) * .24;
+          F.hand(ctx, 'one template, not', cx - sz, cy - sz * 1.5, sz, P.ink, { seed: 'st1', rot: -.62 }); F.hand(ctx, 'all of GPT-2', cx + sz * .3, cy, sz, P.ink, { seed: 'st2', rot: -.62 }); ctx.restore(); }
+      } },
+    { name: 'your hook', start: 126, dur: 20, cap: {
+        1: 'The detective\'s notebook becomes your code: a little hook that swaps one head\'s note, and a ruler that says how much it mattered. Knowing the circuit tells us <b>exactly which part to steer</b>.',
+        2: 'Your patching hook on <code>hook_z</code>, and <code>ioi_metric</code>. <b>Knowing the circuit tells us exactly which part to steer</b>, and which backups will fight back.',
+        3: '<code>hook_z</code> has shape <code>[batch, pos, head_index, d_head]</code>; <code>utils.get_act_name("z", layer)</code> names it. Loop layers x heads with <code>functools.partial</code> for a <code>[layer, head]</code> grid; <code>imshow</code> it. Path patching repeats this with senders patched and receivers\' inputs swapped.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var pw = ph(W);
+        var code = [
+          'def patch_head_vector(corrupted_head_vector,',
+          '        hook, head_index, clean_cache):',
+          '    corrupted_head_vector[:, :, head_index] = \\',
+          '        clean_cache[hook.name][:, :, head_index]',
+          '    return corrupted_head_vector',
+          '',
+          'def ioi_metric(logits):  # 0 corrupted, 1 clean',
+          '    ld = logits_to_ave_logit_diff(logits)',
+          '    return (ld - corrupted_logit_diff) / \\',
+          '        (clean_logit_diff - corrupted_logit_diff)',
+          '',
+          'hook_fn = partial(patch_head_vector,',
+          '    head_index=9, clean_cache=clean_cache)',
+          'logits = model.run_with_hooks(corrupted_tokens,',
+          '    fwd_hooks=[(utils.get_act_name("z", 9), hook_fn)])'];
+        var n = Math.round(code.length * ramp(l, .5, 7)), shown = code.slice(0, n), sz = fitMono(ctx, code, W - 20, pw ? 13 : 16), cx = pw ? 10 : Math.max(10, (W - 620) / 2);
+        codeNote(ctx, shown.length ? shown : [' '], cx, pw ? 16 : 30, sz, 1, 'code');
+        var y = (pw ? 16 : 30) + code.length * sz * 1.4 + 30;
+        if (l > 8) readout(ctx, cx, y, [['toy, head 9.9: metric = ' + PR[HID['9.9']].m.toFixed(2), P.butter]], W);
+        if (l > 10) F.note(ctx, pw ? 'knowing the circuit tells us\nexactly which part to steer' : 'knowing the circuit tells us exactly which part to steer', W / 2, Math.min(H - 50, y + (pw ? 90 : 80)), pw ? 15 : 19, { color: P.pink, seed: 'steer', rot: -.015, reveal: ramp(l, 10, 13) });
+      } }
+  ];
+
+  /* ---------------- coda: now you drive ---------------- */
+  var CD = { mode: 'patch', set: {} };
+  function codaRun() {
+    var o = {}; if (CD.mode === 'patch') { o.patch = {}; Object.keys(CD.set).forEach(function (id) { o.patch[id] = C0.out[id]; }); return M.run(M.CORR, o); }
+    o.scale = {}; Object.keys(CD.set).forEach(function (id) { o.scale[id] = 0; }); return M.run(M.CLEAN, o);
+  }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="font-size:13px">Tap heads. <button class="mp" style="min-height:26px;font-size:12px">mode: patch clean into corrupted</button> <button class="cl" style="min-height:26px;font-size:12px">clear</button></div>';
+      var mp = panel.querySelector('.mp');
+      mp.onclick = function () { CD.mode = CD.mode === 'patch' ? 'ablate' : 'patch'; CD.set = {}; mp.textContent = CD.mode === 'patch' ? 'mode: patch clean into corrupted' : 'mode: zero-ablate in clean'; api.audio.blip(660); };
+      panel.querySelector('.cl').onclick = function () { CD.set = {}; api.audio.blip(520); };
+    },
+    down: function (x, y, api) { var id = hitHead(x, y); if (!id) return; if (CD.set[id]) delete CD.set[id]; else CD.set[id] = 1; api.audio.blip(CD.set[id] ? 880 : 440); },
+    draw: function (ctx, t, W, H) {
+      bg(ctx, W, H, t); var pw = ph(W); geo(W, H, pw ? 84 : 90, H - (pw ? 175 : 150));
+      var R = codaRun(), words = CD.mode === 'patch' ? M.CORR : M.CLEAN, gl = {}, off = {};
+      Object.keys(CD.set).forEach(function (id) { if (CD.mode === 'patch') gl[id] = 1; else off[id] = 1; });
+      board(ctx, W, t, { R: R, words: words, glow: gl, off: off });
+      readout(ctx, 12, 8, [[(CD.mode === 'patch' ? 'corrupted run, patched: ' : 'clean run, ablated: ') + (Object.keys(CD.set).join(', ') || 'none'), P.chalk], ['logit diff ' + R.ld.toFixed(2) + '   metric ' + M.metric(R.ld).toFixed(2), P.butter]], W);
+      seesaw(ctx, W / 2, H - (pw ? 62 : 70), Math.min(W - 110, 300), R.ld, 1);
+    }
+  };
+
+  F.play({
+    title: 'W8 deep dive · The IOI detective story',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: induction heads & patching', href: '../../index.html#demo/induction-heads-patching' },
+      { label: 'Week 8 pack', href: '../../index.html#week-08' },
+      { label: 'Map: activation patching', href: '../../index.html#map/node=activation-patching' },
+      { label: 'Map: path patching', href: '../../index.html#map/node=path-patching' },
+      { label: 'Map: name mover heads', href: '../../index.html#map/node=name-mover-head' },
+      { label: 'Map: S-inhibition heads', href: '../../index.html#map/node=s-inhibition-head' },
+      { label: 'Map: backup name movers', href: '../../index.html#map/node=backup-name-mover-head' },
+      { label: 'Case: IOI task', href: '../../index.html#cases/ioi-task' },
+      { label: 'Case: activation patching', href: '../../index.html#cases/activation-patching' },
+      { label: 'Case: path patching', href: '../../index.html#cases/path-patching' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
