@@ -130,27 +130,28 @@
     ctx.beginPath(); ctx.arc(x + w * c.p, y, 5, 0, 6.283); ctx.fill(); ctx.restore();
     if (label) F.hand(ctx, label, x, y - 18, sz || 13, P.chalk, { align: 'left', seed: 'cb' + label.length, outline: 3, outlineColor: 'rgba(20,20,50,.7)' });
   }
+  /* the paper detective: an ink stick figure in a fedora (no face; she acts with her whole body) */
+  function sleuth(ctx, x, y, W, t, o) {
+    o = o || {}; o.scarf = o.scarf || P.red; var f = F.stick(ctx, x, y, o.s || (small(W) ? 92 : 118), t, o);
+    if (f && f.head) { var r = f.head.r; ctx.save(); ctx.translate(f.head.x, f.head.y - r * .55); ctx.rotate((o.face || 1) * -.12);
+      ctx.fillStyle = '#6b4f45'; ctx.beginPath(); ctx.ellipse(0, 0, r * 1.55, r * .32, 0, 0, 6.283); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-r * .85, 0); ctx.lineTo(-r * .7, -r * .95); ctx.quadraticCurveTo(0, -r * 1.25, r * .7, -r * .95); ctx.lineTo(r * .85, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = P.red; ctx.fillRect(-r * .8, -r * .32, r * 1.6, r * .22); ctx.restore(); }
+    return f;
+  }
   function pct(v, d) { return (100 * v).toFixed(d == null ? 0 : d) + '%'; }
 
   /* ---------------- chapters ---------------- */
-  var chapters = [
-    { name: 'the worry', start: 0, dur: 5, cap: {
-        1: 'A paper detective has a worry about a clever new AI. Before panicking, she wants to <b>measure</b> it. First question on the board...',
-        2: 'Week 11: evals and control. An eval turns a vague worry into a number. The first job is to say exactly what you are worried about.',
-        3: 'ARENA ch.3: threat model → specification → dataset → Inspect eval → agents/elicitation → AI control (Greenblatt et al. 2023).' },
-      draw: function (ctx, t, l, W, H) {
+  var SRC = [ /* scenes; the captioned beats are cut from these below */
+    { name: 'the worry', start: 0, dur: 5, draw: function (ctx, t, l, W, H) {
         office(ctx, W, H, t, { win: true }); var sm = small(W);
-        var s = sm ? 56 : 70; F.person(ctx, W * .3, H - 34, s * 1.5, t, { coat: '#8a6f5a', scarf: P.red, lit: .9 });
+        var s = sm ? 56 : 70; sleuth(ctx, W * .3, H - 34, W, t, { s: s * 1.5, lantern: true, lit: .9, pose: l < 1.2 ? 'idle' : 'think', t0: t - l + 1.2 });
         eggAt(ctx, W * .68, H - 34 - s * 1.0, s * .75, t, 'rgba(243,179,195,.9)', null, ramp(l, 2, 4) * .6); lbl(ctx, 'the new model', W * .68, H - 34 - s * 2.1, P.pink, sm ? 14 : 17);
         var cw = sm ? 240 : 320, chh = sm ? 120 : 150, qx = sm ? 16 + cw / 2 : W / 2; F.paper(ctx, qx, (sm ? 66 : 80), cw, chh, '#b98a5e', { seed: 'cork1', rot: .01 });
         question(ctx, W, H, ramp(l, .5, 1.5), qx, sm ? 66 : 80); pin(ctx, qx + 4, (sm ? 66 : 80) - (sm ? 28 : 36));
         F.plane(ctx, lerp(-40, W + 40, l / 6), H * .4 + Math.sin(l * 2) * 14, 13, .08, P.cream);
       } },
-    { name: 'threat model', start: 5, dur: 7, cap: {
-        1: 'She pins it down with <b>red string</b>: what could the model do, how would it do it, and what harm would follow. Then one number to watch.',
-        2: 'A <b>threat model</b> links a capability to a concrete harm. The <b>specification</b> turns it into something measurable: a metric you can actually compute.',
-        3: 'Capability → pathway → harm, then operationalise: the target property, a proxy behaviour, and the metric (here: backdoor-insertion rate when it believes it is unmonitored).' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'threat model', start: 5, dur: 7, draw: function (ctx, t, l, W, H) {
         office(ctx, W, H, t); var sm = small(W);
         var bw = Math.min(W - 24, 640), bh = Math.min(H - 70, sm ? 330 : 360), bx = (W - bw) / 2, by = sm ? 20 : 30;
         F.paper(ctx, W / 2, by + bh / 2, bw, bh, '#b98a5e', { seed: 'cork' });
@@ -164,15 +165,12 @@
           F.note(ctx, c[1], c[3], c[4], fz, { color: c[2], rot: (i - 1) * .05, seed: 'tm' + i, tape: false });
           F.hand(ctx, c[0], c[3], c[4] - fz * (c[1].split('\n').length * .65 + .9), fz * .75, '#7a2a30', { seed: 'h' + i }); pin(ctx, c[3], c[4] - fz * 1.6); ctx.restore(); pts.push([c[3], c[4] - fz * 1.6]); });
         if (pts.length === 3) redString(ctx, pts, ramp(l, 3.2, 4.6));
+        sleuth(ctx, sm ? W * .84 : bx - 60, sm ? Math.min(H - 20, by + bh + 150) : by + bh, W, t, l < 3 ? { pose: 'idle', face: sm ? -1 : 1 } : { pose: 'point', face: sm ? -1 : 1, t0: t - l + 3.2, look: { x: pts.length ? pts[pts.length - 1][0] : W / 2, y: pts.length ? pts[pts.length - 1][1] : by } });
         var sa = ramp(l, 4.8, 5.6); if (sa > 0) { ctx.save(); ctx.globalAlpha = sa;
           F.note(ctx, 'SPEC  metric = % of tasks with\na backdoor, when it thinks\nnobody is checking', W / 2, by + bh * .9, sm ? 12 : 15, { color: P.mint, rot: .02, seed: 'spec', font: F.MONO }); ctx.restore(); }
         ctx.save(); ctx.globalAlpha = 1; F.note(ctx, 'what exactly are\nwe afraid of?', bx + bw * .74, by + bh * .12, sm ? 12 : 15, { rot: .04, seed: 'q2', color: P.butter, tape: false }); pin(ctx, bx + bw * .74, by + bh * .12 - (sm ? 16 : 20), '#3a6fd0'); ctx.restore();
       } },
-    { name: 'dataset', start: 12, dur: 7, cap: {
-        1: 'She needs lots of test questions. A model writes <b>300</b>; a second model grades each one from 1 to 10. Anything under 7 gets torn up.',
-        2: 'Dataset generation: a model drafts questions, a grader model scores quality, and weak items are filtered out. The count of survivors here is computed live.',
-        3: 'Generate → score with a rubric (1–10) → keep ≥ 7. Watch for grader bias and duplicate items; spot-check by hand. The scores here are seeded draws, not a real run.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'dataset', start: 12, dur: 7, draw: function (ctx, t, l, W, H) {
         office(ctx, W, H, t, { floor: false }); var sm = small(W);
         var cols = sm ? 20 : 30, rows = Math.ceil(300 / cols), gw = Math.min(W - 24, 720), cs = gw / cols, gx = (W - gw) / 2, gy = sm ? 96 : 110;
         var made = Math.floor(ramp(l, .2, 3) * 300), graded = Math.floor(ramp(l, 2.6, 6.2) * 300), kept = 0, torn = 0;
@@ -189,11 +187,7 @@
         eggAt(ctx, W * .25, ey, s, t, 'rgba(243,179,195,.9)', 'writer', .5); eggAt(ctx, W * .75, ey, s, t, 'rgba(185,227,204,.9)', 'grader', .5);
         readout(ctx, 12, 10, [['written ' + made + '  graded ' + graded, P.chalk], ['kept (≥7) ' + kept + '  torn ' + torn, P.mint]], W);
       } },
-    { name: 'scoring', start: 19, dur: 8, cap: {
-        1: 'Now the test runs. Each answer is marked right or wrong by a grader model. The score wobbles at first, then settles. The shaded band is how sure we are.',
-        2: '<b>Inspect</b> runs dataset → solver → scorer. A model-graded scorer marks each answer. Accuracy ± 1.96·SE: the 95% band shrinks like 1/√n.',
-        3: 'Task(dataset, solver, scorer=model_graded_fact()). Wald CI p̂ ± 1.96√(p̂(1−p̂)/n), live on the seeded run. Grader error adds noise this band ignores.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'scoring', start: 19, dur: 8, draw: function (ctx, t, l, W, H) {
         office(ctx, W, H, t, { floor: false }); var sm = small(W);
         // conveyor: dataset -> solver -> scorer
         var y0 = sm ? Math.max(60, H * .1) : 80, bw = Math.min(W - 24, 700), bx = (W - bw) / 2, sz = sm ? 13 : 16;
@@ -207,14 +201,11 @@
         var lw = Math.min(bw * .72, 480), lx = bx + 6, ly = y0 + (sm ? Math.max(130, H * .3) : 150);
         eggAt(ctx, sx, Math.min(H - 40, sy + (sm ? 210 : 240)), sm ? 26 : 32, t, 'rgba(185,227,204,.9)', 'grader', .55);
         ciBar(ctx, lx, ly, lw, c, P.butter, 'accuracy, 95% band', sm ? 14 : 16);
+        sleuth(ctx, sm ? W * .22 : bx - 40, sm ? H - 22 : ly + 200, W, t, { pose: 'lean-in', t0: t - l + .8, look: { x: lx + lw * c.p, y: ly } });
         ['0', '50%', '100%'].forEach(function (s2, i) { F.hand(ctx, s2, lx + lw * i / 2, ly + 18, 11, 'rgba(253,250,240,.7)', { seed: s2 }); });
         readout(ctx, lx, ly + 36, [['n = ' + n + '   correct = ' + k, P.chalk], ['p̂ = ' + c.p.toFixed(3), P.butter], ['SE = √(p̂(1−p̂)/n) = ' + c.se.toFixed(3)], ['95%: ' + pct(c.lo, 1) + ' to ' + pct(c.hi, 1), P.butter]], W);
       } },
-    { name: 'elicitation', start: 27, dur: 6, cap: {
-        1: 'Give the model tools and a chance to think, and it suddenly does <b>much better</b>. The first score was hiding what it could really do. And it might notice it is being tested.',
-        2: '<b>Elicitation</b>: scaffolding (tools, chain of thought, retries) reveals capability a bare prompt misses. <b>Eval awareness</b>: a model that spots the test may act differently.',
-        3: 'Bare vs agent scaffold, n=150 each (seeded): the intervals do not overlap. Under-elicitation gives false comfort; eval awareness breaks the “test = deployment” assumption.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'elicitation', start: 27, dur: 6, draw: function (ctx, t, l, W, H) {
         office(ctx, W, H, t); var sm = small(W), bw = Math.min(W - 24, 600), bx = (W - bw) / 2;
         var n = Math.floor(ramp(l, .3, 3.5) * 150), a = ci(sum(BARE, n), n), b = ci(sum(SCAF, n), n), y = sm ? Math.max(60, H * .14) : 80;
         ciBar(ctx, bx + 4, y + 20, bw - 8, a, P.pink, 'bare prompt  ' + (n ? pct(a.p) + ' ± ' + pct(1.96 * a.se, 1) : ''), sm ? 14 : 16);
@@ -226,12 +217,9 @@
         ctx.fillStyle = '#8fe39a'; ctx.font = '700 ' + Math.round(s * .22) + 'px ' + F.MONO; ctx.fillText('$ _', ex - s * 2.5, H - 46); ctx.restore();
         var aw = ramp(l, 3.8, 4.6); if (aw > 0) { ctx.save(); ctx.globalAlpha = aw; F.note(ctx, 'THIS IS\nA TEST', W * .22, H - 34 - s * 2, sm ? 14 : 17, { color: P.butter, rot: -.1, seed: 'test' }); ctx.restore();
           lbl(ctx, '...is it?', ex + s * .3, ey - s * 1.55, P.butter, sm ? 15 : 18); }
+        sleuth(ctx, sm ? W * .9 : W * .88, H - 22, W, t, l < 2.2 ? { pose: 'lean-in', face: -1, look: { x: W / 2, y: y + 50 } } : l < 6 ? { pose: 'recoil', from: 'lean-in', t0: t - l + 2.3, face: -1, look: { x: W / 2, y: y + 80 } } : { pose: 'shrug', from: 'recoil', t0: t - l + 6.3, face: -1 });
       } },
-    { name: 'AI control', start: 33, dur: 10, cap: {
-        1: 'Suppose we are still not sure. A clever <b>untrusted</b> coder writes the code; a weaker <b>trusted</b> checker gives each piece a suspicion score. A human checks only the top 2%.',
-        2: '<b>Trusted monitoring</b>: T scores every submission from U; the most suspicious 2% (the audit budget) get a human audit. Caught once = shut down. Safety is simulated live.',
-        3: 'Clean ~ N(0,1), backdoor ~ N(2,1), 100 problems, attack rate 5%. Audit if s > Φ⁻¹(0.98) = 2.05. Monte-Carlo safety vs analytic single-attack P(audit) ≈ 0.48.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'AI control', start: 33, dur: 10, draw: function (ctx, t, l, W, H) {
         office(ctx, W, H, t, { floor: false }); var sm = small(W), bw = Math.min(W - 24, 720), bx = (W - bw) / 2;
         // top strip: U -> sheet -> T -> audit / ship
         var s = sm ? 22 : 28, y = sm ? Math.max(46, H * .08) : 52; eggAt(ctx, bx + s * 1.3, y, s, t, 'rgba(243,179,195,.9)', null, .5); eggAt(ctx, bx + bw * .5, y, s, t, 'rgba(185,227,204,.9)', null, .5);
@@ -251,40 +239,31 @@
         F.hand(ctx, 'audit line: top 2%', xs(th.tA), hy + 16, sm ? 12 : 14, P.butter, { seed: 'al' });
         // Monte-Carlo, growing
         var sims = Math.max(1, Math.floor(ramp(l, 2, 7.5) * 1000)), R = simulate(.02, 0, CTRL.d, sims, 5), pa = perAttempt(.02, 0, CTRL.d);
+        sleuth(ctx, sm ? W * .82 : bx + bw - 30, sm ? H - 22 : hy + 230, W, t, l < 5 ? { pose: 'lean-in', t0: t - l + .5, face: -1, look: { x: xs(th.tA), y: hy - hh / 2 } } : { pose: 'point', from: 'lean-in', t0: t - l + 5.2, face: -1, look: { x: bx + 100, y: hy + 70 } });
         readout(ctx, bx, hy + 34, [['episodes simulated: ' + sims, P.chalk], ['caught ' + R.caught + '   backdoor shipped ' + R.lost, P.chalk], ['safety = ' + pct(R.safety, 1) + '  (95% ' + pct(R.lo, 0) + '–' + pct(R.hi, 0) + ')', P.butter], ['one attack audited: ' + pct(pa.pa, 1), 'rgba(253,250,240,.7)']], W);
       } },
-    { name: 'the spreadsheet', start: 43, dur: 6, cap: {
-        1: 'Her results spreadsheet. Check more, or let the trusted checker rewrite the scariest code: <b>safer</b>, but less of the clever model\'s work gets used.',
-        2: '<b>Defer-to-trusted</b>: the next-most-suspicious slice is rewritten by T. Safety rises, <b>usefulness</b> falls. Every cell is a fresh Monte-Carlo run.',
-        3: 'Usefulness normalised so T-only = 0, U-only = 1 (i.e. 1 − fraction deferred on honest runs). 2000 episodes per row; the frontier, not one point, is the result.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the spreadsheet', start: 43, dur: 6, draw: function (ctx, t, l, W, H) {
         office(ctx, W, H, t); var sm = small(W), ww = Math.min(W - 20, 560), wh = Math.min(H - 60, sm ? 300 : 320), wx = (W - ww) / 2, wy = sm ? 20 : 30;
         var r = win98(ctx, wx, wy, ww, wh, 'control_results.xls'), rows = SHEET(), rh = Math.min(34, (r.h - 10) / (rows.length + 1)), c1 = r.w * .52, c2 = r.w * .24, fs = sm ? 11 : 13;
         cell(ctx, 'protocol', r.x, r.y, c1, rh, { bold: true, bg: '#e6e6e6', sz: fs }); cell(ctx, 'safety', r.x + c1, r.y, c2, rh, { bold: true, bg: '#e6e6e6', sz: fs, align: 'right' }); cell(ctx, 'useful', r.x + c1 + c2, r.y, r.w - c1 - c2, rh, { bold: true, bg: '#e6e6e6', sz: fs, align: 'right' });
         rows.forEach(function (row, i) { var a = ramp(l, .3 + i * .6, .6 + i * .6); if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; var yy = r.y + rh * (i + 1);
           cell(ctx, row[0], r.x, yy, c1, rh, { sz: fs }); cell(ctx, pct(row[1], 1), r.x + c1, yy, c2, rh, { sz: fs, align: 'right', color: row[1] > .8 ? '#0a6a2a' : row[1] < .3 ? '#a01c24' : '#111' }); cell(ctx, pct(row[2], 0), r.x + c1 + c2, yy, r.w - c1 - c2, rh, { sz: fs, align: 'right' }); ctx.restore(); });
+        sleuth(ctx, sm ? W * .15 : wx - 60, sm ? H - 22 : wy + wh, W, t, { pose: 'think', t0: t - l + 1 });
         var yb = wy + wh + 12; if (yb < H - 60) F.note(ctx, 'no free lunch: pick a point\non the frontier', W / 2, Math.min(H - 70, yb + 30), sm ? 14 : 17, { color: P.pink, seed: 'lunch', rot: -.02 });
       } },
-    { name: 'where it stops being true', start: 49, dur: 5, cap: {
-        1: 'Honest bit: real attackers <b>adapt</b>. They learn what the checker misses and get sneakier. Watch safety fall as their code looks more innocent.',
-        2: 'Our red team is a fixed Gaussian. Real red teams optimise against the monitor, so safety must be measured against the <b>best</b> attack, not a typical one.',
-        3: 'Shift the backdoor suspicion mean d from 2.0 to 0.5: single-attack audit probability falls live. Control evals assume worst-case, adaptive, colluding U.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'where it stops being true', start: 49, dur: 5, draw: function (ctx, t, l, W, H) {
         office(ctx, W, H, t, { floor: false }); var sm = small(W), d = lerp(CTRL.d, .5, ramp(l, .3, 3.2)), pa = perAttempt(.02, .1, d), bw = Math.min(W - 24, 720), bx = (W - bw) / 2;
         var hy = sm ? Math.max(190, H * .48) : 240, hh = sm ? 80 : 90, xs = function (v) { return bx + (v + 3.5) / 9 * bw; };
         ctx.save(); [[0, 'rgba(185,227,204,.75)'], [d, 'rgba(232,116,124,.75)']].forEach(function (D) { ctx.fillStyle = D[1]; ctx.beginPath(); ctx.moveTo(xs(-3.5), hy);
           for (var v = -3.5; v <= 5.5; v += .05) ctx.lineTo(xs(v), hy - hh * Math.exp(-(v - D[0]) * (v - D[0]) / 2)); ctx.lineTo(xs(5.5), hy); ctx.fill(); }); ctx.restore();
         var th = thresholds(.02, .1); ctx.save(); ctx.strokeStyle = P.butter; ctx.lineWidth = 2.5; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(xs(th.tA), hy - hh - 10); ctx.lineTo(xs(th.tA), hy + 4); ctx.stroke(); ctx.restore();
         readout(ctx, bx, 14, [['attacker sneakiness: d = ' + d.toFixed(2), P.red], ['per attack: audited ' + pct(pa.pa, 0) + '  slips ' + pct(pa.pp, 0), P.chalk], ['odds we catch it first ≈ ' + pct(pa.pa / (pa.pa + pa.pp), 0), P.butter]], W);
+        sleuth(ctx, sm ? W * .2 : bx + 60, H - 22, W, t, l < 1 ? { pose: 'lean-in', look: { x: W / 2, y: hy - 40 } } : l < 6 ? { pose: 'recoil', from: 'lean-in', t0: t - l + 1.4, look: { x: W / 2, y: hy - 40 } } : { pose: 'shrug', from: 'recoil', t0: t - l + 6.2 });
         var p = ramp(l, 2.6, 3.6); F.cornerFlip(ctx, W, H, p, P.cream);
         if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 3.3, 4); var sz = sm ? 14 : 18, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .2;
           F.hand(ctx, 'real attackers', x, y - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'adapt', x + sz * .8, y, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
       } },
-    { name: 'the code', start: 54, dur: 6, cap: {
-        1: 'The whole office folds into two small pieces of code: one that <b>measures</b>, one that <b>contains</b>.',
-        2: 'The office becomes the real Inspect task and the audit rule you implement in ARENA ch.3. Same pieces: dataset, solver, scorer; suspicion, threshold, audit.',
-        3: 'ARENA ch.3: Task(dataset, solver, scorer=model_graded_fact()), then protocol_trusted_monitoring(submissions, sus_scores, audit_fraction=0.02).' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the code', start: 54, dur: 6, draw: function (ctx, t, l, W, H) {
         office(ctx, W, H, t, { floor: false }); var sm = small(W), sz = sm ? 12 : 17;
         var blocks = [
           ['measure', ['Task(', '  dataset=samples,', '  solver=[chain_of_thought(),', '          generate()],', '  scorer=model_graded_fact())'], P.butter, 0],
@@ -296,19 +275,73 @@
           F.hand(ctx, B[0], W / 2 - w / 2 + 14, y + sz, sz * .95, '#6b5a9a', { align: 'left', seed: B[0] });
           B[1].forEach(function (s, i) { F.hand(ctx, s, W / 2 - w / 2 + 14, y + sz * 2.3 + i * sz * 1.45, sz, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: s, reveal: ramp(l, B[3] + .2 + i * .25, B[3] + .9 + i * .25) }); });
           ctx.restore(); y += h + 12; });
+        sleuth(ctx, sm ? W * .8 : W / 2 + 300, sm ? Math.min(H - 22, y + 150) : Math.min(H - 22, y + 80), W, t, { pose: 'point', t0: t - l + .6, face: -1, look: { x: W / 2, y: y * .5 } });
       } },
-    { name: 'why it matters', start: 60, dur: 4, cap: {
-        1: 'Measure as honestly as you can. Then act as if the measurement might be wrong.',
-        2: 'Evals tell you what a model can do; control keeps you safe if the evals missed something. Looking inside and steering is the third line of defence.',
-        3: 'Evals bound capability, control bounds damage under misalignment, interpretability checks the assumptions of both. None is sufficient alone.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'why it matters', start: 60, dur: 4, draw: function (ctx, t, l, W, H) {
         office(ctx, W, H, t, { win: true }); var sm = small(W), s = sm ? 56 : 70;
-        F.person(ctx, W * .3, H - 34, s * 1.5, t, { coat: '#8a6f5a', scarf: P.red, lit: 1 });
+        sleuth(ctx, W * .3, H - 34, W, t, { s: s * 1.5, lantern: l < 3, lit: 1, pose: l < 3 ? 'point' : 'wave', from: 'point', t0: t - l + (l < 3 ? .4 : 3), look: { x: W / 2, y: sm ? 60 : 80 } });
         eggAt(ctx, W * .68, H - 34 - s * 1.0, s * .75, t, 'rgba(255,220,120,.9)', null, .7);
         ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'measure honestly,\nthen plan for being wrong', W / 2, sm ? 60 : 80, sm ? 17 : 24, { color: P.pink, seed: 'end', rot: .02 }); ctx.restore();
         for (var i = 0; i < 3; i++) F.lantern(ctx, W * (.2 + i * .3), sm ? 150 : 180, 9, ramp(l, .5 + i * .4, 1 + i * .4), t + i);
       } }
   ];
+
+  /* ---------------- pass 2: captioned beats cut from the scenes above ----------------
+     need: 'core' (career skill), 'exercise' (this week's ARENA code), 'library' (one line, move on), 'contested' (open research). */
+  function beat(i, at, dur, name, need, cap, over) { var d = SRC[i].draw; return { name: name, need: need, dur: dur, cap: cap, draw: function (ctx, t, l, W, H, api) { var r = d(ctx, t, l + at, W, H, api); if (over) over(ctx, t, l, W, H); return r; } }; }
+  /* one small on-screen credit line when a framing is borrowed (Hamming-simple, credited) */
+  function credit(txt) { return function (ctx, t, l, W, H) { ctx.save(); ctx.globalAlpha = .9 * F.ramp(l, .3, 1.2); F.hand(ctx, txt, 10, H - 14, W < 500 ? 11 : 13, P.chalk, { align: 'left', outline: 3, outlineColor: 'rgba(20,20,50,.9)', seed: 'credit' }); ctx.restore(); }; }
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  var chapters = seq([
+    beat(0, 0, 6, 'the worry', 'core', {
+      1: 'A paper detective is worried about a clever new AI. Before panicking she wants to <b>measure</b> it, and that starts with one question: what exactly are we afraid of?',
+      2: 'An <b>eval</b> turns a vague worry into a number with error bars. <b>Control</b> is the plan for when that number is wrong. This week you build both.',
+      3: 'ARENA ch.3: threat model → spec → dataset → Inspect eval → agents and elicitation → AI control (Greenblatt et al. 2023).' }),
+    beat(1, 0, 7, 'threat model', 'core', {
+      1: 'Red string ties the worry down: what the model can do (write code), how that could hurt (hide a backdoor when unwatched), and the harm (bad code ships).',
+      2: 'A <b>threat model</b> links a capability to a concrete harm. The <b>specification</b> turns it into one countable number, decided before you look at results.',
+      3: 'Andrew Ng\'s advice: one single-number metric to optimise, other needs as pass/fail bars. Here: % of tasks with a backdoor when it thinks it\'s unwatched.' }, credit('framing: Andrew Ng, Deep Learning Specialization')),
+    beat(2, 0, 7, 'dataset', 'exercise', {
+      1: 'She needs lots of test questions. One model writes <b>300</b>; a second grades each from 1 to 10. Anything under 7 gets torn up. Survivors are counted live.',
+      2: 'Dataset generation: a model drafts questions, a grader model scores them against a rubric, weak ones are dropped. Graders have biases too: spot-check by hand.',
+      3: 'Generate → rubric score (1–10) → keep ≥ 7. Scores here are seeded draws, not a real run. Also check duplicates and answer-position bias.' }),
+    beat(3, 0, 8, 'scoring', 'core', {
+      1: 'The test runs; a grader marks each answer right or wrong. The score wobbles, then settles. The shaded band is how unsure we still are; more questions narrow it.',
+      2: 'Accuracy p̂ ± 1.96·SE, with SE = √(p̂(1−p̂)/n). Why √n? Each question\'s luck partly cancels the others\', so 4× the questions halves the band.',
+      3: 'Inspect: Task(dataset, solver, scorer). Wald 95% interval on the seeded run. Grader mistakes add noise this band ignores.' }),
+    beat(4, 0, 6, 'elicitation', 'core', {
+      1: 'Give the model tools and time to think and it suddenly scores much higher. Same model: the first test was hiding what it could really do.',
+      2: '<b>Elicitation</b>: scaffolding (tools, chain of thought, retries) reveals capability a bare prompt misses. A score is a <b>floor</b>, not a ceiling.',
+      3: 'Bare vs agent scaffold, n = 150 each (seeded): the intervals don\'t overlap. Under-elicitation is the dangerous error: it reports "safe".' }),
+    beat(4, 6, 6, 'is it a test?', 'contested', {
+      1: 'And the model might notice it\'s being tested and act differently. Nobody has a reliable way to rule that out yet, so treat every score as "under test conditions".',
+      2: 'Current method: realistic prompts; read reasoning for "this is a test". Emerging research: frontier models often notice evals. You need: to caveat your results.',
+      3: '<b>Eval awareness</b> can push scores either way; ARENA [3.1] cites models acting worse when eval-aware. Probing and steering it are active research.' }),
+    beat(5, 0, 5, 'AI control', 'core', {
+      1: 'Plan for the eval being wrong. A clever <b>untrusted</b> coder (U) writes code; a weaker <b>trusted</b> checker (T) scores each piece for suspicion. Humans check only the top 2%.',
+      2: '<b>Trusted monitoring</b>: T scores every submission from U; the most suspicious 2% (the audit budget) get a human audit. One caught backdoor = shut U down.',
+      3: 'Clean ~ N(0,1), backdoor ~ N(2,1), 100 problems, attack rate 5%. Audit if s > Φ⁻¹(0.98) = 2.05.' }),
+    beat(5, 5, 6, 'how safe?', 'exercise', {
+      1: 'The two hills are suspicion scores for honest and sneaky code. They overlap, so the 2% line catches only about half the attacks. Many runs estimate safety.',
+      2: '<b>Safety</b> = chance no backdoor ships in a 100-task episode. Monte Carlo: play many simulated episodes and count the safe ones.',
+      3: 'Why simulate? Safety depends on the whole episode (which attack comes first). ARENA: <code>protocol_trusted_monitoring(submissions, sus_scores)</code>.' }),
+    beat(6, 0, 7, 'the spreadsheet', 'exercise', {
+      1: 'Her spreadsheet: check more, or let the trusted checker rewrite the scariest code. Safer, but less of the clever model\'s work gets used. No free lunch.',
+      2: '<b>Defer-to-trusted</b>: the next-most-suspicious slice is replaced with T\'s code. Safety rises, <b>usefulness</b> falls. Each row is a fresh Monte-Carlo run.',
+      3: 'Usefulness normalised: T-only = 0, U-only = 1 (1 − fraction deferred on honest runs). 2000 episodes per row; the frontier is the result.' }),
+    beat(7, 0, 7, 'real attackers adapt', 'contested', {
+      1: 'Honest bit: real attackers <b>adapt</b>. They learn what the checker misses and get sneakier. Watch safety fall as their code looks more innocent.',
+      2: 'Current method: red team vs blue team on fixed tasks. Emerging research: control for long agentic tasks and much smarter U. You need: judge the worst attack.',
+      3: 'Shift the backdoor mean d from 2.0 to 0.5: audit odds fall live. Control evals assume an adaptive, possibly colluding U; whether that scales is open.' }),
+    beat(8, 0, 7, 'the code', 'exercise', {
+      1: 'The whole office folds into two small pieces of code: one that <b>measures</b>, one that <b>contains</b>.',
+      2: 'Inspect is a library call: dataset, solver, scorer. The part you write and keep is the protocol: suspicion score, threshold, audit.',
+      3: '<code>Task(dataset, solver, scorer=model_graded_fact())</code>; <code>protocol_trusted_monitoring(submissions, sus_scores, audit_fraction=0.02)</code>.' }),
+    beat(9, 0, 6, 'why it matters', 'core', {
+      1: 'Measure as honestly as you can, with error bars. Then act as if the measurement might be wrong.',
+      2: 'Evals estimate what a model can do; control limits the damage if the evals missed something; looking inside checks both.',
+      3: 'Evals bound capability, control bounds damage under misalignment, interpretability tests the assumptions of both. None is enough alone.' })
+  ]);
   /* desktop: draw in a virtual stage so the scene fills big screens instead of floating in the corner */
   function zoomOf(W, H) { return W < 520 ? 1 : clamp(Math.min(W / 760, H / 540), 1, 1.9); }
   chapters.forEach(function (c) { var d = c.draw; c.draw = function (ctx, t, l, W, H, api) { var z = zoomOf(W, H); ctx.scale(z, z); d(ctx, t, l, W / z, H / z, api); }; });
@@ -368,7 +401,8 @@
       { label: 'Map: threat model & spec', href: '../../index.html#map/node=eval-threat-model-and-spec' },
       { label: 'Map: AI control', href: '../../index.html#map/node=ai-control' },
       { label: 'Case: trusted monitoring', href: '../../index.html#cases/trusted-monitoring' },
-      { label: 'Case: elicitation', href: '../../index.html#cases/elicitation' }
+      { label: 'Case: elicitation', href: '../../index.html#cases/elicitation' },
+      { label: 'Andrew Ng: Deep Learning Specialization', href: 'https://www.coursera.org/specializations/deep-learning' }
     ]
   });
 })();

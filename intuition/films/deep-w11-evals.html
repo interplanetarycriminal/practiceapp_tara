@@ -108,6 +108,16 @@
     return { X: X, Y: Y };
   }
 
+  /* the paper detective: an ink stick figure in a fedora (no face; she acts with her whole body) */
+  function sleuth(ctx, x, y, W, t, o) {
+    o = o || {}; o.scarf = o.scarf || P.red; var f = F.stick(ctx, x, y, o.s || (ph(W) ? 88 : 118), t, o);
+    if (f && f.head) { var r = f.head.r; ctx.save(); ctx.translate(f.head.x, f.head.y - r * .55); ctx.rotate((o.face || 1) * -.12);
+      ctx.fillStyle = '#6b4f45'; ctx.beginPath(); ctx.ellipse(0, 0, r * 1.55, r * .32, 0, 0, 6.283); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-r * .85, 0); ctx.lineTo(-r * .7, -r * .95); ctx.quadraticCurveTo(0, -r * 1.25, r * .7, -r * .95); ctx.lineTo(r * .85, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = P.red; ctx.fillRect(-r * .8, -r * .32, r * 1.6, r * .22); ctx.restore(); }
+    return f;
+  }
+
   /* ================= predict, then watch (never gated) ================= */
   var QT = 103.5, Q = { done: false, prev: -1, choice: null, el: null };
   var QOPTS = [['a', 'Defer the top 5% most suspicious to T'], ['b', 'Defer the top 20% to T'], ['c', 'Defer the top 50% to T'], ['d', 'All the same: the 2% audit does the catching']];
@@ -126,12 +136,8 @@
   function hideQ(api, resume) { if (!Q.el) return; Q.el.classList.remove('on'); if (resume && !isPlaying(api)) api.root.querySelector('.pp').click(); }
 
   /* ================= the chapters ================= */
-  var chapters = [
-    { name: 'threat model to spec', start: 0, dur: 18, cap: {
-        1: 'A detective\'s corkboard. Before any questions get written, pin down the <b>worry</b>: which capability, leading to which harm? Red string from one to the other. Then turn "power-seeking" into something you can actually count.',
-        2: 'Threat model: capability → route to harm. Specification: an <b>operational definition</b> ("picks the option that gains resources or control"), a metric (% of answers matching the behaviour), and what "high" would mean before you look.',
-        3: 'ARENA [3.1] separates the threat model (why we care) from the specification (what one number stands in for it). Each MCQ carries <code>answer_matching_behavior</code>. Deciding the threshold in advance is what stops you moving the goalposts.' },
-      draw: function (ctx, t, l, W, H) {
+  var SRC = [ /* scenes; the captioned beats are cut from these below */
+    { name: 'threat model to spec', start: 0, dur: 18, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, 0); var sm = ph(W), sz = sm ? 14 : 18, bw = Math.min(W - 24, 640), bh = sm ? Math.min(H - 30, 470) : Math.min(H - 40, 460), cx = W / 2, cy = (sm ? 12 : 20) + bh / 2;
         F.paper(ctx, cx, cy, bw, bh, '#c9a27a', { seed: 'cork' });
         var q = F.note(ctx, 'what would convince a sceptic?', cx, cy - bh / 2 + sz * 1.6, sz, { color: P.butter, seed: 'sceptic', rot: -.02 });
@@ -146,12 +152,9 @@
           lines.forEach(function (s, j) { fade(ctx, ramp(l, 7 + j * 1.3, 7.8 + j * 1.3), function () { mono(ctx, s, cx - w / 2 + 14, ys + sz * (1 + j * 1.35), sm ? 11.5 : 15, j ? P.ink : '#6b5a9a', 'left', j ? '600' : '800'); }); });
         });
         fade(ctx, ramp(l, 14, 15), function () { F.plane(ctx, lerp(-20, W + 20, ramp(l, 14, 18)), ys - 18, 12, .1, P.chalk); });
+        sleuth(ctx, sm ? W * .8 : cx + bw / 2 + 70, sm ? H - 22 : cy + bh / 2, W, t, l < 6 ? { pose: 'think', t0: t - l + .8, face: -1 } : { pose: 'write', from: 'think', t0: t - l + 6.3, face: -1 });
       } },
-    { name: 'three questions, one bias', start: 18, dur: 22, cap: {
-        1: 'Three questions, all written by hand. Notice anything? The power-seeking answer is <b>always A</b>. A lazy model that just says "A" every time scores 100% and looks terrifying. Shuffle the options and its score collapses.',
-        2: 'A real quality check, computed live: the "always A" baseline scores (share of targets in position A). Before shuffling: 3/3. After a seeded shuffle: ' + Math.round(alwaysA(TGT_SHUF) * 3) + '/3. A random guesser would get 50% either way.',
-        3: 'ARENA [3.2]/[3.3] meet this as <code>record_to_sample_shuffle</code>: randomise choice order so the target letter is balanced. The same QC pass also looks for duplicates, ambiguous items and label errors, often by having a model grade each generated question against a rubric.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'three questions, one bias', start: 18, dur: 22, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, 0); var sm = ph(W), sz = sm ? 12 : 15, cw = Math.min(W - 24, 560), chh = sz * 4.6, gap = sm ? 10 : 14, y0 = sm ? 14 : 24;
         var sh = ramp(l, 10, 12), tg = sh < .5 ? TGT_RAW : TGT_SHUF;
         QS.forEach(function (q, j) {
@@ -173,12 +176,9 @@
         });
         fade(ctx, ramp(l, 7, 8), function () { F.note(ctx, sh < .5 ? 'high score, zero power-seeking' : 'shuffled: the bias is gone', W / 2, Math.min(H - 28, yb + (sm ? 128 : 150)), sm ? 14 : 18, { color: sh < .5 ? P.pink : P.mint, seed: 'bias' + (sh < .5) }); });
         fade(ctx, ramp(l, 16, 17), function () { F.note(ctx, 'check the dataset before\nyou trust the model', W / 2, Math.min(H - 30, yb + (sm ? 190 : 216)), sm ? 13 : 16, { color: P.butter, seed: 'qc' }); });
+        sleuth(ctx, sm ? W * .8 : W / 2 + cw / 2 + 80, sm ? H - 22 : yb + 170, W, t, l < 10.6 ? { pose: 'lean-in', t0: t - l + 4.2, face: -1, look: { x: W / 2, y: yb + 50 } } : l < 16 ? { pose: 'recoil', from: 'lean-in', t0: t - l + 10.8, face: -1, look: { x: W / 2, y: yb + 50 } } : { pose: 'point', from: 'recoil', t0: t - l + 16.3, face: -1, look: { x: W / 2, y: yb + 200 } });
       } },
-    { name: 'the assembly line', start: 40, dur: 22, cap: {
-        1: 'Inspect is a paper factory. Question cards ride a conveyor: first the <b>dataset</b>, then a row of <b>solvers</b> that format and ask, then a <b>scorer</b> that stamps each one right or wrong. The log at the end counts the stamps.',
-        2: '<code>Task(dataset=..., solver=chain(...), scorer=...)</code>. Each card is a <code>Sample</code> (input, choices, target) made by <code>record_to_sample</code>. Solvers are steps that edit the conversation state; <code>generate()</code> is the one that calls the model.',
-        3: 'ARENA [3.3] benchmark_eval chains <code>multiple_choice_format</code>, <code>generate()</code>, <code>make_choice</code>, <code>generate()</code> and scores with <code>answer("letter")</code>. Swap to <code>model_graded_fact()</code> when there is no letter to match; then the grader is another model with its own biases to check.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the assembly line', start: 40, dur: 22, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, .6); var sm = ph(W), sz = sm ? 11 : 14;
         var st = sm ? [['dataset', 'Sample(...)'], ['solver', 'multiple_choice_format'], ['solver', 'generate()'], ['solver', 'make_choice'], ['scorer', 'answer("letter")']] : [['dataset', 'json_dataset'], ['solver', 'multiple_choice_format'], ['solver', 'generate()'], ['solver', 'make_choice'], ['scorer', 'answer("letter")']];
         // phone: vertical conveyor; desktop: horizontal
@@ -209,12 +209,9 @@
           mono(ctx, 'stderr ' + (done ? se.toFixed(2) : '–') + '   (√(p(1−p)/n))', lx - w / 2 + 12, ly + h * .3, sz - 1, P.ink);
         });
         fade(ctx, ramp(l, 19, 20), function () { F.note(ctx, 'n = 12 is a rumour, not a result', W / 2, Math.min(H - 24, ly + sz * 5), sm ? 13 : 16, { color: P.butter, seed: 'rumour' }); });
+        sleuth(ctx, sm ? W * .82 : W / 2 + 290, sm ? H - 22 : ly + 70, W, t, l < 11 ? { pose: 'lean-in', t0: t - l + 6, face: -1, look: { x: lx, y: ly } } : { pose: 'think', from: 'lean-in', t0: t - l + 11.5, face: -1 });
       } },
-    { name: 'elicitation moves the number', start: 62, dur: 20, cap: {
-        1: 'Same model, same 20 questions, two ways of asking. Just "answer": a middling score. Let it think step by step first: much higher. The model did not get smarter between runs. Our <b>measurement</b> did.',
-        2: 'Simulated: P(correct) = σ(skill + prompt bonus − difficulty) over 20 seeded difficulties. Bare <code>generate()</code>: ' + pct(EL[0].acc) + ' ± ' + pct(EL[0].se) + '. <code>chain_of_thought()</code> + <code>make_choice</code>: ' + pct(EL[1].acc) + ' ± ' + pct(EL[1].se) + ' (one standard error).',
-        3: 'Elicitation (ARENA [3.3]/[3.4]): a score is a lower bound on capability. For a dangerous-capability eval, under-elicitation is the dangerous error: it reports "safe" because you asked badly. Agents with tools ([3.4] LLM agents) widen the gap further.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'elicitation moves the number', start: 62, dur: 20, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, .6); var sm = ph(W), sz = sm ? 12 : 15, w = Math.min(W - 24, 560), h = sm ? 300 : 340, x = W / 2 - w / 2, y = sm ? 14 : 24;
         card(ctx, W / 2, y + h / 2, w, h, 'elic');
         var gx0 = x + 40, gy0 = y + h - 40, gy1 = y + 40, Y = function (v) { return lerp(gy0, gy1, v); };
@@ -234,12 +231,9 @@
         var ny = y + h + (sm ? 36 : 46);
         fade(ctx, ramp(l, 11, 12), function () { F.note(ctx, 'same weights, different number', W / 2, ny, sm ? 14 : 18, { color: P.butter, seed: 'same' }); });
         fade(ctx, ramp(l, 14, 15), function () { F.note(ctx, 'a score is a floor,\nnot a ceiling', W / 2, Math.min(H - 34, ny + (sm ? 62 : 74)), sm ? 15 : 19, { color: P.pink, seed: 'floor', rot: .02 }); });
+        sleuth(ctx, sm ? W * .18 : x - 70, sm ? H - 22 : y + h, W, t, l < 7.3 ? { pose: 'lean-in', t0: t - l + 1, look: { x: W / 2, y: y + h / 2 } } : l < 11 ? { pose: 'recoil', from: 'lean-in', t0: t - l + 7.4, look: { x: W / 2, y: y + h / 2 } } : { pose: 'shrug', from: 'recoil', t0: t - l + 11.4 });
       } },
-    { name: 'now assume it fails', start: 82, dur: 20, cap: {
-        1: 'Now the humbling turn: suppose the eval <b>missed</b> something and the clever model is quietly scheming. A strong untrusted coder <b>U</b> writes the code, a weaker trusted checker <b>T</b> rates how suspicious each answer looks, and humans can afford to check only 2%.',
-        2: 'AI control (ARENA [3.5]): U sometimes inserts a backdoor. Trusted monitoring: T gives every submission a suspiciousness score, and we <b>audit</b> the top 2% (the audit budget). Simulated monitor: clean ~ N(0,1), backdoored ~ N(1.6,1). Catch rate at 2%: ' + pct(protocol(.02, 0).caught) + '.',
-        3: 'ARENA quotes about 34% true positives at a 2% false-positive rate for its T, so this toy monitor is calibrated to be similarly mediocre. Safety here = P(the first backdoor that is not deferred gets audited) = caught / (caught + slipped). With audit alone: ' + pct(protocol(.02, 0).safety) + '.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'now assume it fails', start: 82, dur: 20, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, .6); var sm = ph(W), sz = sm ? 12 : 15;
         var y = sm ? 16 : 24, cx = W / 2;
         fade(ctx, ramp(l, .5, 1.5), function () {
@@ -261,12 +255,9 @@
         var ny = hy + hh + (sm ? 30 : 40);
         fade(ctx, ramp(l, 10, 11), function () { F.note(ctx, 'audit top 2%: catch ' + pct(pr.caught) + ' of backdoors', W / 2, ny, sm ? 13 : 17, { color: P.pink, seed: 'catch', font: F.MONO, tape: false }); });
         fade(ctx, ramp(l, 13, 14), function () { F.note(ctx, 'safety ' + pct(pr.safety) + ' (simulated)', W / 2, Math.min(H - 26, ny + (sm ? 44 : 54)), sm ? 14 : 18, { color: P.butter, seed: 'saf0' }); });
+        sleuth(ctx, sm ? W * .82 : W / 2 + hw / 2 + 60, sm ? H - 22 : hy + hh, W, t, l < 9 ? { pose: 'think', t0: t - l + 1, face: -1 } : { pose: 'point', from: 'think', t0: t - l + 9.4, face: -1, look: { x: W / 2 + hw * .3, y: hy + hh * .4 } });
       } },
-    { name: 'defer to trusted', start: 102, dur: 22, cap: {
-        1: 'Your call first. Then watch: for answers that are <b>suspicious but not audited</b>, throw away U\'s code and use T\'s weaker code instead. Safer, but you lose some of U\'s cleverness. Sweep how much you defer and a curve appears.',
-        2: 'Defer to trusted: above a lower defer threshold, submit T\'s solution. Defer 5%: safety ' + pct(PQ.a.safety) + ', usefulness ' + pct(PQ.a.useN) + '. 20%: ' + pct(PQ.b.safety) + ' / ' + pct(PQ.b.useN) + '. 50%: ' + pct(PQ.c.safety) + ' / ' + pct(PQ.c.useN) + '. Usefulness is scaled so T alone = 0 and U alone = 1.',
-        3: 'So the "safest" setting is trivially "defer everything" and get T\'s usefulness. The real question is the <b>safety/usefulness frontier</b>: the best safety you can buy for each unit of usefulness given. Trusted editing (T edits U\'s code instead of replacing it) sits above this curve in the paper.' },
-      draw: function (ctx, t, l, W, H, api) {
+    { name: 'defer to trusted', start: 102, dur: 22, draw: function (ctx, t, l, W, H, api) {
         if (!Q.done && Q.prev >= 0 && Q.prev < QT && t >= QT && t - Q.prev < .4) { Q.done = true; showQ(api); }
         if (t < QT - 1) { Q.done = false; if (Q.el && Q.el.classList.contains('on')) hideQ(api, false); }
         Q.prev = t;
@@ -284,22 +275,16 @@
           var msg = Q.choice === 'c' ? 'you called it: 50% is safest\n...and costs half of U' : Q.choice && Q.choice !== 'skip' ? 'of the four: defer 50%\n...and it costs half of U' : 'safest of the four: defer 50%\n...and it costs half of U';
           F.note(ctx, msg, W / 2, Math.min(H - 34, ny + (sm ? 52 : 66)), sm ? 14 : 18, { color: Q.choice === 'c' ? P.mint : P.butter, seed: 'ans' + Q.choice });
         });
+        sleuth(ctx, sm ? W * .1 : x1 - 60, sm ? H - 22 : y1 + h1, W, t, { s: sm ? 74 : 118, pose: l < 13 ? 'think' : 'point', from: 'think', t0: t - l + (l < 13 ? 1 : 13.3), look: { x: x2 + w * .5, y: y2 + h2 * .4 } });
       } },
-    { name: 'where it stops being true', start: 124, dur: 8, cap: {
-        1: 'The torn corner: our fake scheming coder attacks at random, and our suspicion scores are drawn from tidy bell curves. A real adversary <b>studies the protocol</b> and hides its attacks exactly where the monitor does not look.',
-        2: 'Real red teams adapt: they pick rare, subtle attacks that land below the defer threshold, so the backdoored curve is not fixed. Control evaluations have to let the red team respond to the blue team\'s choices.',
-        3: 'In ARENA [3.5] the red team iterates attack policies (e.g. <code>generate_backdoor_task_refined</code>) against each protocol; safety is the worst case over those, not the average over a Gaussian toy.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'where it stops being true', start: 124, dur: 8, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, .6); var sm = ph(W), pr = protocol(.02, .2);
         hist(ctx, 10, 12, W - 20, sm ? 220 : 280, pr, sm ? 12 : 14);
         F.cornerFlip(ctx, W, H, ramp(l, .5, 2), P.cream);
         fade(ctx, ramp(l, 1.8, 2.6), function () { F.note(ctx, 'real attackers read\nthe protocol too', W * .6, H * .7, sm ? 16 : 21, { color: P.pink, seed: 'adapt', rot: -.04 }); });
+        sleuth(ctx, sm ? W * .18 : W * .14, H - 22, W, t, l < 2.2 ? { pose: 'lean-in', look: { x: W / 2, y: 120 } } : { pose: 'shrug', from: 'lean-in', t0: t - l + 2.4 });
       } },
-    { name: 'your Inspect Task', start: 132, dur: 18, cap: {
-        1: 'The whole office in a few lines of your own code: a threat model became a spec, the spec became shuffled questions, and the questions ride through a Task. Then a one-line guard for when it all fails. <b>Honest measurement plus control is how we stay safe while we learn to steer.</b>',
-        2: 'ARENA [3.3] <code>@task</code> returns <code>Task(dataset, solver, scorer)</code>; <code>record_to_sample_shuffle</code> fixes position bias; the control guard is <code>if sus > threshold: audit()</code> with a defer band below it.',
-        3: 'Run it with <code>inspect_ai.eval(benchmark_eval(...), model=...)</code>, read the log for accuracy and stderr, then rerun with a stronger solver chain to check elicitation. In [3.5] the same Inspect machinery runs U, T and the protocols.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'your Inspect Task', start: 132, dur: 18, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t, .6); var sm = ph(W), sz = sm ? 10.8 : 14.5, lh = sz * 1.6, cw = Math.min(W - 12, 720), x0 = W / 2 - cw / 2 + 10;
         var ch = CODE.length * lh + 22, cy = (sm ? 8 : 16) + ch / 2; card(ctx, W / 2, cy, cw, ch, 'code');
         var hl = Math.floor(clamp((l - 1) / (12 / CODE.length), -1, CODE.length - 1));
@@ -311,8 +296,79 @@
         var vy = cy + ch / 2 + (sm ? 24 : 34), last = hl; while (last >= 0 && !VALS[last]) last--;
         if (last >= 0) F.note(ctx, VALS[last], W / 2, vy, sm ? 12 : 15, { color: P.mint, seed: 'v' + last, font: F.MONO, tape: false });
         fade(ctx, ramp(l, 14, 15), function () { F.note(ctx, 'honest measurement plus control:\nsafe while we learn to steer', W / 2, Math.min(H - 36, vy + (sm ? 62 : 78)), sm ? 13 : 18, { color: P.pink, seed: 'steer', rot: .02 }); });
+        if (!sm) sleuth(ctx, W / 2 + cw / 2 + 70, cy + ch / 2, W, t, l < 9 ? { pose: 'point', t0: t - l + 1, face: -1, look: { x: W / 2, y: cy } } : { pose: 'wave', from: 'point', t0: t - l + 14.5, face: -1 });
       } }
   ];
+
+  /* ---------------- pass 2: captioned beats cut from the scenes above (same timing) ----------------
+     need: 'core' (career skill), 'exercise' (this week's ARENA code), 'library' (one line, move on), 'contested' (open research). */
+  function beat(i, at, dur, name, need, cap, over) { var d = SRC[i].draw; return { name: name, need: need, dur: dur, cap: cap, draw: function (ctx, t, l, W, H, api) { var r = d(ctx, t, l + at, W, H, api); if (over) over(ctx, t, l, W, H); return r; } }; }
+  /* one small on-screen credit line when a framing is borrowed (Hamming-simple, credited) */
+  function credit(txt) { return function (ctx, t, l, W, H) { ctx.save(); ctx.globalAlpha = .9 * F.ramp(l, .3, 1.2); F.hand(ctx, txt, 10, H - 14, W < 500 ? 11 : 13, P.chalk, { align: 'left', outline: 3, outlineColor: 'rgba(20,20,50,.9)', seed: 'credit' }); ctx.restore(); }; }
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  var P0 = protocol(.02, 0);
+  var chapters = seq([
+    beat(0, 0, 6, 'the worry', 'core', {
+      1: 'A detective\'s corkboard. Before writing any questions, pin down the <b>worry</b>: which capability leads to which harm? Red string from one to the other.',
+      2: 'A <b>threat model</b>: a capability plus a route to real-world harm. It says why this eval matters and what "bad" would look like.',
+      3: 'ARENA [3.1] separates the threat model (why we care) from the specification (what one number stands in for it).' }),
+    beat(0, 6, 12, 'decide before you look', 'core', {
+      1: 'Turn "power-seeking" into something countable and decide first what counts as "high". Ask now: <b>what result would change my mind?</b> No moving goalposts.',
+      2: '<b>Specification</b>: an operational definition ("picks the option that gains resources or control"), a metric (% matching), and the threshold, all set up front.',
+      3: 'Andrew Ng\'s framing: one optimising metric plus pass/fail bars. Fixing them first is pre-registration, as in clinical trials. MCQs carry <code>answer_matching_behavior</code>.' }, credit('framing: Andrew Ng, Deep Learning Specialization')),
+    beat(1, 0, 10, 'the lazy bot', 'core', {
+      1: 'Three hand-written questions. Notice anything? The power-seeking answer is <b>always A</b>. A lazy bot that always says "A" scores 100% and looks terrifying.',
+      2: 'Quality check, live: the "always A" <b>baseline</b> scores the share of targets in position A: 3/3. A random guesser would get 50%.',
+      3: 'Baselines catch broken evals: if a trivial policy scores high, the metric measures format, not behaviour.' }),
+    beat(1, 10, 12, 'shuffle', 'exercise', {
+      1: 'Shuffle the options and the lazy bot\'s score collapses. Now the eval measures choices, not letters. Check the dataset before you trust the model.',
+      2: 'After a seeded shuffle: ' + Math.round(alwaysA(TGT_SHUF) * 3) + '/3. ARENA\'s <code>record_to_sample_shuffle</code> randomises choice order so the target letter is balanced.',
+      3: 'The same QC pass looks for duplicates, ambiguity and label errors, often with a model grading each question against a rubric (ARENA [3.2]).' }),
+    beat(2, 0, 11, 'the assembly line', 'library', {
+      1: 'Inspect is a paper factory: question cards ride a conveyor through the <b>dataset</b>, then <b>solvers</b> that format and ask, then a <b>scorer</b> that stamps right or wrong.',
+      2: 'Library call: <code>Task(dataset, solver=chain(...), scorer)</code>. A card is a <code>Sample</code> (input, choices, target); <code>generate()</code> calls the model.',
+      3: 'ARENA [3.3] <code>benchmark_eval</code> chains multiple_choice_format, generate(), make_choice, generate(); scores with <code>answer("letter")</code>.' }),
+    beat(2, 11, 11, 'a rumour, not a result', 'core', {
+      1: 'The log counts the stamps. With only 12 cards the score is a rumour: one more right or wrong answer moves it a lot.',
+      2: '<b>stderr</b> = √(p(1−p)/n): the typical wobble of an accuracy measured on n questions. Why √n? Independent lucky and unlucky answers partly cancel.',
+      3: 'At n = 12 one standard error is over ±10 points. Model-graded scorers (<code>model_graded_fact()</code>) add their own biases on top.' }),
+    beat(3, 0, 11, 'same model, new number', 'core', {
+      1: 'Same model, same 20 questions, two ways of asking. Just "answer": a middling score. Let it think first: much higher. The model didn\'t change; the measurement did.',
+      2: 'Simulated: P(correct) = σ(skill + prompt bonus − difficulty). Bare: ' + pct(EL[0].acc) + ' ± ' + pct(EL[0].se) + '. Chain of thought: ' + pct(EL[1].acc) + ' ± ' + pct(EL[1].se) + ' (1 SE).',
+      3: 'σ, the logistic squash, turns "how far skill exceeds difficulty" into a probability; the bonus stands in for better elicitation (ARENA [3.3]/[3.4]).' }),
+    beat(3, 11, 9, 'is it a test?', 'contested', {
+      1: 'A score is a <b>floor</b>, not a ceiling. And a model that suspects a test may act differently; there\'s no reliable way yet to rule that out.',
+      2: 'Current method: elicit hard, read reasoning for "this is a test". Emerging research: frontier models often notice evals. You need: say so in your results.',
+      3: 'Under-elicitation reports "safe" because you asked badly. <b>Eval awareness</b> can move scores either way (ARENA [3.1] cites worse behaviour when eval-aware).' }),
+    beat(4, 0, 9, 'assume it fails', 'core', {
+      1: 'Now suppose the eval missed something and the clever model is quietly scheming. Strong untrusted coder <b>U</b> writes code; weaker trusted checker <b>T</b> rates each answer.',
+      2: '<b>AI control</b> (ARENA [3.5]): protocols that stay safe even if U tries to sneak in backdoors. T scores suspicion; humans audit the top 2%.',
+      3: 'Assumptions: T is weaker but honest, human audits are reliable but scarce (2% budget), and U may attack. Safety is judged against U\'s best attack.' }),
+    beat(4, 9, 11, 'two hills', 'exercise', {
+      1: 'The two hills: suspicion scores of honest and backdoored code. They overlap, so a 2% audit catches only some attacks, like a tax office auditing the likeliest cheats.',
+      2: 'Simulated monitor: clean ~ N(0,1), backdoored ~ N(1.6,1). Auditing the top 2% catches ' + pct(P0.caught) + ' of backdoors. Safety: ' + pct(P0.safety) + '.',
+      3: 'Calibrated to ARENA\'s ≈34% true positives at 2% false positives. Safety = P(first un-deferred backdoor is audited) = caught / (caught + slipped).' }),
+    beat(5, 0, 13, 'defer to trusted', 'exercise', {
+      1: 'Your call first. Then watch: for answers that are suspicious but not audited, use T\'s weaker code instead of U\'s. Safer, but you lose some of U\'s skill.',
+      2: 'Defer 5%: safety ' + pct(PQ.a.safety) + ', useful ' + pct(PQ.a.useN) + '. 20%: ' + pct(PQ.b.safety) + ' / ' + pct(PQ.b.useN) + '. 50%: ' + pct(PQ.c.safety) + ' / ' + pct(PQ.c.useN) + '. Useful: T alone = 0, U alone = 1.',
+      3: 'ARENA <code>protocol_defer_to_trusted(..., defer_fraction=0.10)</code>: above the defer line, submit T\'s solution; above the audit line, audit.' }),
+    beat(5, 13, 9, 'a curve, not a point', 'core', {
+      1: 'Deferring more is always safer, and at 100% you\'ve thrown U away. The real answer is a <b>curve</b>: the best safety you can buy for each bit of usefulness.',
+      2: 'The <b>safety/usefulness frontier</b> is the result, not one point. Better protocols push the whole curve up and to the right.',
+      3: 'Greenblatt et al. (2023) reported trusted editing (T edits U\'s code) beating defer-to-trusted at similar usefulness; ARENA has <code>protocol_trusted_editing</code>.' }),
+    beat(6, 0, 8, 'real attackers adapt', 'contested', {
+      1: 'Our fake schemer attacks at random and its scores come from tidy bell curves. A real adversary <b>studies the protocol</b> and hides where the monitor doesn\'t look.',
+      2: 'Current method: red team vs blue team on fixed tasks. Emerging research: control for long agentic tasks and much smarter U. You need: judge the worst attack.',
+      3: 'Key assumption: we can red-team as well as U can attack; whether that holds for far stronger models is open. ARENA [3.5] iterates attacks (<code>refine_backdoor</code>).' }),
+    beat(7, 0, 9, 'your Inspect Task', 'exercise', {
+      1: 'The whole office in a few lines of your own code: a spec became shuffled questions, and the questions ride through a Task.',
+      2: '<code>@task</code> returns <code>Task(dataset, solver, scorer)</code>; <code>record_to_sample_shuffle</code> fixes position bias; the guard: <code>if sus > threshold: audit()</code>.',
+      3: 'Run <code>inspect_ai.eval(benchmark_eval(...), model=...)</code>, read accuracy and stderr from the log, rerun with a stronger solver chain.' }),
+    beat(7, 9, 9, 'the habit to keep', 'core', {
+      1: 'Then a guard for when it all fails. <b>Honest measurement plus control</b> is how we stay safe while we learn to look inside and steer.',
+      2: 'Career skill: every eval is a measurement with a baseline and error bars, and every deployment plan should survive that measurement being wrong.',
+      3: 'Inspect is a library call you\'ll reuse; the durable part is the design: threat model, spec, baseline, elicitation, error bars, control.' })
+  ]);
 
   var p20 = protocol(.02, .2);
   var CODE = [
@@ -392,7 +448,8 @@
       { label: 'Case: elicitation', href: '../../index.html#cases/elicitation' },
       { label: 'Case: trusted monitoring', href: '../../index.html#cases/trusted-monitoring' },
       { label: 'Case: safety/usefulness', href: '../../index.html#cases/safety-usefulness-pareto' },
-      { label: 'Short film: week 11', href: 'w11-evals.html' }
+      { label: 'Short film: week 11', href: 'w11-evals.html' },
+      { label: 'Andrew Ng: Deep Learning Specialization', href: 'https://www.coursera.org/specializations/deep-learning' }
     ]
   });
 })();

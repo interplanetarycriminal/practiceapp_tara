@@ -165,6 +165,15 @@ var M = (function () {
     });
     ctx.restore();
   }
+  /* the detective: an ink stick figure in a paper fedora (no face; the acting is in the pose) */
+  function det(ctx, x, y, W, t, o) {
+    o = o || {}; o.scarf = o.scarf || P.red; var s = o.s || (ph(W) ? 96 : 120), f = F.stick(ctx, x, y, s, t, o);
+    if (f && f.head) { var hx = f.head.x, hy = f.head.y, r = f.head.r; ctx.save(); ctx.translate(hx, hy - r * .55); ctx.rotate((o.face || 1) * -.12);
+      ctx.fillStyle = '#3a3346'; ctx.beginPath(); ctx.ellipse(0, 0, r * 1.55, r * .32, 0, 0, 6.283); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-r * .85, 0); ctx.lineTo(-r * .7, -r * .95); ctx.quadraticCurveTo(0, -r * 1.25, r * .7, -r * .95); ctx.lineTo(r * .85, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = P.red; ctx.fillRect(-r * .8, -r * .32, r * 1.6, r * .22); ctx.restore(); }
+    return f;
+  }
   function hitHead(x, y) { var hit = null; M.HEADS.forEach(function (h) { var p = G.pos[h.id]; if (p && Math.abs(x - p[0]) < G.bw / 2 + 4 && Math.abs(y - p[1]) < G.bh / 2 + 4) hit = h.id; }); return hit; }
   function metricBar(ctx, x, y, w, m, a, label, col) {
     ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = 'rgba(247,240,225,.12)'; ctx.fillRect(x, y, w, 20);
@@ -199,12 +208,8 @@ var M = (function () {
   }
 
   /* ---------------- chapters ---------------- */
-  var chapters = [
-    { name: 'the case', start: 0, dur: 18, cap: {
-        1: 'A paper bar. <b>"When Mary and John went to the store, John gave a drink to ..."</b> Everyone knows the answer is Mary. The mind egg knows too. The case: <b>who inside it decided?</b>',
-        2: 'Indirect object identification (IOI). The score is the <b>logit difference</b>: <code>logit(Mary) - logit(John)</code> at the final token, a seesaw. Positive means the model backs the right name.',
-        3: 'IO = Mary, S = John (named twice: S1, S2), END = "to". ARENA <code>logits_to_ave_logit_diff</code> averages this over a batch of prompts. The toy here is hand-built, 7 heads with GPT-2 small\'s head names, run for real: clean logit diff = ' + C0.ld.toFixed(2) + '.' },
-      draw: function (ctx, t, l, W, H) {
+  var SRC = [ /* scenes; the captioned beats are cut from these below */
+    { name: 'the case', start: 0, dur: 18, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W);
         // the coaster with the question
         var cr = pw ? 58 : 70, cx = pw ? W / 2 : W * .2, cy = pw ? 70 : 110;
@@ -216,12 +221,10 @@ var M = (function () {
         seesaw(ctx, W / 2, y + 100, Math.min(W - 60, 360), ld, ramp(l, 5, 6.5));
         if (l > 7) readout(ctx, W / 2 - (pw ? 110 : 110), y + 170, [['logit(Mary) = ' + (C0.L[0] * ramp(l, 7, 10)).toFixed(2), P.pink], ['logit(John) = ' + C0.L[1].toFixed(2), P.sky], ['logit diff  = ' + ld.toFixed(2), P.butter]], W);
         var es = Math.min(W, H) * .09; F.egg(ctx, W - es * 1.4, pw ? H - es * 1.5 : es * 1.8, es, t, { clear: .3 });
+        var dx = lerp(-40, pw ? W * .16 : W * .14, ramp(l, 0, 2.5)), dy = pw ? H - 22 : H - 40;
+        det(ctx, dx, dy, W, t, l < 2.5 ? { pose: 'walk' } : l < 9 ? { pose: 'think', from: 'walk', t0: t - l + 2.5, look: { x: cx, y: cy } } : { pose: 'point', from: 'think', t0: t - l + 9.2, look: { x: W / 2 - Math.min(W - 60, 360) * .35, y: y + 80 } });
       } },
-    { name: 'the suspects', start: 18, dur: 24, cap: {
-        1: 'Three gangs of heads pass notes up the building. The <b>duplicate-token</b> head spots that John came up twice. The <b>S-inhibition</b> heads carry "ignore John" to the end. The <b>name movers</b> say whoever is left: Mary.',
-        2: 'The circuit, drawn from live attention weights. <b>Duplicate token</b> (3.0) and <b>induction</b> (5.5) heads at S2 attend to S1. <b>S-inhibition</b> heads (7.9, 8.6) at END attend to S2. <b>Name movers</b> (9.9, 9.6) at END attend to Mary and copy her into the logits.',
-        3: 'Toy wiring: DUP at S2 = ' + C0.DUP[9][1].toFixed(2) + ' "John"; INHIB at END = ' + C0.INHIB[1].toFixed(2) + ' "John"; the name movers\' query scores are <code>alpha - delta * INHIB·name</code>, so John\'s key is pushed down and 9.9 puts ' + (C0.att['9.9'].a[1] * 100).toFixed(0) + '% of its attention on Mary. Names match Wang et al. (2022) and ARENA [1.4.1].' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the suspects', start: 18, dur: 24, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W); geo(W, H, pw ? 70 : 80, H - (pw ? 110 : 120));
         var s = { dt: ramp(l, 2, 5), si: ramp(l, 8, 11), nm: ramp(l, 14, 17), bnm: 0 };
         var kinds = ['dt']; if (l > 7) kinds.push('si'); if (l > 13) kinds.push('nm');
@@ -235,11 +238,7 @@ var M = (function () {
         if (l > 6 && l < 13) readout(ctx, 12, pw ? 12 : 16, [['3.0 at S2 -> S1: ' + C0.att['3.0'][9].a[2].toFixed(2), P.sky]], W);
         if (l >= 13) readout(ctx, 12, pw ? 12 : 16, [['8.6 at END -> S2: ' + C0.att['8.6'].a[3].toFixed(2), P.pink], ['9.9 at END -> Mary: ' + C0.att['9.9'].a[1].toFixed(2), P.butter]], W);
       } },
-    { name: 'the alibi', start: 42, dur: 16, cap: {
-        1: 'To test a suspect you need a second bar where the answer flips. Swap one word: "... <b>Mary</b> gave a drink to". Now the answer is John, and the seesaw tips the other way.',
-        2: '<b>Clean</b> vs <b>corrupted</b> prompts: same template, the second subject swapped, so the answer flips. Corrupted logit diff = ' + K0.ld.toFixed(2) + '. The ruler between them is the <b>patching metric</b>: 0 = corrupted, 1 = clean.',
-        3: 'ARENA <code>ioi_metric</code>: "a linear function of logit diff, calibrated so that it equals 0 when performance is same as on corrupted input, and 1 when performance is same as on clean input": <code>(patched - corrupted) / (clean - corrupted)</code>. It is linear, so 0.5 means half-way, not half-probability.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the alibi', start: 42, dur: 16, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W), sw = ramp(l, 2, 4);
         var y1 = sentence(ctx, W, pw ? 36 : 50, M.CLEAN, 1, null);
         lbl(ctx, 'clean', 14, pw ? 14 : 22, P.mint, 13, { align: 'left' });
@@ -257,12 +256,10 @@ var M = (function () {
           F.lantern(ctx, rx + rw * probe, ry - 34, 12, probe, t);
           readout(ctx, W / 2 - (pw ? 160 : 190), ry + 50, [['clean ' + C0.ld.toFixed(2) + '   corrupted ' + K0.ld.toFixed(2), P.chalk], ['logit diff ' + pld.toFixed(2) + ' -> metric ' + M.metric(pld).toFixed(2), P.butter]], W);
         }
+        var ax = pw ? W * .2 : W / 2 - 330, ay = pw ? Math.min(H - 22, ry + 230) : Math.min(H - 20, ry + 150);
+        det(ctx, ax, ay, W, t, l < 1.5 ? { pose: 'idle' } : l < 7.5 ? { pose: 'lean-in', t0: t - l + 1.6, look: { x: W / 2, y: y1 + 30 } } : { pose: 'point', from: 'lean-in', t0: t - l + 8.5, look: { x: rx + rw * (Math.sin((l - 8) * .8) + 1) / 2, y: ry - 30 } });
       } },
-    { name: 'patch each suspect', start: 58, dur: 28, cap: {
-        1: 'The line-up. Run the swapped bar, but hand <b>one head</b> its note from the real bar. If the seesaw swings back to Mary, that head was carrying the evidence. Before you look: which one wins?',
-        2: '<b>Activation patching</b>: run the corrupted prompt, overwrite one head\'s output (all positions) with its value from the clean cache, measure the metric. Seven real forward passes, one per bar.',
-        3: 'ARENA <code>get_act_patch_attn_head_out_all_pos</code> with <code>patch_head_vector</code> on <code>hook_z</code>. It is a chain, so fixing an early link repairs everything downstream: toy best = ' + best.id + ' at ' + best.m.toFixed(2) + '. Both S-inhibition heads together: ' + M.metric(bothSI.ld).toFixed(2) + '. In GPT-2 the brightest cells are the name movers and S-inhibition heads.' },
-      draw: function (ctx, t, l, W, H, api) {
+    { name: 'patch each suspect', start: 58, dur: 28, draw: function (ctx, t, l, W, H, api) {
         bg(ctx, W, H, t); predTick(t, api); var pw = ph(W);
         geo(W, H, pw ? 40 : 50, pw ? H * .46 : H * .5);
         var n = Math.floor(ramp(l, 9.5, 17) * 7 + 1e-6), cur = l > 9.5 && n < 7 ? n : -1, R = K0;
@@ -275,12 +272,10 @@ var M = (function () {
         if (cur >= 0) readout(ctx, W - 12, 8, [['patching ' + M.HEADS[cur].id + ': logit diff ' + R.ld.toFixed(2), P.butter]], W, true);
         if (l > 18) { var ans = PRED.choice, msg = ans === '2' ? 'you called it: the earliest link wins' : ans != null && ans !== 'skip' ? 'close: the earliest link edges it' : 'the earliest link edges it';
           F.note(ctx, msg + ' (' + best.id + ': ' + best.m.toFixed(2) + ')', W / 2, Math.min(H - 30, by + 7 * 28 + 30), pw ? 14 : 17, { color: P.butter, seed: 'ans', reveal: ramp(l, 18, 19.5), rot: -.015 }); }
+        var lx = pw ? 34 : W / 2 - 290, ly = pw ? by + 7 * 28 - 4 : by + 190;
+        if (!pw) det(ctx, lx, ly, W, t, { s: pw ? 72 : 120, pose: l < 8.5 ? 'think' : l < 18 ? 'lean-in' : 'cheer', from: l < 18 ? 'think' : 'lean-in', t0: t - l + (l < 8.5 ? .5 : l < 18 ? 9 : 18.3), look: { x: bx + bw / 2, y: by + 80 } });
       } },
-    { name: 'follow one wire', start: 86, dur: 20, cap: {
-        1: 'Patching a whole head is like swapping a whole witness. Sharper: swap <b>one message</b> between two witnesses. Give the name movers the clean "ignore John" note, and change nothing else.',
-        2: '<b>Path patching</b>: patch only the edge <b>S-inhibition -> name mover queries</b>. Every other reader of the S-inhibition output (here the backup head) still sees the corrupted version. That one wire recovers ' + M.metric(M.pathSI.ld).toFixed(2) + '.',
-        3: 'Sender = heads 7.9 + 8.6, receiver = the <code>q</code> input of 9.9 and 9.6. ARENA does it in three runs: cache clean, run corrupted with senders patched and everything else frozen, then patch the receivers\' inputs (<code>get_path_patch_head_to_heads</code>, <code>receiver_input="q"</code>). Edge 3.0 -> name movers directly: 0, because name movers never read DUP.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'follow one wire', start: 86, dur: 20, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W); geo(W, H, pw ? 50 : 60, H - (pw ? 230 : 220));
         var on = ramp(l, 4, 7), R = on > .5 ? M.pathSI : K0;
         board(ctx, W, t, { R: R, words: M.CORR, a: 1, glow: { '7.9': on, '8.6': on, '9.9': on, '9.6': on } });
@@ -292,27 +287,21 @@ var M = (function () {
         if (l > 7) metricBar(ctx, bx, by, bw, M.metric(M.pathSI.ld), ramp(l, 7, 8), 'wire S-inh -> NM q', P.butter);
         if (l > 9) metricBar(ctx, bx, by + 30, bw, M.metric(bothSI.ld), ramp(l, 9, 10), 'whole S-inh heads', P.pink);
         if (l > 11) metricBar(ctx, bx, by + 60, bw, 0, ramp(l, 11, 12), 'wire 3.0 -> NM', P.sky);
+        det(ctx, pw ? 30 : W / 2 - 280, pw ? by + 96 : by + 140, W, t, { s: pw ? 72 : 120, pose: l < 3 ? 'think' : 'pull', from: 'think', t0: t - l + 3, look: { x: G.pos['8.6'][0], y: G.pos['8.6'][1] } });
         if (l > 13) F.note(ctx, pw ? 'the evidence travels\nalong one wire' : 'the evidence travels along one wire', W / 2, by + (pw ? 112 : 110), pw ? 14 : 17, { color: P.pink, seed: 'wire', reveal: ramp(l, 13, 15) });
       } },
-    { name: 'the backup crew', start: 106, dur: 20, cap: {
-        1: 'The twist every detective hates: arrest the name movers and the answer is <b>still mostly right</b>. A quiet backup head notices nobody said the name, and says it instead.',
-        2: 'Zero-ablate 9.9 and 9.6. With the backup frozen the logit diff would fall to ' + M.noNMfrozen.ld.toFixed(2) + '; for real it is ' + M.noNM.ld.toFixed(2) + '. <b>Backup name movers</b> self-repair, so ablations understate importance. <b>Where the story stops being true:</b> this toy covers one template.',
-        3: 'In the toy, 10.10\'s BOS score is <code>rho * |name mover output|</code>: when the movers go quiet it stops resting on BOS and copies Mary. GPT-2 small\'s real circuit has 26 heads, including negative name movers (10.7, 11.10) that push against the answer; and it explains this IOI template, not GPT-2 as a whole.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the backup crew', start: 106, dur: 20, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W); geo(W, H, pw ? 110 : 70, H - (pw ? 150 : 170));
         var k = 1 - ramp(l, 2, 6), R = M.run(M.CLEAN, { scale: { '9.9': k, '9.6': k } }), Rf = M.run(M.CLEAN, { scale: { '9.9': k, '9.6': k }, patch: { '10.10': C0.out['10.10'] } });
         board(ctx, W, t, { R: R, words: M.CLEAN, off: k < .05 ? { '9.9': 1, '9.6': 1 } : null, glow: { '10.10': clamp(1 - R.att['10.10'].a[0], 0, 1) } });
         var by = G.tokY + 50;
         readout(ctx, pw ? 12 : W / 2 - 180, pw ? 8 : by, [['name movers x ' + k.toFixed(2), P.butter], ['10.10 attention on BOS ' + R.att['10.10'].a[0].toFixed(2), P.mint], ['logit diff, backup frozen ' + Rf.ld.toFixed(2), P.chalk], ['logit diff, for real     ' + R.ld.toFixed(2), P.pink]], W);
+        var nm = G.pos['9.9']; det(ctx, pw ? W * .18 : W / 2 - 430, pw ? H - 22 : H - 30, W, t, l < 6.2 ? { pose: 'lean-in', t0: t - l + .5, look: { x: nm[0], y: nm[1] } } : l < 12 ? { pose: 'recoil', from: 'lean-in', t0: t - l + 6.3, look: { x: nm[0], y: nm[1] } } : { pose: 'shrug', from: 'recoil', t0: t - l + 12.3 });
         var p = ramp(l, 13, 14.5); F.cornerFlip(ctx, W, H, p, P.cream);
         if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 14, 15); var sz = pw ? 12 : 16, cx = W - Math.min(W, H) * .3, cy = H - Math.min(W, H) * .24;
           F.hand(ctx, 'one template, not', cx - sz, cy - sz * 1.5, sz, P.ink, { seed: 'st1', rot: -.62 }); F.hand(ctx, 'all of GPT-2', cx + sz * .3, cy, sz, P.ink, { seed: 'st2', rot: -.62 }); ctx.restore(); }
       } },
-    { name: 'your hook', start: 126, dur: 20, cap: {
-        1: 'The detective\'s notebook becomes your code: a little hook that swaps one head\'s note, and a ruler that says how much it mattered. Knowing the circuit tells us <b>exactly which part to steer</b>.',
-        2: 'Your patching hook on <code>hook_z</code>, and <code>ioi_metric</code>. <b>Knowing the circuit tells us exactly which part to steer</b>, and which backups will fight back.',
-        3: '<code>hook_z</code> has shape <code>[batch, pos, head_index, d_head]</code>; <code>utils.get_act_name("z", layer)</code> names it. Loop layers x heads with <code>functools.partial</code> for a <code>[layer, head]</code> grid; <code>imshow</code> it. Path patching repeats this with senders patched and receivers\' inputs swapped.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'your hook', start: 126, dur: 20, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); var pw = ph(W);
         var code = [
           'def patch_head_vector(corrupted_head_vector,',
@@ -334,12 +323,84 @@ var M = (function () {
         codeNote(ctx, shown.length ? shown : [' '], cx, pw ? 16 : 30, sz, 1, 'code');
         var y = (pw ? 16 : 30) + code.length * sz * 1.4 + 30;
         if (l > 8) readout(ctx, cx, y, [['toy, head 9.9: metric = ' + PR[HID['9.9']].m.toFixed(2), P.butter]], W);
+        det(ctx, pw ? W * .84 : Math.min(W - 80, cx + 700), pw ? H - 22 : H - 30, W, t, l < 10 ? { pose: 'write', t0: t - l + .5, face: -1 } : { pose: 'point', from: 'write', t0: t - l + 10.5, face: -1, look: { x: W / 2, y: Math.min(H - 50, y + (pw ? 90 : 80)) } });
         if (l > 10) F.note(ctx, pw ? 'knowing the circuit tells us\nexactly which part to steer' : 'knowing the circuit tells us exactly which part to steer', W / 2, Math.min(H - 50, y + (pw ? 90 : 80)), pw ? 15 : 19, { color: P.pink, seed: 'steer', rot: -.015, reveal: ramp(l, 10, 13) });
       } }
   ];
 
+  /* ---------------- pass 2: captioned beats cut from the scenes above (same timing) ----------------
+     need: 'core' (career skill), 'exercise' (this week's ARENA code), 'library' (one line, move on), 'contested' (open research). */
+  function beat(i, at, dur, name, need, cap) { var d = SRC[i].draw; return { name: name, need: need, dur: dur, cap: cap, draw: function (ctx, t, l, W, H, api) { return d(ctx, t, l + at, W, H, api); } }; }
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  var chapters = seq([
+    beat(0, 0, 9, 'the case', 'core', {
+      1: 'A paper bar: <b>"When Mary and John went to the store, John gave a drink to…"</b> Everyone knows it\'s Mary, and so does the model. The case: <b>who inside it decided?</b>',
+      2: '<b>Indirect object identification</b> (IOI): pick the name that was <i>not</i> repeated. GPT-2 small gets it right, so some machinery inside must do it. We\'ll find it.',
+      3: 'IO = Mary (indirect object), S = John (subject, named twice: S1, S2), END = "to". The toy: 7 hand-built heads with GPT-2 small\'s head names, run live.' }),
+    beat(0, 9, 9, 'the seesaw', 'core', {
+      1: 'The <b>seesaw</b> weighs Mary against John. How far it tips toward Mary is how sure the model is of the right answer. Every experiment today reads this seesaw.',
+      2: '<b>Logit difference</b> = logit(Mary) − logit(John) at the last token. It equals log(P(Mary)/P(John)): the other 50,000 words cancel, and head effects add.',
+      3: 'ARENA <code>logits_to_ave_logit_diff</code> averages it over a batch of prompts. Toy clean logit diff = ' + C0.ld.toFixed(2) + '.' }),
+    beat(1, 0, 7, 'spot the repeat', 'exercise', {
+      1: 'First suspect: a head sitting on the second "John" looks back, sees the same name earlier, and writes a sticky note: <b>"John is repeated"</b>.',
+      2: '<b>Duplicate-token</b> (3.0) and <b>induction</b> (5.5) heads: at S2, attention lands on S1, and they write "this name is a duplicate" into the residual stream.',
+      3: 'Toy DUP at S2 = ' + C0.DUP[9][1].toFixed(2) + ' toward John; 3.0 attends S2 → S1 at ' + C0.att['3.0'][9].a[2].toFixed(2) + '. Real induction heads reach S1 via the token after it; the toy simplifies.' }),
+    beat(1, 7, 6, 'pass the warning', 'exercise', {
+      1: 'Second gang: heads at the end of the sentence read that sticky note and carry a warning forward: <b>"don\'t say John"</b>.',
+      2: '<b>S-inhibition</b> heads (7.9, 8.6) at END attend to S2 and copy the duplicate signal, making INHIB: a signal that lowers John in later heads\' queries.',
+      3: 'Toy INHIB at END = ' + C0.INHIB[1].toFixed(2) + ' toward John. In GPT-2 these heads pass partly <i>position</i> ("the repeated name was 2nd"), partly token (ARENA bonus).' }),
+    beat(1, 13, 11, 'say the other name', 'exercise', {
+      1: 'Third gang: <b>name movers</b> look at every name, skip the one they were warned about, and copy the other one, Mary, straight into the answer.',
+      2: '<b>Name movers</b> (9.9, 9.6) at END attend to names, with John pushed down by INHIB, and copy the attended name to the logits. 9.9 gives Mary ' + (C0.att['9.9'].a[1] * 100).toFixed(0) + '%.',
+      3: 'Toy query score = <code>alpha − delta · (INHIB · name)</code>, so the warned name loses attention; the OV circuit copies the name\'s token. Names from Wang et al. 2022.' }),
+    beat(2, 0, 7, 'a controlled twin', 'core', {
+      1: 'To test a suspect you need a twin bar where only one word differs: "…<b>Mary</b> gave a drink to". Now the answer is John, and the seesaw tips the other way.',
+      2: '<b>Clean</b> vs <b>corrupted</b>: same template, only S2 swapped, so any difference traces to that one clue. Corrupted logit diff = ' + K0.ld.toFixed(2) + '.',
+      3: 'Why swap only S2, not all three names? Swapping all three keeps "IO is the 2nd name" true, so positional clues wouldn\'t flip. ARENA [1.4.1] asks this.' }),
+    beat(2, 7, 9, 'the ruler', 'core', {
+      1: 'A <b>ruler</b> from the swapped bar\'s tilt (0) to the real bar\'s tilt (1). Every experiment lands somewhere on it: 0.5 means it swung the seesaw halfway back.',
+      2: 'metric = (ld − ld_corr) / (ld_clean − ld_corr). Subtracting makes "no effect" read 0; dividing by the full gap makes "fully restored" read 1. Units vanish.',
+      3: 'ARENA <code>ioi_metric</code>: linear in logit diff, tested so clean → 1, corrupted → 0, averaged logits → 0.5. It can go below 0 or above 1.' }),
+    beat(3, 0, 8.5, 'the line-up', 'core', {
+      1: 'The line-up. Run the swapped bar, but hand <b>one head</b> the note it wrote in the real bar. Everyone after it reads that note. Does the seesaw swing back?',
+      2: '<b>Activation patching</b>: run corrupted, overwrite one head\'s output with its clean cached value, let later layers recompute, read the metric.',
+      3: 'Clean into corrupted (denoising) asks: is this piece <b>sufficient</b> to restore the answer? Corrupted into clean (noising) asks: is it <b>necessary</b>?' }),
+    beat(3, 8.5, 9.5, 'seven runs', 'exercise', {
+      1: 'Your call first: which single head brings Mary back the most? Then watch seven runs, one bar each.',
+      2: 'Seven forward passes, one per head: <code>patch_head_vector</code> on <code>hook_z</code>, all positions. Each bar is that head\'s metric alone.',
+      3: 'ARENA <code>get_act_patch_attn_head_out_all_pos</code>: loop layers × heads, patch <code>z[:, :, head]</code>, record ioi_metric → a [layer, head] grid.' }),
+    beat(3, 18, 10, 'why the earliest wins', 'core', {
+      1: 'The earliest link wins: fix the first note and every later head recomputes from it, so the whole chain repairs. A late head alone fixes only its own share.',
+      2: 'A patch restores everything that flows <i>through</i> that head. Upstream heads feed all later ones: toy best ' + best.id + ' at ' + best.m.toFixed(2) + '; both S-inhibition heads: ' + M.metric(bothSI.ld).toFixed(2) + '.',
+      3: 'In GPT-2 the brightest cells are name movers and S-inhibition heads. High means sufficient in this setup, not "the only place it happens".' }),
+    beat(4, 0, 10, 'one wire', 'exercise', {
+      1: 'Swapping a whole head changes every message it sends. Sharper: change <b>one message on one wire</b>. The name movers get the clean "ignore John" note; nothing else changes.',
+      2: '<b>Path patching</b>: patch only the edge S-inhibition → name-mover queries. Other readers (the backup) still see corrupted. This wire alone: ' + M.metric(M.pathSI.ld).toFixed(2) + '.',
+      3: 'Sender 7.9 + 8.6, receiver the <code>q</code> input of 9.9, 9.6. ARENA <code>get_path_patch_head_to_heads(..., receiver_input="q")</code>.' }),
+    beat(4, 10, 10, 'nodes vs wires', 'exercise', {
+      1: 'Compare: the one wire recovers about as much as swapping the whole heads. A wire from the first gang straight to the name movers recovers nothing: they never read it.',
+      2: 'Activation patching finds which parts matter; path patching tests how they connect. Direct edge 3.0 → name movers = 0: its effect goes via S-inhibition.',
+      3: 'Path patching = three runs: cache clean, run corrupted with senders patched and everything else frozen, then patch the receivers\' inputs.' }),
+    beat(5, 0, 12, 'the backup crew', 'exercise', {
+      1: 'Ask: what breaks if we arrest both name movers? Surprisingly little: the answer is <b>still mostly right</b>. A quiet backup head notices, and says the name instead.',
+      2: 'Zero-ablate 9.9 and 9.6. With the backup frozen the logit diff would fall to ' + M.noNMfrozen.ld.toFixed(2) + '; for real it is ' + M.noNM.ld.toFixed(2) + '. Self-repair makes ablation understate.',
+      3: 'Toy 10.10 BOS score = <code>rho · |name-mover output|</code>: when movers go quiet it copies Mary. GPT-2 also has negative name movers (10.7, 11.10).' }),
+    beat(5, 12, 8, 'how far the story goes', 'contested', {
+      1: 'How far does this detective story go? It explains one sentence pattern in one small model. Whether big models are built from tidy circuits is still debated.',
+      2: 'Current method: hand-find circuits by patching a template. Emerging research: automated circuit discovery, attribution graphs. You need: patch, metric, read the grid.',
+      3: 'Wang et al.: 26 heads, 7 classes, one template family, partly faithful. Self-repair and prompt dependence make any circuit an approximation.' }),
+    beat(6, 0, 10, 'your hook', 'exercise', {
+      1: 'The detective\'s notebook becomes your code: a hook that swaps one head\'s note, and the ruler that says how much it mattered.',
+      2: '<code>patch_head_vector</code> overwrites one head\'s slice of <code>hook_z</code> with the clean cache; <code>ioi_metric</code> turns logit diff into the 0-to-1 ruler.',
+      3: '<code>hook_z</code>: [batch, pos, head_index, d_head]; <code>get_act_name("z", layer)</code> names it; <code>functools.partial</code> fixes head_index and clean_cache.' }),
+    beat(6, 10, 10, 'the habit to keep', 'core', {
+      1: 'Knowing the circuit tells you <b>which part to steer</b>, and which backups will fight back. The habit to keep: change one thing, read a fixed ruler.',
+      2: 'Career skill: a <b>controlled experiment</b>. One clue changed, a ruler pinned at 0 and 1, one part swapped per run: how a mechanic finds the faulty part.',
+      3: 'TransformerLens <code>patching.*</code> is a library call for the grid; write it once by hand so you know what the numbers mean.' })
+  ]);
+
   /* ---------------- coda: now you drive ---------------- */
-  var CD = { mode: 'patch', set: {} };
+  var CD ={ mode: 'patch', set: {} };
   function codaRun() {
     var o = {}; if (CD.mode === 'patch') { o.patch = {}; Object.keys(CD.set).forEach(function (id) { o.patch[id] = C0.out[id]; }); return M.run(M.CORR, o); }
     o.scale = {}; Object.keys(CD.set).forEach(function (id) { o.scale[id] = 0; }); return M.run(M.CLEAN, o);

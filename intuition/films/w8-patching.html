@@ -113,6 +113,20 @@
     ctx.restore();
   }
   function bottomY(W, H) { return HS.bodyY + HS.bodyH; }
+  /* the repair person: an ink stick figure; pose names from IFilm.stickPoses, t0 = film time the pose starts */
+  function guy(ctx, x, y, W, t, o) { o = o || {}; o.scarf = o.scarf || P.red; return F.stick(ctx, x, y, o.s || (ph(W) ? 92 : 112), t, o); }
+  function noteHold(ctx, hx, hy, s) { F.paper(ctx, hx + s * .04, hy - s * .02, s * .2, s * .14, P.cream, { seed: 'note8', shadow: false, rot: -.1 }); ctx.fillStyle = P.ink; ctx.fillRect(hx - s * .03, hy - s * .04, s * .12, 1.5); ctx.fillRect(hx - s * .03, hy, s * .09, 1.5); }
+  /* the normalised patching metric as a ruler: 0 = where the swapped house ended, 1 = where the clean house ended */
+  function ruler(ctx, x, y, w, m, a) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+    F.paper(ctx, x + w / 2, y, w + 26, 30, P.butter, { seed: 'ruler8' });
+    for (var k = 0; k <= 10; k++) { var tx = x + w * k / 10; ctx.strokeStyle = P.ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(tx, y - 14); ctx.lineTo(tx, y - (k % 5 ? 6 : 0)); ctx.stroke(); }
+    var mx = x + w * clamp(m, -.08, 1.08); ctx.fillStyle = P.red; ctx.beginPath(); ctx.moveTo(mx, y - 16); ctx.lineTo(mx - 7, y - 28); ctx.lineTo(mx + 7, y - 28); ctx.closePath(); ctx.fill();
+    F.hand(ctx, '0 = swapped', x, y + 26, 12, P.pink, { seed: 'r0w8', outline: 3, outlineColor: 'rgba(20,20,50,.8)' });
+    F.hand(ctx, '1 = clean', x + w, y + 26, 12, P.mint, { seed: 'r1w8', outline: 3, outlineColor: 'rgba(20,20,50,.8)' });
+    F.hand(ctx, m.toFixed(2), mx, y - 38, 13, P.chalk, { seed: 'rmw8', outline: 3, outlineColor: 'rgba(20,20,50,.8)' });
+    ctx.restore();
+  }
 
   /* superposition drawing: pentagon of arrows in the 2-room plane */
   var COLS = [P.pink, P.butter, P.mint, P.sky, P.lav];
@@ -132,36 +146,26 @@
   }
 
   var ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
-  var chapters = [
-    { name: 'two houses', start: 0, dur: 6, cap: {
-        1: 'Two paper dollhouses, identical except the <b>names are swapped</b> in the story. A repair person wants to find which room holds the answer.',
-        2: 'The <b>IOI</b> task: "Mary and John… John gave a drink to" → Mary. The corrupted copy swaps names so the answer flips. Each room is one attention head.',
-        3: 'Toy model: 3 layers × 4 heads (floor = layer, room = head). In GPT-2 small the real IOI circuit spans 26 heads across 12 layers.' },
-      draw: function (ctx, t, l, W, H) {
+  var SRC = [ /* scenes; the captioned beats are cut from these below */
+    { name: 'two houses', start: 0, dur: 6, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 104 : 110);
         ctx.save(); ctx.globalAlpha = ramp(l, 0, .8); house(ctx, 0, 'clean'); ctx.restore();
         ctx.save(); ctx.globalAlpha = ramp(l, .5, 1.3); house(ctx, 1, 'corrupted'); ctx.restore();
         sentences(ctx, W, ramp(l, 1.2, 2.2));
         var by = bottomY(W, H); toolbox(ctx, W / 2, by + (ph(W) ? 150 : 130), ph(W) ? 64 : 76, ramp(l, 2.2, 3));
-        F.person(ctx, W / 2 - (ph(W) ? 110 : 150), by + (ph(W) ? 200 : 190), ph(W) ? 64 : 76, t, { walk: l < 3, lantern: true });
+        var gx = lerp(-40, W / 2 - (ph(W) ? 110 : 150), ramp(l, 0, 3));
+        guy(ctx, gx, by + (ph(W) ? 200 : 190), W, t, l < 3 ? { pose: 'walk', lantern: true } : { pose: 'lean-in', from: 'walk', t0: t - l + 3, lantern: true, look: { x: W / 2, y: HS.bodyY } });
         F.plane(ctx, lerp(-30, W + 30, l / 6), by + 40 + Math.sin(l * 2) * 10, 11, .1, P.cream);
       } },
-    { name: 'the seesaw', start: 6, dur: 6, cap: {
-        1: 'How do we score an answer? A <b>seesaw</b>: Mary on one end, John on the other. The clean house tips to Mary, the swapped house tips to John.',
-        2: 'The metric is the <b>logit difference</b>: logit(Mary) − logit(John). Clean ≈ +1.03, corrupted ≈ −1.02, both computed from the toy circuit.',
-        3: 'ld = Σ name-mover outputs + a tiny direct path. ARENA\'s ioi_metric rescales it: 0 = corrupted performance, 1 = clean performance.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the seesaw', start: 6, dur: 6, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 104 : 110); sentences(ctx, W, 1); house(ctx, 0, 'clean'); house(ctx, 1, 'corrupted');
         var by = bottomY(W, H) + 58, a = ramp(l, .5, 2);
         seesaw(ctx, HS.xs[0] + HS.hw / 2, by, HS.hw * .85, CL.ld * a, t); seesaw(ctx, HS.xs[1] + HS.hw / 2, by, HS.hw * .85, CO.ld * a, t);
         readout(ctx, 12, by + 50, [['logit(Mary) − logit(John)', P.butter], ['clean     = ' + (CL.ld >= 0 ? '+' : '') + CL.ld.toFixed(3), P.sky], ['corrupted = ' + CO.ld.toFixed(3), P.pink]], W);
         toolbox(ctx, W - (ph(W) ? 80 : 160), by + (ph(W) ? 190 : 120), ph(W) ? 56 : 70, 1);
+        guy(ctx, ph(W) ? W * .3 : W / 2 + 40, by + (ph(W) ? 250 : 200), W, t, { pose: 'point', t0: t - l + 1.2, look: { x: HS.xs[0] + HS.hw * .12, y: by - 20 } });
       } },
-    { name: 'activation patching', start: 12, dur: 14, cap: {
-        1: 'The repair person copies <b>one room</b> from the clean house into the swapped house, and watches the seesaw. If it swings back to Mary, that room mattered.',
-        2: '<b>Activation patching</b>: run the corrupted prompt, but paste in one head\'s clean output, recompute everything downstream. Recovery = how far the seesaw swings back.',
-        3: 'recovery = (ld_patched − ld_corrupt) / (ld_clean − ld_corrupt), one real forward pass per room. Upstream heads (dup-token, S-inhibition) and name movers score high.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'activation patching', start: 12, dur: 14, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 104 : 110); sentences(ctx, W, 1);
         var per = 13 / 12, k = Math.min(11, Math.floor(l / per)), fr = (l % per) / per, tint = []; for (var i = 0; i < 12; i++) tint.push(i < k || (i === k && fr > .6) ? REC[i] : null);
         house(ctx, 0, 'clean', null, { hi: k }); house(ctx, 1, 'corrupted', tint, { hi: k });
@@ -169,15 +173,13 @@
         cable(ctx, [a[0] + a[2] / 2, a[1] + a[3]], [b[0] + b[2] / 2, b[1] + b[3]], t, fr < .6 ? fr / .6 : null);
         var ld = fr > .6 ? patched([k]).ld : CO.ld, by = bottomY(W, H) + 58;
         seesaw(ctx, HS.xs[1] + HS.hw / 2, by, HS.hw * .85, ld, t);
-        F.person(ctx, HS.xs[0] + HS.hw / 2, by + 30, ph(W) ? 52 : 64, t, { walk: true });
-        if (ph(W)) toolbox(ctx, W / 2, H - 70, 60, 1);
         readout(ctx, 12, by + (ph(W) ? 60 : 50), [['patch room ' + Math.floor(k / 4) + '.' + (k % 4) + ' (' + NAMES[k][1] + ')', P.butter], ['ld = ' + ld.toFixed(3), P.chalk], ['recovery = (' + ld.toFixed(2) + ' − ' + CO.ld.toFixed(2) + ')/(' + CL.ld.toFixed(2) + ' − ' + CO.ld.toFixed(2) + ')', P.mint], ['         = ' + (fr > .6 ? REC[k].toFixed(3) : '…'), P.mint]], W);
+        if (l > 7) { var rw = Math.min(W - 70, 420), ry = ph(W) ? Math.min(H - 64, by + 190) : by + 180; ruler(ctx, W / 2 - rw / 2, ry, rw, recovery(ld), ramp(l, 7, 8));
+          guy(ctx, ph(W) ? W * .84 : W / 2 + rw / 2 + 70, ph(W) ? Math.min(H - 22, ry + 124) : ry + 60, W, t, { pose: 'point', from: 'carry', t0: t - l + 7, face: -1, look: { x: W / 2 - rw / 2 + rw * clamp(recovery(ld), 0, 1), y: ry - 20 } }); }
+        else { var wx = .5 - .5 * Math.cos(l * .9), gx2 = lerp(HS.xs[0] + HS.hw * .5, HS.xs[1] + HS.hw * .5, wx);
+          guy(ctx, gx2, ph(W) ? H - 22 : by + 250, W, t, { pose: 'carry', walk: true, face: Math.sin(l * .9) >= 0 ? 1 : -1, hold: noteHold, s: ph(W) ? 70 : 90 }); }
       } },
-    { name: 'name movers', start: 26, dur: 5, cap: {
-        1: 'The heatmap is filled in. The bright rooms form a <b>chain</b>: spot the repeated name, tell the movers to ignore it, move the other name to the answer.',
-        2: 'The circuit, read from recovery scores: <b>duplicate-token</b> → <b>S-inhibition</b> → <b>name mover</b> heads. Patching finds <i>where</i> the answer lives.',
-        3: 'Upstream heads score ≈1 because everything downstream reads them; each name mover alone recovers only its own share. Real GPT-2: name movers 9.6, 9.9, 10.0; S-inhibition 7.3, 7.9, 8.6, 8.10.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'name movers', start: 26, dur: 5, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 104 : 110); sentences(ctx, W, 1);
         house(ctx, 0, 'clean', null, { names: true }); house(ctx, 1, 'recovery', REC, { nums: true });
         var by = bottomY(W, H), cx = W / 2, chain = [0, 5, 8], a = ramp(l, .5, 2);
@@ -187,12 +189,9 @@
         F.note(ctx, 'dup-token → S-inhibition → name mover', cx, by + 60, sz, { color: P.butter, seed: 'chain' });
         for (i = 0; i < 5; i++) F.lantern(ctx, cx - 120 + i * 60, by + 150 + Math.sin(t * 2 + i) * 6, 14, i === 2 ? 1 : .6, t + i);
         ctx.restore();
+        var rN = roomRect(0, 8); guy(ctx, ph(W) ? W * .2 : W / 2 - 220, by + (ph(W) ? 300 : 280), W, t, l < 1.4 ? { pose: 'think', t0: t - l } : { pose: 'point', from: 'think', t0: t - l + 1.4, look: { x: rN[0] + rN[2] / 2, y: rN[1] + rN[3] } });
       } },
-    { name: 'superposition', start: 31, dur: 9, cap: {
-        1: 'Next door, a stranger puzzle: <b>five lodgers share two rooms</b>. Each lodger gets a direction. As long as only one is home at a time, you can still tell who it is.',
-        2: '<b>Superposition</b>: 5 features squeezed into 2 dimensions as a pentagon. Alone, a feature reconstructs well; two at once and they <b>interfere</b>: both vanish and a ghost lights up. That is why single neurons look confusing.',
-        3: 'x′ = ReLU(Wᵀ W x + b), W = 5 unit vectors at 72°, b = −0.31 cancels the cos 72° ≈ 0.31 leak. Bars: x′ (colour) vs x (chalk line), computed each frame.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'superposition', start: 31, dur: 9, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t);
         var R = Math.min(W * .32, H * .22), cx = W / 2, cy = (ph(W) ? 40 : 30) + R * 1.3, x = [0, 0, 0, 0, 0], k = Math.floor(l / 1.4) % NF, two = l > 6.2;
         x[k] = .9; if (two) { x[(k + 2) % NF] = .8; }
@@ -204,12 +203,9 @@
         bars(ctx, cx - bw / 2, by + 6, bw, 88, x, r.out);
         var err = 0; for (var i = 0; i < NF; i++) err += (x[i] - r.out[i]) * (x[i] - r.out[i]);
         readout(ctx, 12, by + 116, [['h = W x = (' + r.h[0].toFixed(2) + ', ' + r.h[1].toFixed(2) + ')', P.chalk], ['‖x − x′‖² = ' + err.toFixed(3), two ? P.pink : P.mint]], W);
+        guy(ctx, ph(W) ? W - 56 : cx + R * 1.75, ph(W) ? Math.min(H - 22, by + 250) : cy + R, W, t, two ? { pose: 'recoil', from: 'lean-in', t0: t - l + 6.3, face: -1, look: { x: cx, y: cy } } : { pose: 'lean-in', t0: t - l + .4, face: -1, look: { x: cx, y: cy } });
       } },
-    { name: 'lantern festival', start: 40, dur: 5, cap: {
-        1: 'So we hang <b>one lantern per lodger</b>. A tidy helper watches the two rooms and lights exactly the lantern of whoever is home.',
-        2: 'A <b>sparse autoencoder</b> learns an overcomplete dictionary: more lanterns than rooms, most dark at any moment. Each lantern is (hopefully) one clean idea.',
-        3: 'SAE: a = ReLU(W_enc h + b_enc), h ≈ W_dec a, trained with reconstruction + L1 sparsity. Here W_enc = Wᵀ of the pentagon, b = −0.31, so a_i = the toy\'s x′_i.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'lantern festival', start: 40, dur: 5, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t);
         var x = [0, 0, 0, 0, 0], k = Math.floor(l / 1) % NF; x[k] = .95; var r = sup(x, -.31);
         var R = Math.min(W * .22, H * .14), cx = W / 2, cy = R * 1.5 + 10; pentagon(ctx, cx, cy, R, x, t, -.31);
@@ -218,27 +214,21 @@
         for (var i = 0; i < NF; i++) { var lx = W / 2 + (i - 2) * sp; F.lantern(ctx, lx, ly + Math.sin(t * 2 + i) * 5, ph(W) ? 16 : 20, clamp(r.out[i] * 1.6, 0, 1), t + i);
           ctx.save(); ctx.font = '600 11px ' + F.MONO; ctx.fillStyle = COLS[i]; ctx.textAlign = 'center'; ctx.fillText('a' + (i + 1) + '=' + r.out[i].toFixed(2), lx, ly + 44); ctx.restore(); }
         readout(ctx, 12, ly + 64, [['2 rooms, 5 lanterns', P.chalk], ['lit: lodger ' + (k + 1), COLS[k]]], W);
+        var lk = W / 2 + (k - 2) * sp; guy(ctx, ph(W) ? W * .76 : W / 2 + 2.6 * sp + 40, ph(W) ? Math.min(H - 22, ly + 200) : ly + 150, W, t, l < 6 ? { pose: 'reach', face: -1, look: { x: lk, y: ly } } : { pose: 'shrug', from: 'reach', t0: t - l + 6.2, face: -1 });
       } },
-    { name: 'where it stops being true', start: 45, dur: 6, cap: {
-        1: 'Honest bit: some houses have <b>spare repair crews</b>. Knock out a key room and a backup quietly takes over, so the room looks less important than it is.',
-        2: '<b>Backup heads</b>: ablate the main name mover and a backup head activates, so the output barely drops. Single-component tests can hide importance.',
-        3: 'Ablating head 2.0 removes its direct contribution but head 2.2 (backup) compensates. In GPT-2 small, backup name movers in layers 10-11 do exactly this (Wang et al. 2022).' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'where it stops being true', start: 45, dur: 6, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 60 : 70);
         var ab = l > 1.2, R = run(1, null, ab ? { 8: 1 } : null), tint = R.h.map(function (v) { return v / 1.3; });
         house(ctx, 0, ab ? 'clean, room 2.0 knocked out' : 'clean', tint, { hi: ab ? 10 : null });
         var r8 = roomRect(0, 8); if (ab) { ctx.save(); ctx.strokeStyle = P.red; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(r8[0], r8[1]); ctx.lineTo(r8[0] + r8[2], r8[1] + r8[3]); ctx.moveTo(r8[0] + r8[2], r8[1]); ctx.lineTo(r8[0], r8[1] + r8[3]); ctx.stroke(); ctx.restore(); }
         var by = bottomY(W, H) + 58; seesaw(ctx, HS.xs[0] + HS.hw / 2, by, HS.hw * .85, R.ld, t);
         readout(ctx, HS.xs[1] + 4, HS.bodyY, [['head 2.0 wrote ' + CL.h[8].toFixed(2), P.chalk], ['ld clean   ' + CL.ld.toFixed(2), P.sky], ['expected   ' + (CL.ld - CL.h[8]).toFixed(2), P.pink], ['actual     ' + R.ld.toFixed(2), P.mint], ['backup 2.2 ' + CL.h[10].toFixed(2) + '→' + R.h[10].toFixed(2), P.butter]], W);
+        guy(ctx, ph(W) ? W * .22 : HS.xs[0] + HS.hw * .2, by + (ph(W) ? 190 : 200), W, t, l < 1.7 ? { pose: 'lean-in', look: { x: HS.xs[0] + HS.hw / 2, y: by } } : l < 6 ? { pose: 'recoil', from: 'lean-in', t0: t - l + 1.7, look: { x: HS.xs[0] + HS.hw / 2, y: by } } : { pose: 'shrug', from: 'recoil', t0: t - l + 6.2 });
         var p = ramp(l, 2.6, 3.6); F.cornerFlip(ctx, W, H, p, P.cream);
         if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 3.3, 4); var sz = ph(W) ? 14 : 18, cx = W - Math.min(W, H) * .3, cy = H - Math.min(W, H) * .22;
           F.hand(ctx, 'backup heads can', cx, cy - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'hide importance', cx + sz * .8, cy, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
       } },
-    { name: 'the code', start: 51, dur: 6, cap: {
-        1: 'The repair person\'s trick is one function call: run the swapped story, with one clean room pasted in.',
-        2: 'Rooms become hook names, copying becomes a hook function, the seesaw becomes ioi_metric. The lodgers become ARENA\'s toy model of superposition.',
-        3: 'ARENA [1.4.1]: model.run_with_hooks(corrupted_tokens, fwd_hooks=[(utils.get_act_name("z", layer), hook_fn)]) then ioi_metric; [1.3.1] toy model: ReLU(W.T @ W @ x + b_final).' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'the code', start: 51, dur: 6, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t);
         var sz = ph(W) ? 12 : 17, lines = [
           ['copy a room', ['model.run_with_hooks(', '  corrupted_tokens,', '  fwd_hooks=[(name, patch_fn)])'], P.butter, 0],
@@ -254,18 +244,81 @@
           L[1].forEach(function (s, i) { F.hand(ctx, s, W / 2 - w / 2 + 12, y + sz * 2.3 + i * sz * 1.5, sz, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: s, reveal: ramp(l, L[3] * .9 + .2 + i * .3, L[3] * .9 + 1 + i * .3) }); });
           ctx.restore(); y += h + 14;
         });
+        guy(ctx, ph(W) ? W * .78 : W / 2 + 300, ph(W) ? Math.min(H - 22, y + 150) : Math.min(H - 10, y + 60), W, t, { pose: 'point', t0: t - l + .8, face: -1, look: { x: W / 2, y: H * .12 } });
       } },
-    { name: 'where to steer', start: 57, dur: 4, cap: {
-        1: 'Why bother? Because to steer a mind safely you need to know <b>which room</b> the decision actually lives in.',
-        2: 'Causal tests tell us where steering will work: intervene on the components that patching shows are necessary and sufficient.',
-        3: 'Patching localises; steering intervenes. A steering vector added where recovery is ≈0 does nothing; added at the name movers\' input it moves the answer.' },
-      draw: function (ctx, t, l, W, H) {
+    { name: 'where to steer', start: 57, dur: 4, draw: function (ctx, t, l, W, H) {
         bg(ctx, W, H, t); houseLayout(W, H, ph(W) ? 150 : 160); house(ctx, 1, 'recovery', REC, {});
         F.egg(ctx, HS.xs[0] + HS.hw / 2, HS.bodyY + HS.bodyH / 2, Math.min(60, HS.hw * .3), t, { clear: .8, features: [{ x: 0, y: 0 }] });
         var r = roomRect(1, 5); F.arrow(ctx, HS.xs[0] + HS.hw * .8, HS.bodyY + 10, r[0] + r[2] / 2, r[1] + r[3] / 2, P.butter, 3.5, 'st');
-        ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'causal tests tell us\nwhere steering will work', W / 2, ph(W) ? 60 : 64, ph(W) ? 18 : 24, { color: P.pink, seed: 'steer8', rot: -.02 }); ctx.restore();
+        guy(ctx, HS.xs[0] + HS.hw * .45, HS.bodyY + HS.bodyH + (ph(W) ? 140 : 170), W, t, { pose: 'push', t0: t - l + 1, look: { x: r[0], y: r[1] } });
+        ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'patching is the map,\nsteering is the hand', W / 2, ph(W) ? 60 : 64, ph(W) ? 18 : 24, { color: P.pink, seed: 'steer8', rot: -.02 }); ctx.restore();
       } }
   ];
+
+  /* ---------------- pass 2: captioned beats cut from the scenes above ----------------
+     need: 'core' (career skill), 'exercise' (this week's ARENA code), 'library' (one line, move on), 'contested' (open research). */
+  function beat(i, at, dur, name, need, cap, over) { var d = SRC[i].draw; return { name: name, need: need, dur: dur, cap: cap, draw: function (ctx, t, l, W, H, api) { var r = d(ctx, t, l + at, W, H, api); if (over) over(ctx, t, l, W, H); return r; } }; }
+  /* one small on-screen credit line when a framing is borrowed (Hamming-simple, credited) */
+  function credit(txt) { return function (ctx, t, l, W, H) { ctx.save(); ctx.globalAlpha = .9 * F.ramp(l, .3, 1.2); F.hand(ctx, txt, 10, H - 14, W < 500 ? 11 : 13, P.chalk, { align: 'left', outline: 3, outlineColor: 'rgba(20,20,50,.9)', seed: 'credit' }); ctx.restore(); }; }
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  var chapters = seq([
+    beat(0, 0, 7, 'two houses', 'core', {
+      1: 'Two identical paper houses (one model, same wiring) hear stories that differ by <b>one word</b>, so they give different answers. Each room is one attention head.',
+      2: 'The <b>IOI</b> task: "Mary and John… John gave a drink to" → Mary. The <b>corrupted</b> copy swaps the second John for Mary, so the answer flips. Same weights, one input changed.',
+      3: 'Toy: 3 layers × 4 heads (floor = layer, room = head), recomputed live. GPT-2 small\'s real IOI circuit is 26 of its 144 heads (Wang et al. 2022).' }),
+    beat(1, 0, 7, 'the seesaw', 'core', {
+      1: 'A <b>seesaw</b> scores the answer: Mary on one end, John on the other. How far it tips is how strongly the model prefers one name. Clean tips to Mary, swapped to John.',
+      2: '<b>Logit difference</b> = logit(Mary) − logit(John). Why a difference? It equals log(P(Mary) / P(John)): every other word cancels, and each head\'s push just adds on.',
+      3: 'Toy ld: clean ' + CL.ld.toFixed(2) + ', corrupted ' + CO.ld.toFixed(2) + '. Logits are linear in the residual stream (after the final LayerNorm scale), so head contributions sum.' }),
+    beat(2, 0, 7, 'copy one room', 'core', {
+      1: 'Copy one room\'s <b>note</b> from the clean house into the swapped house. Later rooms read the pasted note and react as usual. Does the seesaw swing back to Mary?',
+      2: '<b>Activation patching</b>: run the corrupted prompt, overwrite one head\'s output with its value cached from the clean run, and let every later layer recompute.',
+      3: 'Earlier layers are untouched; later ones recompute from the pasted value. Clean into corrupted = <b>denoising</b>: is this piece enough (sufficient) to restore the answer?' }),
+    beat(2, 7, 8, 'the ruler', 'core', {
+      1: 'A <b>ruler</b> under the seesaw: 0 marks where the swapped house ended, 1 where the clean house ended. A room\'s score is how far along the ruler its patch drags things.',
+      2: 'metric = (ld_patched − ld_corrupt) / (ld_clean − ld_corrupt). Subtracting makes "no effect" read 0; dividing by the full gap makes "fully restored" read 1.',
+      3: 'ARENA <code>ioi_metric</code>: linear in ld, pinned so corrupted = 0 and clean = 1. It can dip below 0 or pass 1. Units cancel, so every room shares one scale.' }),
+    beat(3, 0, 7, 'name movers', 'exercise', {
+      1: 'Rooms that swing the seesaw light up. They form a <b>relay</b>: one spots the repeated name, one passes on "ignore John", one says the name that\'s left: Mary.',
+      2: 'Read from the scores: <b>duplicate-token</b> → <b>S-inhibition</b> → <b>name mover</b> heads. Patching says <i>which</i> parts matter, not how they connect.',
+      3: 'Upstream heads score ≈1: every later head reads them. GPT-2: name movers 9.6, 9.9, 10.0; S-inhibition 7.3, 7.9, 8.6, 8.10.' }),
+    beat(4, 0, 6.2, 'five in two', 'core', {
+      1: 'Next door: <b>five lodgers share two rooms</b>. Each lodger is an idea; its arrow is where it lives. With one home at a time, the arrow\'s direction tells you who.',
+      2: '<b>Superposition</b>: 5 features stored as 5 directions in a 2-D space, a pentagon. Read feature i back by projecting onto its arrow; ReLU and bias clear small leaks.',
+      3: 'x′ = ReLU(WᵀW x + b), W = 5 unit columns at 72°, b = −0.31 cancels the cos 72° ≈ 0.31 leak. Bars: x′ (colour) vs x (chalk line), live.' }),
+    beat(4, 6.2, 5.8, 'two at once', 'core', {
+      1: 'Two lodgers home at once: their arrows add up and can point near a third lodger, a <b>ghost</b>. Ideas that are rarely active together can share rooms cheaply.',
+      2: '<b>Interference</b>: the sum of two features overlaps other directions. So one neuron carries bits of several features: that\'s why single neurons look <b>polysemantic</b>.',
+      3: 'Roughly: storing a feature pays ∝ p (how often it\'s present); interference costs ∝ p² (two at once). Sparse features → superposition wins.' }),
+    beat(4, 12, 6, 'room for more', 'core', {
+      1: 'Real models have thousands of rooms, not two. <b>3Blue1Brown\'s picture</b>: if arrows only need to be <i>nearly</i> perpendicular, how many fit grows exponentially.',
+      2: 'Why superposition is everywhere: d dimensions hold only d exactly perpendicular directions, but exponentially many nearly perpendicular ones. Small overlaps, huge room.',
+      3: 'Johnson–Lindenstrauss: about exp(c·ε²·d) unit vectors with every |cos| < ε fit in d dims. Framing from 3Blue1Brown, "How might LLMs store facts".' }, credit('framing: 3Blue1Brown, "How might LLMs store facts"')),
+    beat(5, 0, 6, 'lantern festival', 'exercise', {
+      1: 'Hang <b>one lantern per lodger</b>. A helper watches only the two rooms and lights just the lantern of whoever is home. More lanterns than rooms; most stay dark.',
+      2: 'A <b>sparse autoencoder</b> (SAE): encode the activation into many more latents than dimensions, most exactly zero, then decode back. Each latent should be one idea.',
+      3: 'a = ReLU(W_enc h + b_enc), h ≈ W_dec a; loss = reconstruction + λ·L1(a). Here W_enc = Wᵀ of the pentagon and b = −0.31, so a = the toy\'s x′.' }),
+    beat(5, 6, 6, 'lanterns: open question', 'contested', {
+      1: 'Honest status: lanterns are the most popular way to name a model\'s ideas, but real ones split, merge and miss ideas. How far to trust them is still debated.',
+      2: 'Current method: SAEs. Emerging research: transcoders, crosscoders, attribution graphs; some tests found plain probes beat SAEs. You need: the SAE forward and loss.',
+      3: 'Known SAE issues: feature splitting and absorption, dead latents, reconstruction error that still hurts the model\'s loss. Treat each latent as a hypothesis.' }),
+    beat(6, 0, 6, 'the backup crew', 'exercise', {
+      1: 'Knock out a key room and a <b>spare crew</b> quietly takes over, so the room looks less important than it is. Testing one room at a time can mislead.',
+      2: '<b>Backup heads</b>: ablate the main name mover and another head picks up the job (self-repair). So single-component ablations understate importance.',
+      3: 'Knock out 2.0 and backup 2.2 compensates: actual ld stays near clean. GPT-2 small has backup name movers in layers 9–11 (Wang et al. 2022).' }),
+    beat(6, 6, 6, 'how far the story goes', 'contested', {
+      1: 'How far does this detective story go? It explains one sentence pattern in one small model. Whether big models are built from tidy circuits is still debated.',
+      2: 'Current method: hand-find circuits by patching one template. Emerging research: automated circuit discovery, attribution graphs. You need: the patching loop.',
+      3: 'IOI: 26 heads, 7 classes, one template family, only partly faithful. Self-repair and prompt-dependence make any circuit an approximation.' }),
+    beat(7, 0, 7, 'the code', 'exercise', {
+      1: 'The repair person\'s trick is one function call: run the swapped story with a hook that pastes one clean room in, then read the ruler.',
+      2: 'Rooms become hook names, pasting becomes a hook function, the ruler becomes <code>ioi_metric</code>. The lodgers become ARENA\'s toy model of superposition.',
+      3: '[1.4.1] <code>model.run_with_hooks(corrupted_tokens, fwd_hooks=[(get_act_name("z", L), hook_fn)])</code>, then ioi_metric. [1.5.4] toy model.' }),
+    beat(8, 0, 6, 'where to steer', 'core', {
+      1: 'Why bother? To change a model on purpose you first need to know which rooms the decision passes through. <b>Patching is the map; steering is the hand.</b>',
+      2: 'Career skill: patching is a <b>controlled experiment</b>, the move a mechanic makes: swap one part from a working machine into a broken one and see if it runs.',
+      3: 'Localisation guides where to steer or ablate. It is a guide, not a guarantee: backups and off-target effects can still surprise you.' })
+  ]);
 
   /* ---------------- coda: now you drive ---------------- */
   var C = { set: {}, p: .05, L: null };
@@ -313,7 +366,8 @@
       { label: 'Map: superposition', href: '../../index.html#map/node=superposition' },
       { label: 'Case: IOI task', href: '../../index.html#cases/ioi-task' },
       { label: 'Case: activation patching', href: '../../index.html#cases/activation-patching' },
-      { label: 'Case: superposition', href: '../../index.html#cases/superposition' }
+      { label: 'Case: superposition', href: '../../index.html#cases/superposition' },
+      { label: '3Blue1Brown: neural networks', href: 'https://www.3blue1brown.com/topics/neural-networks' }
     ]
   });
 })();
