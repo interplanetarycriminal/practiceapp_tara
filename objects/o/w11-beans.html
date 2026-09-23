@@ -1,0 +1,1275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The bean machine · Object Lessons</title>
+<meta name="description" content="A Galton board where every peg is one eval question: real seeded binomial runs pile up, and the error bar is sqrt(p(1-p)/n), with the exact binomial beside the normal approximation.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+  .k-label.k-tag{min-width:0}               /* kit note: .k-tag (the beat chip) sets min-width:52px */
+  .k-knob.w11-dim{opacity:.42}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   22 · w11-beans: "The bean machine" (W11, ARENA [3.3] Running Evals with
+   Inspect, [3.5] AI Control's scorers). One bead = one run of an eval; one
+   row of pegs = one question; bounce right = pass (probability p). The MATH
+   block is extracted and verified in node (verify-w11.js, see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* Every number the bean machine shows comes from here.
+   One bead = one run of an eval with n questions; at each peg (question) it bounces right
+   (pass) with probability p. Its slot k = questions passed, score = k/n. Piles are real
+   seeded Bernoulli draws; curves and bars are exact binomial maths. */
+const Z95 = 1.959963984540054;                           // standard normal 97.5% point ("1.96")
+const Z80 = 0.8416212335729143;                          // standard normal 80% point (power)
+
+function hash32(...xs) {                                 // integer mixer: (seed, model, bead, ...) -> stream seed
+  let h = 0x811c9dc5;
+  for (const x of xs) {
+    h = Math.imul(h ^ (x >>> 0), 0x01000193);
+    h ^= h >>> 15; h = Math.imul(h, 0x2c1b3c6d); h ^= h >>> 12;
+  }
+  return h >>> 0;
+}
+function mulberry32(a) {                                 // seeded uniform [0, 1)
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const LOGF = [0];
+function logFact(n) { for (let i = LOGF.length; i <= n; i++) LOGF[i] = LOGF[i - 1] + Math.log(i); return LOGF[n]; }
+const LG = [0.99999999999980993, 676.5203681218851, -1259.1392167224028, 771.32342877765313, -176.61502916214059,
+  12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+function lgamma(x) {                                     // Lanczos (g = 7), for the Beta-binomial
+  if (x < 0.5) return Math.log(Math.PI / Math.abs(Math.sin(Math.PI * x))) - lgamma(1 - x);
+  x -= 1;
+  let a = LG[0];
+  const t = x + 7.5;
+  for (let i = 1; i < 9; i++) a += LG[i] / (x + i);
+  return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
+}
+
+/* Binomial(n, p) pmf, exact up to float rounding (log space: no underflow at n = 2000). */
+function binomPmf(n, p) {
+  const out = new Float64Array(n + 1);
+  if (p <= 0) { out[0] = 1; return out; }
+  if (p >= 1) { out[n] = 1; return out; }
+  const lp = Math.log(p), lq = Math.log1p(-p), lf = logFact(n);
+  for (let k = 0; k <= n; k++) out[k] = Math.exp(lf - logFact(k) - logFact(n - k) + k * lp + (n - k) * lq);
+  return out;
+}
+function binomCdf(n, p, k) {                            // P(X <= k)
+  if (k < 0) return 0;
+  if (k >= n) return 1;
+  const f = binomPmf(n, p);
+  let s = 0;
+  for (let j = 0; j <= k; j++) s += f[j];
+  return Math.min(1, s);
+}
+function quantileK(pmf, q) {                            // smallest k with P(X <= k) >= q
+  let s = 0;
+  for (let k = 0; k < pmf.length; k++) { s += pmf[k]; if (s >= q - 1e-12) return k; }
+  return pmf.length - 1;
+}
+
+/* The standard error of a pass rate: SE = sqrt(p(1 - p)/n). */
+const se = (p, n) => Math.sqrt(p * (1 - p) / n);
+/* Normal approximation: 95% of runs land within p +/- 1.96 SE. */
+const normalBand = (p, n, z = Z95) => [p - z * se(p, n), p + z * se(p, n)];
+/* Exact: the central 95% of runs, and the exact share of runs inside any band. */
+function exactRange(pmf) { return [quantileK(pmf, 0.025), quantileK(pmf, 0.975)]; }
+function massInBand(pmf, lo, hi) {
+  const n = pmf.length - 1;
+  let m = 0;
+  for (let k = 0; k <= n; k++) { const x = k / n; if (x >= lo - 1e-12 && x <= hi + 1e-12) m += pmf[k]; }
+  return m;
+}
+
+/* One run's error bar, three ways (k passed of n). */
+function wald(k, n, z = Z95) { const ph = k / n, h = z * Math.sqrt(ph * (1 - ph) / n); return [ph - h, ph + h]; }
+function wilson(k, n, z = Z95) {
+  const ph = k / n, z2 = z * z, den = 1 + z2 / n;
+  const c = (ph + z2 / (2 * n)) / den, h = (z / den) * Math.sqrt(ph * (1 - ph) / n + z2 / (4 * n * n));
+  return [Math.max(0, c - h), Math.min(1, c + h)];
+}
+function clopperPearson(k, n, alpha = 0.05) {           // exact: invert the binomial tails by bisection
+  const solve = (f) => { let a = 0, b = 1; for (let i = 0; i < 60; i++) { const m = (a + b) / 2; if (f(m)) b = m; else a = m; } return (a + b) / 2; };
+  const lo = k === 0 ? 0 : solve((p) => 1 - binomCdf(n, p, k - 1) >= alpha / 2);   // P(X >= k | p) = alpha/2
+  const hi = k === n ? 1 : solve((p) => binomCdf(n, p, k) <= alpha / 2);          // P(X <= k | p) = alpha/2
+  return [lo, hi];
+}
+/* Exact coverage of an interval method: sum over k of P(k) * [p inside interval(k)]. */
+function coverage(n, p, method) {
+  const f = binomPmf(n, p);
+  let c = 0;
+  for (let k = 0; k <= n; k++) { const [a, b] = method(k, n); if (p >= a - 1e-12 && p <= b + 1e-12) c += f[k]; }
+  return c;
+}
+
+/* Inspect (inspect_ai.scorer): accuracy() = mean of the 0/1 scores;
+   stderr() = np.std(values, ddof=1) / sqrt(n)  ==  sqrt(p_hat(1 - p_hat)/(n - 1)) for 0/1 scores. */
+function inspectAccuracy(v) { let s = 0; for (const x of v) s += x; return v.length ? s / v.length : 0; }
+function inspectStderr(v) {
+  const n = v.length;
+  if (n - 1 < 1) return 0;
+  const m = inspectAccuracy(v);
+  let ss = 0;
+  for (const x of v) ss += (x - m) * (x - m);
+  return Math.sqrt(ss / (n - 1)) / Math.sqrt(n);
+}
+
+/* Toy clustered questions: questions come in groups of m (say, m questions on one passage).
+   Each group's pass rate q ~ Beta(a, b) with mean p and intra-cluster correlation rho. */
+function gaussian(rng) { let u = 0; while (u <= 1e-300) u = rng(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng()); }
+function gammaSample(rng, a) {                          // Marsaglia & Tsang (2000)
+  if (a < 1) { let u = 0; while (u <= 0) u = rng(); return gammaSample(rng, a + 1) * Math.pow(u, 1 / a); }
+  const d = a - 1 / 3, c = 1 / Math.sqrt(9 * d);
+  for (;;) {
+    let x, v;
+    do { x = gaussian(rng); v = 1 + c * x; } while (v <= 0);
+    v = v * v * v;
+    const u = rng();
+    if (u < 1 - 0.0331 * x * x * x * x) return d * v;
+    if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+  }
+}
+function betaSample(rng, a, b) { const x = gammaSample(rng, a), y = gammaSample(rng, b); return x + y > 0 ? x / (x + y) : 0.5; }
+const betaAB = (p, rho) => [p * (1 - rho) / rho, (1 - p) * (1 - rho) / rho];
+const designEffect = (m, rho) => 1 + (m - 1) * rho;
+function clusteredVarCount(n, p, m, rho) {              // exact Var(k): sum of Beta-binomial variances
+  let v = 0;
+  for (let r = 0; r < n; r += m) { const mc = Math.min(m, n - r); v += mc * p * (1 - p) * (1 + (mc - 1) * rho); }
+  return v;
+}
+function betaBinomPmf(m, a, b) {                         // P(x of m pass | q ~ Beta(a, b))
+  const out = new Float64Array(m + 1), lB = lgamma(a) + lgamma(b) - lgamma(a + b);
+  for (let x = 0; x <= m; x++) out[x] = Math.exp(logFact(m) - logFact(x) - logFact(m - x) + lgamma(x + a) + lgamma(m - x + b) - lgamma(m + a + b) - lB);
+  return out;
+}
+function convolve(f, g) {
+  const out = new Float64Array(f.length + g.length - 1);
+  for (let i = 0; i < f.length; i++) { const fi = f[i]; if (fi < 1e-300) continue; for (let j = 0; j < g.length; j++) out[i + j] += fi * g[j]; }
+  return out;
+}
+/* Exact distribution of k when questions come in clusters of m (the last cluster may be short). */
+function clusteredPmf(n, p, m, rho) {
+  if (m <= 1 || rho <= 0 || p <= 0 || p >= 1) return binomPmf(n, p);
+  const [a, b] = betaAB(p, rho), full = betaBinomPmf(m, a, b);
+  let out = new Float64Array([1]);
+  for (let r = 0; r < n; r += m) out = convolve(out, n - r >= m ? full : betaBinomPmf(n - r, a, b));
+  return out;
+}
+
+/* One run = one bead. Same uniforms whatever p is (common random numbers), so moving p slides
+   the pile instead of reshuffling it. bits (optional) receives each question's pass/fail. */
+function drawRun(seed, model, i, n, p, m = 1, rho = 0, bits = null) {
+  const U = mulberry32(hash32(seed, model, i));
+  let k = 0;
+  if (m <= 1 || rho <= 0) {
+    for (let r = 0; r < n; r++) { const b = U() < p ? 1 : 0; k += b; if (bits) bits[r] = b; }
+    return k;
+  }
+  const Q = mulberry32(hash32(seed, model, i, 0xC1));
+  const [a, b] = betaAB(p, rho);
+  let q = p;
+  for (let r = 0; r < n; r++) {
+    if (r % m === 0) q = p <= 0 ? 0 : p >= 1 ? 1 : betaSample(Q, a, b);
+    const bit = U() < q ? 1 : 0; k += bit; if (bits) bits[r] = bit;
+  }
+  return k;
+}
+
+/* Two models. Independent runs: SE of the gap = sqrt(SE_A^2 + SE_B^2). */
+const seDiff = (pA, nA, pB, nB) => Math.sqrt(pA * (1 - pA) / nA + pB * (1 - pB) / nB);
+/* Questions per model so that the 95% bar on the gap is smaller than the gap itself. */
+const nForGap = (pA, pB, gap, z = Z95) => z * z * (pA * (1 - pA) + pB * (1 - pB)) / (gap * gap);
+/* ... and so that a real gap of that size shows up 80% of the time (power analysis). */
+const nForPower = (pA, pB, gap) => (Z95 + Z80) ** 2 * (pA * (1 - pA) + pB * (1 - pB)) / (gap * gap);
+/* Exact P(B's run scores higher than A's run), and P(tie), for independent runs of equal n. */
+function probBeats(fA, fB) {
+  let cdfB = 0, win = 0, tie = 0;
+  const cB = new Float64Array(fB.length);
+  for (let k = 0; k < fB.length; k++) { cdfB += fB[k]; cB[k] = cdfB; }
+  for (let a = 0; a < fA.length; a++) {
+    win += fA[a] * (1 - (a < cB.length ? cB[a] : 1));
+    tie += fA[a] * (a < fB.length ? fB[a] : 0);
+  }
+  return { win, tie };
+}
+const MATH = { Z95, Z80, hash32, mulberry32, logFact, lgamma, binomPmf, binomCdf, quantileK, se, normalBand, exactRange,
+  massInBand, wald, wilson, clopperPearson, coverage, inspectAccuracy, inspectStderr, gaussian, gammaSample, betaSample,
+  betaAB, designEffect, clusteredVarCount, betaBinomPmf, convolve, clusteredPmf, drawRun, seDiff, nForGap, nForPower, probBeats };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const W = 2.8;                        // score axis width (world): the window [lo, hi] maps onto it
+const X0 = -W / 2;
+const TRAY_Y = 0.07;                  // tray floor (top face)
+const PILE_H = 0.9;                   // tallest pile allowed
+const WALL_H = PILE_H + 0.1;          // bin dividers
+const BOARD_TOP = 2.92, BOARD_BOT = 1.42;   // first and last peg rows
+const FUNNEL_Y = 3.16;
+const DEPTH = 0.3;                    // pegs span z in [-DEPTH, DEPTH]
+const POST = 1.78;                    // frame posts at x = +/- POST
+const BOARD_MAX = 24;                 // up to this many questions the pegs are drawn
+const MAXB = 500;                     // beads per model
+const RHO = 0.3;                      // toy intra-cluster correlation
+const SEED = 11;                      // beats and predictions replay the same runs
+const MODELS = ['A', 'B'];
+const COL = { A: C.data, B: C.aux };
+const WINDOWS = [[1, 0.25], [0.5, 0.1], [0.4, 0.1], [0.3, 0.05], [0.2, 0.05], [0.15, 0.05], [0.1, 0.02], [0.06, 0.02], [0.04, 0.01]];
+
+const CAM = {
+  one: { pos: [1.5, 2.7, 9.2], target: [0, 1.62, 0] },
+  front: { pos: [1.1, 2.9, 9.4], target: [0, 1.55, 0] },
+  lanes: { pos: [2.4, 4.9, 8.6], target: [0, 1.4, 0] },
+  ladder: { pos: [0.35, 2.3, 9.6], target: [0, 1.6, 0] },
+  wide: { pos: [-3.4, 3.4, 8.4], target: [0, 1.5, 0] },
+};
+
+const pct = (x, d = 0) => `${(100 * x).toFixed(d)}%`;
+const pts = (x, d = 1) => (100 * x).toFixed(d);
+const num = (v) => String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const f3 = (v) => v.toFixed(3);
+const tier = (S, o) => o[S.tier] ?? o[2];
+
+/* ============================================================== the state */
+
+function cfg(S) {
+  const k = S.knobs;
+  return { n: Math.max(2, Math.round(k.n)), p: { A: k.pA, B: k.pB }, cmp: !!k.cmp, m: Number(k.clu) || 1 };
+}
+const models = (S) => (S.state.c.cmp ? MODELS : ['A']);
+const laneZ = (S, M) => (S.state.c.cmp ? (M === 'A' ? 0.135 : -0.135) : 0);
+const board = (S) => S.state.c.n <= BOARD_MAX;
+const X = (S, s) => X0 + ((s - S.state.L.lo) / (S.state.L.hi - S.state.L.lo)) * W;
+
+/* the spread the pile really has (clusters widen it); the formula stderr() assumes independence */
+function spread(S, M) {
+  const c = S.state.c, p = c.p[M];
+  return { naive: se(p, c.n), real: Math.sqrt(clusteredVarCount(c.n, p, c.m, c.m > 1 ? RHO : 0)) / c.n };
+}
+
+function computeRuns(S) {             // every dropped bead's slot k, for the current settings
+  const st = S.state, c = st.c;
+  for (const M of MODELS) {
+    const N = st.N[M], ks = st.k[M];
+    for (let i = 0; i < N; i++) ks[i] = drawRun(st.seed, M === 'A' ? 1 : 2, i, c.n, c.p[M], c.m, RHO);
+  }
+  for (const M of MODELS) {
+    st.pmf[M] = binomPmf(c.n, c.p[M]);
+    st.real[M] = c.m > 1 ? clusteredPmf(c.n, c.p[M], c.m, RHO) : st.pmf[M];
+  }
+}
+
+/* ============================================================== layout */
+
+function chooseWindow(S) {
+  const st = S.state;
+  if (board(S)) return [0, 1, 0.25];
+  let a = 1, b = 0;
+  for (const M of models(S)) {
+    const s = spread(S, M).real, p = st.c.p[M];
+    a = Math.min(a, p - 4.5 * s); b = Math.max(b, p + 4.5 * s);
+  }
+  a = Math.max(0, a); b = Math.min(1, b);
+  let best = [0, 1, 0.25];
+  for (const [w, t] of WINDOWS) {
+    let lo = Math.floor(a / t + 1e-9) * t;
+    lo = Math.max(0, Math.min(lo, 1 - w));
+    if (lo + w >= b - 1e-9) best = [lo, lo + w, t];
+  }
+  return best;
+}
+
+function layout(S) {
+  const st = S.state, c = st.c, n = c.n;
+  const [lo, hi, tick] = chooseWindow(S);
+  const L = { lo, hi, tick };
+  st.L = L;
+  const perVal = W / ((hi - lo) * n);                   // world width of one score value k/n
+  const g = board(S) ? 1 : Math.max(1, Math.ceil(0.1 / perVal));
+  const kA = Math.max(0, Math.ceil(lo * n - 1e-9)), kB = Math.min(n, Math.floor(hi * n + 1e-9));
+  L.bins = [];
+  L.binOf = new Int32Array(n + 1);
+  for (let k = kA; k <= kB; k += g) {
+    const k1 = Math.min(kB, k + g - 1);
+    L.bins.push({ k0: k, k1, x0: X(S, (k - 0.5) / n), x1: X(S, (k1 + 0.5) / n) });
+  }
+  for (let k = 0; k <= n; k++) L.binOf[k] = Math.max(0, Math.min(L.bins.length - 1, Math.floor((k - kA) / g)));
+  L.g = g;
+  L.trayL = L.bins[0].x0; L.trayR = L.bins[L.bins.length - 1].x1;
+  // counts and expected counts (exact binomial) per bin
+  const B = L.bins.length;
+  L.cnt = {}; L.exp = {};
+  for (const M of MODELS) {
+    const cnt = new Float64Array(B), ex = new Float64Array(B), N = st.N[M], f = st.pmf[M];
+    for (let i = 0; i < N; i++) cnt[L.binOf[st.k[M][i]]]++;
+    for (let k = 0; k <= n; k++) ex[L.binOf[k]] += N * f[k];
+    L.cnt[M] = cnt; L.exp[M] = ex;
+  }
+  // one bead size for the whole scene: fits between pegs, in the bins, and under PILE_H
+  const fullW = g * perVal;
+  let d = Math.min(0.105, 0.9 * fullW);
+  if (board(S)) { const gap = (BOARD_TOP - BOARD_BOT) / (n - 1); d = Math.min(d, 0.8 * W / n, 1.3 * gap); }
+  const per = (j, dd) => Math.max(1, Math.floor(0.94 * (L.bins[j].x1 - L.bins[j].x0) / dd));
+  const tall = (dd) => {
+    let h = 0;
+    for (const M of models(S)) for (let j = 0; j < B; j++) {
+      const q = Math.max(L.cnt[M][j], L.exp[M][j]);
+      if (q > 0) h = Math.max(h, Math.ceil(q / per(j, dd) - 1e-9) * 0.9 * dd + 0.1 * dd);
+    }
+    return h;
+  };
+  for (let it = 0; it < 80 && tall(d) > PILE_H && d > 0.016; it++) d *= 0.95;
+  L.d = d; L.lh = 0.9 * d;
+  L.per = L.bins.map((_, j) => per(j, d));
+  // final pile spots, in bead order
+  for (const M of MODELS) {
+    const P = st.spot[M], fill = new Int32Array(B), z = laneZ(S, M);
+    L[M + 'top'] = 0;
+    for (let i = 0; i < st.N[M]; i++) {
+      const j = L.binOf[st.k[M][i]], b = L.bins[j], pr = L.per[j], s = fill[j]++;
+      const layer = Math.floor(s / pr), col = s % pr, pitch = (b.x1 - b.x0) / pr;
+      let x = b.x0 + (col + 0.5) * pitch + (pr > 1 ? (layer % 2 ? 0.22 : -0.22) * pitch : 0);
+      x = Math.min(b.x1 - d * 0.5, Math.max(b.x0 + d * 0.5, x));
+      const jz = ((hash32(i, 77) % 1000) / 1000 - 0.5) * Math.min(0.05, d * 0.5);
+      P[3 * i] = x; P[3 * i + 1] = TRAY_Y + d / 2 + layer * L.lh; P[3 * i + 2] = z + jz;
+    }
+    let top = 0;
+    for (let j = 0; j < B; j++) {
+      const q = Math.max(L.cnt[M][j], L.exp[M][j]);
+      if (q > 0) top = Math.max(top, Math.ceil(q / L.per[j] - 1e-9) * L.lh + 0.1 * d);
+    }
+    L[M + 'top'] = top;
+  }
+  return L;
+}
+
+/* ============================================================== builders */
+
+function buildStatic(S) {
+  const st = S.state, g = new THREE.Group();
+  const brass = K.mat.brass(), plaster = K.mat.plaster('#efe8dc');
+  const box = (sx, sy, sz, x, y, z, mat) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
+    m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; g.add(m); return m;
+  };
+  st.back = box(2 * POST + 0.06, 3.24, 0.05, 0, 1.64, -0.345, plaster);                  // back panel
+  box(2 * POST + 0.14, 0.05, 0.78, 0, 0.025, 0, brass);                                     // base
+  for (const s of [-1, 1]) box(0.07, 3.3, 0.07, s * POST, 1.67, 0.34, brass);                // front posts
+  for (const s of [-1, 1]) box(0.07, 3.3, 0.07, s * POST, 1.67, -0.34, brass);               // back posts
+  box(2 * POST + 0.07, 0.06, 0.07, 0, 3.33, 0.34, brass);                                    // top bar
+  box(2 * POST + 0.07, 0.06, 0.07, 0, 3.33, -0.34, brass);
+  // funnel (open brass cone)
+  const fun = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.06, 0.2, 32, 1, true), brass.clone());
+  fun.material.side = THREE.DoubleSide;
+  fun.position.set(0, FUNNEL_Y, 0); fun.castShadow = true; g.add(fun);
+  st.funnel = fun;
+  // the axis ruler along the tray's front foot
+  st.ruler = box(1, 0.03, 0.05, 0, 0.08, 0.36, brass);
+  S.root.add(g);
+  st.static = g;
+  // movable tray end walls, dividers, lane glass
+  st.wallL = box(0.03, WALL_H, 0.66, 0, TRAY_Y + WALL_H / 2, 0, plaster);
+  st.wallR = box(0.03, WALL_H, 0.66, 0, TRAY_Y + WALL_H / 2, 0, plaster);
+  st.floor = box(1, 0.02, 0.66, 0, TRAY_Y - 0.01, 0, plaster);
+  st.div = new THREE.InstancedMesh(new THREE.BoxGeometry(0.012, WALL_H, 0.62), K.mat.plaster('#e6ddcf'), 96);
+  st.div.castShadow = true; st.div.receiveShadow = true; st.div.frustumCulled = false; st.div.count = 0; st.div.userData.noFit = true;
+  S.root.add(st.div);
+  st.laneGlass = new THREE.Mesh(new THREE.BoxGeometry(1, WALL_H, 0.01), K.mat.glass('#ffffff', 0.22));
+  st.laneGlass.position.set(0, TRAY_Y + WALL_H / 2, 0);
+  S.root.add(st.laneGlass);
+  st.ticks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.014, 0.07, 0.02), K.mat.brass(), 16);
+  st.ticks.frustumCulled = false; st.ticks.count = 0; st.ticks.userData.noFit = true;
+  S.root.add(st.ticks);
+  // pegs (per-instance colour: brass, or green/red where the tracked bead passed/failed)
+  const pg = new THREE.CylinderGeometry(1, 1, 2 * DEPTH, 14).rotateX(Math.PI / 2);
+  st.pegs = new THREE.InstancedMesh(pg, new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.38, metalness: 0.45 }), 300);
+  st.pegs.castShadow = true; st.pegs.frustumCulled = false; st.pegs.count = 0; st.pegs.userData.noFit = true;
+  st.pegs.setColorAt(0, new THREE.Color(C.brass));
+  S.root.add(st.pegs);
+  // frosted field (fast mode: too many pegs to draw)
+  st.frost = new THREE.Mesh(new THREE.BoxGeometry(2 * POST - 0.1, BOARD_TOP - BOARD_BOT + 0.3, 0.5), K.mat.glass('#f4efe6', 0.55));
+  st.frost.position.set(0, (BOARD_TOP + BOARD_BOT) / 2, 0);
+  st.frost.userData.noFit = true;
+  S.root.add(st.frost);
+  // beads: one instanced mesh per model
+  const bg = new THREE.SphereGeometry(0.5, 16, 12);
+  st.beads = {};
+  for (const M of MODELS) {
+    const m = new THREE.InstancedMesh(bg, K.mat.paint(COL[M]), MAXB);
+    m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; m.count = 0; m.userData.noFit = true;
+    S.root.add(m);
+    st.beads[M] = m;
+  }
+  // per lane: expected-shape string (amber), 95% bar (red), exact bar (brass), true p (green)
+  st.lane = {};
+  for (const M of MODELS) {
+    const o = {};
+    o.curve = K.tube([], C.prob, 0.011, { shadow: false });
+    o.bar = caliper(C.grad, 0.013, 0.085);
+    o.ex = caliper(C.brass, 0.008, 0.05, true);
+    o.truth = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 1, 10).translate(0, 0.5, 0), K.mat.paint(C.good));
+    o.truth.castShadow = false;
+    o.curve.mesh.userData.noFit = true; o.truth.userData.noFit = true;
+    o.top = new THREE.Vector3(); o.barEnd = new THREE.Vector3();
+    S.root.add(o.curve.mesh, o.bar.group, o.ex.group, o.truth);
+    st.lane[M] = o;
+  }
+  // the tracked bead's path (beat 1) and the ladder of error bars (beat 4)
+  st.path = K.tube([], C.data, 0.012, { shadow: false });
+  st.path.mesh.userData.noFit = true;
+  S.root.add(st.path.mesh);
+  st.ladder = new THREE.Group();
+  S.root.add(st.ladder);
+}
+
+function caliper(hex, r, cap, brassy) {
+  const mat = brassy ? K.mat.brass() : K.mat.paint(hex);
+  const group = new THREE.Group();
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(1, 2 * r, 2 * r), mat);
+  const a = new THREE.Mesh(new THREE.BoxGeometry(2 * r, cap, 2 * r), mat), b = a.clone();
+  for (const m of [bar, a, b]) { m.castShadow = true; m.userData.noFit = true; group.add(m); }
+  group.userData.noFit = true;
+  return {
+    group,
+    set(x0, x1, y, z) {
+      const len = Math.max(0.0001, x1 - x0);
+      bar.scale.x = len; bar.position.set((x0 + x1) / 2, y, z);
+      a.position.set(x0, y, z); b.position.set(x1, y, z);
+      group.visible = true;
+    },
+    show(v) { group.visible = v; },
+  };
+}
+
+function buildBoard(S) {             // pegs or frost, tray walls, dividers, ticks: after layout
+  const st = S.state, L = st.L, n = st.c.n, m4 = new THREE.Matrix4(), q = new THREE.Quaternion();
+  const sc = new THREE.Vector3(), ps = new THREE.Vector3();
+  const isBoard = board(S);
+  st.frost.visible = !isBoard;
+  st.pegs.visible = isBoard && !st.hidePegs;
+  if (isBoard) {
+    const gap = (BOARD_TOP - BOARD_BOT) / (n - 1);
+    const r = Math.min(0.022, 0.16 * W / n, 0.22 * gap);
+    st.pegR = r; st.gap = gap;
+    let i = 0;
+    const brass = new THREE.Color(C.brass);
+    for (let row = 0; row < n; row++) for (let j = 0; j <= row; j++) {
+      ps.set(X(S, 0.5 + (j - row / 2) / n), BOARD_TOP - row * gap, 0);
+      sc.set(r, r, 1);
+      st.pegs.setMatrixAt(i, m4.compose(ps, q, sc));
+      st.pegs.setColorAt(i, brass);
+      i++;
+    }
+    st.pegs.count = i;
+    st.pegs.instanceMatrix.needsUpdate = true;
+    st.pegs.instanceColor.needsUpdate = true;
+  } else st.pegs.count = 0;
+  // tray: walls at the window's ends, dividers between bins
+  const tl = L.trayL, tr = L.trayR, w = tr - tl, cx = (tl + tr) / 2;
+  st.wallL.position.x = tl - 0.015; st.wallR.position.x = tr + 0.015;
+  st.floor.scale.x = w + 0.06; st.floor.position.x = cx;
+  st.laneGlass.scale.x = w; st.laneGlass.position.x = cx;
+  st.laneGlass.visible = st.c.cmp;
+  let nd = 0;
+  for (let j = 1; j < L.bins.length && nd < 96; j++) {
+    ps.set(L.bins[j].x0, TRAY_Y + WALL_H / 2, 0); sc.set(1, 1, 1);
+    st.div.setMatrixAt(nd++, m4.compose(ps, q, sc));
+  }
+  st.div.count = nd; st.div.instanceMatrix.needsUpdate = true;
+  // axis ruler + ticks + tick labels (first, middle, last)
+  st.ruler.scale.x = w + 0.1; st.ruler.position.x = cx;
+  const tv = [];
+  for (let v = L.lo; v <= L.hi + 1e-9; v += L.tick) tv.push(Math.round(v * 1e6) / 1e6);
+  st.ticks.count = Math.min(16, tv.length);
+  tv.slice(0, 16).forEach((v, i) => { ps.set(X(S, v), 0.12, 0.36); sc.set(1, 1, 1); st.ticks.setMatrixAt(i, m4.compose(ps, q, sc)); });
+  st.ticks.instanceMatrix.needsUpdate = true;
+  const show = [tv[0], tv[Math.floor((tv.length - 1) / 2)], tv[tv.length - 1]];
+  if (tv.length % 2 === 0) show[1] = null;
+  st.axisTags.forEach((t, i) => {
+    const v = show[i];
+    if (v == null) { t.show(false); return; }
+    const s10 = Math.round(v * 1000) / 10;
+    t.move(new THREE.Vector3(X(S, v), 0.05, 0.4)).set(`${Number.isInteger(s10) ? s10 : s10.toFixed(1)}%`).show(true);
+  });
+  // fast-mode note
+  st.frostNote.set({
+    1: `${num(n)} questions per run: too many pegs to draw`,
+    2: `n = ${num(n)} rows: too fine to draw. Each bead still makes ${num(n)} pass/fail draws`,
+    3: `n = ${num(n)}: pegs not drawn; slot k ~ ${st.c.m > 1 ? 'clustered' : `Binomial(${num(n)}, p)`}, drawn exactly`,
+  }[S.tier]).show(!isBoard && !st.hideFrostNote);
+}
+
+/* expected shape, bars, truth lines: after layout */
+function paintLanes(S) {
+  const st = S.state, L = st.L, c = st.c;
+  for (const M of MODELS) {
+    const o = st.lane[M], on = models(S).includes(M) && !st.hideLanes;
+    o.curve.mesh.visible = on && st.N[M] >= 12;
+    o.bar.show(on); o.ex.show(on); o.truth.visible = on;
+    if (!on) continue;
+    const z = laneZ(S, M) + L.d / 2 + 0.03, p = c.p[M];
+    // amber: exact binomial (independent questions): where the pile heads
+    const pts3 = [], ex = L.exp[M];
+    let first = -1, last = -1;
+    ex.forEach((e, j) => { if (e / L.per[j] > 0.02) { if (first < 0) first = j; last = j; } });
+    if (first >= 0) {
+      const a = Math.max(0, first - 1), b = Math.min(ex.length - 1, last + 1);
+      for (let j = a; j <= b; j++) {
+        const bn = L.bins[j];
+        pts3.push(new THREE.Vector3((bn.x0 + bn.x1) / 2, TRAY_Y + 0.012 + (ex[j] / L.per[j]) * L.lh + (ex[j] > 0.3 ? 0.1 * L.d : 0), z));
+      }
+    }
+    o.curve.set(pts3.length > 1 ? pts3 : [new THREE.Vector3(0, -5, 0), new THREE.Vector3(0, -5, 0.01)]);
+    // bars above the pile
+    const y = Math.min(TRAY_Y + WALL_H + 0.02, TRAY_Y + Math.max(0.22, L[M + 'top'] + 0.1));
+    const [a, b] = normalBand(p, c.n);
+    const clipL = L.trayL - 0.16, clipR = L.trayR + 0.16;
+    o.bar.set(Math.max(clipL, X(S, a)), Math.min(clipR, X(S, b)), y, z);
+    const [ka, kb] = exactRange(st.real[M]);
+    o.ex.set(X(S, ka / c.n), X(S, kb / c.n), y - 0.05, z);
+    o.truth.position.set(X(S, p), TRAY_Y, laneZ(S, M) + 0.001);
+    o.truth.scale.y = y + 0.1 - TRAY_Y;
+    o.barEnd.set(Math.min(clipR, X(S, b)), y, z);
+    o.top.set(X(S, p), y + 0.1, laneZ(S, M));
+  }
+  // tags
+  const A = st.lane.A;
+  st.tagP.move(A.top).set({ 1: `true rate ${pct(c.p.A)}`, 2: `p = ${pct(c.p.A)}`, 3: `p = ${c.p.A.toFixed(2)}` }[S.tier])
+    .show(!st.hideLanes && !c.cmp && !st.hideTags);
+  st.tagBar.move(A.barEnd).set({ 1: '95% of runs', 2: '±1.96 SE', 3: 'p ± 1.96·SE' }[S.tier])
+    .show(!st.hideLanes && !c.cmp && !st.hideTags && st.N.A >= 12);
+  for (const M of MODELS) st.tagM[M].move(st.lane[M].top).set(M === 'A' ? `A ${pct(c.p.A)}` : `B ${pct(c.p.B)}`)
+    .show(c.cmp && !st.hideLanes);
+}
+
+/* ============================================================== the beads */
+
+function placeBeads(S, u = 1) {      // landed beads at their spots (u < 1 mid-morph)
+  const st = S.state, m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3();
+  for (const M of MODELS) {
+    const mesh = st.beads[M], on = models(S).includes(M);
+    mesh.visible = on;
+    if (!on) continue;
+    const P = st.spot[M], F = st.from[M], landed = st.landed[M];
+    const d = st.L.d, d0 = st.morph ? st.morph.d0 : d, dd = d0 + (d - d0) * u;
+    s.set(dd, dd, dd);
+    for (let i = 0; i < landed; i++) {
+      if (u < 1 && F) p.set(F[3 * i] + (P[3 * i] - F[3 * i]) * u, F[3 * i + 1] + (P[3 * i + 1] - F[3 * i + 1]) * u, F[3 * i + 2] + (P[3 * i + 2] - F[3 * i + 2]) * u);
+      else p.set(P[3 * i], P[3 * i + 1], P[3 * i + 2]);
+      mesh.setMatrixAt(i, m4.compose(p, q, s));
+    }
+    mesh.count = Math.max(landed, st.released[M]);
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+}
+
+function flightTime(S) { return board(S) ? { tin: 0.16, trow: 0.88, tout: 0.34 } : { tin: 0, trow: 0.12, tout: 0.4 }; }
+
+const _fb = { bits: null };
+function flightPos(S, M, i, tau, out) {   // where bead i is, tau seconds after release
+  const st = S.state, c = st.c, n = c.n, T = flightTime(S), d = st.L.d;
+  const P = st.spot[M], zl = laneZ(S, M), end = new THREE.Vector3(P[3 * i], P[3 * i + 1], P[3 * i + 2]);
+  if (!board(S)) {                      // fast mode: appear under the frosted field, fall into the bin
+    const x = X(S, st.k[M][i] / n);
+    if (tau < T.trow) { const f = tau / T.trow; out.set(x, BOARD_BOT - 0.12, zl); return f; }
+    const f = Math.min(1, (tau - T.trow) / T.tout);
+    out.set(x + (end.x - x) * f, BOARD_BOT - 0.12 + (end.y - (BOARD_BOT - 0.12)) * f * f, zl + (end.z - zl) * f);
+    return 1;
+  }
+  const fl = st.fly[M].get(i);
+  const R = fl.R, bits = fl.bits, gap = st.gap, lift = st.pegR + d / 2;
+  const xr = (r) => X(S, 0.5 + (R[r] - r / 2) / n);
+  if (tau < T.tin) {                    // funnel mouth to the first peg
+    const f = tau / T.tin;
+    out.set(0, FUNNEL_Y - 0.08 + (BOARD_TOP + lift - FUNNEL_Y + 0.08) * f * f, zl);
+    return 1;
+  }
+  const u = (tau - T.tin) / T.trow * n;
+  if (u < n) {
+    const r = Math.floor(u), f = u - r, dir = bits[r] ? 1 : -1;
+    const x = xr(r) + dir * (W / (2 * n)) * (1 - (1 - f) * (1 - f));
+    const y = BOARD_TOP - r * gap + lift - gap * f * f + 0.32 * gap * Math.sin(Math.PI * f) * (1 - f);
+    out.set(x, y, zl);
+    return 1;
+  }
+  const f = Math.min(1, (tau - T.tin - T.trow) / T.tout), x0 = X(S, R[n] / n), y0 = BOARD_TOP - (n - 1) * gap - gap + lift;
+  out.set(x0 + (end.x - x0) * Math.min(1, f * 1.6), y0 + (end.y - y0) * f * f, zl + (end.z - zl) * f);
+  return 1;
+}
+
+function startFlight(S, M, i) {
+  const st = S.state, c = st.c;
+  if (!board(S)) return;
+  const bits = new Uint8Array(c.n), R = new Int32Array(c.n + 1);
+  drawRun(st.seed, M === 'A' ? 1 : 2, i, c.n, c.p[M], c.m, RHO, bits);
+  for (let r = 0; r < c.n; r++) R[r + 1] = R[r] + bits[r];
+  st.fly[M].set(i, { bits, R });
+}
+
+/* drop c more beads per model; animated unless ?shot=1 or instant */
+function drop(S, cnt, o = {}) {
+  const st = S.state;
+  finishMorph(S);
+  let full = false;
+  for (const M of models(S)) {
+    const add = Math.min(cnt, MAXB - st.N[M]);
+    if (add < cnt) full = true;
+    if (add <= 0) continue;
+    const N0 = st.N[M];
+    st.N[M] += add;
+    const gapT = cnt === 1 ? 0 : board(S) ? 0.05 : 0.03;
+    for (let j = 0; j < add; j++) st.rt[M][N0 + j] = (S.shot || o.instant) ? -1e9 : st.clock + (o.delay ?? 0.1) + j * gapT + (M === 'B' ? gapT / 2 : 0);
+  }
+  if (full) K.toast('The machine holds 500 runs per model: Reset to start again');
+  computeRuns(S);
+  layout(S);
+  buildBoard(S);
+  paintLanes(S);
+  if (S.shot || o.instant) settle(S);
+  placeBeads(S);
+  refresh(S);
+  st.playing = true;
+  S.invalidate();
+}
+
+function settle(S) {                 // every dropped bead lands now
+  const st = S.state;
+  for (const M of MODELS) {
+    for (let i = 0; i < st.N[M]; i++) if (st.rt[M][i] > -1e8) st.rt[M][i] = -1e9;
+    st.landed[M] = st.released[M] = st.N[M];
+    st.fly[M].clear();
+  }
+  if (st.mode === 'one') lightPegs(S, Infinity);
+}
+
+function fresh(S, seed = SEED) {     // empty machine (a beat or prediction starts here)
+  const st = S.state;
+  st.seed = seed;
+  for (const M of MODELS) { st.N[M] = 0; st.landed[M] = 0; st.released[M] = 0; st.fly[M].clear(); st.rt[M].fill(Infinity); }
+  st.morph = null;
+  st.clock = 0;
+  st.c = cfg(S);
+  computeRuns(S);
+  layout(S);
+  buildBoard(S);
+  paintLanes(S);
+  placeBeads(S);
+  st.path.mesh.visible = false;
+  clearLadder(S);
+}
+
+function finishMorph(S) { const st = S.state; if (st.morph) { st.morph = null; placeBeads(S, 1); } }
+
+/* ============================================================== pegs lit by one run (beat 1) */
+
+function lightPegs(S, upto) {
+  const st = S.state, c = st.c;
+  if (!board(S) || st.N.A < 1) return;
+  const bits = new Uint8Array(c.n);
+  drawRun(st.seed, 1, 0, c.n, c.p.A, c.m, RHO, bits);
+  const col = new THREE.Color(), brass = new THREE.Color(C.brass), good = new THREE.Color(C.good), bad = new THREE.Color(C.grad);
+  let R = 0, idx = 0;
+  const pts3 = [];
+  for (let row = 0; row < c.n; row++) {
+    for (let j = 0; j <= row; j++) {
+      col.copy(brass);
+      if (j === R && row < upto) col.copy(bits[row] ? good : bad);
+      st.pegs.setColorAt(idx++, col);
+    }
+    if (row < upto) pts3.push(new THREE.Vector3(X(S, 0.5 + (R - row / 2) / c.n), BOARD_TOP - row * st.gap + st.pegR + 0.004, 0.02));
+    R += bits[row];
+  }
+  st.pegs.instanceColor.needsUpdate = true;
+  if (upto >= c.n && pts3.length) pts3.push(new THREE.Vector3(X(S, R / c.n), st.spot.A[1], 0.02));
+  st.path.set(pts3.length > 1 ? pts3 : [new THREE.Vector3(0, -5, 0), new THREE.Vector3(0, -5, 0.01)]);
+  st.path.mesh.visible = pts3.length > 1;
+}
+
+/* ============================================================== the ladder (beat 4) */
+
+function clearLadder(S) {
+  const st = S.state;
+  while (st.ladder.children.length) {
+    const m = st.ladder.children.pop();
+    if (m.geometry && !m.userData.shared) m.geometry.dispose();
+  }
+  st.ladderOn = false;
+  st.ladderN = 0;
+}
+
+function leaveLadder(S) { const st = S.state; if (!st.ladderOn) return; clearLadder(S); st.hidePegs = false; if (st.mode === 'ladder') st.mode = 'pile'; buildBoard(S); refresh(S); }
+
+function buildLadder(S, instant) {
+  const st = S.state, c = st.c, N = st.N.A;
+  clearLadder(S);
+  st.ladderOn = true;
+  const R = Math.min(20, N), y0 = BOARD_BOT - 0.02, dy = (BOARD_TOP + 0.08 - y0) / Math.max(1, R - 1), z = 0.36;
+  const ink = K.mat.ink(), red = K.mat.paint(C.grad), blue = K.mat.paint(C.data);
+  const barG = new THREE.BoxGeometry(1, 0.026, 0.026), capG = new THREE.BoxGeometry(0.02, 0.07, 0.02), dotG = new THREE.SphereGeometry(0.036, 14, 10);
+  for (const g of [barG, capG, dotG]) g.userData = { shared: true };
+  let cover = 0;
+  st.ladderRows = [];
+  for (let r = 0; r < R; r++) {
+    const i = N - R + r, k = st.k.A[i], [a, b] = wald(k, c.n), hit = c.p.A >= a && c.p.A <= b;
+    if (hit) cover++;
+    const mat = hit ? ink : red, y = y0 + r * dy, xa = Math.max(X0 - 0.3, X(S, a)), xb = Math.min(X0 + W + 0.3, X(S, b));
+    const bar = new THREE.Mesh(barG, mat); bar.scale.x = Math.max(0.001, xb - xa); bar.position.set((xa + xb) / 2, y, z);
+    const ca = new THREE.Mesh(capG, mat); ca.position.set(xa, y, z);
+    const cb = new THREE.Mesh(capG, mat); cb.position.set(xb, y, z);
+    const dot = new THREE.Mesh(dotG, blue); dot.position.set(X(S, k / c.n), y, z + 0.01);
+    const row = new THREE.Group(); row.add(bar, ca, cb, dot);
+    row.traverse((m) => { m.userData.noFit = true; if (m.isMesh) { m.userData.shared = true; m.castShadow = true; } });
+    row.visible = false;
+    st.ladder.add(row);
+    st.ladderRows.push(row);
+  }
+  const line = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 1, 10).translate(0, 0.5, 0), K.mat.paint(C.good));
+  line.position.set(X(S, c.p.A), y0 - 0.12, z - 0.02); line.scale.y = (R - 1) * dy + 0.3; line.userData.noFit = true;
+  st.ladder.add(line);
+  st.ladderCover = cover; st.ladderR = R;
+  st.ladderT = S.shot || instant ? 99 : 0;
+  if (st.ladderT >= 99) st.ladderRows.forEach((r) => { r.visible = true; });
+  st.ladderTop = new THREE.Vector3(X(S, c.p.A), y0 + (R - 1) * dy + 0.2, z);
+  st.playing = true;
+}
+
+/* ============================================================== readouts */
+
+function refresh(S) {
+  const st = S.state, c = st.c, T = S.tier;
+  const nA = st.landed.A, mode = st.mode;
+  const pA = c.p.A, n = c.n;
+  let txt = '';
+  const sA = spread(S, 'A');
+  if (mode === 'one' && st.N.A <= 1) {
+    if (nA < 1) txt = { 1: `**${n} questions** · dropping one run…`, 2: `n = ${n} questions · one run…`, 3: `n = ${n} · drawing k ~ Binomial(${n}, ${pA.toFixed(2)})` }[T];
+    else {
+      const k = st.k.A[0];
+      txt = {
+        1: `this run: **${k} of ${n}** right = ${pct(k / n)}`,
+        2: `one run: **${k}/${n} = ${pct(k / n)}**\ntrue p = ${pct(pA)} (hidden in real life)`,
+        3: `k = ${k}, n = ${n} → k/n = ${f3(k / n)}\np = ${pA.toFixed(2)} (unobservable)`,
+      }[T];
+    }
+  } else if (st.ladderOn) {
+    const cv = st.ladderCover, R = st.ladderR;
+    txt = {
+      1: `**${cv} of ${R}** error bars catch the true rate`,
+      2: `**${cv} of ${R}** runs' 95% bars cover p = ${pct(pA)}`,
+      3: `Wald bars: ${cv}/${R} cover p\nexact coverage ${pts(coverage(n, pA, wald))}% · Wilson ${pts(coverage(n, pA, wilson))}%`,
+    }[T];
+  } else if (c.cmp) {
+    const pB = c.p.B, hA = Z95 * se(pA, n), hB = Z95 * se(pB, n), sd = seDiff(pA, n, pB, n), gap = pB - pA;
+    const call = Math.abs(gap) > Z95 * sd ? { 1: 'a real difference', 2: 'clear of the bar', 3: 'significant at 5%' } : { 1: 'too close to call', 2: 'inside the bar: can\'t tell', 3: 'not significant' };
+    const pb = probBeats(st.pmf.A, st.pmf.B);
+    txt = {
+      1: `A **${pct(pA)}** ±${pts(hA)} · B **${pct(pB)}** ±${pts(hB)}\ngap ${pts(gap)} ±${pts(Z95 * sd)} points: ${call[1]}`,
+      2: `n = ${num(n)} each · A ${pct(pA)} ±${pts(hA)} · B ${pct(pB)} ±${pts(hB)}\ngap ${pts(gap)} ± ${pts(Z95 * sd)} pts (95%): ${call[2]}\nB's run beats A's: ${pts(pb.win)}% (exact)`,
+      3: `SE_Δ = √(SE_A² + SE_B²) = ${pts(sd, 2)} pts, z = ${(gap / sd).toFixed(2)}\nP(k_B > k_A) = ${pb.win.toFixed(3)} · ${call[3]}\nn for a clear 95% gap: ${num(Math.ceil(nForGap(pA, pB, Math.abs(gap) || 1e-9)))}`,
+    }[T];
+  } else if (mode === 'inspect' && nA >= 1) {
+    const i = nA - 1, v = new Uint8Array(n);
+    drawRun(st.seed, 1, i, n, pA, c.m, RHO, v);
+    const acc = inspectAccuracy(v), sde = inspectStderr(v);
+    txt = {
+      1: `last run: accuracy **${f3(acc)}**\nerror bar ±${pts(Z95 * sde)} points (95%)`,
+      2: `last run (n = ${num(n)}):\n\`accuracy()\` ${f3(acc)} · \`stderr()\` ${sde.toFixed(4)}`,
+      3: `accuracy() = k/n = ${f3(acc)}\nstderr() = √(p̂(1−p̂)/(n−1)) = ${sde.toFixed(4)}`,
+    }[T];
+  } else if (c.m > 1) {
+    const de = designEffect(c.m, RHO);
+    txt = {
+      1: `groups of ${c.m}: real spread ±${pts(Z95 * sA.real)} points\nthe simple formula says ±${pts(Z95 * sA.naive)}`,
+      2: `clusters of ${c.m} (toy ρ = ${RHO})\nstderr()-style bar ±${pts(Z95 * sA.naive)} · real ±${pts(Z95 * sA.real)} pts`,
+      3: `Var = np(1−p)[1 + (m−1)ρ]${n % c.m ? ' (last cluster short)' : `, DE = ${de.toFixed(2)}`}\n±${pts(Z95 * sA.naive)} → ±${pts(Z95 * sA.real)} pts (95%)`,
+    }[T];
+  } else {
+    let mean = 0;
+    for (let i = 0; i < nA; i++) mean += st.k.A[i];
+    mean = nA ? mean / (nA * n) : NaN;
+    const [a, b] = normalBand(pA, n), inside = massInBand(st.pmf.A, a, b), [ka, kb] = exactRange(st.pmf.A);
+    const runs = `${num(Math.max(nA, st.N.A))} run${st.N.A === 1 ? '' : 's'}`;
+    const exactNote = Math.abs(inside - 0.95) < 0.006 ? 'exact: ≈95% inside ✓' : `exact: ${pts(inside, 0)}% inside`;
+    const lo = Math.max(0, a), hi = Math.min(1, b);
+    txt = {
+      1: `**${runs}** · ${num(n)} questions each\n95% land within ±${pts(Z95 * se(pA, n))} points`,
+      2: `${runs} · n = ${num(n)}${nA ? ` · mean ${pct(mean, 1)}` : ''}\nSE = √(p(1−p)/n) = ${pts(se(pA, n))} pts\nred 95%: ${pts(a, 0)}–${pts(b, 0)}% · ${exactNote}`,
+      3: `SE = √(${pA.toFixed(2)}·${(1 - pA).toFixed(2)}/${n}) = ${se(pA, n).toFixed(3)}\np ± 1.96·SE = [${a.toFixed(2)}, ${b.toFixed(2)}] → P = ${inside.toFixed(3)}\nexact 2.5–97.5%: k/n ∈ [${(ka / n).toFixed(2)}, ${(kb / n).toFixed(2)}]`,
+    }[T];
+    if (lo !== a || hi !== b) txt += { 1: '\n(the bar pokes past the ends: the formula strains)', 2: '\nthe red bar passes 0–100%: normal approx. strains', 3: '\nWald band leaves [0, 1]: use exact / Wilson' }[T];
+  }
+  st.read.set(txt);
+  if (st.legend && c.cmp) {
+    for (const M of MODELS) {
+      let s = 0; const nm = st.landed[M];
+      for (let i = 0; i < nm; i++) s += st.k[M][i];
+      st.legend.set(M, nm ? pct(s / (nm * n), 1) : '');
+    }
+  }
+  S.invalidate();
+}
+
+/* ============================================================== scene config per beat */
+
+function scene(S, o = {}) {
+  const st = S.state;
+  st.mode = o.mode || 'pile';
+  st.hidePegs = !!o.hidePegs;
+  st.hideLanes = !!o.hideLanes;
+  st.hideTags = !!o.hideTags;
+  st.hideFrostNote = !!o.hideFrostNote;
+  // legend chips only when comparing
+  const want = st.c.cmp;
+  if (want !== st.legendOn) {
+    st.legend = want ? K.legend(MODELS.map((M) => ({ id: M, label: `Model ${M}`, color: COL[M] })), null) : (K.legend([], null), null);
+    st.legendOn = want;
+  }
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt || [-1.62, 0, 0.78], o.face || [0.2, 0.6, 3]);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.at && (typeof o.at === 'function' ? o.at(S) : o.at) });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  dimKnobs(S);
+}
+
+function dimKnobs(S) {               // the kit cannot dim knobs: a tiny helper (see LEDGER)
+  const row = document.getElementById('k-pB');
+  const el = row && row.closest('.k-knob');
+  if (el) el.classList.toggle('w11-dim', !S.knobs.cmp);
+}
+
+function wait(S, ms) { return S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)); }
+function whenLanded(S) {
+  const st = S.state;
+  if (S.shot) return Promise.resolve();
+  return new Promise((res) => {
+    const chk = () => { if (models(S).every((M) => st.landed[M] >= st.N[M])) res(); else setTimeout(chk, 120); };
+    chk();
+  });
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'w11-beans', num: '22', week: 11, kind: 'weekly',
+  title: 'The bean machine',
+  subtitle: 'A Galton board where every peg is one eval question: why every score needs an error bar.',
+  back2d: '#week-11',
+  film: 'w11-evals',
+  plinth: { r: 2.05, h: 0.14 },
+
+  knobs: [
+    { id: 'n', type: 'range', label: { 1: 'Questions per run', 2: 'Questions per run, n', 3: 'n (samples per run)' },
+      min: 5, max: 2000, log: true, value: 6, fmt: (v) => num(v) },
+    { id: 'pA', type: 'range', label: { 1: 'Model A: true pass rate', 2: 'A: true pass rate p', 3: 'p_A' },
+      min: 0, max: 1, step: 0.01, value: 0.6, fmt: (v) => pct(v) },
+    { id: 'cmp', type: 'toggle', label: { 1: 'Add a second model (B)', 2: 'Compare model B', 3: 'second model B' }, value: false },
+    { id: 'pB', type: 'range', label: { 1: 'Model B: true pass rate', 2: 'B: true pass rate p', 3: 'p_B' },
+      min: 0, max: 1, step: 0.01, value: 0.75, fmt: (v) => pct(v) },
+    { id: 'clu', type: 'select', wide: true, label: { 1: 'Questions come in groups?', 2: 'Clustered questions (toy, ρ = 0.3)', 3: 'cluster size m (ρ = 0.3, toy)' },
+      value: '1', options: [['1', { 1: 'No: every question independent', 2: 'Independent (m = 1)', 3: 'm = 1' }],
+        ['3', { 1: 'Groups of 3 (one passage each)', 2: 'Clusters of 3', 3: 'm = 3' }],
+        ['6', { 1: 'Groups of 6 (one passage each)', 2: 'Clusters of 6', 3: 'm = 6' }]] },
+    { id: 'd1', type: 'button', label: { 1: 'Drop 1 run', 2: 'Drop 1', 3: 'Drop 1' }, onClick: (S) => { leaveLadder(S); drop(S, 1); } },
+    { id: 'd100', type: 'button', label: { 1: 'Drop 100 runs', 2: 'Drop 100', 3: 'Drop 100' }, onClick: (S) => { leaveLadder(S); if (S.state.mode === 'one') S.state.mode = 'pile'; drop(S, 100); } },
+    { id: 'reset', type: 'button', wide: true, label: { 1: 'Empty the machine (new luck)', 2: 'Reset (new seed)', 3: 'Reset (seed + 1)' },
+      onClick: (S) => { const st = S.state; leaveLadder(S); if (st.mode === 'one') st.mode = 'pile'; fresh(S, st.seed + 1); refresh(S); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.N = { A: 0, B: 0 }; st.landed = { A: 0, B: 0 }; st.released = { A: 0, B: 0 };
+    st.k = { A: new Int32Array(MAXB), B: new Int32Array(MAXB) };
+    st.rt = { A: new Float64Array(MAXB).fill(Infinity), B: new Float64Array(MAXB).fill(Infinity) };
+    st.spot = { A: new Float32Array(MAXB * 3), B: new Float32Array(MAXB * 3) };
+    st.from = { A: new Float32Array(MAXB * 3), B: new Float32Array(MAXB * 3) };
+    st.fly = { A: new Map(), B: new Map() };
+    st.pmf = {}; st.real = {};
+    st.seed = SEED; st.clock = 0; st.mode = 'pile';
+    st.c = cfg(S);
+    buildStatic(S);
+    st.read = K.label([0, FUNNEL_Y + 0.3, 0], '', { cls: 'readout', anchor: 'bottom', dy: -6 });
+    st.tagP = K.label([0, 0, 0], '', { cls: 'tag', anchor: 'bottom', dy: -4 });
+    st.tagBar = K.label([0, 0, 0], '', { cls: 'tag', anchor: 'left', dx: 8, dy: 0 });
+    st.tagM = { A: K.label([0, 0, 0], 'A', { cls: 'tag', anchor: 'bottom', dy: -4 }), B: K.label([0, 0, 0], 'B', { cls: 'tag', anchor: 'bottom', dy: -4 }) };
+    st.axisTags = [0, 1, 2].map(() => K.label([0, 0, 0], '', { cls: 'tag', anchor: 'top', dy: 6 }));
+    st.frostNote = K.label([0, (BOARD_TOP + BOARD_BOT) / 2, 0.3], '', { cls: 'note', anchor: 'center' });
+    st.ladderTag = K.label([0, 0, 0], '', { cls: 'tag', anchor: 'bottom', dy: -4 });
+    st.ladderTag.show(false);
+    st.fig = K.figure();
+    st.fig.group.traverse((m) => { m.userData.noFit = true; });
+    st.fig.group.visible = false;
+    S.root.add(st.fig.group);
+    st.legendOn = false;
+  },
+
+  rebuild(S, id) {
+    const st = S.state, prev = st.c, next = cfg(S);
+    const changed = S.first || !prev || prev.n !== next.n || prev.cmp !== next.cmp || prev.m !== next.m
+      || prev.p.A !== next.p.A || prev.p.B !== next.p.B;
+    st.c = next;
+    dimKnobs(S);
+    if (!changed) return;
+    if (id === '*') { settle(S); computeRuns(S); layout(S); buildBoard(S); paintLanes(S); placeBeads(S); refresh(S); return; }
+    // a knob moved: every dropped run keeps its luck (same uniforms) and slides to its new slot
+    const oldN = { ...st.N }, old = {};
+    for (const M of MODELS) old[M] = Float32Array.from(st.spot[M]);
+    const d0 = st.L ? st.L.d : 0.08;
+    settle(S);
+    if (id === 'cmp') {
+      if (st.mode === 'one') st.mode = 'pile';
+      leaveLadder(S);
+      scene(S, { mode: st.mode });
+      if (next.cmp) {
+        st.N.B = st.N.A;
+        for (let i = 0; i < st.N.B; i++) st.rt.B[i] = -1e9;
+        st.landed.B = st.released.B = st.N.B;
+        oldN.B = 0;
+      }
+    }
+    computeRuns(S); layout(S); buildBoard(S); paintLanes(S);
+    for (const M of MODELS) {
+      st.from[M].set(old[M]);
+      for (let i = oldN[M]; i < st.N[M]; i++) for (let c = 0; c < 3; c++) st.from[M][3 * i + c] = st.spot[M][3 * i + c];
+    }
+    if (S.shot) { st.morph = null; placeBeads(S, 1); } else { st.morph = { t: 0, d0 }; st.playing = true; placeBeads(S, 0); }
+    if (st.ladderOn) buildLadder(S, true);
+    if (st.mode === 'one') lightPegs(S, Infinity);
+    refresh(S);
+    S.invalidate();
+  },
+
+  frame(S, t, dt) {
+    const st = S.state;
+    if (!st.playing) return false;
+    st.clock += dt;
+    let busy = false, landedNow = false;
+    const T = flightTime(S), total = T.tin + T.trow + T.tout;
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3();
+    for (const M of models(S)) {
+      const rt = st.rt[M], N = st.N[M], mesh = st.beads[M], d = st.L.d;
+      while (st.landed[M] < N && st.clock - rt[st.landed[M]] >= total) {
+        const i = st.landed[M]++;
+        st.fly[M].delete(i);
+        p.set(st.spot[M][3 * i], st.spot[M][3 * i + 1], st.spot[M][3 * i + 2]); s.set(d, d, d);
+        mesh.setMatrixAt(i, m4.compose(p, q, s));
+        landedNow = true;
+      }
+      while (st.released[M] < N && st.clock >= rt[st.released[M]]) { startFlight(S, M, st.released[M]); st.released[M]++; }
+      for (let i = st.landed[M]; i < st.released[M]; i++) {
+        const k = flightPos(S, M, i, st.clock - rt[i], p);
+        const sz = d * (board(S) ? 1 : Math.min(1, 0.2 + k));
+        s.set(sz, sz, sz);
+        mesh.setMatrixAt(i, m4.compose(p, q, s));
+      }
+      mesh.count = Math.max(st.landed[M], st.released[M]);
+      mesh.instanceMatrix.needsUpdate = true;
+      if (st.landed[M] < N) busy = true;
+    }
+    if (st.mode === 'one' && board(S) && st.N.A >= 1) {      // light the pegs as the tracked bead passes them
+      const tau = st.clock - st.rt.A[0], u = Math.floor((tau - T.tin) / T.trow * st.c.n) + 1;
+      const upto = st.landed.A >= 1 ? Infinity : Math.max(0, Math.min(st.c.n, u));
+      if (upto !== st.litUpto) { st.litUpto = upto; lightPegs(S, upto); }
+    }
+    if (st.morph) {
+      st.morph.t += dt;
+      const u = Math.min(1, st.morph.t / 0.55), e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+      placeBeads(S, e);
+      if (u >= 1) st.morph = null; else busy = true;
+    }
+    if (st.ladderOn && st.ladderT < 99) {
+      st.ladderT += dt;
+      const show = Math.floor(st.ladderT / 0.07);
+      st.ladderRows.forEach((r, j) => { r.visible = j <= show; });
+      if (show < st.ladderRows.length) busy = true; else st.ladderT = 99;
+    } else if (st.ladderOn) st.ladderRows.forEach((r) => { r.visible = true; });
+    if (landedNow) refresh(S);
+    if (!busy && !st.morph) st.playing = st.ladderOn && st.ladderT < 99;
+    return busy || st.playing;
+  },
+
+  onTier(S) { const st = S.state; buildBoard(S); paintLanes(S); refresh(S); if (st.mode === 'one') lightPegs(S, st.litUpto ?? Infinity); },
+
+  solids(S) {
+    const st = S.state, L = st.L, out = [];
+    const cub = (x, y, z, sx, sy, sz) => J.primitives.cuboid({ size: [sx, sz, sy], center: [x, -z, y] });   // three (x, y, z) -> JSCAD (x, -z, y)
+    out.push(cub(0, 0.025, 0, 2 * POST + 0.14, 0.05, 0.78));                          // base
+    out.push(cub(0, 1.64, -0.345, 2 * POST + 0.06, 3.24, 0.05));                      // back panel
+    for (const s of [-1, 1]) out.push(cub(s * POST, 1.67, 0.34, 0.07, 3.3, 0.07), cub(s * POST, 1.67, -0.34, 0.07, 3.3, 0.07));
+    out.push(cub(0, 3.33, 0.34, 2 * POST + 0.07, 0.06, 0.07), cub(0, 3.33, -0.34, 2 * POST + 0.07, 0.06, 0.07));
+    for (let j = 1; j < L.bins.length; j++) out.push(cub(L.bins[j].x0, TRAY_Y + WALL_H / 2, -0.02, 0.02, WALL_H, 0.62));
+    out.push(cub(L.trayL - 0.015, TRAY_Y + WALL_H / 2, -0.02, 0.03, WALL_H, 0.62), cub(L.trayR + 0.015, TRAY_Y + WALL_H / 2, -0.02, 0.03, WALL_H, 0.62));
+    if (board(S)) {
+      const n = st.c.n, r = Math.max(0.02, st.pegR);
+      for (let row = 0; row < n; row++) for (let j = 0; j <= row; j++) {
+        const x = X(S, 0.5 + (j - row / 2) / n), y = BOARD_TOP - row * st.gap;
+        out.push(J.transforms.translate([x, 0.065, y], J.transforms.rotateX(Math.PI / 2, J.primitives.cylinder({ radius: r, height: 0.53, segments: 12 }))));
+      }
+    }
+    // each pile as a printable histogram column (height = the pile's height)
+    for (const M of models(S)) {
+      const z = laneZ(S, M), depth = st.c.cmp ? 0.24 : 0.5;
+      L.bins.forEach((b, j) => {
+        const c = L.cnt[M][j];
+        if (!c) return;
+        const h = Math.ceil(c / L.per[j]) * L.lh + 0.1 * L.d;
+        out.push(cub((b.x0 + b.x1) / 2, TRAY_Y + h / 2, z, Math.max(0.02, b.x1 - b.x0 - 0.03), h, depth));
+      });
+    }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**One bead = one run of an eval.** Each row of pegs is a question. At each peg the bead goes right if the model gets it right, left if not. Where it lands is the score.',
+        2: '**One bead = one eval run.** Each peg row is a question: the bead goes right (pass, peg lights green) with probability p, the model\'s true pass rate, else left (red). Its slot k counts the passes, so score = k/n. Here n = 6, p = 60%.',
+        3: 'Each run is n Bernoulli(p) trials: right iff the model passes question i. Slot k = Σ passes, so k ~ Binomial(n, p) and the score is k/n: an exact Galton-board mapping, if questions are independent draws from a large pool (Miller 2024\'s "super-population").',
+      },
+      cam: CAM.one,
+      set: { n: 6, pA: 0.6, cmp: false, clu: '1' },
+      enter(S) {
+        scene(S, { mode: 'one', figure: 'point', at: [0, 2.2, 0], hideTags: true, hideLanes: true });
+        fresh(S); S.state.litUpto = -1;
+        drop(S, 1, { delay: 0.45 });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Run it again and the score moves.** 100 more beads make a pile. Which questions a run gets right is luck. In real life you see one bead; the pile is what reruns would show.',
+        2: '**Rerun on fresh questions and the score moves.** 101 runs pile into the binomial shape (amber: the exact curve). The red bar spans p ± 1.96 SE, where 95% of runs should land. You only ever see one bead: the pile is the invisible spread behind it.',
+        3: 'k/n has mean p and SD √(p(1−p)/n): the standard error. At n = 6 the normal band p ± 1.96 SE = [0.21, 0.99] holds only 91.2% of runs (exact sum); the brass bar is the exact 2.5–97.5% range, [1/6, 6/6]. Small n: the normal approximation is rough.',
+      },
+      cam: CAM.front,
+      set: { n: 6, pA: 0.6, cmp: false, clu: '1' },
+      enter(S) {
+        scene(S, { mode: 'pile' });
+        fresh(S);
+        drop(S, 1, { instant: true });
+        drop(S, 100, { delay: 0.3 });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Four times the questions, half the wobble.** 24 questions instead of 6 and the pile is half as wide. With more questions, lucky and unlucky ones cancel out more.',
+        2: 'SE = √(p(1−p)/n): 20 points at n = 6, 10 at n = 24. Why √n: passes add up like coin flips, so the total grows as n but its wobble only as √n. Halving an error bar costs 4× the questions; a tenth costs 100×. Same 101 runs, each now 24 questions long.',
+        3: 'Var(k) = np(1−p), so SD(k/n) = √(p(1−p)/n) = O(n^−½). p(1−p) peaks at ½, so SE ≤ 0.5/√n (±9.8 pts at n = 100, worst case). At n = 24 the normal band [0.40, 0.80] holds 96.5% exactly, near the 95% it promises; exact range k ∈ [10, 19].',
+      },
+      cam: CAM.front,
+      set: { n: 24, pA: 0.6, cmp: false, clu: '1' },
+      enter(S) {
+        scene(S, { mode: 'pile' });
+        fresh(S);
+        drop(S, 101, { delay: 0.2 });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**What your error bar means.** Each line is one run\'s score ± its error bar. About 19 in 20 cross the green line, the true rate. Your eval is one of these lines: probably honest, never certain.',
+        2: 'Flip the pile around: if 95% of runs land within 1.96 SE of p, then p lies within 1.96 SE of 95% of runs. Each line is one run\'s p̂ ± 1.96√(p̂(1−p̂)/n); red ones miss the green truth. So report "58% ± 20 (95% CI)", never a bare 58%.',
+        3: 'The Wald CI p̂ ± z√(p̂(1−p̂)/n) inverts the band; its exact coverage here (n = 24, p = 0.6) is 93.8%, Wilson\'s 96.5%. At p̂ = 1 Wald collapses to ±0, yet 20/20 only pins p to [83.2%, 100%] (Clopper–Pearson). ARENA [4.2] plots Wilson intervals.',
+      },
+      cam: CAM.ladder,
+      set: { n: 24, pA: 0.6, cmp: false, clu: '1' },
+      enter(S) {
+        scene(S, { mode: 'ladder', hidePegs: true, hideTags: true });
+        fresh(S);
+        drop(S, 101, { instant: true });
+        buildBoard(S);
+        buildLadder(S);
+        refresh(S);
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Is B better than A?** B truly passes 75%, A 72%, on 100 questions each. The piles overlap almost completely: one run of each could easily come out the other way round.',
+        2: 'Blue = A (true 72%), teal = B (75%), n = 100 each. Each 95% bar is about ±9 points; the 3-point gap has a bar of ±12.2, because errors add in quadrature: √(SE_A² + SE_B²). B\'s run beats A\'s only 65.6% of the time (exact). "B beats A" here is mostly luck.',
+        3: 'Independent runs: SE_Δ = √(p_A q_A/n + p_B q_B/n) = 6.24 pts, z = 0.48; P(k_B > k_A) = 0.656, ties 0.057 (exact convolution). Same questions for both? Pair them: Var(Δ) = Var_A + Var_B − 2Cov, often far smaller (Miller 2024, paired differences).',
+      },
+      cam: CAM.lanes,
+      set: { n: 100, pA: 0.72, pB: 0.75, cmp: true, clu: '1' },
+      enter(S) {
+        scene(S, { mode: 'pile', figure: 'shrug', figAt: [-1.66, 0, 0.9], face: [0, 0.6, 4], hideFrostNote: false });
+        fresh(S);
+        drop(S, 100, { delay: 0.2 });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**To see a small gap, ask many questions.** At 2,000 questions each the two piles finally pull apart. Andrew Ng\'s rule: make your test set big enough to see the differences you care about.',
+        2: 'For the 3-point gap to clear its 95% bar you need n ≥ 1.96²(p_A q_A + p_B q_B)/Δ² ≈ 1,661 questions per model; at 2,000 the bar is ±2.7. Andrew Ng (Machine Learning Yearning): one single-number metric, and a dev set big enough to see the gaps you care about.',
+        3: 'Power analysis (Miller 2024): to detect Δ = 3 pts with 80% power at α = 0.05 you need n = (1.96 + 0.84)²(p_A q_A + p_B q_B)/Δ² ≈ 3,394 per model. Bars shrink as 1/√n, so halving the detectable gap costs 4× the questions. The axis zooms here: read its labels.',
+      },
+      cam: CAM.lanes,
+      set: { n: 2000, pA: 0.72, pB: 0.75, cmp: true, clu: '1' },
+      enter(S) {
+        scene(S, { mode: 'pile' });
+        fresh(S);
+        drop(S, 100, { delay: 0.2 });
+      } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**In the exercise you build this.** Inspect runs your ~300 questions and a scorer marks each one. It reports accuracy (where the bead landed) and stderr (the width of its error bar).',
+        2: 'ARENA [3.3]: Inspect\'s `Task(dataset, solver, scorer)` runs your ~300 questions; [3.5] uses `@scorer(metrics=[accuracy(), stderr()])`. accuracy() is k/n, the slot; stderr() is that one run\'s SE. The readout is the last bead\'s own pair. At n = 300 the 95% bar is up to ±5.7 pts.',
+        3: 'Inspect\'s stderr() = np.std(values, ddof=1)/√n = √(p̂(1−p̂)/(n−1)) for 0/1 scores. Your MCQs have 2 choices, so chance is 50% ± 5.7 at n = 300: a model at 55% is barely told from a coin. Newer Inspect also has ci() and ci_wilson().',
+      },
+      cam: CAM.front,
+      set: { n: 300, pA: 0.55, cmp: false, clu: '1' },
+      enter(S) {
+        scene(S, { mode: 'inspect' });
+        fresh(S);
+        drop(S, 100, { delay: 0.2 });
+      } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Real questions come in clumps.** Six questions on one passage rise or fall together, so runs swing more than the simple formula says. The pile spills past the amber curve.',
+        2: 'Toy: 24 questions in 4 clusters of 6, ρ = 0.3. The pile spills past the binomial curve: the plain formula says ±19.6, the exact spread is ±31.0 (×√(1 + 5·0.3)). Current method: stderr(); emerging: clustered SEs (Miller 2024). And eval awareness moves p itself.',
+        3: 'Var(k) = np(1−p)[1 + (m−1)ρ], design effect 2.5 here; Inspect: stderr(cluster="passage"). Open: eval awareness shifts p itself (bias no error bar catches); questions aren\'t random draws. Inconsequential for applied work: ddof, bootstrap vs analytic SE.',
+      },
+      cam: CAM.front,
+      set: { n: 24, pA: 0.6, cmp: false, clu: '6' },
+      enter(S) {
+        scene(S, { mode: 'pile' });
+        fresh(S);
+        drop(S, 100, { delay: 0.2 });
+      } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Every opinion poll: about 1,000 people gives ±3 points. A/B tests, drug trials and factory checks all ask the same thing: is this difference bigger than luck?',
+        2: 'Polls: 1,000 people at 50% gives ±3.1 points, the "margin of error". A/B tests, clinical trials and factory quality control use the same √(p(1−p)/n). Francis Galton built this board in the 1870s to show many small chances adding up to a bell.',
+        3: 'The same CLT behind every margin of error: polls (±1.96·0.5/√n), A/B tests (two-proportion z-tests), clinical trials (power analysis), control charts (p ± 3SE). Galton\'s quincunx shows the binomial-to-normal limit; with a probe\'s accuracy, report its SE too.',
+      },
+      cam: CAM.wide,
+      set: { n: 1000, pA: 0.5, cmp: false, clu: '1' },
+      enter(S) {
+        scene(S, { mode: 'pile', figure: 'cheer', figAt: [-1.66, 0, 0.9], face: [0, 0.6, 4] });
+        fresh(S);
+        drop(S, 100, { delay: 0.2 });
+      } },
+  ],
+
+  predict: [
+    { q: { 1: '100 questions, true pass rate 50%. How big is the standard error of the score?',
+        2: 'n = 100 questions, p = 0.5. The standard error of the score?',
+        3: 'SE of k/n for n = 100, p = 0.5?' },
+      options: [{ t: '5 points', ok: true }, { t: '0.5 points' }, { t: '50 points' }, { t: '1 point: one question' }],
+      why: { 1: 'The formula is √(p(1−p)/n) = √(0.25/100) = 0.05: 5 points. So 95% of runs land within about ±10 points of 50%.',
+        2: '√(0.5 × 0.5 / 100) = 0.05 = 5 points; the 95% bar is ±1.96 × 5 = ±9.8. p = 0.5 is the worst case, since p(1−p) peaks there.',
+        3: 'SE = √(pq/n) = 0.05; 95% band [0.402, 0.598]. For 0/1 scores Inspect\'s stderr() on one run gives √(p̂q̂/(n−1)) ≈ 0.0503 at p̂ = 0.5.' },
+      show(S) {
+        S.setKnobs({ n: 100, pA: 0.5, cmp: false, clu: '1' });
+        scene(S, { mode: 'pile' }); S.fly(CAM.front);
+        fresh(S); drop(S, 100, { delay: 0.2 });
+        return whenLanded(S);
+      } },
+    { q: { 1: 'You make the eval 4 times longer (25 → 100 questions). The error bar…',
+        2: 'Quadruple n from 25 to 100 at the same p. The 95% error bar…',
+        3: 'n → 4n, p fixed. SE → ?' },
+      options: [{ t: 'Halves', ok: true }, { t: 'Shrinks to a quarter' }, { t: 'Stays the same' }, { t: 'Doubles' }],
+      why: { 1: 'The error bar shrinks with the square root of the number of questions: 4 times the questions, half the error bar. Watch the same runs squeeze together.',
+        2: 'SE = √(p(1−p)/n), so 4× n gives 1/√4 = ½ the SE. Independent errors partly cancel: the total wobbles like √n while the total itself grows like n.',
+        3: 'SE ∝ n^−½: exactly halves. To shrink it 10× you need 100× the questions, which is why SE-driven eval budgets explode for small effects.' },
+      show(S) {
+        S.setKnobs({ n: 25, pA: 0.6, cmp: false, clu: '1' });
+        scene(S, { mode: 'pile' }); S.fly(CAM.front);
+        fresh(S); drop(S, 100, { instant: true });
+        return wait(S, 900).then(() => { S.setKnob('n', 100); return wait(S, 700); });
+      } },
+    { q: { 1: 'Model A scores 72%, model B 75%, on 100 questions each. Can you say B is better?',
+        2: 'A: 72%, B: 75%, n = 100 each, independent questions. Is "B beats A" supported?',
+        3: 'p̂_A = 0.72, p̂_B = 0.75, n = 100 each, independent. Significant at 5%?' },
+      options: [{ t: 'No: the gap is well inside its error bar', ok: true }, { t: 'Yes: 75 is bigger than 72' },
+        { t: 'Yes, if both were scored with Inspect' }, { t: 'Yes, if both ran at temperature 0' }],
+      why: { 1: 'Each score wobbles by about ±9 points. A 3-point gap is far smaller than that. You would need many more questions to tell.',
+        2: 'The gap\'s 95% bar is ±12.2 points (SE_Δ = 6.24); 3 points is 0.48 SE. Temperature 0 removes the model\'s sampling noise, not the luck of which questions you drew.',
+        3: 'z = 0.03/0.0624 = 0.48, two-sided p ≈ 0.63. Detecting Δ = 3 pts at 80% power needs n ≈ 3,394 each (or pair the questions and use the paired SE).' },
+      show(S) {
+        S.setKnobs({ n: 100, pA: 0.72, pB: 0.75, cmp: true, clu: '1' });
+        scene(S, { mode: 'pile' }); S.fly(CAM.lanes);
+        fresh(S); drop(S, 100, { delay: 0.2 });
+        return whenLanded(S);
+      } },
+    { q: { 1: 'A model that truly gets every question right (100%). What does its pile look like?',
+        2: 'p = 1. What does the pile of runs look like?',
+        3: 'p = 1: distribution of k/n, and the Wald CI after observing 20/20?' },
+      options: [{ t: 'One spike at 100%: no spread', ok: true }, { t: 'A narrow bell just below 100%' },
+        { t: 'The same width as at 50%' }, { t: 'Half at 100%, half at 0%' }],
+      why: { 1: 'Every bead goes right at every peg, so every run scores 100%. Careful, though: seeing 20 out of 20 does not prove a model is perfect.',
+        2: 'p(1−p) = 0, so SE = 0 and every run lands at 100%. But observing 20/20 doesn\'t show p = 1: the exact 95% interval is [83.2%, 100%].',
+        3: 'Var = 0. After 20/20, Wald gives ±0 (useless), Clopper–Pearson [0.832, 1], Wilson [0.839, 1]; the rule of three says p > 1 − 3/n roughly. Use Wilson or exact near 0 and 1.' },
+      show(S) {
+        S.setKnobs({ n: 20, pA: 1, cmp: false, clu: '1' });
+        scene(S, { mode: 'pile' }); S.fly(CAM.front);
+        fresh(S); drop(S, 100, { delay: 0.2 });
+        return whenLanded(S);
+      } },
+    { q: { 1: 'ARENA\'s alignment-faking replication uses 20 prompts per group and expects about an 18-point gap. How wide is the error bar on that gap?',
+        2: 'ARENA [3.1] replicates alignment faking with N_PROMPTS = 20 per tier; the expected gap is ~18 points. The 95% bar on that gap?',
+        3: 'Two independent rates, n = 20 each. Upper bound on the 95% half-width of p̂_B − p̂_A?' },
+      options: [{ t: 'Up to about ±31 points', ok: true }, { t: 'About ±3 points' }, { t: 'About ±9 points' }, { t: 'None: 20 prompts give an exact answer' }],
+      why: { 1: 'With only 20 prompts each, each rate wobbles a lot, and the gap wobbles more. ARENA itself warns that numbers will be noisy at N = 20.',
+        2: 'Worst case p = 0.5: 1.96 × √(0.25/20 + 0.25/20) = ±31 points. An 18-point gap sits inside it. ARENA: "Numbers will be noisy at N=20". (The rates shown, 40% vs 58%, are illustrative.)',
+        3: 'SE_Δ ≤ √(2 × 0.25/20) = 0.158, so ±31 pts. Treat an N = 20 gap as a sign of life, not a measurement; the original paper used far larger samples.' },
+      show(S) {
+        S.setKnobs({ n: 20, pA: 0.4, pB: 0.58, cmp: true, clu: '1' });
+        scene(S, { mode: 'pile' }); S.fly(CAM.lanes);
+        fresh(S); drop(S, 100, { delay: 0.2 });
+        return whenLanded(S);
+      } },
+    { q: { 1: '24 questions in 4 groups of 6 that rise and fall together (toy). The simple error bar is…',
+        2: 'Toy: 24 questions as 4 clusters of 6 (ρ = 0.3). Inspect\'s plain stderr() is…',
+        3: 'm = 6, ρ = 0.3, n = 24: naive SE vs true SE?' },
+      options: [{ t: 'Too small: runs really spread about 1.6× wider', ok: true }, { t: 'Too big' }, { t: 'Exactly right' }, { t: 'Zero' }],
+      why: { 1: 'Questions in a group succeed or fail together, so they cancel out less. Real runs swing more than the simple formula expects.',
+        2: 'Design effect 1 + (m−1)ρ = 2.5, so the true SE is √2.5 ≈ 1.58× the naive one: ±31.0 instead of ±19.6 points. Fix: stderr(cluster="passage").',
+        3: 'Var(k) = np(1−p)[1 + (m−1)ρ]; SE ratio √2.5 = 1.58. Inspect\'s clustered stderr sums (Σ residuals per cluster)² with a C/(C−1) correction (Miller 2024, App. A).' },
+      show(S) {
+        S.setKnobs({ n: 24, pA: 0.6, cmp: false, clu: '6' });
+        scene(S, { mode: 'pile' }); S.fly(CAM.front);
+        fresh(S); drop(S, 100, { delay: 0.2 });
+        return whenLanded(S);
+      } },
+  ],
+
+  where: { 1: 'Every opinion poll (1,000 people: ±3 points), A/B tests, drug trials and factory quality checks: each asks whether a difference is bigger than luck.',
+    2: 'Polls\' margin of error, A/B tests, clinical-trial power analyses and factory control charts all use √(p(1−p)/n). In this course: any probe accuracy or win rate you report.',
+    3: 'CLT standard errors everywhere: poll margins, two-proportion z-tests, power analysis, SPC charts; in the course: probe accuracies, reward-model win rates, eval scores. Cluster and pair when data aren\'t independent.' },
+  links: [
+    { label: 'Film · W11 evals', href: '../../intuition/films/w11-evals.html' },
+    { label: 'Film · evals, deep', href: '../../intuition/films/deep-w11-evals.html' },
+    { label: 'Week 11 pack', href: '../../index.html#week-11' },
+    { label: 'Demo · evals pipeline', href: '../../index.html#demo/evals-pipeline' },
+    { label: 'Case · eval threat model & spec', href: '../../index.html#cases/eval-threat-model-and-spec' },
+    { label: 'Case · model-graded scoring', href: '../../index.html#cases/model-graded-scoring' },
+    { label: 'Case · the Inspect framework', href: '../../index.html#cases/inspect-framework' },
+    { label: 'Map · eval task', href: '../../index.html#map/node=eval-task' },
+    { label: 'Map · scorer', href: '../../index.html#map/node=scorer' },
+    { label: 'Map · Inspect', href: '../../index.html#map/node=inspect-ai' },
+    { label: 'Object · The threshold wall', href: 'd11-threshold.html' },
+  ],
+  remix: 'Build a single-file three.js Galton board ("bean machine") on a round plinth with a brass frame: n rows of brass pegs, one row per eval question. Each bead is one run of the eval: at each peg it bounces right (pass) with probability p, drawn from a seeded PRNG, so its final slot k is a genuine Binomial(n, p) draw and its score is k/n on a fixed 0-100% axis. Pile the beads in bins, draw the exact binomial pmf as an amber curve over the pile, a red bar for p ± 1.96·sqrt(p(1-p)/n) and a brass bar for the exact 2.5-97.5% binomial quantiles. Add sliders for n (5-2000, with a fast histogram mode above 24 rows and a zooming axis) and p, a second model in a back lane with its own pile, a readout of the gap and its error bar sqrt(SE_A^2 + SE_B^2), a "ladder" of 20 runs\' own confidence intervals with misses in red, and a clustered-questions switch (Beta-distributed cluster pass rates, rho = 0.3) that makes the pile spill past the binomial curve.',
+  credit: 'Statistics after Evan Miller, "Adding Error Bars to Evals: A Statistical Approach to Language Model Evaluations" (2024): super-population framing, clustered and paired standard errors, power analysis. Dev-set size and the single-number metric: Andrew Ng, Machine Learning Yearning. Inspect\'s accuracy()/stderr() as used in ARENA [3.3] and [3.5] (stderr() = np.std(ddof=1)/√n, checked against the inspect_ai source); Wilson intervals as in ARENA [4.2]. The board is Francis Galton\'s quincunx. Every pile is seeded binomial draws; every bar and curve is exact. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>
