@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Relay · Object Lessons</title>
+<meta name="description" content="Heads in different layers compose: a layer-0 head writes a note into the residual stream and a layer-1 head reads it. ARENA's composition score, live, against random baselines at toy and real size.">
+<link rel="stylesheet" href="../kit.css">
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   14 · d07-relay: "The relay" (W7 deep dive, ARENA [1.2] composition scores).
+   One toy residual stream (d_model = 3) at one position. A layer-0 head
+   writes into its image (violet); a layer-1 head reads through W_Q, W_K or
+   W_V (teal). Every number on screen comes from ARENA's get_comp_score and
+   generate_single_random_comp_score, computed live below; the MATH block is
+   extracted and checked in node against independent computations.
+   ========================================================================= */
+
+// MATH-BEGIN
+const D_MODEL = 3;                                  // toy stream
+const REAL = { d_model: 768, d_head: 64 };          // ARENA's 2-layer attn-only model (HookedTransformerConfig)
+const N_SAMPLES = 300;                              // ARENA: n_samples = 300
+const TYPES = ['Q', 'K', 'V'];
+
+const mm = (A, B) => A.map((r) => B[0].map((_, j) => r.reduce((s, a, m) => s + a * B[m][j], 0)));
+const T = (A) => A[0].map((_, j) => A.map((r) => r[j]));
+const vm = (v, A) => A[0].map((_, j) => v.reduce((s, a, m) => s + a * A[m][j], 0));   // row vector @ matrix
+const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
+const norm = (a) => Math.sqrt(dot(a, a));
+const unit = (a) => { const n = norm(a); return a.map((v) => v / n); };
+const frob = (W) => Math.sqrt(W.reduce((s, r) => s + r.reduce((t, v) => t + v * v, 0), 0));
+const mean = (a) => a.reduce((s, v) => s + v, 0) / Math.max(1, a.length);
+
+/* ARENA [1.2] get_comp_score, line for line */
+function get_comp_score(W_A, W_B) {
+  const W_A_norm = frob(W_A);
+  const W_B_norm = frob(W_B);
+  const W_AB_norm = frob(mm(W_A, W_B));
+  return W_AB_norm / (W_A_norm * W_B_norm);
+}
+
+/* symmetric eigen-decomposition (cyclic Jacobi), eigenvalues descending, eigenvectors as rows */
+function eigSym(S) {
+  const n = S.length, A = S.map((r) => r.slice()), V = A.map((_, i) => A.map((_, j) => (i === j ? 1 : 0)));
+  for (let sweep = 0; sweep < 60; sweep++) {
+    let off = 0;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) off += A[i][j] * A[i][j];
+    if (off < 1e-30) break;
+    for (let p = 0; p < n; p++) for (let q = p + 1; q < n; q++) {
+      if (Math.abs(A[p][q]) < 1e-300) continue;
+      const th = (A[q][q] - A[p][p]) / (2 * A[p][q]);
+      const t = (th >= 0 ? 1 : -1) / (Math.abs(th) + Math.sqrt(th * th + 1));
+      const c = 1 / Math.sqrt(t * t + 1), s = t * c;
+      for (let k = 0; k < n; k++) { const a = A[k][p], b = A[k][q]; A[k][p] = c * a - s * b; A[k][q] = s * a + c * b; }
+      for (let k = 0; k < n; k++) { const a = A[p][k], b = A[q][k]; A[p][k] = c * a - s * b; A[q][k] = s * a + c * b; }
+      for (let k = 0; k < n; k++) { const a = V[k][p], b = V[k][q]; V[k][p] = c * a - s * b; V[k][q] = s * a + c * b; }
+    }
+  }
+  const vals = A.map((r, i) => r[i]);
+  const idx = vals.map((_, i) => i).sort((a, b) => vals[b] - vals[a]);
+  return { vals: idx.map((i) => vals[i]), vecs: idx.map((i) => V.map((r) => r[i])) };
+}
+/* singular values (descending) and right singular vectors of W */
+function svdRight(W) {
+  const e = eigSym(mm(T(W), W));
+  return { s: e.vals.map((v) => Math.sqrt(Math.max(0, v))), V: e.vecs };
+}
+/* where x W can land: the row space of W (right singular vectors V, rows) */
+function imageBasis(W) {
+  const { s, V } = svdRight(W);
+  return s[0] < 1e-12 ? [] : V.filter((_, i) => s[i] > 1e-6 * s[0]);
+}
+/* what x W depends on: the column space of W (left singular vectors U) */
+const readBasis = (W) => imageBasis(T(W));
+const project = (x, B) => B.reduce((acc, b) => { const c = dot(x, b); return acc.map((v, i) => v + c * b[i]); }, x.map(() => 0));
+
+/* the toy relay. All pages hinge on one shared line (in 3-D any two planes share a line). */
+const HINGE = [0, 1, 0];
+const W1 = unit([1, 0, 0.12]);                      // the writer's main output direction
+const OFFSET = { K: 0, V: 60, Q: 90 };              // the reader's input windows at reader angle 0 (deg from W1)
+const X_A = [0.45, 0.2, 0.9];                       // toy embedding of the previous token "A", which the writer copies
+function rotHinge(u, deg) {                         // rotate u about the hinge
+  const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+  return [u[0] * c + u[2] * s, u[1], -u[0] * s + u[2] * c];
+}
+const colsOf = (vecs) => [0, 1, 2].map((i) => vecs.map((v) => v[i]));   // [d_model, d_head], columns = vecs
+const rowsOf = (vecs) => vecs.map((v) => v.slice());                   // [d_head, d_model], rows = vecs
+
+/* two heads with orthonormal factors (so every singular value is 1): layer-0 writer A, layer-1 reader B.
+   Turning the reader rotates all of W_Q, W_K, W_V, W_O of head B about the hinge. */
+function makeHeads(d_head, angle) {
+  const A = {
+    W_V: colsOf([[0, 0, 1], [1, 0, 0]].slice(0, d_head)),
+    W_O: rowsOf([W1, HINGE].slice(0, d_head)),
+  };
+  const win = (off) => [rotHinge(W1, angle + off), HINGE].slice(0, d_head);
+  const B = {
+    W_Q: colsOf(win(OFFSET.Q)),
+    W_K: colsOf(win(OFFSET.K)),
+    W_V: colsOf(win(OFFSET.V)),
+    W_O: rowsOf([rotHinge([0, 0, 1], angle), HINGE].slice(0, d_head)),
+  };
+  return { d_head, angle, A, B };
+}
+
+/* ARENA: W_A = W_OV of the earlier head; W_B = W_QK (Q), W_QK.T (K) or W_OV (V) of the later head */
+function compositionMatrices(H) {
+  const W_OV_A = mm(H.A.W_V, H.A.W_O);
+  const W_QK_B = mm(H.B.W_Q, T(H.B.W_K));
+  const W_OV_B = mm(H.B.W_V, H.B.W_O);
+  return { W_A: W_OV_A, W_B: { Q: W_QK_B, K: T(W_QK_B), V: W_OV_B } };
+}
+
+function relay(H, type) {
+  const M = compositionMatrices(H);
+  const scores = {}, reads = {};
+  for (const t of TYPES) { scores[t] = get_comp_score(M.W_A, M.W_B[t]); reads[t] = readBasis(M.W_B[t]); }
+  const note = vm(X_A, M.W_A);                      // m = x_A W_OV^A, the note written at this position
+  const shadow = project(note, reads[type]);        // what the reader's input can see of it
+  const n = norm(note);
+  return {
+    ...M, type, scores, reads, score: scores[type],
+    writeBasis: imageBasis(M.W_A), readBasis: reads[type],
+    note, shadow, frac: n > 1e-12 ? norm(shadow) / n : 0,
+    sA: svdRight(M.W_A).s, sB: svdRight(M.W_B[type]).s,
+  };
+}
+
+/* seeded uniform [0, 1) */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+/* torch.nn.init.kaiming_uniform_(W, a=sqrt(5)) on a [rows, cols] tensor: fan_in = cols,
+   gain = sqrt(2 / (1 + a^2)), bound = gain * sqrt(3 / fan_in) (= 1 / sqrt(cols)) */
+function kaiming_uniform_(rows, cols, r, a = Math.sqrt(5)) {
+  const bound = Math.sqrt(2 / (1 + a * a)) * Math.sqrt(3 / cols);
+  return Array.from({ length: rows }, () => Array.from({ length: cols }, () => (2 * r() - 1) * bound));
+}
+/* ARENA's generate_single_random_comp_score (forms the [d_model, d_model] products; fine at d_model 3) */
+function generate_single_random_comp_score(r, d_model = D_MODEL, d_head = 2) {
+  const W_A_left = kaiming_uniform_(d_model, d_head, r);
+  const W_B_left = kaiming_uniform_(d_model, d_head, r);
+  const W_A_right = kaiming_uniform_(d_model, d_head, r);
+  const W_B_right = kaiming_uniform_(d_model, d_head, r);
+  const W_A = mm(W_A_left, T(W_A_right));
+  const W_B = mm(W_B_left, T(W_B_right));
+  return get_comp_score(W_A, W_B);
+}
+function toyBaseline(seed, d_head, n = N_SAMPLES) {
+  const r = mulberry32(seed);
+  return Array.from({ length: n }, () => generate_single_random_comp_score(r, D_MODEL, d_head));
+}
+/* the same random score at real size without 768 x 768 products (the low-rank trick ARENA points to):
+   W_A = A_l A_rᵀ, W_B = B_l B_rᵀ, M = A_rᵀ B_l (d_head x d_head), G_X = XᵀX:
+   ||W_A W_B||² = Tr(Mᵀ G_Al M G_Br),  ||W_A||² = Tr(G_Al G_Ar),  ||W_B||² = Tr(G_Bl G_Br).
+   Self-contained so it can run in a Web Worker. Factors stored transposed: k rows of length n. */
+function realSample(r, n, k) {
+  const bound = Math.sqrt(2 / (1 + 5)) * Math.sqrt(3 / k);          // kaiming_uniform_, a = sqrt(5), fan_in = d_head
+  const make = () => { const X = new Float64Array(n * k); for (let i = 0; i < n * k; i++) X[i] = (2 * r() - 1) * bound; return X; };
+  const Al = make(), Bl = make(), Ar = make(), Br = make();
+  const gram = (X, Y, sym) => {                                     // G = Xᵀ Y (as [n, k] matrices)
+    const G = new Float64Array(k * k);
+    if (k % 2) {                                                    // odd widths: plain dot products
+      for (let a = 0; a < k; a++) for (let b = 0; b < k; b++) { let s = 0; for (let i = 0; i < n; i++) s += X[a * n + i] * Y[b * n + i]; G[a * k + b] = s; }
+      return G;
+    }
+    for (let a = 0; a < k; a += 2) {                                // 2 x 2 blocks: four dot products per pass
+      const x0 = a * n, x1 = x0 + n;
+      for (let b = sym ? a : 0; b < k; b += 2) {
+        const y0 = b * n, y1 = y0 + n;
+        let s00 = 0, s01 = 0, s10 = 0, s11 = 0;
+        for (let i = 0; i < n; i++) { const p = X[x0 + i], q = X[x1 + i], u = Y[y0 + i], v = Y[y1 + i]; s00 += p * u; s01 += p * v; s10 += q * u; s11 += q * v; }
+        G[a * k + b] = s00; G[a * k + b + 1] = s01; G[(a + 1) * k + b] = s10; G[(a + 1) * k + b + 1] = s11;
+        if (sym) { G[b * k + a] = s00; G[(b + 1) * k + a] = s01; G[b * k + a + 1] = s10; G[(b + 1) * k + a + 1] = s11; }
+      }
+    }
+    return G;
+  };
+  const mul = (A, B) => {
+    const Cm = new Float64Array(k * k);
+    for (let i = 0; i < k; i++) for (let m = 0; m < k; m++) { const a = A[i * k + m]; if (!a) continue; for (let j = 0; j < k; j++) Cm[i * k + j] += a * B[m * k + j]; }
+    return Cm;
+  };
+  const trAB = (A, B) => { let s = 0; for (let i = 0; i < k; i++) for (let j = 0; j < k; j++) s += A[i * k + j] * B[j * k + i]; return s; };
+  const Gal = gram(Al, Al, true), Gar = gram(Ar, Ar, true), Gbl = gram(Bl, Bl, true), Gbr = gram(Br, Br, true);
+  const M = gram(Ar, Bl, false);
+  const Mt = new Float64Array(k * k);
+  for (let i = 0; i < k; i++) for (let j = 0; j < k; j++) Mt[i * k + j] = M[j * k + i];
+  const num = trAB(mul(mul(Mt, Gal), M), Gbr);
+  return Math.sqrt(num / (trAB(Gal, Gar) * trAB(Gbl, Gbr)));
+}
+const MATH = { D_MODEL, REAL, N_SAMPLES, TYPES, HINGE, W1, OFFSET, X_A, mm, T, vm, dot, norm, unit, frob, mean,
+  get_comp_score, eigSym, svdRight, imageBasis, readBasis, project, rotHinge, makeHeads, compositionMatrices, relay,
+  mulberry32, kaiming_uniform_, generate_single_random_comp_score, toyBaseline, realSample };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const SR = 0.62;                        // world units per residual-stream unit
+const HALF = 0.72;                      // cube half-size
+const CY = 0.07 + HALF;                 // cube centre height (on a thin plaster base)
+const RP = 0.66;                        // radius of pages and windows
+const O = new THREE.Vector3(0, CY, 0);  // origin of the toy stream
+const UP = new THREE.Vector3(0, 1, 0), ZAX = new THREE.Vector3(0, 0, 1);
+const V3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
+const at = (r, s = SR) => new THREE.Vector3(O.x + s * r[0], O.y + s * r[1], O.z + s * r[2]);
+const fmt = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+const pct = (a) => `${Math.round(a * 100)}%`;
+const comb = (a, s, b, t) => unit(a.map((v, i) => s * v + t * b[i]));
+
+/* the score dial: a brass half-disc standing on the cube's back top edge, leaning back */
+const LEAN = (25 * Math.PI) / 180;
+const DR = 0.7;
+const DC = new THREE.Vector3(0, CY + HALF + 0.03, -HALF);
+const DX = new THREE.Vector3(1, 0, 0);
+const DU = new THREE.Vector3(0, Math.cos(LEAN), -Math.sin(LEAN));
+const DN = new THREE.Vector3().crossVectors(DX, DU);          // faces up and forward
+const dialDir = (s) => { const th = Math.PI * (1 - Math.min(1, Math.max(0, s))); return DX.clone().multiplyScalar(Math.cos(th)).addScaledVector(DU, Math.sin(th)); };
+const dialPt = (s, r, lift = 0) => DC.clone().addScaledVector(dialDir(s), r).addScaledVector(DN, lift);
+const RUG = [0.5 * DR, 0.8 * DR];       // radial band of the random-baseline rugs
+const FIG_W = [-1.28, 0, 0.1], FIG_R = [1.36, 0, 0.1];   // where the two heads stand as stick figures
+
+/* close-up view helper: look at `target` from direction `dir`; the free square spans `span` world units */
+function view(target, dir, span, D = 5) {
+  const d = new THREE.Vector3(...dir).normalize();
+  const p = target.clone().addScaledVector(d, D);
+  return { pos: [p.x, p.y, p.z], target: [target.x, target.y, target.z], fit: +(0.5359 * D / span).toFixed(3) };
+}
+const CAM = {
+  whole: view(new THREE.Vector3(0, 1.12, 0), [-0.55, 0.52, 1], 3.25),
+  book: view(new THREE.Vector3(0, 1.0, -0.1), [-1, 0.45, 0.5], 2.6),
+  top: view(new THREE.Vector3(0, 1.02, -0.28), [0.25, 2.4, 1], 2.45),
+  dial: view(new THREE.Vector3(0, 1.45, -0.3), [0.2, 0.62, 1], 2.5),
+};
+
+const GEO = {
+  cyl: new THREE.CylinderGeometry(1, 1, 1, 14, 1).translate(0, 0.5, 0),
+  cone: new THREE.ConeGeometry(1, 1, 20, 1).translate(0, 0.5, 0),
+  ball: new THREE.SphereGeometry(1, 20, 14),
+  disc: new THREE.CircleGeometry(1, 72),
+  ring: new THREE.TorusGeometry(1, 0.012, 8, 96),
+  box: new THREE.BoxGeometry(1, 1, 1),
+};
+
+function arrow(mat, r) {
+  const group = new THREE.Group();
+  const shaft = new THREE.Mesh(GEO.cyl, mat), head = new THREE.Mesh(GEO.cone, mat);
+  shaft.castShadow = head.castShadow = true;
+  group.add(shaft, head);
+  const d = new THREE.Vector3();
+  return {
+    group, mat,
+    set(a, b, rr = r) {
+      d.subVectors(b, a);
+      const len = d.length();
+      group.visible = len > 1e-4;
+      if (!group.visible) return;
+      const hl = Math.min(rr * 6.5, len * 0.5);
+      shaft.scale.set(rr, Math.max(1e-4, len - hl), rr);
+      head.scale.set(rr * 2.5, hl, rr * 2.5);
+      head.position.y = len - hl;
+      group.position.copy(a);
+      group.quaternion.setFromUnitVectors(UP, d.normalize());
+    },
+  };
+}
+/* instanced segments (rods between point pairs): one draw call */
+function rods(n, mat, r) {
+  const m = new THREE.InstancedMesh(GEO.cyl, mat, n);
+  const o = new THREE.Object3D(), d = new THREE.Vector3();
+  m.count = 0;
+  return {
+    mesh: m,
+    set(pairs, rr = r) {
+      m.count = pairs.length;
+      pairs.forEach(([a, b], i) => {
+        d.subVectors(b, a);
+        const len = Math.max(1e-5, d.length());
+        o.position.copy(a);
+        o.quaternion.setFromUnitVectors(UP, d.normalize());
+        o.scale.set(rr, len, rr);
+        o.updateMatrix();
+        m.setMatrixAt(i, o.matrix);
+      });
+      m.instanceMatrix.needsUpdate = true;
+      m.computeBoundingSphere();
+    },
+  };
+}
+function balls(n, mat) {
+  const m = new THREE.InstancedMesh(GEO.ball, mat, n);
+  m.count = 0;
+  const o = new THREE.Object3D();
+  return {
+    mesh: m,
+    set(list) {   // [{p, r}]
+      m.count = list.length;
+      list.forEach(({ p, r }, i) => { o.position.copy(p); o.quaternion.identity(); o.scale.setScalar(r); o.updateMatrix(); m.setMatrixAt(i, o.matrix); });
+      m.instanceMatrix.needsUpdate = true;
+      m.computeBoundingSphere();
+    },
+  };
+}
+/* a subspace through the stream origin: disc + rim for a plane, rod for a line */
+function subspace(color, opacity, { ghost = false, rodR = 0.017 } = {}) {
+  const g = new THREE.Group();
+  const discMat = new THREE.MeshStandardMaterial({ color, roughness: 0.3, metalness: 0, transparent: true, opacity,
+    depthWrite: false, side: THREE.DoubleSide });
+  const solid = ghost ? new THREE.MeshStandardMaterial({ color, roughness: 0.5, transparent: true, opacity: 0.45 }) : K.mat.paint(color);
+  const disc = new THREE.Mesh(GEO.disc, discMat);
+  const rim = new THREE.Mesh(GEO.ring, solid);
+  const rod = new THREE.Mesh(GEO.cyl, solid);
+  rod.castShadow = !ghost;
+  disc.renderOrder = 2;
+  g.add(disc, rim, rod);
+  const q = new THREE.Quaternion(), n = new THREE.Vector3(), a = new THREE.Vector3();
+  const api = {
+    group: g, discMat, enabled: true, dim: 0,
+    set(c, basis, R) {
+      api.dim = basis.length;
+      g.visible = api.enabled && (basis.length === 1 || basis.length === 2);
+      if (!g.visible) return;
+      disc.visible = rim.visible = basis.length === 2;
+      rod.visible = basis.length === 1;
+      if (basis.length === 2) {
+        n.set(...basis[0]).cross(new THREE.Vector3(...basis[1])).normalize();
+        q.setFromUnitVectors(ZAX, n);
+        for (const m of [disc, rim]) { m.position.copy(c); m.quaternion.copy(q); m.scale.setScalar(R); }
+      } else {
+        a.set(...basis[0]).normalize();
+        rod.position.copy(c).addScaledVector(a, -R);
+        rod.quaternion.setFromUnitVectors(UP, a);
+        rod.scale.set(rodR, 2 * R, rodR);
+      }
+    },
+  };
+  return api;
+}
+/* a rug of thin radial ticks on the dial, one per random score */
+function rug(n, color, opacity) {
+  const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide });
+  const m = new THREE.InstancedMesh(GEO.box, mat, n);
+  m.count = 0; m.renderOrder = 4;
+  const o = new THREE.Object3D(), xa = new THREE.Vector3(), B = new THREE.Matrix4();
+  return {
+    mesh: m,
+    set(scores, w = 0.0045) {
+      m.count = scores.length;
+      scores.forEach((s, i) => {
+        const d = dialDir(s);
+        xa.crossVectors(d, DN);
+        B.makeBasis(xa, d, DN);
+        o.quaternion.setFromRotationMatrix(B);
+        o.position.copy(DC).addScaledVector(d, (RUG[0] + RUG[1]) / 2).addScaledVector(DN, 0.007);
+        o.scale.set(w, RUG[1] - RUG[0], 0.003);
+        o.updateMatrix(); m.setMatrixAt(i, o.matrix);
+      });
+      m.instanceMatrix.needsUpdate = true;
+      m.computeBoundingSphere();
+    },
+  };
+}
+
+/* ======================================================== object behaviour */
+
+const WB_NAME = { Q: 'W_QK', K: 'W_QKᵀ', V: 'W_OV' };
+const WB_CODE = { Q: 'W_QK[1, j]', K: 'W_QK[1, j].T', V: 'W_OV[1, j]' };
+const TYPE_WORD = { Q: 'question', K: 'labels', V: 'cargo' };
+
+function compute(S) {
+  const st = S.state, k = S.knobs;
+  st.H = makeHeads(k.dhead, k.angle);
+  st.R = relay(st.H, k.type);
+}
+const readerDir = (S, t) => rotHinge(W1, S.knobs.angle + OFFSET[t]);
+
+function paint(S) {
+  const st = S.state, R = st.R, k = S.knobs, d = k.dhead;
+  // the writer's page (violet) and the reader's window for the chosen input (teal)
+  st.writeSub.set(O, R.writeBasis, RP);
+  st.readSub.set(O, R.readBasis, RP - 0.05);                      // a little smaller, so both rims show when aligned
+  for (const t of TYPES) { const g = st.ghost[t]; g.enabled = !!st.ghosts && t !== k.type; g.set(O, R.reads[t], RP - 0.05); }
+  // tag anchors on the rims: the writer's on the lower left, the reader's on the far side of it
+  const dirW = d === 2 ? comb(W1, -0.8, HINGE, 0.55) : W1.map((v) => -v);
+  st.aW.position.copy(at(dirW, RP + 0.05));
+  const u = readerDir(S, k.type);
+  const cands = d === 2 ? [comb(u, 0.8, HINGE, -0.6), comb(u, -0.8, HINGE, -0.6)] : [u, u.map((v) => -v)];
+  const far = cands.map((c) => norm(c.map((v, i) => v - dirW[i])));
+  st.aR.position.copy(at(far[0] >= far[1] ? cands[0] : cands[1], RP + 0.05));
+  for (const t of TYPES) {
+    const g = readerDir(S, t);
+    st.aGhost[t].position.copy(at(d === 2 ? comb(g, 0.8, HINGE, 0.6) : g, RP + 0.1));
+  }
+  // the note m = x_A W_OV^A and its shadow in the reader's window
+  if (st.noteOn) {
+    st.noteArrow.set(O, at(R.note), 0.024);
+    st.shadowArrow.set(O, at(R.shadow), 0.02);
+    const gap = norm(R.note.map((v, i) => v - R.shadow[i]));
+    st.drop.set(gap > 1e-3 ? [[at(R.note), at(R.shadow)]] : [], 0.006);
+    st.aNote.position.copy(at(R.note));
+  } else {
+    st.noteArrow.group.visible = st.shadowArrow.group.visible = false;
+    st.drop.set([]);
+  }
+  paintGrid(S);
+  paintDial(S);
+}
+
+/* 3Blue1Brown's moving grid: the lattice {-1, 0, 1}^3 carried by x -> x((1 - t) I + t W_A) */
+function paintGrid(S) {
+  const st = S.state, t = st.t;
+  st.gridBalls.mesh.visible = st.gridRods.mesh.visible = !!st.grid;
+  if (!st.grid) return;
+  const W = st.R.W_A;
+  const P = st.gridPts.map((x) => { const m = vm(x, W); return at(x.map((v, i) => (1 - t) * v + t * m[i])); });
+  st.gridBalls.set(P.map((p) => ({ p, r: 0.019 })));
+  st.gridRods.set(st.gridEdges.map(([a, b]) => [P[a], P[b]]), 0.0048);
+  st.matGrid.color.set('#a8a092').lerp(st.cDir, t);
+}
+
+function paintDial(S) {
+  const st = S.state, R = st.R, k = S.knobs;
+  st.needle.set(dialPt(0, 0, 0.022), dialPt(R.score, DR - 0.09, 0.022), 0.013);
+  st.marks.set(st.letters ? TYPES.map((t) => ({ p: dialPt(R.scores[t], DR + 0.045, 0.01), r: t === k.type ? 0.03 : 0.02 })) : []);
+  TYPES.forEach((t) => st.aLetter[t].position.copy(dialPt(R.scores[t], DR + 0.14, 0.01)));
+  const on = !!st.rug;
+  const toy = on && st.toy ? st.toy.scores : [], real = on && st.real ? st.real.scores : [];
+  st.rugToy.set(toy);
+  st.rugReal.set(real);
+  const means = [];
+  if (toy.length) { const m = mean(toy); means.push([dialPt(m, RUG[0] - 0.035, 0.01), dialPt(m, RUG[1] + 0.035, 0.01)]); st.aRugToy.position.copy(dialPt(m, RUG[0] - 0.09, 0.01)); }
+  if (real.length) { const m = mean(real); means.push([dialPt(m, RUG[0] - 0.035, 0.01), dialPt(m, RUG[1] + 0.035, 0.01)]); st.aRugReal.position.copy(dialPt(m + 0.09, (RUG[0] + RUG[1]) / 2, 0.01)); }
+  st.meanTicks.set(means, 0.007);
+}
+
+function readouts(S) {
+  const st = S.state, R = st.R, k = S.knobs, tier = S.tier, d = k.dhead, t = k.type;
+  const code = !!st.code;
+  // pages
+  st.tagW.set(tier === 1 ? 'writes here' : tier === 2 ? 'layer 0 writes' : 'row space W_A');
+  st.tagR.set(tier === 1 ? `reads here (${t})` : tier === 2 ? `layer 1 reads · ${t}` : `col W_B · ${WB_NAME[t]}`);
+  st.codeW.set(tier === 1 ? 'layer-0 head i' : '`W_A = W_OV[0, i]`');
+  st.codeR.set(tier === 1 ? `layer-1 head j, ${t} input` : `\`W_B = ${WB_CODE[t]}\``);
+  st.tagW.show(st.pageTags && !code); st.tagR.show(st.pageTags && !code);
+  st.codeW.show(code); st.codeR.show(code);
+  TYPES.forEach((g) => { st.ghostTag[g].set(g); st.ghostTag[g].show(!!st.ghosts && g !== t); });
+  // the note
+  st.noteTag.set(tier === 1 ? `note · ${pct(R.frac)} gets through` : tier === 2 ? `note · ${pct(R.frac)} gets through` : `note m · ${fmt(R.frac)} inside col W_B`);
+  st.noteTag.show(!!st.noteOn && !!st.noteTag_on);
+  // the dial
+  const sc = TYPES.map((g) => `${g} ${fmt(R.scores[g], tier === 3 ? 3 : 2)}`).join(' · ');
+  const lines = [];
+  if (tier === 1) lines.push(`overlap score: ${fmt(R.score)}`);
+  else if (code || tier === 3) lines.push(`get_comp_score(W_A, W_B) = ${fmt(R.score, 3)}`, sc);
+  else lines.push(`${t}-composition score ${fmt(R.score, 3)}`, sc);
+  if (st.rug) {
+    const mt = st.toy && st.toy.scores.length ? fmt(mean(st.toy.scores), tier === 1 ? 2 : 3) : '…';
+    const n = st.real ? st.real.scores.length : 0;
+    const mr = n ? fmt(mean(st.real.scores), 3) : 'computing';
+    const prog = n && n < N_SAMPLES ? ` (${n}/${N_SAMPLES})` : '';
+    lines.push(tier === 1 ? `random pairs: toy ${mt} · real size ${mr}${prog}` : tier === 2 ? `random mean: 3-D ${mt} · 768-D ${mr}${prog}` : `baseline (mean of ${N_SAMPLES}): 3-D ${mt} · 768-D ${mr}${prog}`);
+  }
+  st.dialTag.set(lines.join('\n'));
+  st.dialTag.show(st.dialTag_on !== false);
+  TYPES.forEach((g) => { st.letter[g].set(g); st.letter[g].show(!!st.letters); });
+  st.rugTagToy.set(tier === 1 ? 'toy' : `3-D · d_head ${d}`);
+  st.rugTagReal.set(tier === 1 ? 'real size' : '768-D · d_head 64');
+  st.rugTagToy.show(!!st.rug && !!st.toy);
+  st.rugTagReal.show(!!st.rug && !!st.real && st.real.scores.length > 0);
+}
+
+/* random baselines: the toy one is instant; the real-size one runs in a worker (300 samples) */
+function ensureBaselines(S) {
+  const st = S.state, d = S.knobs.dhead;
+  if (!st.toy || st.toy.d !== d || st.toy.seed !== st.baseSeed) st.toy = { d, seed: st.baseSeed, scores: toyBaseline(1000 + st.baseSeed * 7 + d, d) };
+  if (!st.real || st.real.seed !== st.baseSeed) startReal(S);
+}
+function startReal(S) {
+  const st = S.state, seed = st.baseSeed;
+  if (st.worker) { st.worker.terminate(); st.worker = null; }
+  clearTimeout(st.fallbackTimer);
+  st.real = { seed, scores: [] };
+  const rngSeed = 424242 + seed * 7919;
+  const take = (arr) => {
+    if (!st.real || st.real.seed !== seed) return;
+    st.real.scores.push(...arr.slice(0, N_SAMPLES - st.real.scores.length));
+    if (st.rug) { paintDial(S); readouts(S); S.invalidate(); }
+  };
+  const fallback = () => {
+    st.real.scores = [];
+    const r = mulberry32(rngSeed);
+    const step = () => {
+      if (!st.real || st.real.seed !== seed || st.real.scores.length >= N_SAMPLES) return;
+      const out = [], t0 = performance.now();
+      while (st.real.scores.length + out.length < N_SAMPLES && performance.now() - t0 < 14) out.push(realSample(r, REAL.d_model, REAL.d_head));
+      take(out);
+      st.fallbackTimer = setTimeout(step, 0);
+    };
+    step();
+  };
+  try {
+    const src = `${mulberry32.toString()}\n${realSample.toString()}\n` +
+      'onmessage = (e) => { const { seed, n, d_model, d_head, batch } = e.data; const r = mulberry32(seed); let out = [];' +
+      ' for (let i = 0; i < n; i++) { out.push(realSample(r, d_model, d_head)); if (out.length === batch || i === n - 1) { postMessage(out); out = []; } } };';
+    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    const w = new Worker(url);
+    st.worker = w;
+    w.onmessage = (e) => { take(e.data); if (st.real && st.real.scores.length >= N_SAMPLES) { w.terminate(); URL.revokeObjectURL(url); if (st.worker === w) st.worker = null; } };
+    w.onerror = (e) => { e.preventDefault(); w.terminate(); if (st.worker === w) st.worker = null; fallback(); };
+    w.postMessage({ seed: rngSeed, n: N_SAMPLES, d_model: REAL.d_model, d_head: REAL.d_head, batch: 6 });
+  } catch (err) { fallback(); }
+}
+
+/* scene configuration shared by beats and predictions */
+function scene(S, o = {}) {
+  const st = S.state;
+  st.noteOn = o.note !== false;
+  st.noteTag_on = o.noteTag !== false;
+  st.grid = !!o.grid;
+  st.ghosts = !!o.ghosts;
+  st.letters = !!o.letters;
+  st.code = !!o.code;
+  st.pageTags = o.pageTags !== false;
+  st.dialTag_on = o.dialTag !== false;
+  st.rug = !!o.rug;
+  st.figs = o.figs || null;
+  st.writeSub.discMat.opacity = o.grid ? 0.08 : 0.16;
+  if (st.figs) {
+    st.figW.group.visible = st.figR.group.visible = true;
+    st.figW.place(FIG_W, [0, CY, 0]);
+    st.figR.place(FIG_R, [0, CY, 0]);
+    st.figW.pose('stand', { ms: 0 }); st.figR.pose('stand', { ms: 0 });
+    const doPose = () => {
+      if (st.figs === 'cheer') { st.figW.pose('cheer'); st.figR.pose('cheer'); return; }
+      st.figW.pose('point', { at: at(st.R.note).toArray() });
+      st.figR.pose('point', { at: at(st.R.shadow.some((v) => Math.abs(v) > 1e-6) ? st.R.shadow : readerDir(S, S.knobs.type)).toArray() });
+    };
+    if (S.shot) doPose(); else setTimeout(doPose, 520);
+  } else st.figW.group.visible = st.figR.group.visible = false;
+  squash(S, o.squash === 'play' ? 'play' : 'done');
+  if (st.rug) ensureBaselines(S);
+  refresh(S);
+}
+function squash(S, how) {
+  const st = S.state;
+  if (how === 'play' && !S.shot) { st.t = 0; st.t0 = null; st.playing = true; }
+  else { st.t = 1; st.playing = false; }
+}
+function refresh(S) { paint(S); readouts(S); S.invalidate(); }
+function wait(S, ms) { return S.shot ? Promise.resolve() : new Promise((r) => setTimeout(r, ms)); }
+const base = { angle: 20, type: 'K', dhead: 2 };
+
+/* ================================================================== run() */
+
+run({
+  id: 'd07-relay', num: '14', week: 7, kind: 'deep',
+  title: 'The relay',
+  subtitle: 'Heads in different layers compose: one writes a note, a later one reads it.',
+  back2d: '#week-07',
+  film: 'deep-w07-induction',
+  plinth: { r: 1.95, h: 0.14 },
+
+  knobs: [
+    { id: 'angle', type: 'range', label: { 1: 'Turn the reader', 2: 'Reader angle φ', 3: 'Reader rotation about the hinge, φ' }, min: 0, max: 90, step: 1, value: 20, fmt: (v) => `${Math.round(v)}°` },
+    { id: 'type', type: 'select', label: { 1: 'Which input reads the note', 2: 'Composition type', 3: 'Composition type (W_B)' }, value: 'K',
+      options: [['Q', { 1: 'Q: its question', 2: 'Q: queries', 3: 'Q: W_QK' }], ['K', { 1: 'K: its labels', 2: 'K: keys', 3: 'K: W_QKᵀ' }], ['V', { 1: 'V: its cargo', 2: 'V: values', 3: 'V: W_OV' }]] },
+    { id: 'dhead', type: 'range', label: { 1: 'Head width (channels)', 2: 'd_head', 3: 'd_head' }, min: 1, max: 2, step: 1, value: 2, fmt: (v) => String(v) },
+    { id: 'baseline', type: 'button', wide: true, label: { 1: 'Compare with random heads', 2: 'Random baseline: 300 new pairs', 3: '300 × generate_single_random_comp_score()' },
+      onClick: (S) => { const st = S.state; st.baseSeed += 1; st.rug = true; ensureBaselines(S); refresh(S); S.fly(CAM.dial); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.t = 1; st.baseSeed = 0; st.toy = null; st.real = null;
+    st.cDir = new THREE.Color(C.dir);
+    const brass = K.mat.brass();
+    // plaster base and a brass wire cube: the residual stream at one position
+    const baseM = new THREE.Mesh(new THREE.RoundedBoxGeometry(1.62, 0.07, 1.62, 2, 0.02), K.mat.plaster('#ece4d6'));
+    baseM.position.set(0, 0.035, 0); baseM.castShadow = baseM.receiveShadow = true;
+    S.root.add(baseM);
+    const edges = [], corners = [];
+    const P = (sx, sy, sz) => new THREE.Vector3(sx * HALF, CY + sy * HALF, sz * HALF);
+    for (const a of [-1, 1]) for (const b of [-1, 1]) edges.push([P(-1, a, b), P(1, a, b)], [P(a, -1, b), P(a, 1, b)], [P(a, b, -1), P(a, b, 1)]);
+    for (const a of [-1, 1]) for (const b of [-1, 1]) for (const e of [-1, 1]) corners.push({ p: P(a, b, e), r: 0.026 });
+    const frame = rods(12, brass, 0.011); frame.set(edges); frame.mesh.castShadow = true;
+    const cn = balls(8, brass); cn.set(corners); cn.mesh.castShadow = true;
+    S.root.add(frame.mesh, cn.mesh);
+    const stud = K.bead(O, C.ink, 0.03); stud.castShadow = false; S.root.add(stud);
+
+    // the writer's page, the reader's window, and faint windows for its other two inputs
+    st.writeSub = subspace(C.dir, 0.16, { rodR: 0.02 });
+    st.readSub = subspace(C.aux, 0.2, { rodR: 0.02 });
+    st.ghost = {};
+    for (const t of TYPES) { st.ghost[t] = subspace(C.aux, 0.05, { ghost: true, rodR: 0.011 }); S.root.add(st.ghost[t].group); }
+    S.root.add(st.writeSub.group, st.readSub.group);
+    // the note and its shadow
+    st.noteArrow = arrow(K.mat.paint(C.dir), 0.024);
+    st.shadowArrow = arrow(K.mat.paint(C.aux), 0.02);
+    st.drop = rods(1, new THREE.MeshStandardMaterial({ color: C.aux, transparent: true, opacity: 0.75, roughness: 0.6 }), 0.006);
+    S.root.add(st.noteArrow.group, st.shadowArrow.group, st.drop.mesh);
+    // the grid the writer squashes (beat 2)
+    st.gridPts = [];
+    for (const a of [-1, 0, 1]) for (const b of [-1, 0, 1]) for (const c of [-1, 0, 1]) st.gridPts.push([a, b, c]);
+    st.gridEdges = [];
+    st.gridPts.forEach((p, i) => st.gridPts.forEach((q, j) => {
+      if (j > i && p.reduce((s, v, m) => s + Math.abs(v - q[m]), 0) === 1) st.gridEdges.push([i, j]);
+    }));
+    st.matGrid = new THREE.MeshStandardMaterial({ color: '#a8a092', roughness: 0.7, transparent: true, opacity: 0.8 });
+    st.gridBalls = balls(27, st.matGrid);
+    st.gridRods = rods(st.gridEdges.length, st.matGrid, 0.0048);
+    S.root.add(st.gridBalls.mesh, st.gridRods.mesh);
+
+    // the score dial
+    const basis = new THREE.Matrix4().makeBasis(DX, DU, DN);
+    const face = new THREE.Mesh(new THREE.CircleGeometry(DR, 64, 0, Math.PI), new THREE.MeshStandardMaterial({ color: '#f4efe6', roughness: 0.95, side: THREE.DoubleSide }));
+    face.quaternion.setFromRotationMatrix(basis); face.position.copy(DC); face.receiveShadow = true; face.castShadow = true;
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(DR, 0.014, 8, 72, Math.PI), brass);
+    rim.quaternion.setFromRotationMatrix(basis); rim.position.copy(DC); rim.castShadow = true;
+    S.root.add(face, rim);
+    const bar = rods(1, brass, 0.014); bar.set([[dialPt(0, DR), dialPt(1, DR)]]); S.root.add(bar.mesh);
+    const inkMat = K.mat.paint(C.ink);
+    const ticks = rods(11, inkMat, 0.0045);
+    ticks.set(Array.from({ length: 11 }, (_, i) => [dialPt(i / 10, DR - (i % 5 === 0 ? 0.1 : 0.055), 0.006), dialPt(i / 10, DR - 0.012, 0.006)]));
+    S.root.add(ticks.mesh);
+    st.needle = arrow(inkMat, 0.013);
+    const cap = new THREE.Mesh(GEO.ball, brass); cap.scale.setScalar(0.036); cap.position.copy(dialPt(0, 0, 0.022));
+    S.root.add(st.needle.group, cap);
+    st.marks = balls(3, K.mat.paint(C.aux)); S.root.add(st.marks.mesh);
+    st.rugToy = rug(N_SAMPLES, '#8a8275', 0.22);
+    st.rugReal = rug(N_SAMPLES, C.ink, 0.2);
+    st.meanTicks = rods(2, inkMat, 0.007);
+    S.root.add(st.rugToy.mesh, st.rugReal.mesh, st.meanTicks.mesh);
+
+    // label anchors (Object3D, so labels follow them)
+    const anchor = () => { const a = new THREE.Object3D(); S.root.add(a); return a; };
+    st.aW = anchor(); st.aR = anchor(); st.aNote = anchor(); st.aRugToy = anchor(); st.aRugReal = anchor();
+    st.aGhost = {}; st.aLetter = {};
+    for (const t of TYPES) { st.aGhost[t] = anchor(); st.aLetter[t] = anchor(); }
+    st.tagW = K.label(st.aW, '', { cls: 'tag', anchor: 'right', dx: -4 });
+    st.tagR = K.label(st.aR, '', { cls: 'tag', anchor: 'left', dx: 4 });
+    st.codeW = K.label(st.aW, '', { cls: 'note', anchor: 'right', dx: -4 });
+    st.codeR = K.label(st.aR, '', { cls: 'note', anchor: 'left', dx: 4 });
+    st.ghostTag = {}; st.letter = {};
+    for (const t of TYPES) {
+      st.ghostTag[t] = K.label(st.aGhost[t], t, { cls: 'tag', anchor: 'center' });
+      st.letter[t] = K.label(st.aLetter[t], t, { cls: 'tag', anchor: 'center' });
+    }
+    st.noteTag = K.label(st.aNote, '', { cls: 'tag', anchor: 'bottom', dy: -10 });
+    st.dialTag = K.label(dialPt(0.5, DR + 0.16, 0.01), '', { cls: 'readout', anchor: 'bottom', dy: -2 });
+    st.rugTagToy = K.label(st.aRugToy, '', { cls: 'tag', anchor: 'center' });
+    st.rugTagReal = K.label(st.aRugReal, '', { cls: 'tag', anchor: 'center' });
+    K.label(dialPt(0, DR + 0.1, 0.01), '0', { cls: 'tag', anchor: 'center' });
+    K.label(dialPt(1, DR + 0.1, 0.01), '1', { cls: 'tag', anchor: 'center' });
+    // the two heads as stick figures (violet writes, teal reads)
+    st.figW = K.figure({ color: C.dir }); st.figR = K.figure({ color: C.aux });
+    S.root.add(st.figW.group, st.figR.group);
+    st.figW.group.visible = st.figR.group.visible = false;
+  },
+
+  rebuild(S, id) {
+    const st = S.state;
+    compute(S);
+    if (id === 'dhead' && st.grid) squash(S, 'play');
+    if (st.rug) ensureBaselines(S);
+    refresh(S);
+  },
+
+  frame(S, t) {
+    const st = S.state;
+    if (!st.playing) return false;
+    if (st.t0 == null) st.t0 = t;
+    const u = Math.min(1, Math.max(0, (t - st.t0 - 0.35) / 1.5));
+    st.t = K.ease.inOut(u);
+    paintGrid(S);
+    if (u >= 1) { st.playing = false; st.t = 1; paintGrid(S); return false; }
+    return true;
+  },
+
+  onTier(S) { readouts(S); },
+
+  solids(S) {
+    const st = S.state, R = st.R, out = [];
+    const toJ = (p) => [p.x, -p.z, p.y];                          // three (x, y, z) -> JSCAD (x, -z, y)
+    const tube = (a, b, r) => K.tubeSolid([toJ(a), toJ(b)], r, 10);
+    const cone = (a, b, r, h) => {
+      const A = toJ(a), B = toJ(b), d = B.map((v, i) => v - A[i]), L = Math.hypot(...d);
+      const c = J.primitives.cylinderElliptic({ height: h, startRadius: [r, r], endRadius: [r * 0.05, r * 0.05], segments: 16, center: [0, 0, h / 2] });
+      const th = Math.acos(d[2] / L), ph = Math.atan2(d[1], d[0]);
+      return J.transforms.translate(B.map((v, i) => v - (d[i] / L) * h), J.transforms.rotateZ(ph, J.transforms.rotateY(th, c)));
+    };
+    const arrowJ = (a, b, r) => {
+      const L = a.distanceTo(b); if (L < 1e-3) return [];
+      const h = Math.min(r * 6.5, L * 0.5), mid = a.clone().lerp(b, (L - h) / L);
+      return [tube(a, mid, r), cone(a, b, r * 2.5, h)];
+    };
+    const place = (c, e1, e2, geom) => {                          // local x -> e1, y -> e2, z -> e1 x e2, origin -> c
+      const n = new THREE.Vector3().crossVectors(e1, e2);
+      const [a, b, m, t] = [toJ(e1), toJ(e2), toJ(n), toJ(c)];
+      return J.transforms.transform([a[0], a[1], a[2], 0, b[0], b[1], b[2], 0, m[0], m[1], m[2], 0, t[0], t[1], t[2], 1], geom);
+    };
+    out.push(J.primitives.cuboid({ size: [1.62, 1.62, 0.07], center: [0, 0, 0.035] }));
+    const P = (sx, sy, sz) => new THREE.Vector3(sx * HALF, CY + sy * HALF, sz * HALF);
+    for (const a of [-1, 1]) for (const b of [-1, 1]) out.push(tube(P(-1, a, b), P(1, a, b), 0.02), tube(P(a, -1, b), P(a, 1, b), 0.02), tube(P(a, b, -1), P(a, b, 1), 0.02));
+    for (const B of [R.writeBasis, R.readBasis]) {
+      if (B.length === 2) out.push(place(O, V3(B[0]), V3(B[1]), J.primitives.cylinder({ radius: RP, height: 0.014, segments: 48 })));
+      else if (B.length === 1) out.push(tube(at(B[0], -RP), at(B[0], RP), 0.02));
+    }
+    out.push(...arrowJ(O, at(R.note), 0.026), ...arrowJ(O, at(R.shadow), 0.022));
+    const pts = []; for (let i = 0; i <= 48; i++) { const th = (Math.PI * i) / 48; pts.push([DR * Math.cos(th), DR * Math.sin(th)]); }
+    const half = J.transforms.translate([0, 0, -0.012], J.extrusions.extrudeLinear({ height: 0.024 }, J.primitives.polygon({ points: pts })));
+    out.push(place(DC, DX, DU, half));
+    out.push(K.tubeSolid(Array.from({ length: 33 }, (_, i) => toJ(dialPt(i / 32, DR))), 0.02, 8));
+    out.push(tube(dialPt(0, 0, 0.02), dialPt(R.score, DR - 0.09, 0.02), 0.016));
+    return out.filter(Boolean);
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**Heads pass notes.** All heads share one stream. A layer-0 head writes a note (violet arrow) on its page; a later head reads through its teal window and only gets the note\'s shadow there.',
+        2: '**Same stream, later reader.** A layer-0 head adds its output (the violet note) to the residual stream, and every later head reads that same vector. A layer-1 head sees it only through its teal window: the shadow is what gets through. Toy stream: d_model = 3.',
+        3: 'Heads add into one residual stream, so a layer-1 head\'s input contains m = x_A W_OV^A from a layer-0 head (here: a copy of the previous token). W_B sees m only through its projection on col(W_B) (teal). Toy: d_model 3, d_head 2, orthonormal factors.',
+      },
+      cam: CAM.whole,
+      set: { ...base },
+      enter(S) { scene(S, { figs: 'relay' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Each head uses a small patch.** The writer only writes on its violet page: watch it press the grid flat (3Blue1Brown\'s picture). The reader only looks through its teal window. Real heads: 64 of 768.',
+        2: '3Blue1Brown\'s picture: a matrix moves the grid. The writer\'s W_OV = W_V W_O presses all of space onto its violet page (rank ≤ d_head = 2), so every note lands there. The reader sees only its teal window. Real: 64-dim patches of a 768-dim stream.',
+        3: 'x W_A lies in the row space of W_A (right singular vectors V_A, violet); x W_B depends only on x U_B (left singular vectors, teal). Both have rank ≤ d_head. Grid: x ↦ x((1−t)I + tW_A), after 3Blue1Brown\'s Essence of Linear Algebra.',
+      },
+      cam: CAM.book,
+      set: { ...base },
+      enter(S) { scene(S, { grid: true, squash: 'play', note: false, dialTag: false }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The score is the overlap.** Thin both heads to one direction each. If the two rods line up the score is 1; at right angles it is 0 and the note is invisible to the reader. Turn the reader in Knobs.',
+        2: 'Composition score = ‖W_A W_B‖_F / (‖W_A‖_F ‖W_B‖_F). With d_head = 1 each head is one rod, and the score is |cos| of the angle between the writer\'s rod and the reader\'s (ARENA\'s rank-1 case): 20° gives 0.94, 90° gives 0.',
+        3: 'With W_A = U_A S_A V_Aᵀ and W_B = U_B S_B V_Bᵀ, score = ‖S_A V_Aᵀ U_B S_B‖_F / (‖S_A‖_F ‖S_B‖_F): a σ-weighted mean of cos² between writer and reader directions. Rank 1: |v_A·u_B|. Live: SVDs of the 3×3 W_A, W_B.',
+      },
+      cam: CAM.top,
+      set: { ...base, dhead: 1 },
+      enter(S) { scene(S, {}); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Three doors in.** The reader can take the note into its question (Q), its labels (K) or its cargo (V). Q or K change where it looks; V changes what it carries. Induction heads use K.',
+        2: 'Q- and K-composition feed the note into W_QK, so they change where the reader attends; V-composition feeds W_OV, so it changes what it moves. Induction: head 0.7 writes "my previous token was A", and heads 1.4 and 1.10 read it with W_K.',
+        3: 'W_B = W_QK^B (Q, reads via W_Q), W_QK^Bᵀ = W_K W_Qᵀ (K, via W_K), W_OV^B (V, via W_V). ARENA\'s model: 0.7 K-composes with 1.4 and 1.10; V-scores into them are low (their OV copies from the embedding subspace), and shortformer rules out Q.',
+      },
+      cam: CAM.top,
+      set: { ...base, dhead: 1 },
+      enter(S) { scene(S, { ghosts: true, letters: true }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**Saturday: is a score high?** Score every pair of heads, then compare with random heads. In 3 directions random pairs score about 0.5; at real size, about 0.04. Big spaces make chance overlap tiny.',
+        2: 'ARENA [1.2], bonus part of section 4: `get_comp_score(W_A, W_B)` for layer-0 head i and layer-1 head j, with W_A = `W_OV[0, i]` and W_B = `W_QK[1, j]` (Q), `.T` (K) or `W_OV[1, j]` (V). Baseline: mean of 300 × `generate_single_random_comp_score()`.',
+        3: 'Baseline: four `[d_model, d_head]` weights, `nn.init.kaiming_uniform_(W, a=np.sqrt(5))`, W_A = W_A_left @ W_A_right.T. The score ignores scale; random pairs land near 1/√d_model (0.036 at 768). `plot_comp_scores(..., baseline=baseline)`.',
+      },
+      cam: CAM.dial,
+      set: { ...base },
+      enter(S) { scene(S, { rug: true, code: true, letters: true, noteTag: false }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**A rule of thumb, not a law.** ARENA calls measuring overlap an open question. Two identical pages score only 0.71 here, and ideas spread over many heads slip past. Newer tools trace single features.',
+        2: 'Current method: this Frobenius overlap (ARENA: "basically an open question, but a surprisingly good metric"). It mixes alignment with spectrum shape: identical flat pages score 1/√2 = 0.71. Emerging: attribution graphs trace composition feature by feature.',
+        3: 'Flat spectra cap the score at 1/√rank (two identical flat 64-dim patches: 0.125); weights ignore which directions data uses; superposition spreads features over heads. Emerging: attribution graphs over transcoders ([1.4.2]). For [1.2]: compare with the baseline.',
+      },
+      cam: CAM.whole,
+      set: { ...base, angle: 0 },
+      enter(S) { scene(S, { rug: true }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** Two colleagues who agree which corner of a shared whiteboard means what. A radio: you hear a station only when the receiver is tuned to the band it sends on.',
+        2: 'Any shared channel with agreed slots: a whiteboard corner two colleagues agreed on; a radio tuned to a station\'s band; services on one message bus, each reading its topic. Week 8\'s IOI circuit chains heads by V (into S-inhibition heads) and Q (into name movers).',
+        3: 'Virtual weights (ARENA, after Elhage et al.): W_A W_B is the direct path from one head to another through the stream, a channel of rank ≤ d_head. [1.4.1] IOI uses V- and Q-composition; [1.4.2] attribution graphs pair writing and reading vectors the same way.',
+      },
+      cam: CAM.whole,
+      set: { ...base },
+      enter(S) { scene(S, { figs: 'cheer' }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'Turn the reader so its rod is at right angles to the writer\'s rod. What is the score?',
+        2: 'd_head = 1, reader\'s rod at 90° to the writer\'s rod. Composition score?',
+        3: 'Rank-1 W_A and W_B with v_A ⟂ u_B. get_comp_score?' },
+      options: [{ t: '0', ok: true }, { t: '0.5' }, { t: '1' }, { t: 'Negative' }],
+      why: { 1: 'The note casts no shadow on a window at right angles, so nothing gets through: the score is 0.',
+        2: 'For rank-1 heads the score is |cos| of the angle between the writer\'s output direction and the reader\'s input direction: |cos 90°| = 0. The shadow shrinks to a point.',
+        3: 'W_A W_B = σ_Aσ_B u_A (v_A·u_B) v_Bᵀ, so the score is |v_A·u_B| = 0. It is never negative: it is a ratio of Frobenius norms.' },
+      show(S) {
+        S.setKnobs({ ...base, dhead: 1 });
+        scene(S, {}); S.fly(CAM.top);
+        if (S.shot) { S.setKnob('angle', 90); return Promise.resolve(); }
+        return S.tween(2200, (e) => S.setKnob('angle', Math.round(20 + 70 * e)), K.ease.inOut);
+      } },
+    { q: { 1: 'An induction head reads the previous-token head\'s note. Through which door?',
+        2: 'Induction heads compose with the previous-token head mainly via…',
+        3: 'In ARENA\'s 2-layer model, 0.7 → 1.4 and 1.10 composition is mainly…' },
+      options: [{ t: 'K: the keys', ok: true }, { t: 'Q: the queries' }, { t: 'V: the values' }, { t: 'None: they never meet' }],
+      why: { 1: 'Through K, its labels: each token now carries "the word before me was A", so when A shows up again it can find the word that came right after the old A.',
+        2: 'K: head 0.7 writes the previous token into each position, and 1.4 and 1.10 match their query (the current token) against those keys. Their OV copies from the embeddings, so V-scores are low.',
+        3: 'K-composition: W_OV of 0.7 overlaps W_QKᵀ of 1.4 and 1.10. With shortformer embeddings induction cannot form via Q (ARENA), and V-scores into 1.4 and 1.10 are low.' },
+      show(S) {
+        S.setKnobs({ ...base, dhead: 1 });
+        scene(S, { ghosts: true, letters: true }); S.fly(CAM.top);
+        return wait(S, 1200);
+      } },
+    { q: { 1: 'The writer writes only along a direction the reader\'s question window can\'t see. What changes in the reader\'s question?',
+        2: 'The note is perpendicular to the reader\'s Q window. Effect on the reader\'s queries?',
+        3: 'm ⟂ col(W_Q) of the reader. Change in q = (x + m) W_Q?' },
+      options: [{ t: 'Nothing at all', ok: true }, { t: 'A weaker copy of the note' }, { t: 'The note, turned sideways' }, { t: 'Some random noise' }],
+      why: { 1: 'Reading is a shadow, and a note at right angles casts none. The reader\'s questions stay exactly as they were.',
+        2: 'The query is (x + m)W_Q = xW_Q + mW_Q, and mW_Q = 0 when m is perpendicular to every column of W_Q. Here: type Q at angle 0, Q-score 0.',
+        3: '(x + m)W_Q = xW_Q + mW_Q with mW_Q = 0 for m ⟂ col(W_Q). When the whole image of W_A is ⟂ col(W_Q), the Q-score is exactly 0.' },
+      show(S) {
+        S.setKnobs({ angle: 0, type: 'Q', dhead: 1 });
+        scene(S, {}); S.fly(CAM.top);
+        return wait(S, 1200);
+      } },
+    { q: { 1: 'Two-channel heads, with the reader\'s window lined up exactly on the writer\'s page. What is the score?',
+        2: 'd_head = 2, reader\'s window = writer\'s page, all singular values 1. Score?',
+        3: 'W_A, W_B with the same 2-dim subspace and flat spectra (σ = 1, 1). Score?' },
+      options: [{ t: 'About 0.71', ok: true }, { t: '1' }, { t: '0.5' }, { t: '2' }],
+      why: { 1: 'Not 1! The score spreads over both channels, so a perfect two-channel match scores 1/√2. Only one-channel heads can reach 1.',
+        2: '‖W_A W_B‖_F = ‖I₂‖_F = √2, while ‖W_A‖_F ‖W_B‖_F = √2 · √2 = 2, so the score is 1/√2 = 0.71. Flat spectra cap it at 1/√d_head: 0.125 at d_head 64.',
+        3: '‖S_A V_Aᵀ U_B S_B‖_F / (‖S_A‖_F ‖S_B‖_F) = ‖I_k‖_F / k = 1/√k for flat σ. Peaked spectra score higher: the metric mixes alignment with spectrum shape.' },
+      show(S) {
+        S.setKnobs({ ...base, angle: 0 });
+        scene(S, {}); S.fly(CAM.whole);
+        return wait(S, 1200);
+      } },
+    { q: { 1: 'Random heads: where do they overlap more by pure chance, in a 3-direction toy stream or in the real 768?',
+        2: 'Random pairs of heads: higher mean score at d_model = 3 or at d_model = 768?',
+        3: 'E[score] for Kaiming-random W_A, W_B: d_model 3 (d_head 2) vs 768 (d_head 64)?' },
+      options: [{ t: 'The 3-D toy: about 0.5 vs 0.04', ok: true }, { t: 'The 768-D stream' }, { t: 'The same in both' }, { t: 'Zero in both' }],
+      why: { 1: 'In a small room everything bumps into everything. In 768 directions two random patches barely touch, so a real score well above 0.04 means the heads chose to line up.',
+        2: 'Random directions in n dimensions have cos² ≈ 1/n, and the score behaves alike: about 0.5 in the toy, 0.036 at 768. That is why ARENA compares against a random baseline.',
+        3: 'For iid factors E‖W_AW_B‖²/(‖W_A‖²‖W_B‖²) ≈ 1/d_model, to first order independent of d_head: ≈ 0.036 at 768. The dial shows 300 live samples of each.' },
+      show(S) {
+        S.setKnobs({ ...base });
+        scene(S, { rug: true, code: false, letters: true, noteTag: false }); S.fly(CAM.dial);
+        return wait(S, 1500);
+      } },
+  ],
+
+  where: {
+    1: 'Anywhere two parties share one space and agree on spots: a whiteboard corner two colleagues use for handovers, a radio tuned to the band a station sends on.',
+    2: 'Shared channels with agreed slots: whiteboard corners, radio bands, topics on a message bus. In week 8, IOI chains heads by V (into S-inhibition heads) and Q (into name movers).',
+    3: 'Virtual weights W_A W_B for any writer and reader that share the residual stream; IOI ([1.4.1]) uses V- and Q-composition; [1.4.2] attribution graphs pair writing and reading vectors the same way.',
+  },
+  links: [
+    { label: 'Film · induction, deep', href: '../../intuition/films/deep-w07-induction.html' },
+    { label: 'Film · induction heads', href: '../../intuition/films/w7-induction.html' },
+    { label: 'Week 7 pack', href: '../../index.html#week-07' },
+    { label: 'Case · induction heads', href: '../../index.html#cases/induction-heads' },
+    { label: 'Case · QK and OV circuits', href: '../../index.html#cases/qk-ov-circuits' },
+    { label: 'Map · K-composition', href: '../../index.html#map/node=k-composition' },
+    { label: 'Map · Q-composition', href: '../../index.html#map/node=q-composition' },
+    { label: 'Map · composition score', href: '../../index.html#map/node=composition-score' },
+    { label: 'Map · previous-token head', href: '../../index.html#map/node=previous-token-head' },
+    { label: 'Demo · induction heads and patching', href: '../../index.html#demo/induction-heads-patching' },
+  ],
+  remix: 'Build a single-file three.js scene: a brass wire cube on a round plinth is the residual stream at one position (toy d_model = 3). A layer-0 head writes into a violet disc, the row space of W_A = W_V W_O (rank ≤ d_head); a layer-1 head reads through a teal disc, the column space of W_B (W_Q W_Kᵀ for Q-, W_K W_Qᵀ for K-, W_V W_O for V-composition), hinged on a line shared with the violet one. Draw a violet note m = x_A W_A and its teal shadow (projection) in the reader\'s disc. Above the cube, a half-circle dial shows ARENA\'s composition score ‖W_A W_B‖_F / (‖W_A‖_F ‖W_B‖_F) live, plus rugs of 300 random scores from four Kaiming-uniform [d_model, d_head] factors at d_model 3 and at 768 / 64 (use the trace trick Tr(Mᵀ G M G\') in a Web Worker for the big ones). Knobs: reader angle, type Q/K/V, d_head 1-2, redraw the baseline.',
+  credit: 'Formulas and names: ARENA [1.2] composition scores (`get_comp_score`, `generate_single_random_comp_score` with `nn.init.kaiming_uniform_(W, a=np.sqrt(5))`, `n_samples = 300`, the SVD reading ‖S_A V_Aᵀ U_B S_B‖_F and the rank-1 |cos| case), after Elhage et al., "A Mathematical Framework for Transformer Circuits" (2021): virtual weights and Q-, K-, V-composition. Pictures borrowed from 3Blue1Brown\'s Essence of Linear Algebra: a matrix as a moving grid, a dot product as a shadow. Toy numbers: hand-set heads in a 3-dim stream; both random baselines are computed live in your browser. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>

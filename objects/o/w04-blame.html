@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Blame Web · Object Lessons</title>
+<meta name="description" content="Backprop as a bead-and-string model: values flow up a tiny two-layer network, blame flows back down, rates multiply along a path and add where a weight is used twice.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+/* chips beside the beads: value (ink), blame (red), exchange rate (brass), backward order (brass disc) */
+.k-label.k-val,.k-label.k-blame,.k-label.k-rate,.k-label.k-ord{min-width:0; text-transform:none; letter-spacing:0;
+  font:600 11px/1.15 var(--font); font-variant-numeric:tabular-nums; padding:2px 6px; border-radius:6px}
+.k-label.k-val b,.k-label.k-blame b{font-weight:700}
+.k-label.k-blame{color:color-mix(in srgb, var(--k-grad) 80%, var(--ink)); border-color:color-mix(in srgb, var(--k-grad) 45%, var(--rule))}
+.k-label.k-blame.k-part{opacity:.72; border-style:dashed}
+.k-label.k-rate{color:color-mix(in srgb, var(--k-brass) 60%, var(--ink)); border-color:color-mix(in srgb, var(--k-brass) 50%, var(--rule)); padding:1px 5px; font-size:10.5px}
+.k-label.k-ord{background:var(--k-brass); color:#fff; border:0; border-radius:999px; padding:2px 6px; font-weight:700}
+.k-label.k-code{font:500 11px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:nowrap}
+.k-label.k-code b{font-weight:700; color:color-mix(in srgb, var(--k-grad) 80%, var(--ink))}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   07 · w04-blame: "The blame web" (W4, ARENA [0.4] Backprop)
+   A bead-and-string model of one computational graph. The engine below is
+   ARENA's own design in miniature (Recipe, BACK_FUNCS, topological_sort,
+   backprop), run on plain numbers: every value, blame, exchange rate, order
+   number and count on screen comes from it. The MATH block is extracted and
+   checked in node against hand derivatives and central differences.
+   ========================================================================= */
+
+// MATH-BEGIN
+/* A scalar autograd engine that follows ARENA [0.4] name for name (Recipe, BackwardFuncLookup,
+   BACK_FUNCS, Tensor.is_leaf, wrap_forward_fn, topological_sort, sorted_computational_graph,
+   backprop). Arrays are plain numbers here, so unbroadcast has nothing to sum away. */
+const np = {
+  multiply: (x, y) => x * y,
+  add: (x, y) => x + y,
+  subtract: (x, y) => x - y,
+  maximum: (x, y) => Math.max(x, y),
+};
+for (const [k, f] of Object.entries(np)) f.label = `np.${k}`;
+
+class Recipe {
+  constructor(func, args, kwargs, parents) {
+    this.func = func;        // the 'inner' numpy function that did the forward computation
+    this.args = args;        // its input VALUES (needed by the backward functions)
+    this.kwargs = kwargs;
+    this.parents = parents;  // {arg position: Tensor} (needed to walk the graph)
+  }
+}
+class BackwardFuncLookup {
+  constructor() { this.back_funcs = new Map(); }   // (forward_fn, arg_position) -> back_fn
+  add_back_func(forward_fn, arg_position, back_fn) { this.back_funcs.set(`${forward_fn.label}|${arg_position}`, back_fn); }
+  get_back_func(forward_fn, arg_position) { return this.back_funcs.get(`${forward_fn.label}|${arg_position}`); }
+}
+const unbroadcast = (broadcasted, original) => broadcasted;   // scalars: shapes already match
+function multiply_back0(grad_out, out, x, y) { return unbroadcast(y * grad_out, x); }
+function multiply_back1(grad_out, out, x, y) { return unbroadcast(x * grad_out, y); }
+function maximum_back0(grad_out, out, x, y) { const bool_sum = (x > y) + 0.5 * (x === y); return unbroadcast(grad_out * bool_sum, x); }
+function maximum_back1(grad_out, out, x, y) { const bool_sum = (x < y) + 0.5 * (x === y); return unbroadcast(grad_out * bool_sum, y); }
+const add_back0 = (grad_out, out, x, y) => unbroadcast(grad_out, x);
+const add_back1 = (grad_out, out, x, y) => unbroadcast(grad_out, y);
+const subtract_back0 = (grad_out, out, x, y) => unbroadcast(grad_out, x);
+const subtract_back1 = (grad_out, out, x, y) => unbroadcast(-grad_out, y);
+const BACK_FUNCS = new BackwardFuncLookup();
+BACK_FUNCS.add_back_func(np.multiply, 0, multiply_back0);
+BACK_FUNCS.add_back_func(np.multiply, 1, multiply_back1);
+BACK_FUNCS.add_back_func(np.add, 0, add_back0);
+BACK_FUNCS.add_back_func(np.add, 1, add_back1);
+BACK_FUNCS.add_back_func(np.subtract, 0, subtract_back0);
+BACK_FUNCS.add_back_func(np.subtract, 1, subtract_back1);
+BACK_FUNCS.add_back_func(np.maximum, 0, maximum_back0);
+BACK_FUNCS.add_back_func(np.maximum, 1, maximum_back1);
+/* ARENA names multiply's and maximum's back functions; add's and subtract's are lambdas (named null here) */
+const BACK_NAME = new Map([[multiply_back0, 'multiply_back0'], [multiply_back1, 'multiply_back1'], [add_back0, null],
+  [add_back1, null], [subtract_back0, null], [subtract_back1, null],
+  [maximum_back0, 'maximum_back0'], [maximum_back1, 'maximum_back1']]);
+
+const grad_tracking_enabled = true;
+class Tensor {
+  constructor(array, requires_grad = false) {
+    this.array = array;
+    this.requires_grad = requires_grad;
+    this.grad = null;
+    this.recipe = null;
+  }
+  get is_leaf() { return !(this.requires_grad && this.recipe && Object.keys(this.recipe.parents).length > 0); }
+}
+function wrap_forward_fn(numpy_func, is_differentiable = true) {
+  return function tensor_func(...args) {
+    const arg_arrays = args.map((a) => (a instanceof Tensor ? a.array : a));
+    const out_arr = numpy_func(...arg_arrays);
+    const requires_grad = grad_tracking_enabled && is_differentiable && args.some((a) => a instanceof Tensor && a.requires_grad);
+    const out = new Tensor(out_arr, requires_grad);
+    if (requires_grad) {
+      const parents = {};
+      args.forEach((a, idx) => { if (a instanceof Tensor) parents[idx] = a; });
+      out.recipe = new Recipe(numpy_func, arg_arrays, {}, parents);
+    }
+    return out;
+  };
+}
+const multiply = wrap_forward_fn(np.multiply);
+const add = wrap_forward_fn(np.add);
+const subtract = wrap_forward_fn(np.subtract);
+const maximum = wrap_forward_fn(np.maximum);
+const relu = (x) => maximum(x, 0.0);
+
+/* depth-first search: every node lands in `result` after all of its children (here: parents) */
+function topological_sort(node, get_children) {
+  const result = [], perm = new Set(), temp = new Set();
+  function visit(cur) {
+    if (perm.has(cur)) return;
+    if (temp.has(cur)) throw new Error('Not a DAG!');
+    temp.add(cur);
+    for (const next of get_children(cur)) visit(next);
+    result.push(cur);
+    perm.add(cur);
+    temp.delete(cur);
+  }
+  visit(node);
+  return result;
+}
+function sorted_computational_graph(tensor) {
+  const get_parents = (t) => (t.recipe == null ? [] : Object.values(t.recipe.parents));
+  return topological_sort(tensor, get_parents).reverse();
+}
+/* ARENA's backprop, line for line. `log` (optional) records each pop and each back-function call. */
+function backprop(end_node, end_grad = null, log = null) {
+  const end_grad_arr = end_grad == null ? 1 : end_grad.array;
+  const grads = new Map([[end_node, end_grad_arr]]);
+  for (const node of sorted_computational_graph(end_node)) {
+    const outgrad = grads.get(node);
+    grads.delete(node);                                                 // grads.pop(node)
+    if (log) log.push({ kind: 'pop', node, outgrad });
+    if (node.is_leaf) {
+      if (node.requires_grad) node.grad = node.grad == null ? new Tensor(outgrad) : new Tensor(node.grad.array + outgrad);
+    } else {
+      for (const [argnum, parent] of Object.entries(node.recipe.parents)) {
+        const back_fn = BACK_FUNCS.get_back_func(node.recipe.func, Number(argnum));
+        const in_grad = back_fn(outgrad, node.array, ...node.recipe.args);
+        grads.set(parent, grads.has(parent) ? grads.get(parent) + in_grad : in_grad);
+        if (log) log.push({ kind: 'call', node, parent, argnum: Number(argnum), outgrad, in_grad, back_fn });
+      }
+    }
+  }
+}
+
+/* The toy network: one example, two inputs, one hidden relu unit, squared error (toy numbers). */
+const W0 = { w1: 0.6, w2: 0.5, v: 1.5 };
+function buildNet(x1v, x2v, yv, share = false, wv = W0) {
+  const x1 = new Tensor(x1v), x2 = new Tensor(x2v), y = new Tensor(yv);            // data: no grad
+  const w1 = new Tensor(wv.w1, true), w2 = new Tensor(wv.w2, true), v = new Tensor(wv.v, true);
+  const m1 = multiply(w1, x1);
+  const m2 = multiply(share ? w1 : w2, x2);          // "use w1 twice": weight sharing
+  const s = add(m1, m2);
+  const h = relu(s);                                  // maximum(s, 0.0)
+  const yhat = multiply(h, v);
+  const d = subtract(yhat, y);
+  const L = multiply(d, d);                           // (yhat - y)**2, written the way ARENA's ops allow
+  const net = { x1, x2, w1, w2, v, y, m1, m2, s, h, yhat, d, L };
+  const names = new Map();
+  for (const [k, t] of Object.entries(net)) names.set(t, k);
+  return { net, names };
+}
+/* Everything the object shows, computed from one forward pass and one backprop call. */
+function analyse(x1, x2, y, share = false, wv = W0) {
+  const { net, names } = buildNet(x1, x2, y, share, wv);
+  const log = [];
+  backprop(net.L, null, log);
+  const order = log.filter((e) => e.kind === 'pop').map((e) => names.get(e.node));
+  const value = {}, blame = {}, grad = {};
+  for (const [k, t] of Object.entries(net)) { value[k] = t.array; if (t.grad) grad[k] = t.grad.array; }
+  for (const e of log) if (e.kind === 'pop') blame[names.get(e.node)] = e.outgrad;
+  const calls = log.filter((e) => e.kind === 'call').map((e) => ({
+    to: names.get(e.node), from: names.get(e.parent), argnum: e.argnum, outgrad: e.outgrad, in_grad: e.in_grad,
+    back: BACK_NAME.get(e.back_fn),
+    rate: e.back_fn(1, e.node.array, ...e.node.recipe.args),        // exchange rate: back_fn at grad_out = 1
+    step: order.indexOf(names.get(e.node)) + 1,
+  }));
+  const used = new Set(order);
+  const fwdOps = Object.values(net).filter((t) => used.has(names.get(t)) && t.recipe).length;
+  return { net, names, order, value, blame, grad, calls, used, fwdOps, backCalls: calls.length };
+}
+/* every path from a node up to L: the chain rule is "multiply along a path, add over paths" */
+function paths(A, from) {
+  const out = [];
+  const walk = (node, acc) => {
+    if (node === 'L') { out.push(acc); return; }
+    for (const c of A.calls) if (c.from === node) walk(c.to, [...acc, c]);
+  };
+  walk(from, []);
+  return out.map((p) => ({ edges: p, product: p.reduce((a, c) => a * c.rate, 1) }));
+}
+/* the wiggle test: nudge one weight by eps and run the forward pass again (finite differences) */
+function lossOnly(x1, x2, y, share, wv) { return buildNet(x1, x2, y, share, wv).net.L.array; }
+function wiggle(x1, x2, y, share, name, eps = 0.001, wv = W0) {
+  const up = { ...wv, [name]: wv[name] + eps }, dn = { ...wv, [name]: wv[name] - eps };
+  const L0 = lossOnly(x1, x2, y, share, wv), Lp = lossOnly(x1, x2, y, share, up), Lm = lossOnly(x1, x2, y, share, dn);
+  const g = analyse(x1, x2, y, share, wv).grad[name];
+  return { L0, Lp, Lm, dL: Lp - L0, forward: (Lp - L0) / eps, central: (Lp - Lm) / (2 * eps), grad: g };
+}
+const MATH = { np, Recipe, BackwardFuncLookup, BACK_FUNCS, Tensor, wrap_forward_fn, multiply, add, subtract, maximum, relu,
+  topological_sort, sorted_computational_graph, backprop, W0, buildNet, analyse, paths, lossOnly, wiggle,
+  multiply_back0, multiply_back1, maximum_back0, maximum_back1 };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const NAME = { x1: 'x₁', x2: 'x₂', w1: 'w₁', w2: 'w₂', v: 'v', y: 'y', m1: 'm₁', m2: 'm₂', s: 's', h: 'h', yhat: 'ŷ', d: 'd', L: 'L' };
+const KIND = { x1: 'input', x2: 'input', y: 'target', w1: 'weight', w2: 'weight', v: 'weight',
+  m1: 'op', m2: 'op', s: 'op', h: 'op', yhat: 'op', d: 'op', L: 'loss' };
+const SYM = { m1: 'times', m2: 'times', s: 'plus', h: 'relu', yhat: 'times', d: 'minus', L: 'times' };
+const FORMULA = { m1: 'w₁·x₁', m2: 'w₂·x₂', s: 'm₁ + m₂', h: 'relu(s)', yhat: 'h·v', d: 'ŷ − y', L: 'd·d' };
+const CODE = { m1: 'multiply(w1, x1)', m2: 'multiply(w2, x2)', s: 'add(m1, m2)', h: 'relu(s)', yhat: 'multiply(h, v)', d: 'subtract(yhat, y)', L: 'multiply(d, d)' };
+const FWD = ['m1', 'm2', 's', 'h', 'yhat', 'd', 'L'];            // the order the forward pass computes them
+/* world positions: inputs in front, weights behind, the loss on top */
+const POS = {
+  x1: [-1.0, 0.26, 0.45], w1: [-0.52, 0.58, -0.42], x2: [0.52, 0.26, 0.45], w2: [1.0, 0.58, -0.42],
+  m1: [-0.62, 1.06, 0.02], m2: [0.62, 1.06, 0.02], s: [0, 1.5, 0], h: [0, 1.93, 0],
+  v: [-0.84, 2.0, -0.45], yhat: [0, 2.37, 0], y: [0.84, 2.46, 0.45], d: [0, 2.81, 0], L: [0, 3.27, 0],
+};
+const RAD = { input: 0.075, target: 0.08, weight: 0.088, op: 0.1, loss: 0.13 };
+const SIDE = { x1: -1, w1: -1, m1: -1, v: -1, x2: 1, w2: 1, m2: 1, y: 1, s: 1, h: 1, yhat: 1, d: 1, L: 1 };
+const LEAVES = ['x1', 'x2', 'w1', 'w2', 'v', 'y'];
+const WEIGHTS = ['w1', 'w2', 'v'];
+/* every string the web can have: parent > child #argument position (w1 > m2 is the "use w1 twice" string) */
+const EDGES = [
+  ['w1', 'm1', 0], ['x1', 'm1', 1], ['w2', 'm2', 0], ['w1', 'm2', 0], ['x2', 'm2', 1],
+  ['m1', 's', 0], ['m2', 's', 1], ['s', 'h', 0], ['h', 'yhat', 0], ['v', 'yhat', 1],
+  ['yhat', 'd', 0], ['y', 'd', 1], ['d', 'L', 0], ['d', 'L', 1],
+].map(([from, to, arg]) => ({ from, to, arg, key: `${from}>${to}#${arg}` }));
+const ekey = (c) => `${c.from}>${c.to}#${c.argnum}`;
+const FACE = 0.3;               // inlays and chips face the default camera (a little to the right)
+const REST = '#9b9383';         // an unlit string
+const CAM = {
+  front: { pos: [1.7, 2.5, 7.4], target: [0, 1.72, 0] },
+  low: { pos: [1.5, 1.6, 5.2], target: [0, 1.02, 0.1], fit: 1.35 },
+  high: { pos: [1.3, 3.2, 5.0], target: [0, 2.35, 0], fit: 1.5 },
+  wide: { pos: [3.6, 3.0, 6.4], target: [0, 1.6, 0] },
+};
+
+const fx = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+const nf = (v) => { const t = fx(v, 2); return t.endsWith('0') && t.includes('.') ? fx(v, 1).replace(/\.0$/, '') : t; };   // 2, 1.5, 0.55
+const py = (a) => (Number.isInteger(a) ? a.toFixed(1) : String(+a.toFixed(4)));     // Python's repr: 2.0, 0.6, -1.0
+const V3 = (a) => new THREE.Vector3(...a);
+/* every road from a weight to L, the m₁ road first (paths() lists them in backward-pop order) */
+const roads = (A, f) => paths(A, f).sort((a, b) => FWD.indexOf(a.edges[0].to) - FWD.indexOf(b.edges[0].to));
+/* the relu's state, when it matters: off (rate 0) or exactly at its kink (ARENA's tie rule gives ½) */
+const reluNote = (A, T) => (A.value.s < 0
+  ? (T === 1 ? '\nrelu is off (s < 0): nothing gets through' : T === 2 ? `\nrelu off: s = ${fx(A.value.s)} < 0, rate 0` : `\nmaximum_back0 → 0 (s = ${fx(A.value.s)} < 0)`)
+  : A.value.s === 0 ? (T === 1 ? '\nrelu exactly at its kink: rate ½' : '\ns = 0: maximum_back0 splits the tie, ½') : '');
+const UP = new THREE.Vector3(0, 1, 0);
+
+/* ============================================================ small builders */
+
+const CYL = new THREE.CylinderGeometry(1, 1, 1, 10, 1).translate(0, 0.5, 0);
+function rod(mat, r) {
+  const m = new THREE.Mesh(CYL, mat);
+  m.castShadow = true;
+  return {
+    mesh: m,
+    set(a, b) {
+      const d = b.clone().sub(a), len = d.length();
+      m.position.copy(a);
+      m.scale.set(r, Math.max(1e-4, len), r);
+      m.quaternion.setFromUnitVectors(UP, d.normalize());
+    },
+  };
+}
+/* the operation, inlaid in brass on the bead's face: ×, +, −, or relu's hockey stick */
+function inlay(sym, r) {
+  const g = new THREE.Group(), mat = K.mat.brass(), z = r * 0.9, t = r * 0.13;
+  const seg = (x0, y0, x1, y1) => { const q = rod(mat, t); q.set(new THREE.Vector3(x0 * r, y0 * r, z), new THREE.Vector3(x1 * r, y1 * r, z)); g.add(q.mesh); };
+  if (sym === 'times') { seg(-0.42, -0.42, 0.42, 0.42); seg(-0.42, 0.42, 0.42, -0.42); }
+  if (sym === 'plus') { seg(-0.55, 0, 0.55, 0); seg(0, -0.55, 0, 0.55); }
+  if (sym === 'minus') seg(-0.55, 0, 0.55, 0);
+  if (sym === 'relu') { seg(-0.6, -0.3, 0, -0.3); seg(0, -0.3, 0.5, 0.42); }
+  g.rotation.y = FACE;
+  return g;
+}
+/* a string between two beads: straight, or bowed (the two strings of d·d), trimmed to the bead surfaces */
+function edgePoints(e) {
+  const a = V3(POS[e.from]), b = V3(POS[e.to]);
+  const ra = RAD[KIND[e.from]] * 1.02, rb = RAD[KIND[e.to]] * 1.02;
+  const bow = e.from === 'd' && e.to === 'L' ? (e.arg === 0 ? -0.12 : 0.12) : 0;
+  const c = a.clone().lerp(b, 0.5).add(new THREE.Vector3(bow, 0, 0));
+  const pts = [];
+  for (let i = 0; i <= 40; i++) {
+    const t = i / 40;
+    pts.push(a.clone().multiplyScalar((1 - t) ** 2).addScaledVector(c, 2 * t * (1 - t)).addScaledVector(b, t * t));
+  }
+  const out = pts.filter((p) => p.distanceTo(a) >= ra && p.distanceTo(b) >= rb);
+  return out;
+}
+function along(pts, t) {           // the point at arc-length fraction t
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += pts[i].distanceTo(pts[i - 1]);
+  let want = t * total;
+  for (let i = 1; i < pts.length; i++) {
+    const s = pts[i].distanceTo(pts[i - 1]);
+    if (want <= s) return pts[i - 1].clone().lerp(pts[i], s > 0 ? want / s : 0);
+    want -= s;
+  }
+  return pts[pts.length - 1].clone();
+}
+function fade(obj, on) {           // unused beads (w2 when w1 is shared) turn to ghosts
+  obj.traverse((m) => {
+    if (!m.isMesh) return;
+    if (!m.userData.mat0) m.userData.mat0 = m.material;
+    if (on) {
+      if (!m.userData.ghost) { m.userData.ghost = m.userData.mat0.clone(); m.userData.ghost.transparent = true; m.userData.ghost.opacity = 0.22; m.userData.ghost.depthWrite = false; }
+      m.material = m.userData.ghost; m.castShadow = false;
+    } else { m.material = m.userData.mat0; m.castShadow = true; }
+  });
+}
+
+/* ============================================================ state + compute */
+
+function compute(S) {
+  const st = S.state, k = S.knobs;
+  st.A = analyse(k.x1, k.x2, k.y, !!k.share);
+  st.N = st.A.order.length;
+  st.step = Math.min(k.step, st.N);
+  st.focus = st.A.used.has(k.focus) ? k.focus : 'w1';
+}
+/* blame known after `step` pops: final for popped nodes, running totals (+=) for the rest */
+function blameAt(A, step) {
+  const done = new Set(A.order.slice(0, step)), sum = {}, fin = {};
+  if (step >= 1) sum.L = 1;
+  for (const c of A.calls) if (done.has(c.to)) sum[c.from] = (sum[c.from] ?? 0) + c.in_grad;
+  for (const n of done) fin[n] = true;
+  return { sum, fin, done };
+}
+
+/* ============================================================ draw */
+
+function draw(S) {
+  const st = S.state, A = st.A, T = S.tier, mode = st.mode;
+  const used = A.used;
+  const pathKeys = new Set(), otherKeys = new Set(), all = mode === 'path' ? roads(A, st.focus) : [];
+  if (all.length) {
+    for (const c of all[0].edges) pathKeys.add(ekey(c));
+    for (const p of all.slice(1)) for (const c of p.edges) if (!pathKeys.has(ekey(c))) otherKeys.add(ekey(c));
+  }
+  const B = blameAt(A, mode === 'fwd' ? 0 : (mode === 'order' || mode === 'path') ? st.N : st.step);
+  const fwdDone = st.playing && mode === 'fwd' ? st.fwdDone : FWD.length;
+  const known = (n) => LEAVES.includes(n) || FWD.indexOf(n) < fwdDone;
+  const callBy = new Map(A.calls.map((c) => [ekey(c), c]));
+  // beads, ghosts for anything the graph no longer uses
+  for (const n of Object.keys(POS)) {
+    const N = st.nodes[n], on = used.has(n);
+    fade(N.group, !on);
+  }
+  const ringAt = st.code ? st.codeOp : (WEIGHTS.includes(st.focus) && (mode === 'path' || st.split || st.wigOn) ? st.focus : null);
+  st.ring.visible = !!ringAt;
+  if (ringAt) { st.ring.position.copy(V3(POS[ringAt])); st.ring.scale.setScalar((RAD[KIND[ringAt]] + 0.055) / 0.15); }
+  // strings
+  for (const e of EDGES) {
+    const E = st.edges[e.key], c = callBy.get(e.key), on = !!c;
+    E.base.mesh.visible = on;
+    let lit = null;
+    if (on) {
+      if (mode === 'fwd') lit = known(e.to) ? C.data : null;
+      else if (mode === 'path') lit = pathKeys.has(e.key) ? C.grad : otherKeys.has(e.key) ? '#e7a3a3' : null;
+      else if (st.split) lit = e.from === st.focus ? C.grad : (B.done.has(e.to) ? '#e7a3a3' : null);
+      else lit = B.done.has(e.to) ? C.grad : null;
+    }
+    E.lit.mesh.visible = !!lit;
+    if (lit) { E.mat.color.set(lit); E.mat.emissive.set(lit); }
+    // chips on strings: exchange rates along the path, or the blame each road carries back to a shared weight
+    let rt = null;
+    if (on && mode === 'path' && pathKeys.has(e.key)) rt = `×${nf(c.rate)}`;
+    if (on && st.split && e.from === st.focus && B.done.has(e.to)) rt = `${T === 1 ? '' : '+= '}${fx(c.in_grad)}`;
+    E.chip.set(rt || '');
+    E.chip.el.className = 'k-label ' + (st.split ? 'k-blame' : 'k-rate');
+    E.chip.show(!!rt && !st.playing);
+  }
+  // chips on beads
+  for (const n of Object.keys(POS)) {
+    const N = st.nodes[n], on = used.has(n);
+    let text = null, cls = 'k-val';
+    if (!on) text = null;
+    else if (mode === 'fwd') text = known(n) ? `${NAME[n]} ${fx(A.value[n])}` : null;
+    else if (mode === 'order') { const i = A.order.indexOf(n); text = `${i + 1} · ${NAME[n]}`; cls = 'k-ord'; }
+    else if (mode === 'path') {
+      if (n === st.focus) text = `${NAME[n]}`;
+      else if (n === 'L') text = T === 1 ? 'loss' : 'L';
+      cls = 'k-val';
+    } else {
+      const s = B.sum[n];
+      if (s !== undefined) {
+        const g = T === 3 && WEIGHTS.includes(n) && B.fin[n] ? `${NAME[n]}.grad` : NAME[n];
+        text = `${g} ${fx(s)}${B.fin[n] ? '' : ' …'}`;
+        cls = B.fin[n] ? 'k-blame' : 'k-blame k-part';
+      } else if (st.step === 0) text = `${NAME[n]} ${fx(A.value[n])}`;
+    }
+    N.chip.el.className = 'k-label ' + cls;
+    N.chip.set(text || '');
+    N.chip.show(!!text);
+  }
+  readouts(S);
+  S.invalidate();
+}
+
+/* ============================================================ readouts */
+
+function readouts(S) {
+  const st = S.state, A = st.A, T = S.tier, k = S.knobs;
+  let r = '';
+  const g = A.grad, f = st.focus;
+  const wg = WEIGHTS.filter((w) => A.used.has(w));
+  if (st.wigOn) {
+    const W = wiggle(k.x1, k.x2, k.y, !!k.share, f, 0.001);
+    r = T === 1 ? `nudge ${NAME[f]} by 0.001, rerun forward:\nloss ${fx(W.L0, 5)} → ${fx(W.Lp, 5)}\nchange ÷ nudge = **${fx(W.forward, 3)}** · blame **${fx(W.grad, 3)}**`
+      : T === 2 ? `${NAME[f]} + ε, ε = 0.001: L ${fx(W.L0, 5)} → ${fx(W.Lp, 5)}\nΔL/ε = **${fx(W.forward, 4)}** · backprop **${fx(W.grad, 4)}**`
+        : `(L(${NAME[f]}+ε) − L)/ε = **${fx(W.forward, 4)}**\n(L₊ − L₋)/2ε = ${fx(W.central, 4)} · ${NAME[f]}.grad = **${fx(W.grad, 4)}**`;
+  } else if (st.cost) {
+    const n = wg.length;
+    r = T === 1 ? `forward: ${A.fwdOps} small jobs · backward: ${A.backCalls} jobs\n→ blame for all ${n} weights at once\nwiggling instead: ${n} more forward trips`
+      : T === 2 ? `forward ${A.fwdOps} ops · backward ${A.backCalls} back-fn calls (${fx(A.backCalls / A.fwdOps, 1)}×)\n→ ${wg.map((w) => NAME[w]).join(', ')} grads together\nfinite differences: +${n} forward passes`
+        : `fwd ${A.fwdOps} ops, bwd ${A.backCalls} back_fn calls (${fx(A.backCalls / A.fwdOps, 1)}×)\nFD: N + 1 passes (central 2N), N = ${n}\nbackprop: ≈ 3 passes for any N`;
+  } else if (st.code) {
+    const n = st.codeOp, node = A.net[n], rec = node.recipe;
+    if (!rec) {                                   // a leaf: an input, the target or a weight
+      const isW = WEIGHTS.includes(n), bl = A.blame[n];
+      r = T === 1 ? `${NAME[n]} = ${fx(node.array)}: ${isW ? 'a weight' : n === 'y' ? 'the target' : 'an input'}, made by no bead\nits blame: **${fx(bl)}**${isW ? ' (kept: training nudges it)' : ' (dropped: data stays fixed)'}`
+        : T === 2 ? `${NAME[n]}: a leaf, requires_grad=${isW ? 'True' : 'False'}\n∂L/∂${NAME[n]} = **${fx(bl)}**, ${isW ? `kept as ${NAME[n]}.grad` : 'computed, then dropped'}`
+          : `${NAME[n]}.is_leaf = True, recipe = None\n${isW ? `${NAME[n]}.grad = **${fx(g[n], 3)}**` : `grads.pop(${NAME[n]}) = ${fx(bl, 3)}, not stored`}`;
+      st.readout.set(r); st.readout.show(true); return;
+    }
+    const par = Object.entries(rec.parents).map(([i, p]) => `${i}: ${NAME[A.names.get(p)]}`).join(', ');
+    const calls = A.calls.filter((c) => c.to === n);
+    const args = rec.args.map(py).join(', ');
+    const tied = k.share && n === 'm2';
+    const formula = tied ? 'w₁·x₂' : FORMULA[n], code = tied ? 'multiply(w1, x2)' : CODE[n];
+    const inputs = Object.values(rec.parents).map((p) => NAME[A.names.get(p)]);
+    r = T === 1 ? `${NAME[n]} = ${formula} = ${fx(node.array)}\nremembers: ${rec.func.label.slice(3)}, inputs ${inputs[0] === inputs[1] ? `${inputs[0]} twice` : inputs.join(' & ')}\nblame sent back: ` + calls.map((c) => `${NAME[c.from]} **${fx(c.in_grad)}**`).join(' · ')
+      : T === 2 ? `${NAME[n]} = ${code}\nrecipe: ${rec.func.label}, parents {${par}}\nback: ` + calls.map((c) => `${NAME[c.from]} ${fx(c.outgrad)} × ${nf(c.rate)} = **${fx(c.in_grad)}**`).join(' · ')
+        : `Recipe(${rec.func.label}, (${args}), {}, {${par}})\n` + calls.map((c) => `${c.back || `λ(${rec.func.label}, ${c.argnum})`}(${fx(c.outgrad, 3)}, …) = **${fx(c.in_grad, 3)}** → ${NAME[c.from]}`).join('\n');
+  } else if (st.mode === 'fwd') {
+    const v = A.value;
+    r = T === 1 ? `guess ŷ = **${fx(v.yhat)}**, target y = ${fx(v.y)}\nloss = (${fx(v.yhat)} − ${fx(v.y)})² = **${fx(v.L, 4)}**`
+      : T === 2 ? `ŷ = v·relu(w₁x₁ + ${k.share ? 'w₁' : 'w₂'}x₂) = **${fx(v.yhat, 3)}**\nL = (ŷ − y)² = **${fx(v.L, 4)}**`
+        : `h = max(s, 0) = ${fx(v.h, 3)}, ŷ = ${fx(v.yhat, 3)}\nL = d·d = **${fx(v.L, 4)}**`;
+  } else if (st.mode === 'path') {
+    const P = roads(A, f), p = P[0];
+    const chain = p.edges.map((c) => nf(c.rate)).join(' × ');
+    const tot = P.reduce((a, q) => a + q.product, 0);
+    r = T === 1 ? `one road from ${NAME[f]} to the loss:\n${chain} = **${fx(p.product)}**\n${P.length} roads in all → **${fx(tot)}**`
+      : T === 2 ? `∂L/∂${NAME[f]} along one path:\n${chain} = **${fx(p.product, 3)}**\nall ${P.length} paths: Σ = **${fx(tot, 3)}** = ${NAME[f]}.grad`
+        : `Π rates = ${chain} = **${fx(p.product, 3)}**\nΣ over ${P.length} paths = **${fx(tot, 3)}** (= ${NAME[f]}.grad)`;
+    r += reluNote(A, T);
+  } else if (st.mode === 'order') {
+    const names = A.order.map((n) => NAME[n]);
+    const last = A.order[A.order.length - 1];
+    const cons = A.calls.filter((c) => c.from === last).map((c) => NAME[c.to]);
+    r = (T === 1 ? 'backward order:\n' : T === 2 ? 'reverse topological order:\n' : 'sorted_computational_graph(L):\n')
+      + names.join(', ')
+      + (cons.length > 1 ? `\n${NAME[last]} waits for ${cons.join(' and ')}` : '');
+  } else {
+    const B = blameAt(A, st.step);
+    if (st.step === 0) r = T === 1 ? 'forward done; blame not sent yet\n(slide "backward steps")' : `backward: 0 of ${st.N} steps done`;
+    else if (st.step < st.N) {
+      const n = A.order[st.step - 1];
+      r = T === 1 ? `step ${st.step} of ${st.N}: ${NAME[n]} passes its blame down` : `step ${st.step}/${st.N}: pop ${NAME[n]}, ∂L/∂${NAME[n]} = **${fx(B.sum[n])}**`;
+    } else {
+      const parts = wg.map((w) => `${NAME[w]} **${fx(g[w])}**`);
+      r = (T === 1 ? `blame on the weights:\n${parts.join(' · ')}`
+        : T === 2 ? `∂L/∂weights:\n${parts.join(' · ')}` : wg.map((w) => `${NAME[w]}.grad = **${fx(g[w], 3)}**`).join('\n')) + reluNote(A, T);
+      const sp = A.calls.filter((c) => c.from === f);
+      if (st.split && sp.length > 1) {
+        const byFwd = [...sp].sort((a, b) => FWD.indexOf(a.to) - FWD.indexOf(b.to));
+        r = T === 3 ? `grads[${NAME[f]}] = ${fx(sp[0].in_grad)} (${NAME[sp[0].to]} pops first)\ngrads[${NAME[f]}] += ${fx(sp[1].in_grad)} (${NAME[sp[1].to]}) → **${fx(g[f])}**`
+          : (T === 1 ? `blame into ${NAME[f]} from its two users:\n` : `∂L/∂${NAME[f]} = Σ over consumers:\n`)
+            + `${byFwd.map((c) => fx(c.in_grad)).join(' + ')} = **${fx(g[f])}**`.replace('+ −', '− ');
+      }
+    }
+  }
+  st.readout.set(r);
+  st.readout.show(!!r);
+}
+
+/* ============================================================ scene config */
+
+function view(S, o = {}) {
+  const st = S.state;
+  st.playToken = (st.playToken || 0) + 1;       // any running animation stops
+  st.playing = false;
+  hidePulses(st);
+  st.mode = o.mode || S.knobs.show;
+  st.split = !!o.split;
+  st.code = !!o.code;
+  st.cost = !!o.cost;
+  st.wigOn = !!o.wig;
+  st.codeOp = o.codeOp || st.codeOp || 'm1';
+  compute(S);
+  if (o.figure) {
+    const F = st.fig;
+    F.group.visible = true;
+    F.place(o.figAt || [0.3, 0, 1.3], o.face ?? -0.3);
+    F.pose('stand', { ms: 0 });
+    const doPose = () => F.pose(o.figure, { at: o.at });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  draw(S);
+}
+
+/* ============================================================ pulses (Play) */
+
+function hidePulses(st) { for (const p of st.pulses) p.visible = false; }
+function pulse(S, list, down, hex, ms, token) {
+  const st = S.state;
+  const use = list.slice(0, st.pulses.length);
+  use.forEach((e, i) => { const p = st.pulses[i]; p.material.color.set(hex); p.material.emissive.set(hex); p.visible = true; });
+  return S.tween(ms, (t) => {
+    if (token !== st.playToken) return;
+    use.forEach((e, i) => { st.pulses[i].position.copy(along(st.edges[e].pts, down ? 1 - t : t)); });
+    if (t >= 1) hidePulses(st);
+    S.invalidate();
+  }, (x) => x);
+}
+async function play(S) {
+  const st = S.state, A = st.A;
+  const token = (st.playToken = (st.playToken || 0) + 1);
+  st.split = st.code = st.cost = st.wigOn = false;
+  st.mode = 'fwd'; st.playing = true; st.fwdDone = 0;
+  S.setKnob('show', 'bwd', { silent: true });
+  draw(S);
+  for (let i = 0; i < FWD.length; i++) {
+    const into = A.calls.filter((c) => c.to === FWD[i]).map(ekey);
+    await pulse(S, into, false, C.data, 300, token);
+    if (token !== st.playToken) return;
+    st.fwdDone = i + 1; draw(S);
+  }
+  st.mode = 'bwd'; st.step = 0; S.setKnob('step', 0, { silent: true }); draw(S);
+  for (let i = 1; i <= A.order.length; i++) {
+    const out = A.calls.filter((c) => c.to === A.order[i - 1]).map(ekey);
+    if (out.length) await pulse(S, out, true, C.grad, 340, token);
+    else await S.tween(90, () => {});
+    if (token !== st.playToken) return;
+    st.step = i; S.setKnob('step', i, { silent: true }); draw(S);
+  }
+  st.playing = false; draw(S);
+}
+
+/* ============================================================ taps */
+
+function tapNode(S, n) {
+  const st = S.state;
+  if (!st.A.used.has(n)) return;
+  st.playToken = (st.playToken || 0) + 1; st.playing = false; hidePulses(st);
+  if (WEIGHTS.includes(n)) { S.setKnob('focus', n, { silent: true }); st.focus = n; }
+  if (!(st.mode === 'path' && WEIGHTS.includes(n))) {            // path view: tapping a weight just follows its road
+    st.codeOp = n; st.code = true; st.cost = st.wigOn = st.split = false;
+    if (st.mode !== 'bwd') { st.mode = 'bwd'; S.setKnob('show', 'bwd', { silent: true }); }
+    if (st.step < st.N) { st.step = st.N; S.setKnob('step', st.N, { silent: true }); }
+  }
+  draw(S);
+}
+
+/* ================================================================== run() */
+
+run({
+  id: 'w04-blame', num: '07', week: 4, kind: 'weekly',
+  title: 'The blame web',
+  subtitle: 'Backprop as blame flowing backwards through a 3D web of operations.',
+  back2d: '#week-04',
+  film: 'w4-backprop',
+  plinth: { r: 1.6, h: 0.14 },
+
+  knobs: [
+    { id: 'show', type: 'select', wide: true, label: { 1: 'Show', 2: 'Show', 3: 'View' }, value: 'fwd',
+      options: [['fwd', { 1: 'Forward: the numbers', 2: 'Forward values', 3: 'forward: values' }],
+        ['bwd', { 1: 'Backward: the blame', 2: 'Backward blame ∂L/∂node', 3: 'backward: grads' }],
+        ['path', { 1: 'One road: its exchange rates', 2: 'One path: rates multiply', 3: 'one path: Π local derivatives' }],
+        ['order', { 1: 'The order blame moves in', 2: 'Backward order', 3: 'reverse topological order' }]] },
+    { id: 'x1', type: 'range', label: { 1: 'Input x₁', 2: 'x₁', 3: 'x₁' }, min: -3, max: 3, step: 0.1, value: 2, fmt: (v) => K.fmt(v, 2) },
+    { id: 'x2', type: 'range', label: { 1: 'Input x₂', 2: 'x₂', 3: 'x₂' }, min: -3, max: 3, step: 0.1, value: -1, fmt: (v) => K.fmt(v, 2) },
+    { id: 'y', type: 'range', label: { 1: 'Target (right answer)', 2: 'Target y', 3: 'y' }, min: -2, max: 3, step: 0.1, value: 0.5, fmt: (v) => K.fmt(v, 2) },
+    { id: 'share', type: 'toggle', label: { 1: 'Use w₁ twice', 2: 'Use w₁ twice (m₂ = w₁·x₂)', 3: 'tie w₂ := w₁' }, value: false },
+    { id: 'focus', type: 'select', label: { 1: 'Follow weight', 2: 'Focus weight', 3: 'Focus' }, value: 'w1',
+      options: [['w1', 'w₁'], ['w2', 'w₂'], ['v', 'v']] },
+    { id: 'step', type: 'range', label: { 1: 'Backward steps done', 2: 'Backward steps (pops)', 3: 'pops done' }, min: 0, max: 13, step: 1, value: 13, fmt: (v) => String(v) },
+    { id: 'play', type: 'button', label: { 1: 'Play: up, then down', 2: 'Play forward + backward', 3: 'Play forward, backprop' },
+      onClick: (S) => { play(S); } },
+    { id: 'wig', type: 'button', label: { 1: 'Wiggle test', 2: 'Wiggle check (ε = 0.001)', 3: 'Finite-difference check' },
+      onClick: (S) => { const st = S.state; st.playToken = (st.playToken || 0) + 1; st.playing = false; hidePulses(st); st.wigOn = true; st.cost = st.code = st.split = false; st.mode = 'bwd'; st.step = st.N; S.setKnob('show', 'bwd', { silent: true }); S.setKnob('step', st.N, { silent: true }); draw(S); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.mode = 'fwd';
+    st.nodes = {};
+    const brass = K.mat.brass();
+    const mats = { input: K.mat.paint(C.data), target: K.mat.paint(C.good), weight: K.mat.brass(), op: K.mat.plaster(), loss: K.mat.paint(C.grad) };
+    for (const n of Object.keys(POS)) {
+      const kind = KIND[n], r = RAD[kind], g = new THREE.Group();
+      const bead = new THREE.Mesh(new THREE.SphereGeometry(r, 32, 20), mats[kind]);
+      bead.castShadow = true; bead.receiveShadow = true;
+      g.add(bead);
+      if (SYM[n]) g.add(inlay(SYM[n], r));
+      g.position.copy(V3(POS[n]));
+      S.root.add(g);
+      let post = null;
+      if (LEAVES.includes(n)) {             // leaves stand on thin brass posts
+        post = rod(brass, 0.0075);
+        post.set(new THREE.Vector3(POS[n][0], 0, POS[n][2]), new THREE.Vector3(POS[n][0], POS[n][1] - r * 0.9, POS[n][2]));
+        g.add(post.mesh);
+        post.mesh.position.sub(g.position);
+      }
+      K.pick(bead, () => tapNode(S, n));
+      const chip = K.label(g, '', { cls: 'val', anchor: SIDE[n] < 0 ? 'right' : 'left', dx: SIDE[n] * 15, dy: 0 });
+      st.nodes[n] = { group: g, bead, chip };
+    }
+    st.edges = {};
+    for (const e of EDGES) {
+      const pts = edgePoints(e);
+      const base = K.tube(pts, REST, 0.0075);
+      const mat = K.mat.string(C.data);
+      const lit = K.tube(pts, C.data, 0.0135, { material: mat });
+      S.root.add(base.mesh, lit.mesh);
+      const mid = along(pts, 0.5);
+      const chip = K.label(mid, '', { cls: 'rate', anchor: 'center', dx: 0, dy: 0, prio: 2 });
+      st.edges[e.key] = { base, lit, mat, pts, chip };
+    }
+    st.pulses = Array.from({ length: 4 }, () => {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.042, 16, 12), new THREE.MeshStandardMaterial({ color: C.data, emissive: C.data, emissiveIntensity: 0.6, roughness: 0.4 }));
+      m.visible = false; S.root.add(m); return m;
+    });
+    st.ring = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.009, 10, 48), K.mat.brass());
+    st.ring.rotation.y = FACE;
+    S.root.add(st.ring);
+    st.fig = K.figure();
+    st.fig.group.scale.setScalar(0.85);
+    S.root.add(st.fig.group);
+    st.readout = K.label(new THREE.Vector3(0, 3.56, 0), '', { cls: 'readout', anchor: 'bottom', dy: -2 });
+    // an invisible spacer above L: the kit's auto-fit then keeps room for a three- or four-line readout
+    const spacer = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.02), new THREE.MeshBasicMaterial({ visible: false }));
+    spacer.position.set(0, 3.8, 0);
+    S.root.add(spacer);
+  },
+
+  rebuild(S, id) {
+    const st = S.state;
+    if (id === '*') { compute(S); draw(S); return; }
+    if (st.playing) st.mode = S.knobs.show;          // a knob touched mid-play: stop, and show what Show says
+    st.playToken = (st.playToken || 0) + 1; st.playing = false; hidePulses(st);
+    if (id === 'show') { st.mode = S.knobs.show; st.split = st.code = st.cost = st.wigOn = false; if (st.mode === 'bwd' && S.knobs.step === 0) S.setKnob('step', 13, { silent: true }); }
+    if (id === 'step') { if (st.mode !== 'bwd') { st.mode = 'bwd'; S.setKnob('show', 'bwd', { silent: true }); } st.code = st.cost = st.wigOn = false; }
+    if (id === 'share') st.split = st.split && !!S.knobs.share;
+    compute(S);
+    draw(S);
+  },
+
+  onTier(S) { draw(S); },
+
+  solids(S) {
+    const st = S.state, A = st.A;
+    const out = [J.primitives.cylinder({ radius: 1.25, height: 0.08, center: [0, 0, -0.04], segments: 64 })];   // a base disc to stand on
+    const toJ = (v) => [v.x, -v.z, v.y];
+    for (const n of Object.keys(POS)) {
+      if (!A.used.has(n)) continue;
+      const p = V3(POS[n]);
+      out.push(J.primitives.sphere({ radius: RAD[KIND[n]], center: toJ(p), segments: 24 }));
+      if (LEAVES.includes(n)) { const t = K.tubeSolid([toJ(new THREE.Vector3(p.x, 0, p.z)), toJ(p)], 0.022, 8); if (t) out.push(t); }
+    }
+    for (const e of EDGES) {
+      if (!A.calls.some((c) => ekey(c) === e.key)) continue;
+      const pts = st.edges[e.key].pts.filter((_, i, a) => i % 4 === 0 || i === a.length - 1).map(toJ);
+      const t = K.tubeSolid(pts, 0.02, 8);          // 1 mm strings at 1 unit = 25 mm
+      if (t) out.push(t);
+    }
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**Forward: numbers flow up.** Inputs (blue) meet weights (brass) in a tiny two-layer net. Each bead does one small job (×, +, relu, −) and passes its number up to the loss: how wrong the guess is.',
+        2: 'One toy example through a two-layer net: h = relu(w₁x₁ + w₂x₂), ŷ = v·h, loss L = (ŷ − y)², built as d·d. Each bead is one operation; the strings carry values up. With x = (2, −1) and target 0.5, the guess is 1.05 and L = 0.3025.',
+        3: 'Each bead is a Tensor from `wrap_forward_fn(np.multiply)` and friends: it computes f(args) and, since an input `requires_grad`, stores `Recipe(func, args, kwargs, parents)`. The recipes are the graph. Leaves: x₁, x₂, y (no grad) and w₁, w₂, v (`requires_grad=True`).',
+      },
+      cam: CAM.front,
+      set: { show: 'fwd', x1: 2, x2: -1, y: 0.5, share: false, focus: 'w1', step: 13 },
+      enter(S) { view(S, { mode: 'fwd', figure: 'point', at: POS.L }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Backward: blame flows down.** Each red number answers: if this bead\'s value went up a hair, how much would the loss go up, per unit? The loss starts it with 1. Negative blame: pushing up would help.',
+        2: 'Blame = ∂L/∂node: nudge the node by ε and L moves by about blame × ε. It starts as 1 at L and flows down every string: w₁ gets 3.30, v 0.77, w₂ −1.65 (raising w₂ would lower the loss). Karpathy\'s micrograd keeps it as .grad on every node.',
+        3: '`backprop(L)` seeds grads = {L: 1}, then pops nodes in reverse topological order, calling one back function per (node, parent) and adding the result into grads[parent]. Leaves that require grad keep theirs: w₁.grad = 3.3, w₂.grad = −1.65, v.grad = 0.77.',
+      },
+      cam: CAM.front,
+      set: { show: 'bwd', x1: 2, x2: -1, y: 0.5, share: false, focus: 'w1', step: 13 },
+      enter(S) { view(S, { mode: 'bwd' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Rates multiply along a road.** Each string has an exchange rate: how far the upper bead moves per unit of the lower one. From w₁ up to the loss: 2 × 1 × 1 × 1.5 × 1 × 0.55 = 1.65.',
+        2: 'Each string\'s rate is a local derivative: × passes the other input (w₁ → m₁: x₁ = 2), + passes 1, relu passes 1 while on, − passes 1. Chain rule: multiply along the path, 2 × 1 × 1 × 1.5 × 1 × 0.55 = 1.65. L = d·d adds a twin path worth another 1.65: 3.3 in all.',
+        3: 'A back function returns grad_out × local rate, e.g. `multiply_back0(grad_out, out, x, y) = unbroadcast(y * grad_out, x)`. Composing them multiplies rates: ∂L/∂w₁ = Σ over paths of Π rates = 1.65 + 1.65 (both slots of d·d) = 3.3. 3Blue1Brown\'s backprop-calculus video draws this chain.',
+      },
+      cam: CAM.front,
+      set: { show: 'path', x1: 2, x2: -1, y: 0.5, share: false, focus: 'w1', step: 13 },
+      enter(S) { view(S, { mode: 'path' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Two roads back? Add them.** Now w₁ is used twice, once with each input. Blame comes back along both strings, 2.40 and −1.20, and simply adds: w₁\'s blame is 1.20.',
+        2: 'Share w₁ (m₂ = w₁·x₂, the way a convolution or an RNN reuses weights): w₁ moves the loss through m₁ and through m₂, and both effects count. Via m₁: 2 × 1.2 = 2.40; via m₂: −1 × 1.2 = −1.20; total 1.20. The same rule makes d·d give 2d = 0.8.',
+        3: 'Multivariable chain rule: ∂L/∂w₁ = Σ over consumers c of ∂L/∂c · ∂c/∂w₁. In `backprop`: `grads[parent] = in_grad if (parent not in grads) else grads[parent] + in_grad`. Overwrite instead of adding and w₁.grad would be 2.40 or −1.20, not 1.20.',
+      },
+      cam: CAM.front,
+      set: { show: 'bwd', x1: 2, x2: -1, y: 0.5, share: true, focus: 'w1', step: 13 },
+      enter(S) { view(S, { mode: 'bwd', split: true }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Order matters.** A bead passes blame down only after every bead above it has reported. The numbers show the order: the loss goes first; w₁, used twice, must wait for both its users.',
+        2: 'Backprop visits nodes in reverse topological order: each node after all of its consumers, so its blame is complete before it passes any on. Here: L, d, y, ŷ, v, h, s, m₂, x₂, m₁, x₁, w₁. w₁ comes last because it waits for m₂ and m₁.',
+        3: '`sorted_computational_graph(L)` is `topological_sort(L, get_parents)[::-1]`: a DFS post-order with `perm`/`temp` sets (a cycle raises \'Not a DAG!\'), reversed. Any order with every consumer before its producers works; then `grads.pop(node)` is already final.',
+      },
+      cam: CAM.front,
+      set: { show: 'order', x1: 2, x2: -1, y: 0.5, share: true, focus: 'w1', step: 13 },
+      enter(S) { view(S, { mode: 'order' }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**This week you build it.** Each bead keeps a recipe (which function, which inputs); a table holds each function\'s backward rule. Sort the graph, walk down from the loss adding blame to inputs: backprop.',
+        2: 'ARENA [0.4] in four parts: a `Recipe` (func, args, parents) on every output; `BACK_FUNCS`, a table from (function, argument position) to a backward function; `topological_sort`; and `backprop`, which walks the sorted graph adding each back function\'s result to the parent\'s grad. Tap a bead.',
+        3: 'For m₁ = w₁·x₁: `Recipe(np.multiply, (0.6, 2.0), {}, {0: w₁, 1: x₁})`; `BACK_FUNCS.get_back_func(np.multiply, 0)` is `multiply_back0`, giving 2.0 × 1.65 = 3.3 into grads[w₁]. relu is `maximum(x, 0.0)`; its back rule gives ½ at exactly 0.',
+      },
+      cam: CAM.front,
+      set: { show: 'bwd', x1: 2, x2: -1, y: 0.5, share: false, focus: 'w1', step: 13 },
+      enter(S) { view(S, { mode: 'bwd', code: true, codeOp: 'm1' }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Why this is cheap.** One trip down gives every weight\'s blame at once, for about twice the work of the trip up. Wiggling instead costs one forward trip per weight: billions, for a big model.',
+        2: 'Forward: 7 ops. Backward: 13 back-function calls, about 2× the forward work, returning all three weight gradients together. Finite differences need one extra forward pass per weight: fine for 3, hopeless for 10⁹. Reverse mode is why deep learning trains at all.',
+        3: 'Reverse-mode AD costs a small constant times one forward pass (≈ 2× more for matmul layers: dA and dB), independent of the parameter count N; forward differences cost N + 1 passes, central 2N. The price is memory: every recipe\'s args are kept for the backward pass.',
+      },
+      cam: CAM.front,
+      set: { show: 'bwd', x1: 2, x2: -1, y: 0.5, share: false, focus: 'w1', step: 13 },
+      enter(S) { view(S, { mode: 'bwd', cost: true }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** A spreadsheet recalculating after you edit one cell walks a graph like this, in order. So does tracing why a budget ran over: which input moved the total, and by how much.',
+        2: 'Dependency graphs are everywhere: spreadsheet recalculation (topological order), build systems, supply-chain blame, sensitivity analysis. From W5 on, every model you train runs this backward pass, and interpretability reads the same gradients.',
+        3: 'Reverse-mode AD is the adjoint method: weather data assimilation (4D-Var), CFD shape optimisation, finance\'s AAD for Greeks. Attribution methods (gradient × input, integrated gradients) reuse backprop to ask which inputs a model\'s output blames.',
+      },
+      cam: CAM.wide,
+      set: { show: 'bwd', x1: 2, x2: -1, y: 0.5, share: false, focus: 'w1', step: 13 },
+      enter(S) { view(S, { mode: 'bwd', figure: 'cheer' }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'A bead feeds two others. They send back blame 0.3 and −0.1. What is its total blame?',
+        2: 'A node feeds two consumers, which send back 0.3 and −0.1. ∂L/∂node = ?',
+        3: 'grads[node] after its two consumers report 0.3 and −0.1?' },
+      options: [{ t: '0.2', ok: true }, { t: '0.3 (the bigger one)' }, { t: '0.4' }, { t: '−0.03 (their product)' }],
+      why: { 1: 'Add them: 0.3 + (−0.1) = 0.2. Each road back is a separate way the bead moves the loss, and the effects stack. On the web, w₁ used twice gets 2.40 − 1.20 = 1.20.',
+        2: 'Total derivative: sum over consumers, 0.3 − 0.1 = 0.2. Multiplying is for rates along one path; adding is for separate paths. Here shared w₁ gets 2.40 + (−1.20) = 1.20.',
+        3: '`grads[parent] + in_grad`: 0.3 + (−0.1) = 0.2. Plain assignment instead keeps whichever consumer reported last: a classic bug that only bites once a weight is reused.' },
+      show(S) {
+        S.setKnobs({ show: 'bwd', x1: 2, x2: -1, y: 0.5, share: true, focus: 'w1', step: 13 });
+        view(S, { mode: 'bwd', split: true });
+        return S.fly(CAM.front);
+      } },
+    { q: { 1: 'Along one road the first string has exchange rate 2 and the next 0.5. What is the rate for the whole road?',
+        2: 'Two local derivatives in a chain: 2, then 0.5. The end-to-end derivative?',
+        3: 'dz/dx, if dy/dx = 2 and dz/dy = 0.5?' },
+      options: [{ t: '1.0', ok: true }, { t: '2.5 (add them)' }, { t: '2 (the first one)' }, { t: '0.25' }],
+      why: { 1: 'Multiply: nudge the start by 1, the middle moves 2, and the end moves 0.5 × 2 = 1. Rates along one road multiply; separate roads add.',
+        2: 'Chain rule: 2 × 0.5 = 1.0. On the web, w₁\'s road reads 2 × 1 × 1 × 1.5 × 1 × 0.55 = 1.65.',
+        3: 'dz/dx = dz/dy · dy/dx = 0.5 × 2 = 1. In backprop: grad_out 1, × 0.5 at one back function, × 2 at the next.' },
+      show(S) {
+        S.setKnobs({ show: 'path', x1: 2, x2: -1, y: 0.5, share: false, focus: 'w1', step: 13 });
+        view(S, { mode: 'path' });
+        return S.fly(CAM.front);
+      } },
+    { q: { 1: 'Going backward, which bead passes its blame on first?',
+        2: 'Which node does backprop process first?',
+        3: 'First node of sorted_computational_graph(L)?' },
+      options: [{ t: 'The loss L', ok: true }, { t: 'w₁, the first weight' }, { t: 'x₁, the first input' }, { t: 'Whichever was computed first' }],
+      why: { 1: 'The loss. Its blame is simply 1: the loss moves exactly as much as itself. Every other bead waits for the beads above it.',
+        2: 'L, with grad 1 (∂L/∂L). Nothing consumes L, so reverse topological order puts it first and the leaves last.',
+        3: 'L is the DFS root, so `topological_sort` appends it last and `[::-1]` puts it first; `backprop` seeds grads = {L: 1} (or end_grad).' },
+      show(S) {
+        S.setKnobs({ show: 'order', x1: 2, x2: -1, y: 0.5, share: true, focus: 'w1', step: 13 });
+        view(S, { mode: 'order' });
+        return S.fly(CAM.front);
+      } },
+    { q: { 1: 'w₁\'s blame is 3.30. Nudge w₁ up by 0.001 and run forward again. About how much does the loss change?',
+        2: '∂L/∂w₁ = 3.30. Rerun forward with w₁ + 0.001: ΔL ≈ ?',
+        3: 'w₁.grad = 3.3, ε = 1e-3: forward-difference ΔL?' },
+      options: [{ t: 'About +0.0033', ok: true }, { t: 'About +3.3' }, { t: 'About +0.001' }, { t: 'About −0.0033' }],
+      why: { 1: 'Blame × nudge: 3.3 × 0.001 = 0.0033. Measured: 0.003309. This wiggle test is how ARENA checks your backprop.',
+        2: 'ΔL ≈ ∂L/∂w₁ · ε = 0.0033. Measured: 0.003309; the extra 0.000009 is curvature, ½ · 18 · ε². Finite differences check backprop one weight at a time.',
+        3: '(L(w₁ + ε) − L)/ε = 3.309 = g + ½L″ε with L″ = 2(v·x₁)² = 18. The central difference gives 3.3000 exactly: L is quadratic in w₁ while the relu is on.' },
+      show(S) {
+        S.setKnobs({ show: 'bwd', x1: 2, x2: -1, y: 0.5, share: false, focus: 'w1', step: 13 });
+        view(S, { mode: 'bwd', wig: true });
+        return S.fly(CAM.front);
+      } },
+    { q: { 1: 'Slide input x₁ to −1, so the relu bead\'s input goes negative. What blame reaches w₁ now?',
+        2: 'Set x₁ = −1, so s = −1.1 < 0. ∂L/∂w₁ = ?',
+        3: 'x₁ = −1 ⇒ s < 0. w₁.grad?' },
+      options: [{ t: '0: nothing gets past the relu', ok: true }, { t: 'The same, 3.30' }, { t: 'It flips sign' }, { t: 'It doubles' }],
+      why: { 1: 'A switched-off relu outputs 0 however s wiggles, so its exchange rate is 0 and every road through it carries 0. Even v gets 0. This example teaches the unit nothing.',
+        2: 'relu(s) = max(s, 0) is flat for s < 0: rate 0, so ∂L/∂s = 0 and w₁, w₂ both get 0; v gets 0 too, since h = 0. The loss is still 0.25: zero blame means "can\'t help", not "no error".',
+        3: '`maximum_back0`: bool_sum = (s > 0) + 0.5·(s == 0) = 0, so grads[s] = 0 and w₁, w₂ get 0; v.grad = 2d·h = 0. A unit that is off for every example never recovers: the dead-ReLU problem.' },
+      show(S) {
+        S.setKnobs({ show: 'bwd', x1: -1, x2: -1, y: 0.5, share: false, focus: 'w1', step: 13 });
+        view(S, { mode: 'bwd' });
+        return S.fly(CAM.front);
+      } },
+  ],
+
+  where: { 1: 'Anything built from steps that feed each other: a spreadsheet recalculating, a recipe scaled up, a budget traced back to the line that blew it.',
+    2: 'Dependency graphs: spreadsheet recalculation, build systems, supply-chain and budget blame, sensitivity analysis, and every model you train from here on.',
+    3: 'Reverse-mode AD as the adjoint method (4D-Var, CFD, AAD Greeks), topological scheduling (build systems, dataflow engines) and gradient-based attribution in interpretability.' },
+  links: [
+    { label: 'Film · W4 backprop', href: '../../intuition/films/w4-backprop.html' },
+    { label: 'Film · backprop, deep', href: '../../intuition/films/deep-w04-backprop.html' },
+    { label: 'Week 4 pack', href: '../../index.html#week-04' },
+    { label: 'Demo · backprop & training', href: '../../index.html#demo/backprop-training' },
+    { label: 'Case · backprop & topological order', href: '../../index.html#cases/backprop-and-topological-order' },
+    { label: 'Map · computational graph', href: '../../index.html#map/node=computational-graph' },
+    { label: 'Map · backward function', href: '../../index.html#map/node=backward-function' },
+    { label: 'Map · topological sort', href: '../../index.html#map/node=topological-sort' },
+    { label: 'Object · Anatomy of one step', href: 'd03-step.html' },
+    { label: 'Object · One cube, three squashes', href: 'd04-squash.html' },
+  ],
+  remix: 'Build a single-file three.js scene: a tiny computational graph as beads on strings above a round plinth. Inputs x₁ = 2, x₂ = −1 (blue beads on brass posts, in front), weights w₁ = 0.6, w₂ = 0.5, v = 1.5 (brass beads, behind), target y = 0.5 (green). Plaster op beads with inlaid brass symbols: m₁ = w₁·x₁, m₂ = w₂·x₂, s = m₁ + m₂, h = relu(s), ŷ = h·v, d = ŷ − y, and a red loss bead L = d·d on top, joined to d by two bowed strings. Forward: blue pulses climb and each bead shows its value (L = 0.3025). Backward: red pulses descend in reverse topological order and each bead shows ∂L/∂node (w₁ 3.30, w₂ −1.65, v 0.77); a path view labels each string with its exchange rate (2 × 1 × 1 × 1.5 × 1 × 0.55). A toggle reuses w₁ in place of w₂ and shows its two blames adding: 2.40 − 1.20 = 1.20.',
+  credit: 'Toy example, labelled as toy: one input pair (2, −1), target 0.5 and weights (0.6, 0.5, 1.5), picked so every number stays short. The engine is ARENA [0.4]\'s design on plain numbers (Recipe, BACK_FUNCS, wrap_forward_fn, topological_sort, backprop); relu stands in for tanh because [0.4] builds relu as maximum(x, 0). Pictures borrowed from 3Blue1Brown ("Backpropagation calculus") and Andrej Karpathy\'s micrograd. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>
