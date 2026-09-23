@@ -9,7 +9,7 @@
 <style>
   /* row names on the label board, and the drawer read-out, in the code face */
   .k-label.k-row{background:transparent; border:0; box-shadow:none; -webkit-backdrop-filter:none; backdrop-filter:none;
-    padding:0 2px; font:600 10px/1.1 var(--mono); color:var(--ink); letter-spacing:0}
+    padding:0 2px; font:600 10px/1 var(--mono); color:var(--ink); letter-spacing:0}
   .k-label.k-row b{color:var(--k-data); font-weight:700}
   .k-label.k-row.k-on{color:var(--k-data)}
   .k-label.k-key{font:500 11px/1.4 var(--mono); white-space:pre-wrap; max-width:min(330px, 88vw); width:max-content;
@@ -20,6 +20,10 @@
   .k-label.k-tag.k-col{text-transform:none; letter-spacing:0; font:700 10px/1.1 var(--mono); color:color-mix(in srgb, var(--k-brass) 55%, var(--ink));
     background:color-mix(in srgb, var(--wash) 88%, transparent); padding:1px 4px; border-radius:4px}
   .k-label.k-note{max-width:min(300px, 80vw)}
+  @media (min-width:760px){
+    .k-label.k-row{font-size:11.5px}
+    .k-label.k-key{font-size:12px; max-width:400px}
+  }
   .k-label.k-tag.k-vert{writing-mode:vertical-rl; text-transform:none; letter-spacing:.02em; font:600 10px/1.1 var(--font)}
 </style>
 </head>
@@ -124,13 +128,13 @@ const SHELF = { CFG, REAL_SEQ, BLOCK, EMBEDS, FINAL, LOGITS, HOOKS, hookById, ca
 // as deep as the sequence: it holds one index card per token.
 const W768 = 0.25;
 const wOf = (n) => Math.max(0.05, W768 * Math.sqrt(n / 768));
-const DH = 0.11, RP = 0.14, Y0 = 0.1;               // drawer front height, row pitch, lowest row
+const DH = 0.12, RP = 0.16, Y0 = 0.1;               // drawer front height, row pitch, lowest row
 const CPW = 0.64, GW = 0.26, LBW = 0.98, SIDE = 0.04;
 const ZF = 0.35;                                    // the plane of the drawer fronts
 const depthOf = (L) => 0.14 + 0.0095 * L;
 const RACK = 0.075;                                 // KV rack: row pitch on the plinth
 const zRack = (row) => ZF + 0.16 + row * RACK;
-const zTokens = (G, kv) => ZF + (kv ? 0.185 + 2 * G.n * RACK : 0.62);
+const zTokens = (G, kv) => ZF + (kv ? 0.185 + 2 * G.n * RACK : 0.52);
 const NROW = 21;                                    // embed, pos_embed, 17 block rows, ln_final x2
 const yRow = (g) => Y0 + g * RP;                    // bottom of row g's drawer front
 const HEADS = new Set(['attn.hook_q', 'attn.hook_k', 'attn.hook_v', 'attn.hook_attn_scores', 'attn.hook_pattern', 'attn.hook_z']);
@@ -138,14 +142,14 @@ const MASKED = new Set(['attn.hook_attn_scores', 'attn.hook_pattern']);
 const KVH = new Set(['attn.hook_k', 'attn.hook_v']);
 const MAX_NEW = 24;                                 // KV mode: tokens you can add after the prompt
 const COL = {
-  carcass: '#e9e1d3', board: '#e4dac8', rail: '#d9cfbd', empty: '#fbf8f2', filled: '#bcd0f5', sel: '#4f7fe0',
-  twin: '#8fb0ee', edited: '#c7b6f2', ghost: '#ede7dc', kv: '#5f8be0', divider: '#c9bfae', tray: '#efe7da',
+  carcass: '#e9e1d3', board: '#e4dac8', rail: '#d9cfbd', empty: '#fbf8f2', filled: '#a4c0f2', sel: '#3f74de',
+  twin: '#8fb0ee', edited: '#c7b6f2', fresh: '#6f97e3', ghost: '#ede7dc', kv: '#5f8be0', divider: '#c9bfae', tray: '#efe7da',
   card: '#6f97e3', cardP: C.prob, cardNew: C.data, token: '#7ea2e6', tokenNew: C.data, cube: '#7ea2e6',
 };
 const CAM = {
   front: { pos: [2.0, 3.5, 11.0], target: [0, 1.6, 0.3] },          // far and narrow: little perspective
   high: { pos: [3.1, 5.2, 10.3], target: [0, 1.5, 0.35] },
-  tray: { pos: [0.75, 2.75, 2.75], target: [0, 1.42, 0.55], fit: 1.1 },    // close-up on block 0's pattern drawer
+  tray: { pos: [0.8, 2.95, 2.78], target: [0.04, 1.6, 0.56], fit: 1.1 },    // close-up on block 0's pattern drawer
   kv: { pos: [3.3, 5.8, 10.1], target: [0, 1.2, 0.6] },
 };
 const f2 = (v) => v.toFixed(2);
@@ -203,8 +207,10 @@ function compute(S) {
    their extent). Beats reframe from scratch; knob changes only ever grow it. */
 function fitProxy(S, reframe = false) {
   const st = S.state, G = st.geo;
-  const back = ZF - G.D - 0.08, front = ZF + 0.95, top = G.yTop + 0.5;
-  st.proxy.scale.set(G.TW + 0.1, top, front - back);
+  // just the cabinet (plus headroom for the read-out): anything wider or deeper would inflate the
+  // turntable-safe fit cylinder beyond the plinth and shrink the drawers on a phone
+  const back = ZF - G.D - 0.03, front = ZF + 0.02, top = G.yTop + 0.5;
+  st.proxy.scale.set(G.TW, top, front - back);
   st.proxy.position.set(0, top / 2, (front + back) / 2);
   st.proxy.updateMatrixWorld();
   const size = [G.TW, G.yTop, front - back];
@@ -228,6 +234,7 @@ function frontHex(S, d) {
   if (st.twin === d.i) return COL.twin;
   if (o >= A.fill) return COL.empty;
   if (k.mode === 'hooks' && k.edit && st.clipOrd != null && o > st.clipOrd) return COL.edited;
+  if (A.fill !== Infinity && o >= A.fill - 1.5) return COL.fresh;    // the pass is here right now
   return COL.filled;
 }
 // drawers pulled out: the selected one (cache and hooks modes) and its twin
@@ -310,7 +317,7 @@ function draw(S) {
   if (kv) {
     for (let c = 0; c < G.n; c++) for (let kvI = 0; kvI < 2; kvI++) {
       const row = c * 2 + kvI, z = zRack(row);
-      put(st.rails, row, xT0 + avail / 2, 0.006, z, avail, 0.012, 0.06);
+      put(st.rails, row, xT0 + (G.L * pitchT) / 2, 0.006, z, G.L * pitchT + 0.03, 0.012, 0.06);
       st.rackRows.push({ c, kvI, z });
       for (let j = 0; j < G.L; j++) {
         const isNew = st.s > 0 && j === G.L - 1, sc = isNew ? A.cube : 1;
@@ -343,6 +350,56 @@ function draw(S) {
 }
 
 /* ============================================================ labels */
+// Row names sit 1 row pitch apart. When the view makes that pitch smaller than a label (zoomed
+// out, small screen), every other name is shown (the selected row always), so the kit's overlap
+// nudging never shuffles names onto the wrong rows.
+const rowFs = (S) => parseFloat(getComputedStyle(S.state.rowLabels[0].el).fontSize) || 10;   // line-height 1
+const _v = new THREE.Vector3();
+function rowPitch(S) {
+  const G = S.state.geo;
+  if (!G) return 99;
+  const H = S.renderer.domElement.clientHeight || innerHeight, x = G.xLB + LBW - 0.05;
+  const a = _v.set(x, yRow(2) + DH / 2, ZF).project(S.camera).y;
+  const b = _v.set(x, yRow(18) + DH / 2, ZF).project(S.camera).y;
+  return (Math.abs(b - a) / 2) * H / 16;
+}
+function rowVis(S) {
+  const st = S.state, k = S.knobs, mode = st.rowMode || 'all', cov = st.rowCovered || new Set();
+  const must = new Set();
+  if (k.mode === 'kv') { must.add(6); must.add(7); }
+  else if (st.sel >= 0) must.add(st.drawers[st.sel].g);
+  st.rowLabels.forEach((L, g) => {
+    const near = [...must].some((m) => Math.abs(m - g) === 1 && !must.has(g));
+    const on = !cov.has(g) && (mode === 'all' || must.has(g) || (mode === 'half' && g % 2 === 0 && !near));
+    if (L._on !== on) { L._on = on; L.show(on); }
+  });
+}
+/* A row name that a higher-priority label (read-out, note, clip tag) covers is hidden rather than
+   left to the kit's nudging, which would park it beside the wrong drawer. */
+function coveredRows(S) {
+  const st = S.state, G = st.geo, out = new Set();
+  const host = S.stage.labelsEl, cv = S.renderer.domElement;
+  if (!G || !host) return out;
+  const hb = host.getBoundingClientRect(), W = cv.clientWidth, H = cv.clientHeight;
+  const obs = [st.readout, st.note, st.hookTag].filter((L) => L.el.style.display !== 'none' && L.el.style.visibility !== 'hidden' && L.el.offsetWidth > 0)
+    .map((L) => { const r = L.el.getBoundingClientRect(); return [r.left - hb.left, r.top - hb.top, r.right - hb.left, r.bottom - hb.top]; });
+  if (!obs.length) return out;
+  const fs = rowFs(S), cw = fs * 0.61, x = G.xLB + LBW - 0.05;
+  st.rowLabels.forEach((L, g) => {
+    _v.set(x, yRow(g) + DH / 2, ZF - 0.01).project(S.camera);
+    const px = ((_v.x + 1) / 2) * W - 2, py = ((1 - _v.y) / 2) * H;
+    const w = String(L._t || '').replace(/\*\*/g, '').length * cw + 4;
+    const l = px - w, t = py - fs / 2, r = px, b = py + fs / 2;
+    if (obs.some(([ol, ot, or, ob]) => l < or + 3 && r + 3 > ol && t < ob + 3 && b + 3 > ot)) out.add(g);
+  });
+  return out;
+}
+function thinRows(S) {
+  const p = rowPitch(S), st = S.state;
+  const h = rowFs(S) + 3.5, m = p >= h ? 'all' : 2 * p >= h ? 'half' : 'sel';
+  const cov = coveredRows(S), key = [...cov].join(',');
+  if (m !== st.rowMode || key !== st.rowCovKey) { st.rowMode = m; st.rowCovered = cov; st.rowCovKey = key; rowVis(S); }
+}
 const rowName = (h, T) => {
   if (T === 3) return h.key;
   if (h.ln === 'ln_final') return `ln_final ${h.short}`;
@@ -350,7 +407,7 @@ const rowName = (h, T) => {
 };
 function keyText(S, d, T) {
   const k = S.knobs, st = S.state, L = st.geo.L;
-  const nb = k.nobatch;
+  const nb = k.nobatch && k.mode === 'cache';          // remove_batch_dim is a run_with_cache option; hooks see the batch dim
   const sh = shapeOf(d.h, L, nb), full = fullName(d.h, d.layer);
   const size = numel(sh.sizes);
   const conv = L === REAL_SEQ ? '' : ' (conventional)';
@@ -380,9 +437,10 @@ function labels(S) {
     let t = rowName(h, T);
     if (st.orderOn && g >= 2 && g < 19) t = `${g - 1} · ${t}`;
     if (kv && KVH.has(h.key)) t = `**${t}**`;
-    L.set(t);
+    L.set(t); L._t = t;
     L.el.classList.toggle('k-on', g === selRow && !kv);
   }
+  rowVis(S);
   // column tags and the hidden blocks
   st.colTags.forEach((L, c) => {
     if (c >= G.n) { L.show(false); return; }
@@ -391,25 +449,18 @@ function labels(S) {
   st.gapTag.show(G.gap).move([G.xGap, yRow(10) + DH / 2, ZF + 0.02]).set(G.n === CFG.n_layers - 1 ? `blocks.11` : `blocks.${G.n}–11 ⋯`);
   const wl = wOf(CFG.d_vocab);
   st.logitsTag.show(!kv).move([G.x0 + G.TW * 0.72, G.yTop + 0.06, ZF]).set(
-    T === 1 ? `logits: handed back` : `logits ${tup(shapeOf(LOGITS, G.L, k.nobatch).sizes)}: returned`);
+    T === 1 ? `logits: handed back` : `logits ${tup(shapeOf(LOGITS, G.L).sizes)}: returned`);   // remove_batch_dim only touches the cache
   st.tokensTag.move([G.xC0 + 0.02, 0.03, zTokens(G, kv) + 0.06]).set(
-    kv ? `tokens: ${k.seq} prompt + ${st.s} new` : T === 1 ? `the ${G.L} tokens you feed in` : `tokens ${tup(k.nobatch ? [G.L] : [1, G.L])}`);
-  st.rackTags.forEach((L, i) => {
-    const r = st.rackRows[i];
-    if (!kv || !r) { L.show(false); return; }
-    L.show(true).move([G.xC0 - 0.02, 0.03, r.z]).set(`blocks.${r.c} ${r.kvI ? 'v' : 'k'}`);
-  });
+    kv ? `tokens: ${k.seq} prompt + ${st.s} new` : T === 1 ? `the ${G.L} tokens you feed in` : `tokens ${tup([1, G.L])}`);
+  st.rackTag.show(kv).move([G.xC0 - 0.02, 0.03, (zRack(0) + zRack(2 * G.n - 1)) / 2]).set(
+    T === 1 ? 'kept: keys, values' : `k, v × ${G.n} block${G.n > 1 ? 's' : ''}`);
   // the read-out: the call, then the drawer you are holding
   const R = st.readout;
-  if (st.readAt === 'drawer' && st.sel >= 0) { const d = st.drawers[st.sel]; R.move([d.x, d.y + DH + 0.45, ZF]); }
+  if (st.readAt === 'drawer' && st.sel >= 0) { const d = st.drawers[st.sel]; R.move([d.x, d.y + DH + 0.25, ZF]); }
   else R.move([0, G.yTop + 0.22, ZF - G.D / 2]);
-  if (kv) {
-    const shp = kvShape(G.L);
-    R.set(T === 1 ? `**Writing word by word**\nkept: keys and values, ${G.n === 1 ? 'one layer' : 'every layer'}, ${G.L} tokens`
-      : `**KeyValueCache ${tup(shp)}**\n(n_layers, 2, batch, seq_len, n_heads, d_head)`);
-  } else if (st.logitsSel) {
+  if (kv) R.set(kvText(S)); else if (st.logitsSel) {
     R.set(T === 1 ? `**logits** come back from the call itself;\nthe cache holds everything before them`
-      : `logits, cache = model.run_with_cache(tokens)\n**logits ${tup(shapeOf(LOGITS, G.L, k.nobatch).sizes)}**: the return value;\n"logits" is not a key of the cache`);
+      : `logits, cache = model.run_with_cache(tokens)\n**logits ${tup(shapeOf(LOGITS, G.L).sizes)}**: the return value${k.nobatch ? '\n(remove_batch_dim leaves it alone)' : ''};\n"logits" is not a key of the cache`);
   } else if (st.sel >= 0) {
     const call = k.mode === 'hooks' ? (T === 1 ? 'run with a clip (hook) on this drawer' : 'model.run_with_hooks(tokens, fwd_hooks=[...])')
       : (T === 1 ? 'one run fills every drawer' : `logits, cache = model.run_with_cache(tokens${k.nobatch ? ', remove_batch_dim=True' : ''})`);
@@ -420,13 +471,29 @@ function labels(S) {
   st.hookTag.show(k.mode === 'hooks' && st.sel >= 0);
   if (k.mode === 'hooks' && st.sel >= 0) {
     const d = st.drawers[st.sel];
-    st.hookTag.move([d.x + d.w / 2 + 0.02, d.y + DH + 0.05, ZF + 0.02]).set(T === 1 ? (k.edit ? 'clip: swaps in an edit' : 'clip: reads') : `hook_function(${d.h.short === 'pattern' ? 'pattern' : 'activation'}, hook)`);
+    st.hookTag.move([d.x + d.w / 2 + 0.02, d.y + DH + 0.05, ZF + 0.02]).set(T === 1 ? (k.edit ? 'clip: swaps in an edit' : 'clip: reads') : `hook_function(${d.h.short === 'pattern' ? 'attn_pattern' : 'activation'}, hook)`);
   }
+}
+
+// KV mode read-out: the cache tensor, then the work done with and without it (all live)
+function kvText(S) {
+  const st = S.state, k = S.knobs, G = st.geo, T = S.tier;
+  const P = k.seq, w = kvWork(P, st.s), b = kvBytes(w.L, bytesOf(k)), b1k = kvBytes(1000, 2);
+  const step = st.s > 0, shp = tup(kvShape(G.L));
+  const k1 = st.show1k ? (T === 1 ? `\n1,000 words in 2-byte numbers: ${mb(b1k)}` : `\nL = 1,000 in fp16: ${int(b1k)} B = ${mb(b1k)}`) : '';
+  if (T === 1) return `**Writing word by word**\nkept: keys and values, every block, ${w.L} words\n`
+    + (step ? `this word: 1 word through the model, not ${w.L}\n` : `the prompt goes through once: ${P} words\n`)
+    + `so far ${int(w.posWith)} word-runs (no cache: ${int(w.posWithout)})\nmemory ${mb(b)}${k1}`;
+  if (T === 2) return `**KeyValueCache ${shp}**\n(n_layers, 2, batch, seq_len, n_heads, d_head)\n`
+    + (step ? `new token: 1 position, ${w.L} q·k per head\nno cache: ${w.L} positions, ${int(w.L * w.L)} q·k\n` : `prompt: ${P} positions, ${int(P * P)} q·k per head\n`)
+    + `so far: ${int(w.posWith)} vs ${int(w.posWithout)} positions, ${int(w.qkWith)} vs ${int(w.qkWithout)} q·k\n2 × 12 × 768 × ${w.L} × ${bytesOf(k)} B = ${mb(b)}${k1}`;
+  return `**KeyValueCache ${shp}**\nk = t.concat([kv_cache_entry[0], k], dim=1)\npos_embed offset n_cached_tokens = ${step ? w.L - 1 : 0}\n`
+    + `positions ${int(w.posWith)} vs ${int(w.posWithout)}; q·k ${int(w.qkWith)} vs ${int(w.qkWithout)}\nKV ${int(b)} B (${k.dtype})${k1}`;
 }
 
 function note(S) {
   const st = S.state, k = S.knobs, G = st.geo, T = S.tier, N = st.note, mode = st.noteMode;
-  if (!mode) { N.show(false); return; }
+  if (!mode || mode === 'kv') { N.show(false); return; }
   N.show(true).move(st.noteAt || [0, 0.02, ZF + 1.0]);
   let t = '';
   if (mode === 'cache') {
@@ -444,15 +511,9 @@ function note(S) {
     else {
       const name = fullName(d.h, d.layer), shp = tup(shapeOf(d.h, G.L).sizes);
       t = T === 1 ? (k.edit ? `the clip swaps in an edit: every drawer\nafter it (violet) is computed from the edit` : `the clip only reads: nothing downstream changes`)
-        : T === 2 ? `fwd_hooks=[("${name}", hook_function)]\nit gets ${shp}; ${k.edit ? 'returns an edit: violet = recomputed' : 'returns None: read only'}`
+        : T === 2 ? `fwd_hooks=[("${name}", hook_function)]\nhook_function gets ${shp}\n${k.edit ? 'returns an edit: violet = recomputed from it' : 'returns None: nothing changes'}`
         : `hook_function(tensor ${shp}, hook: HookPoint)\nhook.name == "${name}", hook.layer() == ${d.layer ?? 'None'}\n${k.edit ? 'return tensor′ (same shape): downstream reruns on it' : 'return None: activation unchanged'}`;
     }
-  } else if (mode === 'kv') {
-    const P = k.seq, w = kvWork(P, st.s), b = kvBytes(w.L, bytesOf(k)), b1k = kvBytes(1000, 2);
-    const step = st.s > 0;
-    t = T === 1 ? `${step ? `this word: 1 token through the model, not ${w.L}` : `the prompt runs once: ${P} tokens`}\nso far ${int(w.posWith)} token-runs (without the cache ${int(w.posWithout)})\nmemory ${mb(b)}${st.show1k ? ` · 1,000 tokens in fp16: ${mb(b1k)}` : ''}`
-      : T === 2 ? `${step ? `new token: 1 position, ${w.L} q·k per head (no cache: ${w.L}, ${int(w.L * w.L)})` : `prompt: ${P} positions, ${int(P * P)} q·k per head`}\ntotals: ${int(w.posWith)} vs ${int(w.posWithout)} positions · ${int(w.qkWith)} vs ${int(w.qkWithout)} q·k\n2 × 12 × 768 × ${w.L} × ${bytesOf(k)} B = ${mb(b)}${st.show1k ? `\n1,000 tokens, fp16: ${int(b1k)} B = ${mb(b1k)}` : ''}`
-      : `k, v = t.concat([cache[0], k], dim=1), ... ; pos offset ${w.L - 1}\npositions ${int(w.posWith)} vs ${int(w.posWithout)}; q·k ${int(w.qkWith)} vs ${int(w.qkWithout)} (per head·layer)\nKV ${int(b)} B (${k.dtype})${st.show1k ? `; L = 1000 fp16: ${int(b1k)} B` : ''}`;
   } else if (mode === 'twin') {
     t = T === 1 ? `the top drawer of block 0 and the bottom drawer\nof block 1 hold exactly the same numbers`
       : `cache["resid_post", 0] and cache["resid_pre", 1]\nare the same tensor: one block's output is the next one's input`;
@@ -517,7 +578,7 @@ function scene(S, o = {}) {
   st.logitsSel = false;
   if (o.fig) {
     st.fig.group.visible = true;
-    st.fig.place(o.figAt || [1.38, 0, 0.78], o.face || [0, 0.8, 0.2]);
+    st.fig.place(o.figAt || [1.25, 0, 0.62], o.face || [0, 0.8, 0.2]);
     st.fig.pose('stand', { ms: 0 });
     const doPose = () => st.fig.pose(o.fig, { at: typeof o.at === 'function' ? o.at(S) : o.at });
     if (S.shot) doPose(); else setTimeout(doPose, 480);
@@ -544,7 +605,7 @@ run({
   subtitle: 'run_with_cache hands you this shelf: every activation, in a drawer shaped like its tensor.',
   back2d: '#week-06',
   film: 'deep-w06-sampling',
-  plinth: { r: 1.65, h: 0.14 },
+  plinth: { r: 1.5, h: 0.14 },
 
   knobs: [
     { id: 'layers', type: 'range', label: { 1: 'Blocks shown', 2: 'Blocks shown (of 12)', 3: 'layers shown (n_layers = 12)' }, min: 1, max: 2, step: 1, value: 2, fmt: (v) => `${v} of 12` },
@@ -554,11 +615,11 @@ run({
       options: [['cache', 'run_with_cache: the full shelf'], ['hooks', 'run_with_hooks: a clip on one drawer'], ['kv', 'KV cache: generate token by token']] },
     { id: 'hook', type: 'select', label: { 1: 'Drawer', 2: 'Hook point', 3: 'hook name' }, value: 'attn.hook_pattern', wide: true, options: HOOK_OPTS },
     { id: 'layer', type: 'range', label: { 1: 'Block', 2: 'Layer', 3: 'layer' }, min: 0, max: 1, step: 1, value: 0, fmt: (v) => `blocks.${v}` },
-    { id: 'nobatch', type: 'toggle', label: { 1: 'Drop the batch of 1', 2: 'remove_batch_dim', 3: 'remove_batch_dim=True' }, value: false },
-    { id: 'edit', type: 'toggle', label: { 1: 'Clip edits (not just reads)', 2: 'Hook edits the activation', 3: 'hook returns a tensor' }, value: true },
-    { id: 'dtype', type: 'select', label: { 1: 'Number size', 2: 'dtype', 3: 'dtype' }, value: 'fp32', options: [['fp32', 'float32 (4 bytes)'], ['fp16', 'float16 (2 bytes)']] },
+    { id: 'nobatch', type: 'toggle', wide: true, label: { 1: 'Drop the batch of 1 (cache only)', 2: 'remove_batch_dim (cache only)', 3: 'run_with_cache(..., remove_batch_dim=True)' }, value: false },
+    { id: 'edit', type: 'toggle', wide: true, label: { 1: 'Clip swaps in an edit (not just reads)', 2: 'Hook returns an edited activation', 3: 'hook_function returns a tensor' }, value: true },
+    { id: 'dtype', type: 'select', label: { 1: 'Number size', 2: 'dtype', 3: 'dtype' }, value: 'fp32', options: [['fp32', 'float32 (4 B)'], ['fp16', 'float16 (2 B)']] },
     { id: 'go', type: 'button', label: { 1: 'Run the model', 2: 'Run forward', 3: 'forward pass' }, onClick: (S) => { if (S.knobs.mode === 'kv') S.setKnob('mode', 'cache'); else runPass(S); } },
-    { id: 'next', type: 'button', label: { 1: 'Next word', 2: 'Next token (KV)', 3: 'generate 1 token' }, onClick: (S) => { scene(S, { note: 'kv' }); kvStep(S); } },
+    { id: 'next', type: 'button', label: { 1: 'Next word', 2: 'Next token', 3: 'next token' }, onClick: (S) => { scene(S, { note: 'kv' }); kvStep(S); } },
     { id: 'reset', type: 'button', label: { 1: 'Start over', 2: 'Start over', 3: 'reset' }, onClick: (S) => { S.state.s = 0; compute(S); fitProxy(S, true); newAnim(S); draw(S); } },
   ],
 
@@ -604,7 +665,7 @@ run({
     st.gapTag = K.label([0, 0, 0], '', { cls: 'tag vert', anchor: 'center' });
     st.logitsTag = K.label([0, 0, 0], '', { cls: 'tag col', anchor: 'center', prio: 0.5 });
     st.tokensTag = K.label([0, 0, 0], '', { cls: 'tag col', anchor: 'top', dy: 4 });
-    st.rackTags = Array.from({ length: 4 }, () => K.label([0, 0, 0], '', { cls: 'tag col', anchor: 'right', dx: -4, dy: 0 }));
+    st.rackTag = K.label([0, 0, 0], '', { cls: 'tag col', anchor: 'right', dx: -4, dy: 0 });
     st.readout = K.label([0, 0, 0], '', { cls: 'readout key', anchor: 'bottom', dy: -4 });
     st.note = K.label([0, 0, 0], '', { cls: 'note', anchor: 'top', dy: 6 });
     st.hookTag = K.label([0, 0, 0], '', { cls: 'tag col fn', anchor: 'left', dx: 4, dy: 0, prio: 1.5 });
@@ -643,7 +704,7 @@ run({
     draw(S);
   },
 
-  frame() { return false; },
+  frame(S) { thinRows(S); return false; },
   onTier(S) { labels(S); },
 
   solids(S) {
@@ -705,7 +766,7 @@ run({
       },
       cam: CAM.front,
       set: { mode: 'hooks', layers: 2, seq: 35, hook: 'attn.hook_pattern', layer: 1, edit: true, nobatch: false },
-      enter(S) { scene(S, { note: 'hook', fig: 'lean', figAt: [1.8, 0, 0.95], face: [0.6, 0.8, 0.2] }); runPass(S); } },
+      enter(S) { scene(S, { note: 'hook', fig: 'lean', figAt: [1.25, 0, 0.62], face: [0.6, 0.9, 0.2] }); runPass(S); } },
 
     { tag: 'library',
       cap: {
@@ -720,7 +781,7 @@ run({
     { tag: 'core',
       cap: {
         1: '**Where else?** Anywhere in-between results are kept instead of redone: a lab notebook of every measurement, a browser that keeps pages it already fetched, a cook\'s chopped-and-ready bowls.',
-        2: 'This is memoisation (dynamic programming): compute once, file it under a name, reuse it. Browser and CPU caches, build systems and spreadsheets do the same. PyTorch has `register_forward_hook`; activation checkpointing makes the opposite trade: recompute to save memory.',
+        2: 'This is memoisation: compute once, file it under a name, reuse it, as browser and CPU caches and build systems do. PyTorch\'s own `register_forward_hook` is the raw hook. Activation checkpointing makes the opposite trade: recompute to save memory.',
         3: 'Named intermediate caches: memoisation/DP tables, CPU and HTTP caches, incremental builds. In ML: forward hooks (PyTorch, TransformerLens, nnsight), gradient checkpointing (trade compute for memory), paged KV caches (vLLM) and prefix caching in LLM serving.',
       },
       cam: CAM.high,
