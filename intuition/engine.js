@@ -377,6 +377,8 @@
       if (mode === 'coda' && coda && coda.resize) coda.resize(W, H);
     }
     window.addEventListener('resize', resize); resize();
+    /* The bottom bar grows when the coda opens; re-measure whenever the stage changes size. */
+    if (window.ResizeObserver) new ResizeObserver(function () { resize(); }).observe(stage);
     function paintTier() {
       [].forEach.call(root.querySelectorAll('.tiers button'), function (b) { b.setAttribute('aria-pressed', b.dataset.t === tier ? 'true' : 'false'); });
       var c = ch[cur]; if (c && c.cap) cap.innerHTML = c.cap[tier] || c.cap['2'] || '';
