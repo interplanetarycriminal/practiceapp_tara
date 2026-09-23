@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>From a table to a network</title>
+<meta name="theme-color" content="#1c2140">
+<style>
+#predict{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(18,20,44,.55);z-index:5;padding:14px;box-sizing:border-box}
+#predict.on{display:flex}
+#predict .card{background:#fbf6ea;color:#2a2934;border-radius:6px;max-width:360px;width:100%;padding:14px 14px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);font:15px/1.35 system-ui,-apple-system,'Segoe UI',sans-serif;transform:rotate(-.6deg)}
+#predict .q{font:700 18px 'Comic Neue','Segoe Print','Bradley Hand','Chalkboard SE','Comic Sans MS',cursive;margin:0 0 4px}
+#predict .sub{font-size:13px;color:#5a5566;margin:0 0 10px}
+#predict button.opt{display:block;width:100%;text-align:left;margin:0 0 7px;padding:9px 10px;border-radius:8px;border:1.5px solid #c8b8ea;background:#fff;color:#2a2934;font:inherit;font-size:14px;cursor:pointer;min-height:40px}
+#predict button.opt:hover,#predict button.opt:focus{background:#f7e3a0;outline:none}
+#predict button.skipq{background:none;border:0;color:#6b5a9a;text-decoration:underline;font:inherit;font-size:14px;cursor:pointer;padding:4px 0;min-height:32px}
+</style>
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+  function R32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function argmaxTie(q, r) { var m = Math.max.apply(null, q), b = []; for (var k = 0; k < q.length; k++) if (q[k] === m) b.push(k); return b[Math.floor(r() * b.length)]; }
+
+  /* ================= 1. tabular Q-learning on a 4x6 cliff world (ARENA [2.1] QLearning.learn) ================= */
+  // gamma = 1, reward -1 per step, -100 for the cliff (back to start), epsilon 0.1, lr 0.5.
+  var CR = 4, CC = 6, S0 = 18, GOALS = 23;
+  function cstep(s, a) {
+    var r = Math.floor(s / CC), c = s % CC;
+    if (a === 0) r = Math.max(0, r - 1); else if (a === 1) c = Math.min(CC - 1, c + 1); else if (a === 2) r = Math.min(CR - 1, r + 1); else c = Math.max(0, c - 1);
+    if (r === 3 && c > 0 && c < 5) return { s2: S0, r: -100, cliff: true, done: false, tile: r * CC + c };
+    var s2 = r * CC + c; return { s2: s2, r: -1, done: s2 === GOALS, tile: s2 };
+  }
+  var TAB = (function () {
+    var rnd = R32(7), Q = [], log = []; for (var i = 0; i < CR * CC; i++) Q.push([0, 0, 0, 0]);
+    for (var e = 0; e < 60; e++) {
+      var s = S0, n = 0;
+      while (n++ < 200) {
+        var a = rnd() < 0.1 ? Math.floor(rnd() * 4) : argmaxTie(Q[s], rnd), o = cstep(s, a);
+        var mx = o.done ? 0 : Math.max.apply(null, Q[o.s2]), old = Q[s][a];
+        Q[s][a] = old + 0.5 * (o.r + 1 * mx - old);            // Q[s,a] += lr * (r + gamma * max Q[s'] - Q[s,a])
+        log.push({ e: e, s: s, a: a, r: o.r, tile: o.tile, old: old, mx: mx, nw: Q[s][a], cliff: !!o.cliff, Q: Q.map(function (q) { return q.slice(); }) });
+        s = o.s2; if (o.done) break;
+      }
+    }
+    return log;
+  })();
+
+  /* ================= 2. a tiny DQN on a paper corridor, trained live in JS ================= */
+  // state x in [0,1); actions 0 = left, 1 = right (step 0.1); reward 1 on reaching x >= 1 (terminated). Net: x -> 16 tanh -> 2.
+  var HN = 16;
+  function newNet() { var r = R32(11), p = { w1: [], b1: [], w2: [[], []], b2: [0, 0] }; for (var j = 0; j < HN; j++) { p.w1.push((r() * 2 - 1) * 2); p.b1.push(r() * 2 - 1); p.w2[0].push((r() * 2 - 1) * .3); p.w2[1].push((r() * 2 - 1) * .3); } return p; }
+  function clone(p) { return { w1: p.w1.slice(), b1: p.b1.slice(), w2: [p.w2[0].slice(), p.w2[1].slice()], b2: p.b2.slice() }; }
+  function fwd(p, x) { var h = [], q = [p.b2[0], p.b2[1]]; for (var j = 0; j < HN; j++) { h.push(Math.tanh(p.w1[j] * x + p.b1[j])); q[0] += p.w2[0][j] * h[j]; q[1] += p.w2[1][j] * h[j]; } return { h: h, q: q }; }
+  function envStep(x, a) { var x2 = a === 1 ? x + 0.1 : Math.max(0, x - 0.1); return x2 >= 1 - 1e-9 ? { x2: 1, r: 1, d: 1 } : { x2: x2, r: 0, d: 0 }; }
+  function vstar(x, g) { return x >= 1 ? 0 : Math.pow(g, Math.max(1, Math.ceil((1 - x) / 0.1 - 1e-9)) - 1); }
+  function qstar(x, a, g) { return a === 1 ? (x + 0.1 >= 1 - 1e-9 ? 1 : g * vstar(x + 0.1, g)) : g * vstar(Math.max(0, x - 0.1), g); }
+  var PROBE = []; for (var pi = 0; pi < 20; pi++) PROBE.push(pi / 20 + 0.025);
+  function probeLoss(p, g) {   // mean squared TD error over 20 probe states x 2 actions, target from the live net
+    var L = 0; PROBE.forEach(function (x) { for (var a = 0; a < 2; a++) { var o = envStep(x, a), tg = o.r + g * (1 - o.d) * Math.max.apply(null, fwd(p, o.x2).q), td = tg - fwd(p, x).q[a]; L += td * td; } });
+    return L / 40;
+  }
+  function Trainer(opt) {
+    var T = { opt: opt, g: opt.gamma, lr: opt.lr, r: R32(3), p: newNet(), buf: [], x: 0, ep: 0, st: 0, hist: [], dead: false, last: 0 };
+    T.tp = clone(T.p); T.x = T.r() * 0.9;
+    T.step = function () {
+      if (T.dead) return;
+      var q = fwd(T.p, T.x).q, a = T.r() < 0.3 ? (T.r() < .5 ? 0 : 1) : (q[1] >= q[0] ? 1 : 0), o = envStep(T.x, a);
+      T.buf.push([T.x, a, o.r, o.x2, o.d]); if (T.buf.length > 1000) T.buf.shift(); T.ep++;
+      if (o.d || T.ep >= 30) { T.ep = 0; T.x = T.r() * 0.9; } else T.x = o.x2;
+      var batch = []; if (T.opt.replay) { for (var b = 0; b < 16; b++) batch.push(T.buf[Math.floor(T.r() * T.buf.length)]); } else batch.push(T.buf[T.buf.length - 1]);
+      var tn = T.opt.target ? T.tp : T.p, p = T.p, gw1 = [], gb1 = [], gw2 = [[], []], gb2 = [0, 0], j;
+      for (j = 0; j < HN; j++) { gw1.push(0); gb1.push(0); gw2[0].push(0); gw2[1].push(0); }
+      batch.forEach(function (e) {
+        var tg = e[2] + T.g * (1 - e[4]) * Math.max.apply(null, fwd(tn, e[3]).q), f = fwd(p, e[0]), td = tg - f.q[e[1]], dq = -2 * td / batch.length;
+        gb2[e[1]] += dq; for (var k = 0; k < HN; k++) { gw2[e[1]][k] += dq * f.h[k]; var dh = dq * p.w2[e[1]][k] * (1 - f.h[k] * f.h[k]); gw1[k] += dh * e[0]; gb1[k] += dh; }
+      });
+      for (j = 0; j < HN; j++) { p.w1[j] -= T.lr * gw1[j]; p.b1[j] -= T.lr * gb1[j]; p.w2[0][j] -= T.lr * gw2[0][j]; p.w2[1][j] -= T.lr * gw2[1][j]; }
+      p.b2[0] -= T.lr * gb2[0]; p.b2[1] -= T.lr * gb2[1];
+      T.st++; if (T.opt.target && T.st % 100 === 0) T.tp = clone(p);         // our toy: copy every 100 steps (ARENA: trains_per_target_update)
+      if (T.st % 25 === 0) {
+        var L = probeLoss(p, T.g); if (!isFinite(L) || L > 1e3) { T.dead = true; L = 1e3; }
+        T.last = L; T.hist.push({ st: T.st, L: L, p: T.dead ? null : clone(p) });
+      }
+    };
+    return T;
+  }
+  function run(replay, target) { var T = Trainer({ replay: replay, target: target, gamma: 0.99, lr: 0.35 }); for (var i = 0; i < 3000; i++) T.step(); return T; }
+  var RUN_BOTH = run(true, true), RUN_NOREP = run(false, true), RUN_NOTGT = run(true, false);
+  function blowup(Tr) { for (var i = 0; i < Tr.hist.length; i++) if (Tr.hist[i].L >= 1e3) return Tr.hist[i].st; return null; }
+  var BU_NOREP = blowup(RUN_NOREP), BU_NOTGT = blowup(RUN_NOTGT);
+  function histAt(Tr, st) { var h = Tr.hist, i = clamp(Math.floor(st / 25) - 1, 0, h.length - 1); while (i > 0 && !h[i].p) i--; return h[i]; }
+  // the numbers lit up in the final code scene: one real transition through the trained 'both' net
+  var FIN = RUN_BOTH.hist[RUN_BOTH.hist.length - 1].p, TGT = RUN_BOTH.tp;
+  var EX = (function () { var x = 0.45, o = envStep(x, 1), tmax = Math.max.apply(null, fwd(TGT, o.x2).q), pred = fwd(FIN, x).q[1], td = o.r + 0.99 * tmax * (1 - o.d) - pred; return { x: x, x2: o.x2, tmax: tmax, pred: pred, td: td, loss: td * td }; })();
+
+  /* ================= drawing helpers ================= */
+  function hex(h) { return [parseInt(h.substr(1, 2), 16), parseInt(h.substr(3, 2), 16), parseInt(h.substr(5, 2), 16)]; }
+  function mix(a, b, t) { var A1 = hex(a), B1 = hex(b); return 'rgb(' + [0, 1, 2].map(function (i) { return Math.round(lerp(A1[i], B1[i], t)); }).join(',') + ')'; }
+  function bg(ctx, W, H, t, d) { F.sky(ctx, W, H, mix('#1c2140', '#2e4f6b', d), mix('#2b2f5c', '#5f8f9a', d)); F.stars(ctx, W, H, t, 'dqn', Math.round(40 * (1 - d))); }
+  function mono(ctx, s, x, y, sz, color, align, weight) { ctx.save(); ctx.font = (weight || '600') + ' ' + sz + 'px ' + F.MONO; ctx.fillStyle = color || P.ink; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle'; ctx.fillText(s, x, y); ctx.restore(); }
+  function card(ctx, cx, cy, w, h, seed, color) { F.paper(ctx, cx, cy, w, h, color || P.cream, { seed: seed, rot: 0 }); }
+  function fade(ctx, a, fn) { if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; fn(); ctx.restore(); }
+  function ph(W) { return W < 500; }
+  function robot(ctx, x, y, s, t) {
+    ctx.save(); ctx.translate(x, y + Math.sin(t * 5) * s * .06);
+    F.paper(ctx, 0, 0, s * 1.1, s, P.sky, { seed: 'bot', rot: 0, shadow: false });
+    ctx.fillStyle = P.ink; ctx.beginPath(); ctx.arc(-s * .2, -s * .08, s * .09, 0, 7); ctx.arc(s * .2, -s * .08, s * .09, 0, 7); ctx.fill();
+    ctx.strokeStyle = P.ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(0, -s * .5); ctx.lineTo(0, -s * .75); ctx.stroke();
+    ctx.fillStyle = P.butter; ctx.beginPath(); ctx.arc(0, -s * .8, s * .1, 0, 7); ctx.fill(); ctx.restore();
+  }
+  function qColor(v) { var u = clamp((v + 12) / 12, 0, 1); return mix('#e8747c', '#b9e3cc', u); }
+  // the cliff world with a Q table: each tile split into 4 triangles (up/right/down/left) shaded by Q
+  function grid(ctx, x0, y0, cs, Q, opts) {
+    opts = opts || {};
+    for (var s = 0; s < CR * CC; s++) {
+      var r = Math.floor(s / CC), c = s % CC, x = x0 + c * cs, y = y0 + r * cs, cliff = r === 3 && c > 0 && c < 5;
+      if (cliff) { F.paper(ctx, x + cs / 2, y + cs / 2, cs - 3, cs - 3, P.orange, { seed: 'cl' + s, rot: 0, shadow: false }); mono(ctx, 'cliff', x + cs / 2, y + cs / 2, Math.max(9, cs * .2), P.ink, 'center'); continue; }
+      var q = Q ? Q[s] : [0, 0, 0, 0], cx = x + cs / 2, cy = y + cs / 2, crn = [[x, y], [x + cs, y], [x + cs, y + cs], [x, y + cs]];
+      for (var a = 0; a < 4; a++) {
+        var p1 = crn[a], p2 = crn[(a + 1) % 4];
+        ctx.fillStyle = s === GOALS ? P.butter : (q[a] === 0 ? 'rgba(251,246,234,.9)' : qColor(q[a]));
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.closePath(); ctx.fill();
+      }
+      ctx.strokeStyle = 'rgba(42,41,52,.35)'; ctx.lineWidth = 1; ctx.strokeRect(x + .5, y + .5, cs - 1, cs - 1);
+      if (s === GOALS) { mono(ctx, 'goal', cx, cy, Math.max(9, cs * .22), P.ink, 'center', '700'); continue; }
+      if (Q && opts.arrows && Math.max.apply(null, q) !== 0) {
+        var m = Math.max.apply(null, q), a2 = q.indexOf(m), d = [[0, -1], [1, 0], [0, 1], [-1, 0]][a2];
+        ctx.strokeStyle = P.ink; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx - d[0] * cs * .18, cy - d[1] * cs * .18); ctx.lineTo(cx + d[0] * cs * .22, cy + d[1] * cs * .22); ctx.stroke();
+        ctx.beginPath(); ctx.arc(cx + d[0] * cs * .22, cy + d[1] * cs * .22, 2.5, 0, 7); ctx.fillStyle = P.ink; ctx.fill();
+      }
+      if (Q && opts.values) mono(ctx, Math.max.apply(null, q).toFixed(1), cx, y + cs - 8, Math.max(8, cs * .17), P.ink, 'center');
+    }
+  }
+  // log-scale TD loss plot
+  function lossPlot(ctx, x, y, w, h, series, upto, sz) {
+    card(ctx, x + w / 2, y + h / 2, w, h, 'lp' + w, P.cream);
+    var gx0 = x + 44, gx1 = x + w - 12, gy0 = y + h - 22, gy1 = y + 28, lo = -5, hi = 3;
+    var X = function (st) { return gx0 + (gx1 - gx0) * st / 3000; }, Y = function (L) { return lerp(gy0, gy1, (clamp(Math.log10(Math.max(L, 1e-5)), lo, hi) - lo) / (hi - lo)); };
+    mono(ctx, 'TD loss (log)', x + 10, y + 13, sz, '#6b5a9a', 'left', '700');
+    ctx.strokeStyle = 'rgba(42,41,52,.35)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx0, gy1); ctx.lineTo(gx0, gy0); ctx.lineTo(gx1, gy0); ctx.stroke();
+    [-4, -2, 0, 2].forEach(function (e) { mono(ctx, '1e' + e, gx0 - 4, Y(Math.pow(10, e)), 10, '#5a5566', 'right'); });
+    mono(ctx, 'steps → 3000', gx1, gy0 + 11, 10, '#5a5566', 'right');
+    series.forEach(function (sr) {
+      ctx.strokeStyle = sr.color; ctx.lineWidth = 2.4; ctx.beginPath(); var started = false, lastX = 0, lastY = 0;
+      sr.T.hist.forEach(function (hh) { if (hh.st > upto) return; var px = X(hh.st), py = Y(hh.L); if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py); lastX = px; lastY = py; });
+      ctx.stroke();
+      if (started && sr.label) mono(ctx, sr.label, Math.min(lastX + 4, gx1 - 70), lastY + (sr.dy || -9), 11, sr.ink || P.ink, 'left', '700');
+      var bu = blowup(sr.T); if (bu && bu <= upto) { ctx.fillStyle = '#b3443c'; mono(ctx, '✕ blew up @' + bu, X(bu) + 4, gy1 + 6 + (sr.dy > 0 ? 14 : 0), 11, '#b3443c', 'left', '700'); }
+    });
+  }
+  // Q(x, left) and Q(x, right) from a net vs the true Q* (dashed)
+  function qPlot(ctx, x, y, w, h, p, g, sz, title) {
+    card(ctx, x + w / 2, y + h / 2, w, h, 'qp' + w, P.cream);
+    var gx0 = x + 34, gx1 = x + w - 12, gy0 = y + h - 22, gy1 = y + 28, lo = Math.floor((Math.pow(g, 10) - 0.06) * 20) / 20, X = function (v) { return lerp(gx0, gx1, v); }, Y = function (v) { return lerp(gy0, gy1, (clamp(v, lo - .03, 1.08) - lo) / (1.05 - lo)); };
+    mono(ctx, title || 'Q(x, ·)  vs  true Q* (dashed)', x + 10, y + 13, sz, '#6b5a9a', 'left', '700');
+    ctx.strokeStyle = 'rgba(42,41,52,.35)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx0, gy1); ctx.lineTo(gx0, gy0); ctx.lineTo(gx1, gy0); ctx.stroke();
+    mono(ctx, 'x = 0', gx0, gy0 + 11, 10, '#5a5566', 'center'); mono(ctx, 'goal', gx1, gy0 + 11, 10, '#5a5566', 'center'); mono(ctx, '1', gx0 - 4, Y(1), 10, '#5a5566', 'right'); mono(ctx, lo.toFixed(2), gx0 - 4, Y(lo), 10, '#5a5566', 'right');
+    [[0, '#c0602a'], [1, '#2c5f8a']].forEach(function (c) {
+      ctx.strokeStyle = c[1]; ctx.lineWidth = 1.6; ctx.setLineDash([4, 4]); ctx.beginPath();
+      for (var i = 0; i <= 90; i++) { var v = i / 100; ctx[i ? 'lineTo' : 'moveTo'](X(v), Y(qstar(v, c[0], g))); } ctx.stroke(); ctx.setLineDash([]);
+      if (p) { ctx.lineWidth = 2.6; ctx.beginPath(); for (i = 0; i <= 90; i++) { v = i / 100; ctx[i ? 'lineTo' : 'moveTo'](X(v), Y(fwd(p, v).q[c[0]])); } ctx.stroke(); }
+    });
+    mono(ctx, '← left', gx0 + 6, gy1 + 2, 11, '#c0602a', 'left', '700'); mono(ctx, 'right →', gx0 + 64, gy1 + 2, 11, '#2c5f8a', 'left', '700');
+  }
+  function cartpole(ctx, x, y, s, ang, t) {
+    ctx.save(); ctx.translate(x, y);
+    ctx.strokeStyle = 'rgba(253,250,240,.5)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-s * 3, s * .5); ctx.lineTo(s * 3, s * .5); ctx.stroke();
+    F.paper(ctx, 0, 0, s * 1.4, s * .6, P.peach, { seed: 'cart', rot: 0 });
+    ctx.fillStyle = P.ink; ctx.beginPath(); ctx.arc(-s * .4, s * .32, s * .14, 0, 7); ctx.arc(s * .4, s * .32, s * .14, 0, 7); ctx.fill();
+    ctx.rotate(ang); F.paper(ctx, 0, -s * 1.2, s * .16, s * 2.4, P.butter, { seed: 'pole', rot: 0 }); ctx.restore();
+  }
+
+  /* ================= predict, then watch (never gated) ================= */
+  var QT = 83.5, Q = { done: false, prev: -1, choice: null, el: null };
+  var QOPTS = [['a', 'Same curve, just a bit noisier'], ['b', 'Better: fresher, more relevant data'], ['c', 'It stalls high, then blows up']];
+  function buildQ(api) {
+    if (Q.el) return Q.el;
+    var d = document.createElement('div'); d.id = 'predict';
+    d.innerHTML = '<div class="card"><p class="q">Predict: bin the shoebox. The net learns from each step as it happens, in order. What does the TD loss do?</p><p class="sub">same net, same lr 0.35, same γ 0.99, target net still on</p>' +
+      QOPTS.map(function (o) { return '<button class="opt" data-c="' + o[0] + '">' + o[1] + '</button>'; }).join('') + '<button class="skipq">just show me &#9654;</button></div>';
+    api.root.querySelector('.stage').appendChild(d);
+    d.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    [].forEach.call(d.querySelectorAll('button'), function (b) { b.onclick = function (e) { e.stopPropagation(); Q.choice = b.dataset.c || 'skip'; hideQ(api, true); if (b.dataset.c) api.audio.blip(b.dataset.c === 'c' ? 880 : 520); }; });
+    Q.el = d; return d;
+  }
+  function isPlaying(api) { return api.root.querySelector('.pp').getAttribute('aria-label') === 'Pause'; }
+  function showQ(api) { var d = buildQ(api); d.classList.add('on'); if (isPlaying(api)) api.root.querySelector('.pp').click(); }
+  function hideQ(api, resume) { if (!Q.el) return; Q.el.classList.remove('on'); if (resume && !isPlaying(api)) api.root.querySelector('.pp').click(); }
+
+  var ACT = ['up', 'right', 'down', 'left'];
+  function tabIndex(l) { if (l < 2) return -1; if (l < 10) return Math.floor(l - 2); return Math.min(TAB.length - 1, 8 + Math.floor(Math.pow(ramp(l, 10, 23), 1.6) * (TAB.length - 9))); }
+  var NB = [10, 100]; // bins per CartPole number
+
+  /* ================= the chapters ================= */
+  var chapters = [
+    { name: 'what is this worth?', start: 0, dur: 16, cap: {
+        1: 'A paper robot on a <b>cliff walk</b>: start bottom-left, goal bottom-right, a cliff in between. Every step costs 1; falling costs 100 and sends it home. Written on the start tile: <b>what is this worth?</b>',
+        2: 'An MDP: states (24 tiles), actions (up, right, down, left), rewards (−1 a step, −100 the cliff), discount γ. Q(s, a) is the total reward you expect if you take action a in s and then play well.',
+        3: 'ARENA [2.1] Bellman optimality: Q*(s,a) = E[r + γ max<sub>a′</sub> Q*(s′,a′) | s, a]. Value is defined recursively: this tile is worth its reward plus the best of the next tile. Here γ = 1 and the answer turns out to be an exact integer.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .5); var sm = ph(W), cs = Math.min((W - 30) / CC, (H * .55) / CR, 90), gx = W / 2 - cs * CC / 2, gy = sm ? 70 : H * .2;
+        card(ctx, W / 2, gy + cs * CR / 2, cs * CC + 16, cs * CR + 16, 'board', P.paper); grid(ctx, gx, gy, cs, null);
+        robot(ctx, gx + cs / 2, gy + cs * 3.5, cs * .5, t);
+        F.lantern(ctx, gx + cs * 5.5, gy + cs * 3.5 - cs * .1, cs * .16, .8 + .2 * Math.sin(t * 3), t);
+        fade(ctx, ramp(l, 1.5, 2.5), function () { F.note(ctx, 'what is this worth?', clamp(gx + cs * .5 + 60, 90, W - 90), gy - 26, sm ? 16 : 20, { color: P.pink, seed: 'q', rot: -.03 }); });
+        var ny = gy + cs * CR + (sm ? 40 : 56);
+        fade(ctx, ramp(l, 6, 7), function () { F.note(ctx, 'Q*(s,a) = E[ r + γ · max Q*(s′,a′) ]', W / 2, ny, sm ? 13.5 : 18, { color: P.cream, seed: 'bell', font: F.MONO, tape: false }); });
+        fade(ctx, ramp(l, 10, 11), function () { F.note(ctx, 'step −1 · cliff −100 · γ = 1', W / 2, ny + (sm ? 46 : 58), sm ? 14 : 18, { color: P.butter, seed: 'rw' }); });
+      } },
+    { name: 'the table fills in', start: 16, dur: 26, cap: {
+        1: 'The robot doesn\'t know the map. It wanders, and after <b>every single step</b> nudges one number in its table toward "what I got, plus the best I now think comes next". Watch the colours flood back from the goal.',
+        2: 'Real Q-learning, lr 0.5, ε = 0.1, 60 episodes, 1,090 updates, all computed in your browser. Each tile is split into 4 triangles, one Q per action; red is bad, green is good. The line on top is the actual update just applied.',
+        3: 'ARENA <code>QLearning.observe</code>: <code>Q[s,a] += lr * (r + gamma * np.max(Q[s′]) - Q[s,a])</code>. Off-policy: the target uses max even when ε made it wander. SARSA would use Q[s′,a′] of the action it actually took, and learn a safer path one row up.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .5); var sm = ph(W), cs = Math.min((W - 30) / CC, (H * .5) / CR, 90), gx = W / 2 - cs * CC / 2, gy = sm ? 96 : H * .2;
+        var k = tabIndex(l), u = k >= 0 ? TAB[k] : null;
+        card(ctx, W / 2, gy + cs * CR / 2, cs * CC + 16, cs * CR + 16, 'board', P.paper); grid(ctx, gx, gy, cs, u ? u.Q : null, { arrows: l > 12, values: l > 23 });
+        var tile = u ? u.tile : S0; robot(ctx, gx + (tile % CC + .5) * cs, gy + (Math.floor(tile / CC) + .5) * cs, cs * .42, t);
+        var sz = sm ? 11.5 : 15, wide = Math.min(W - 16, 620);
+        card(ctx, W / 2, sm ? 44 : 50, wide, sm ? 58 : 64, 'upd', P.cream);
+        if (u) {
+          mono(ctx, 'episode ' + (u.e + 1) + '/60 · update ' + (k + 1) + ' · s=' + u.s + ' a=' + ACT[u.a] + (u.cliff ? ' · CLIFF' : ''), W / 2, (sm ? 44 : 50) - sz * .8, sz - 1, u.cliff ? '#b3443c' : '#6b5a9a', 'center', '700');
+          mono(ctx, u.old.toFixed(2) + ' + 0.5·(' + u.r + ' + ' + u.mx.toFixed(2) + ' − ' + u.old.toFixed(2) + ') = ' + u.nw.toFixed(2), W / 2, (sm ? 44 : 50) + sz * .75, sz, P.ink, 'center', '700');
+        } else mono(ctx, 'Q[s,a] += lr·(r + γ·max Q[s′] − Q[s,a])', W / 2, sm ? 44 : 50, sz, P.ink, 'center', '700');
+        var ny = gy + cs * CR + (sm ? 36 : 50);
+        if (l > 23) fade(ctx, ramp(l, 23, 24), function () { var v = Math.max.apply(null, TAB[TAB.length - 1].Q[S0]); F.note(ctx, 'start tile is worth ' + v.toFixed(2) + ':\nseven steps, along the edge', W / 2, ny + 10, sm ? 15 : 19, { color: P.mint, seed: 'ans' }); });
+      } },
+    { name: 'too many tiles', start: 42, dur: 18, cap: {
+        1: 'A table works when you can list every state. <b>CartPole</b> can\'t be listed: the state is four real numbers (cart position, speed, pole angle, spin). Try chopping each into bins and count the rows.',
+        2: '10 bins each: 10⁴ = 10,000 states × 2 actions. 100 bins: 10⁸ states. Exact float32: about 2³² values per number, (2³²)⁴ = 2¹²⁸ ≈ 3.4 × 10³⁸ rows. And a table never shares: learning one tile teaches its neighbour nothing.',
+        3: 'ARENA [2.2.1] uses gym CartPole-v1: obs shape (4,), 2 actions, +1 reward per step alive, episode ends when the pole passes ±12° or the cart leaves ±2.4, or at 500 steps. The fix is function approximation: a network Q(s; θ) that generalises between nearby states.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .3); var sm = ph(W), s = sm ? 34 : 46, ang = Math.sin(t * 1.3) * .18;
+        cartpole(ctx, W / 2 + Math.sin(t * .7) * s, sm ? 130 : H * .28, s, ang, t);
+        var labels = ['x ' + (Math.sin(t * .7) * .4).toFixed(4), 'ẋ ' + (Math.cos(t * .7) * .28).toFixed(4), 'θ ' + ang.toFixed(4), 'θ̇ ' + (Math.cos(t * 1.3) * .23).toFixed(4)];
+        var sz = sm ? 13 : 16, bx = sm ? 16 : W / 2 - 280, by = sm ? 196 : H * .44;
+        labels.forEach(function (sx, i) { mono(ctx, sx, bx + (i % 2) * (sm ? W / 2 - 8 : 150) + (sm ? 0 : Math.floor(i / 2) * 300), by + (sm ? Math.floor(i / 2) * 22 : 0), sz, P.cream, 'left', '700'); });
+        var rows = [['10 bins each', '10⁴ × 2 = 20,000 Q-values', 3], ['100 bins each', '10⁸ × 2 = 200,000,000', 6.5], ['exact float32', '2¹²⁸ ≈ 3.4 × 10³⁸ rows', 10]];
+        var cw = Math.min(W - 20, 560), cy = by + (sm ? 70 : 60);
+        rows.forEach(function (r, i) { fade(ctx, ramp(l, r[2], r[2] + .8), function () { var yy = cy + i * (sm ? 50 : 56); card(ctx, W / 2, yy, cw, sm ? 42 : 46, 'row' + i, i === 2 ? P.pink : P.cream); mono(ctx, r[0], W / 2 - cw / 2 + 12, yy, sz - 1, '#6b5a9a', 'left', '700'); mono(ctx, r[1], W / 2 + cw / 2 - 12, yy, sz - 1, P.ink, 'right', '700'); }); });
+        fade(ctx, ramp(l, 13.5, 14.5), function () { F.note(ctx, 'and every tile learns alone', W / 2, Math.min(H - 34, cy + 3 * (sm ? 50 : 56) + 20), sm ? 16 : 20, { color: P.butter, seed: 'alone' }); });
+      } },
+    { name: 'a network guesses Q', start: 60, dur: 22, cap: {
+        1: 'Swap the table for a <b>tiny network</b>: in goes the state, out come two numbers, Q(left) and Q(right). A paper corridor (reward 1 at the far end, γ = 0.99) keeps it small enough to train live, right here.',
+        2: 'x → 16 tanh units → 2 outputs, trained on the TD loss with a <b>replay buffer</b> (1,000 transitions, minibatches of 16) and a <b>target network</b> copied every 100 steps. Solid curves: the net. Dashed: the true Q*. The loss is measured on 20 probe states.',
+        3: 'Gradient descent on (r + γ(1−d)·max Q_target(s′) − Q(s,a))², treating the target as a constant. This is not a true gradient of any fixed objective (semi-gradient), which is exactly why the two tricks in the next scenes exist. lr 0.35 is deliberately high to make the dangers visible.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .45); var sm = ph(W), st = Math.round(3000 * ramp(l, 3, 19)), hh = histAt(RUN_BOTH, Math.max(25, st));
+        var w = sm ? W - 20 : Math.min(460, (W - 60) / 2), h = sm ? Math.min(210, (H - 80) / 2) : 290, xa = sm ? 10 : W / 2 - w - 10, ya = sm ? 10 : 40, xb = sm ? 10 : W / 2 + 10, yb = sm ? ya + h + 10 : ya;
+        qPlot(ctx, xa, ya, w, h, l > 3 ? hh.p : newNet(), 0.99, sm ? 12 : 13);
+        lossPlot(ctx, xb, yb, w, h, [{ T: RUN_BOTH, color: '#2f7a52', label: 'replay + target' }], st, sm ? 12 : 13);
+        var ny = yb + h + (sm ? 28 : 44);
+        if (ny < H - 20) fade(ctx, ramp(l, 1, 2), function () { F.note(ctx, 'step ' + st + ' · TD loss ' + (st ? hh.L.toExponential(1) : '—'), W / 2, ny, sm ? 13 : 16, { color: P.cream, seed: 'st', font: F.MONO, tape: false }); });
+      } },
+    { name: 'predict: no replay', start: 82, dur: 20, cap: {
+        1: 'Your turn. Throw the <b>shoebox of Polaroids</b> away: the net learns from each step the moment it happens, in order. Better, same, or worse?',
+        2: 'Real run, same seed: without replay the loss stalls around 10⁻² while the net chases whichever end of the corridor it saw last, then blows up at step ' + (BU_NOREP || '—') + '. Consecutive steps are near-duplicates, so each update drags the whole curve toward one spot.',
+        3: 'Replay breaks correlation (samples look closer to i.i.d.), reuses each transition many times, and averages over many old behaviours. ARENA\'s <code>ReplayBuffer.add</code> keeps the last <code>buffer_size</code> rows with <code>t.cat(...)[-self.buffer_size:]</code>; <code>sample</code> draws uniformly with replacement.' },
+      draw: function (ctx, t, l, W, H, api) {
+        if (!Q.done && Q.prev >= 0 && Q.prev < QT && t >= QT && t - Q.prev < .4) { Q.done = true; showQ(api); }
+        if (t < QT - 1) { Q.done = false; if (Q.el && Q.el.classList.contains('on')) hideQ(api, false); }
+        Q.prev = t;
+        bg(ctx, W, H, t, .35); var sm = ph(W), w = Math.min(W - 20, 620), h = sm ? Math.min(230, H * .38) : 290, x = W / 2 - w / 2, y = sm ? 10 : 30;
+        var st = l < 2 ? 3000 : Math.round(3000 * ramp(l, 2.5, 13));
+        var series = [{ T: RUN_BOTH, color: '#2f7a52', label: 'with replay', dy: 12 }]; if (l >= 2) series.push({ T: RUN_NOREP, color: '#b3443c', label: 'no replay', ink: '#b3443c', dy: -10 });
+        lossPlot(ctx, x, y, w, h, series, l < 2 ? 3000 : st, sm ? 12 : 14);
+        var ny = y + h + (sm ? 34 : 46), sz = sm ? 14 : 18;
+        // the shoebox of Polaroids
+        var bxY = Math.min(H - 60, ny + (sm ? 70 : 90));
+        F.paper(ctx, W / 2, bxY, sm ? 120 : 160, sm ? 50 : 60, P.peach, { seed: 'shoebox', rot: -.02 });
+        for (var i = 0; i < 5; i++) { var fly = l < 2 ? 0 : ramp(l, 2 + i * .15, 3.4 + i * .15); fade(ctx, 1 - fly, function () { F.paper(ctx, W / 2 - 40 + i * 20, bxY - 30 - fly * 60, 18, 22, P.cream, { seed: 'pol' + i, rot: (i - 2) * .2 }); }); }
+        mono(ctx, 'replay buffer', W / 2, bxY + 2, sm ? 11 : 13, P.ink, 'center', '700');
+        if (l > 13.5) {
+          var tx = Q.choice === 'c' ? 'you got it: it stalls, then blows up' : Q.choice && Q.choice !== 'skip' ? 'real answer: it stalls, then blows up' : 'it stalls, then blows up';
+          F.note(ctx, tx, W / 2, ny, sz, { color: P.mint, seed: 'pa' });
+        }
+      } },
+    { name: 'no frozen target', start: 102, dur: 16, cap: {
+        1: 'Now keep the shoebox but drop the <b>frozen copy</b>. The net\'s target is built from its own output, so every step it moves the goalposts it is aiming at. A dog chasing its own tail.',
+        2: 'Same seed, replay on, target off: the loss blows up at step ' + (BU_NOTGT || '—') + '. With a target network copied every 100 steps, the goal holds still long enough to actually be reached.',
+        3: 'ARENA builds <code>target_network</code> as a copy of <code>q_network</code> and reloads it with <code>load_state_dict(self.q_network.state_dict())</code> every <code>trains_per_target_update</code> training steps; the target is computed under <code>t.inference_mode()</code> so no gradient flows into it. Honest detail: at lr 0.25 this toy survives without it; the trick buys margin, not magic.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .35); var sm = ph(W), w = Math.min(W - 20, 620), h = sm ? Math.min(230, H * .38) : 290, x = W / 2 - w / 2, y = sm ? 10 : 30;
+        var st = Math.round(3000 * ramp(l, 1, 8));
+        lossPlot(ctx, x, y, w, h, [{ T: RUN_BOTH, color: '#2f7a52', label: 'with target', dy: 12 }, { T: RUN_NOTGT, color: '#b3443c', label: 'no target', ink: '#b3443c', dy: -10 }], st, sm ? 12 : 14);
+        var ny = y + h + (sm ? 40 : 56), sz = sm ? 14 : 18;
+        // goalposts: frozen copy vs sliding
+        var gy = Math.min(H - 60, ny + 50), slide = Math.sin(t * 4) * 50;
+        fade(ctx, ramp(l, 2, 3), function () {
+          F.note(ctx, 'target = r + γ · max Q_target(s′)', W / 2, ny, sm ? 13 : 16, { color: P.cream, seed: 'tg', font: F.MONO, tape: false });
+          F.paper(ctx, W * .3, gy, 40, 46, P.mint, { seed: 'gp1', rot: 0 }); mono(ctx, 'frozen', W * .3, gy + 36, 12, P.cream, 'center', '700');
+          F.paper(ctx, W * .7 + slide * (sm ? .5 : 1), gy, 40, 46, P.pink, { seed: 'gp2', rot: Math.sin(t * 4) * .1 }); mono(ctx, 'moving', W * .7, gy + 36, 12, P.cream, 'center', '700');
+        });
+      } },
+    { name: 'where it stops being true', start: 118, dur: 10, cap: {
+        1: 'Where the story stops being true: a replay buffer and a frozen target make DQN <b>steadier</b>, not safe. It still overestimates, and exploring a big world with ε-greedy is mostly luck.',
+        2: 'max over noisy estimates is biased upward (Double DQN fixes some of that by choosing the action with the online net and scoring it with the target). ε-greedy explores one random step at a time; in a big world that rarely reaches anything new.',
+        3: 'Function approximation + bootstrapping + off-policy learning is Sutton & Barto\'s "deadly triad": no convergence guarantee. Even our stable γ = 0.99 run can\'t walk the corridor greedily: the two Q-values differ by under 1%, below its error. ARENA\'s probe environments (Probe1..Probe5) exist because DQN bugs look like bad luck; test each piece on a tiny env with a known answer.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .2); var sm = ph(W);
+        F.cornerFlip(ctx, W, H, ramp(l, 0, 1.2), P.pink);
+        fade(ctx, ramp(l, .8, 1.8), function () { F.note(ctx, 'where this stops being true:\nsteadier is not safe.\nmax overestimates, and\nε-greedy rarely finds\nanything far away', W / 2, H * .38, sm ? 17 : 22, { color: P.pink, seed: 'limit', rot: -.02 }); });
+      } },
+    { name: 'your TD loss', start: 128, dur: 20, cap: {
+        1: 'All of it, in the lines you wrote in ARENA, lit with a real transition through the trained corridor net. The shoebox is <code>buffer.sample</code>; the frozen copy is <code>target_network</code>. <b>What an agent values is what we trained into it.</b>',
+        2: 'ARENA [2.2.1] <code>DQNAgent.training_step</code>. The (1 − terminated) mask stops bootstrapping past the end of an episode; <code>gather</code> picks the Q of the action actually taken.',
+        3: 'ARENA\'s DQNArgs defaults: gamma 0.99, buffer_size 10,000, batch_size 512, learning_rate 5e-3, trains_per_target_update 50, and <code>linear_schedule</code> for ε (start_e 1.0 → end_e 0.02 over exploration_fraction 0.1). Q-values are the agent\'s beliefs about what matters; inspecting them is one of the first windows into what it has learned to want.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .5); var sm = ph(W), sz = sm ? 10.6 : 14.5, lh = sz * 1.6, cw = Math.min(W - 12, 760), x0 = W / 2 - cw / 2 + 10;
+        var ch = CODE.length * lh + 22, cy = (sm ? 8 : 16) + ch / 2; card(ctx, W / 2, cy, cw, ch, 'code');
+        var hl = Math.floor(clamp((l - 1.5) / 1.3, -1, CODE.length - 1));
+        CODE.forEach(function (s, j) {
+          var y = cy - ch / 2 + 13 + j * lh + lh / 2 - 2;
+          if (j === hl && VALS[j]) { ctx.fillStyle = 'rgba(247,227,160,.8)'; ctx.fillRect(x0 - 6, y - lh / 2 + 1, cw - 8, lh - 2); }
+          mono(ctx, s, x0, y, sz, s.trim().charAt(0) === '#' ? '#6b5a9a' : P.ink, 'left', j === hl ? '700' : '500');
+        });
+        var vy = cy + ch / 2 + (sm ? 26 : 36);
+        if (hl >= 0 && VALS[hl]) F.note(ctx, VALS[hl], W / 2, vy, sm ? 12.5 : 16, { color: P.mint, seed: 'v' + hl, font: F.MONO, tape: false });
+        fade(ctx, ramp(l, 15, 16), function () { F.note(ctx, 'what an agent values is\nwhat we trained into it', W / 2, Math.min(H - 44, vy + (sm ? 70 : 86)), sm ? 15 : 19, { color: P.pink, seed: 'steer', rot: .02 }); });
+      } }
+  ];
+
+  var f3 = function (v) { return v.toFixed(3); };
+  var CODE = [
+    'data = self.buffer.sample(self.args.batch_size)',
+    'with t.inference_mode():',
+    '    target_max = self.target_network(data.next_obs).max(-1).values',
+    'predicted_q_vals = self.q_network(data.obs).gather(',
+    '    -1, data.actions.unsqueeze(-1)).squeeze(-1)',
+    'td_error = data.rewards + self.args.gamma * target_max \\',
+    '    * (1 - data.terminated.float()) - predicted_q_vals',
+    'loss = td_error.pow(2).mean()',
+    'loss.backward()'];
+  var VALS = ['one row: obs x = ' + EX.x + ', action right, next_obs ' + EX.x2.toFixed(2), 'no gradient into the frozen copy', 'target_max = ' + f3(EX.tmax),
+    'predicted Q(0.45, right) = ' + f3(EX.pred), null, 'td_error = 0 + 0.99·' + f3(EX.tmax) + '·1 − ' + f3(EX.pred), '         = ' + EX.td.toExponential(2), 'loss = ' + EX.loss.toExponential(2), 'gradients flow into q_network only'];
+  if (window.innerWidth < 500) {
+    CODE = ['data = self.buffer.sample(', '    self.args.batch_size)', 'with t.inference_mode():', '  target_max = self.target_network(', '      data.next_obs).max(-1).values',
+      'predicted_q_vals = self.q_network(', '    data.obs).gather(-1,', '    data.actions.unsqueeze(-1)', '    ).squeeze(-1)',
+      'td_error = (data.rewards', '    + self.args.gamma * target_max', '    * (1 - data.terminated.float())', '    - predicted_q_vals)', 'loss = td_error.pow(2).mean()', 'loss.backward()'];
+    VALS = ['obs x = 0.45, action right', 'next_obs = ' + EX.x2.toFixed(2), 'no gradient into the copy', 'target_max = ' + f3(EX.tmax), null, 'predicted Q = ' + f3(EX.pred), null, null, null,
+      'r = 0 (not at the goal yet)', '0.99 · ' + f3(EX.tmax), 'terminated = 0 → keep it', '− ' + f3(EX.pred) + ' → ' + EX.td.toExponential(2), 'loss = ' + EX.loss.toExponential(2), 'grads into q_network only'];
+  }
+
+  /* ================= coda: now you drive ================= */
+  var C = { rep: true, tgt: true, gamma: 0.99, lr: 0.35, T: null };
+  function resetC() { C.T = Trainer({ replay: C.rep, target: C.tgt, gamma: C.gamma, lr: C.lr }); }
+  function greedyLen(p) { var x = 0, n = 0; while (n < 30) { var q = fwd(p, x).q, o = envStep(x, q[1] >= q[0] ? 1 : 0); n++; if (o.d) return n; x = o.x2; } return null; }
+  var coda = {
+    caption: { 1: 'Your corridor, your rules. Toggle the shoebox and the frozen copy, slide γ, and watch a real network learn (or fall over).', 2: 'Every frame runs 12 real training steps. Episode length is a greedy walk from x = 0; the best possible is 10.', 3: 'Honest surprise: at γ 0.99 even the stable run often "never arrives": Q(left) and Q(right) differ by under 1%, less than the net\'s error. Try γ 0.9: bigger gaps, a 10-step walk. Lower lr and both tricks become optional on a problem this small.' },
+    start: function (api, panel) {
+      hideQ(api, false);
+      var btn = 'font:inherit;border-radius:8px;padding:5px 10px;min-height:34px';
+      panel.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:13px">' +
+        '<button data-a="rep" style="' + btn + '"></button><button data-a="tgt" style="' + btn + '"></button><button data-a="reset" style="' + btn + '">retrain</button>' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:170px">γ <input data-k="g" type="range" min="0.8" max="0.99" step="0.01" value="' + C.gamma + '" style="flex:1;min-width:60px"> <b data-v="g" style="min-width:2.6em"></b></label>' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:170px">lr <input data-k="lr" type="range" min="0.05" max="0.5" step="0.05" value="' + C.lr + '" style="flex:1;min-width:60px"> <b data-v="lr" style="min-width:2.6em"></b></label></div>';
+      var paint = function () { panel.querySelector('[data-a=rep]').textContent = 'replay: ' + (C.rep ? 'on' : 'off'); panel.querySelector('[data-a=tgt]').textContent = 'target net: ' + (C.tgt ? 'on' : 'off'); panel.querySelector('[data-v=g]').textContent = C.gamma.toFixed(2); panel.querySelector('[data-v=lr]').textContent = C.lr.toFixed(2); };
+      panel.querySelector('[data-a=rep]').onclick = function () { C.rep = !C.rep; paint(); resetC(); api.audio.blip(C.rep ? 880 : 440); };
+      panel.querySelector('[data-a=tgt]').onclick = function () { C.tgt = !C.tgt; paint(); resetC(); api.audio.blip(C.tgt ? 880 : 440); };
+      panel.querySelector('[data-a=reset]').onclick = function () { resetC(); api.audio.blip(660); };
+      panel.querySelector('[data-k=g]').oninput = function (e) { C.gamma = +e.target.value; paint(); resetC(); };
+      panel.querySelector('[data-k=lr]').oninput = function (e) { C.lr = +e.target.value; paint(); resetC(); };
+      paint(); resetC();
+    },
+    draw: function (ctx, t, W, H, api, dt) {
+      bg(ctx, W, H, t, .4); var sm = ph(W), T = C.T; if (!T) resetC(), T = C.T;
+      if (T.st < 3000) for (var i = 0; i < 12; i++) T.step();
+      var w = sm ? W - 20 : Math.min(460, (W - 60) / 2), h = sm ? Math.max(120, Math.min(200, (H - 60) / 2)) : Math.min(300, H - 80), xa = sm ? 10 : W / 2 - w - 10, ya = 10, xb = sm ? 10 : W / 2 + 10, yb = sm ? ya + h + 8 : ya;
+      var last = T.hist.length ? T.hist[T.hist.length - 1] : null, p = T.dead ? histAt(T, T.st).p : T.p;
+      qPlot(ctx, xa, ya, w, h, p, C.gamma, sm ? 11 : 13, 'Q(x,·) live · γ ' + C.gamma.toFixed(2));
+      lossPlot(ctx, xb, yb, w, h, [{ T: T, color: T.dead ? '#b3443c' : '#2f7a52' }], T.st, sm ? 11 : 13);
+      var gl = T.dead ? null : greedyLen(T.p), ry = yb + h + (sm ? 16 : 24);
+      if (ry < H - 8) mono(ctx, 'step ' + T.st + ' · loss ' + (last ? last.L.toExponential(1) : '—') + ' · episode length ' + (T.dead ? 'diverged' : gl ? gl + ' (best 10)' : 'never arrives'), W / 2, ry, sm ? 11.5 : 14, P.cream, 'center', '700');
+    }
+  };
+
+  window.__DQN = { Trainer: Trainer, greedyLen: greedyLen, TAB: TAB, BU_NOREP: BU_NOREP, BU_NOTGT: BU_NOTGT, EX: EX, bothLast: RUN_BOTH.hist[RUN_BOTH.hist.length - 1].L };
+  F.play({
+    title: 'Deep dive · From a table to a network',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Week 9 pack', href: '../../index.html#week-09' },
+      { label: 'Demo: RL foundations & DQN', href: '../../index.html#demo/rl-foundations-dqn' },
+      { label: 'Map: Q-learning', href: '../../index.html#map/node=q-learning' },
+      { label: 'Map: DQN', href: '../../index.html#map/node=dqn' },
+      { label: 'Map: replay buffer', href: '../../index.html#map/node=replay-buffer' },
+      { label: 'Map: target network', href: '../../index.html#map/node=target-network' },
+      { label: 'Map: Bellman equation', href: '../../index.html#map/node=bellman-equation' },
+      { label: 'Case: Q-learning', href: '../../index.html#cases/q-learning' },
+      { label: 'Case: DQN', href: '../../index.html#cases/dqn' },
+      { label: 'Case: replay buffer', href: '../../index.html#cases/replay-buffer' },
+      { label: 'Short film: week 9', href: 'w9-rl.html' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
