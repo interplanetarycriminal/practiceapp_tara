@@ -16,12 +16,12 @@
 
 /*MATH*/
 var GR = 4, GC = 5, START_S = 15, GOAL_S = 19, DR = [-1, 0, 1, 0], DC = [0, 1, 0, -1], ARW = ['↑', '→', '↓', '←'];
-function mkWorld(cliffs) { var c = {}; (cliffs || [16, 17, 18]).forEach(function (s) { c[s] = 1; }); return { cliff: c }; }
+function mkWorld(cliffs, coin) { var c = {}; (cliffs || [16, 17, 18]).forEach(function (s) { c[s] = 1; }); return { cliff: c, coin: coin || null }; }
 function isTerm(w, s) { return s === GOAL_S || !!w.cliff[s]; }
 function stepEnv(w, s, a) {
   var r = Math.floor(s / GC), c = s % GC, r2 = r + DR[a], c2 = c + DC[a];
   if (r2 < 0 || r2 >= GR || c2 < 0 || c2 >= GC) { r2 = r; c2 = c; }
-  var s2 = r2 * GC + c2, rew = s2 === GOAL_S ? 1 : w.cliff[s2] ? -1 : 0;
+  var s2 = r2 * GC + c2, rew = s2 === GOAL_S ? 1 : w.cliff[s2] ? -1 : (w.coin && w.coin[s2]) || 0;  // a coin pays every time you step onto it
   return { s2: s2, r: rew, done: isTerm(w, s2) };
 }
 function zeros() { var Q = []; for (var s = 0; s < GR * GC; s++) Q.push([0, 0, 0, 0]); return Q; }
@@ -54,6 +54,14 @@ function greedyPath(w, Q, maxn) {
     s = stepEnv(w, s, a).s2; p.push(s); if (seen[s]) return { p: p, ok: false }; seen[s] = 1; }
   return { p: p, ok: s === GOAL_S };
 }
+// greedy action from a value table (planning): argmax_a r + gamma * V(s')
+function vPolicy(w, V, s, gamma) { var best = -1e9, ba = 0; for (var a = 0; a < 4; a++) { var e = stepEnv(w, s, a), q = e.r + (e.done ? 0 : gamma * V[e.s2]); if (q > best + 1e-9) { best = q; ba = a; } } return ba; }
+function discReturn(w, path, gamma) { var G = 0, g = 1; for (var i = 1; i < path.length; i++) { var s = path[i - 1], s2 = path[i], a = -1; for (var k = 0; k < 4; k++) if (stepEnv(w, s, k).s2 === s2) a = k; G += g * stepEnv(w, s, a).r; g *= gamma; } return G; }
+// explore vs exploit: a 3-armed bandit with sample-average estimates (greedy is eps = 0)
+function bandit(eps, n, rnd, means) { var Q = [0, 0, 0], N = [0, 0, 0], out = [];
+  for (var i = 0; i < n; i++) { var ex = rnd() < eps, a; if (ex) a = Math.floor(rnd() * 3); else { var m = Math.max(Q[0], Q[1], Q[2]), bs = []; for (var k = 0; k < 3; k++) if (Q[k] >= m - 1e-12) bs.push(k); a = bs[Math.floor(rnd() * bs.length)]; }
+    var R = means[a] + (rnd() - .5) * .4; N[a]++; Q[a] += (R - Q[a]) / N[a]; out.push({ a: a, ex: ex, R: R, Q: Q.slice(), N: N.slice() }); }
+  return out; }
 // REINFORCE on a 3-armed dance floor
 function softmax(z) { var m = Math.max.apply(null, z), e = z.map(function (v) { return Math.exp(v - m); }), S = e.reduce(function (a, b) { return a + b; }, 0); return e.map(function (v) { return v / S; }); }
 function reinforce(n, lr, seed) {
@@ -81,7 +89,16 @@ function reinforce(n, lr, seed) {
       var sc = L0.slice(0, 5).filter(function (x) { return Math.abs(x.td) > 1e-3; }).length; if (sc > best) { best = sc; EP = e; } } if (best >= 0) return;
     for (e = 3; e < 120; e++) { var a = QL.epStart[e], b = QL.epStart[e + 1], L = QL.log.slice(a, b), nz = L.filter(function (x) { return Math.abs(x.td) > 1e-9; }).length; if (L[L.length - 1].r > 0 && L.length <= 9 && nz >= 3) { EP = e; return; } } EP = 20; })();
   var DANCE = reinforce(40, 0.35, F.rng('dance-floor'));
-  window.__w9 = { qPath: QL.path, sPath: SA.path, ep: EP, V: VI[8] };
+  // explore vs exploit: same three moves, one dancer always greedy, one eps-greedy (seeded; both happen to try macarena first)
+  var CHEER = [0.3, 1.0, 0.6], GREEDY = bandit(0, 60, F.rng('greedy4'), CHEER), EGREEDY = bandit(0.1, 60, F.rng('eps16'), CHEER);
+  var FOUND = -1; for (var fi = 0; fi < 60; fi++) if (EGREEDY[fi].a === 1) { FOUND = fi; break; }
+  // reward hacking: a +0.2 coin on (2,1), paid every time you step onto it. Planned exactly with value iteration.
+  var WC = mkWorld(null, { 11: 0.2 }), VC = valueIter(WC, GAMMA, 80)[80];
+  var LOOP = (function () { var s = START_S, p = [s]; for (var i = 0; i < 14; i++) { if (isTerm(WC, s)) break; s = stepEnv(WC, s, vPolicy(WC, VC, s, GAMMA)).s2; p.push(s); } return p; })();
+  var FINISH = [15, 10, 11, 12, 13, 14, 19], G_FIN = discReturn(WC, FINISH, GAMMA), G_LOOP = VC[START_S];
+  // goal misgeneralisation (toy): move the gold to (0,4); the trained table still points to (3,4)
+  var NEWGOAL = 4;
+  window.__w9 = { qPath: QL.path, sPath: SA.path, ep: EP, V: VI[8], greedyN: GREEDY[59].N, epsN: EGREEDY[59].N, found: FOUND, loop: LOOP, gLoop: G_LOOP, gFin: G_FIN };
 
   /* ---------------- layout: board on top (phone) or left (desktop), readouts beside ---------------- */
   var L = {};
@@ -98,24 +115,26 @@ function reinforce(n, lr, seed) {
   function bg(ctx, W, H, t) { F.sky(ctx, W, H, P.night, '#2b3163'); F.stars(ctx, W, H, t, 'w9', 50); }
   var GB = ['#cfe0a8', '#bdd494'];
   function board(ctx, t, o) {
-    o = o || {}; var w = o.world || W0, cs = L.cs;
+    o = o || {}; var w = o.world || W0, cs = L.cs, gS = o.goal != null ? o.goal : GOAL_S;
     F.paper(ctx, L.gx + GC * cs / 2, L.gy + GR * cs / 2, GC * cs + 16, GR * cs + 16, '#5b6b3a', { seed: 'boardbg', blur: 10 });
     for (var s = 0; s < GR * GC; s++) {
-      var p = tc(s), col = s === GOAL_S ? P.butter : w.cliff[s] ? '#34304a' : s === START_S ? P.sky : GB[(s + Math.floor(s / GC)) % 2];
+      var p = tc(s), col = s === gS ? P.butter : w.cliff[s] ? '#34304a' : s === START_S ? P.sky : GB[(s + Math.floor(s / GC)) % 2];
       F.paper(ctx, p[0], p[1], cs - 5, cs - 5, col, { seed: 'tile' + s, shadow: false, grainA: .5 });
       if (w.cliff[s]) { ctx.save(); ctx.strokeStyle = 'rgba(200,190,240,.5)'; ctx.lineWidth = 1.5; ctx.beginPath(); for (var k = 0; k < 3; k++) { var yy = p[1] - cs * .2 + k * cs * .2; ctx.moveTo(p[0] - cs * .3, yy); for (var j = 1; j <= 6; j++) ctx.lineTo(p[0] - cs * .3 + j * cs * .1, yy + (j % 2 ? -3 : 3)); } ctx.stroke(); ctx.restore(); }
     }
     var fs = Math.max(10, cs * .17);
     if (!o.noLabels) {
-      var g = tc(GOAL_S); F.hand(ctx, '+1', g[0], g[1] + cs * .3, fs, '#7a5a10', { seed: 'goal' });
+      var g = tc(gS); F.hand(ctx, '+1', g[0], g[1] + cs * .3, fs, '#7a5a10', { seed: 'goal' });
+      if (w.coin) Object.keys(w.coin).forEach(function (c) { var q = tc(+c); ctx.save(); ctx.fillStyle = '#f2c14e'; ctx.strokeStyle = '#8a6a10'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(q[0], q[1] - cs * .08, cs * .17, 0, 6.283); ctx.fill(); ctx.stroke(); ctx.restore();
+        F.hand(ctx, '+' + w.coin[c], q[0], q[1] + cs * .3, fs, '#7a5a10', { seed: 'coin' + c }); });
       Object.keys(w.cliff).forEach(function (c) { var q = tc(+c); F.hand(ctx, '−1', q[0], q[1] + cs * .3, fs, P.pink, { seed: 'cl' + c }); });
       if (!o.noCliffWord && w === W0) { var m = tc(17); F.hand(ctx, 'cliff', m[0], m[1] - cs * .02, fs * 1.1, P.lav, { seed: 'cliffw' }); }
     }
-    if (o.Q) for (s = 0; s < GR * GC; s++) { if (w.cliff[s] || s === GOAL_S) continue; qTri(ctx, s, o.Q[s], o.qA == null ? 1 : o.qA); }
-    if (o.V) for (s = 0; s < GR * GC; s++) { if (w.cliff[s] || s === GOAL_S) continue; var q2 = tc(s), v = o.V[s];
+    if (o.Q) for (s = 0; s < GR * GC; s++) { if (w.cliff[s] || s === gS) continue; qTri(ctx, s, o.Q[s], o.qA == null ? 1 : o.qA); }
+    if (o.V) for (s = 0; s < GR * GC; s++) { if (w.cliff[s] || s === gS) continue; var q2 = tc(s), v = o.V[s];
       F.lantern(ctx, q2[0], q2[1] - cs * .06, cs * .15, clamp(v, 0, 1), t);
       F.hand(ctx, fx(v), q2[0], q2[1] + cs * .3, fs, v > 0 ? '#2d4a1e' : P.ink, { font: F.MONO, seed: 'v' + s, wobble: .2 }); }
-    if (o.arrows) for (s = 0; s < GR * GC; s++) { if (w.cliff[s] || s === GOAL_S) continue; var qq = o.arrows[s], mx = maxQ(qq); if (Math.abs(mx) < 1e-6 && qq.every(function (z) { return Math.abs(z) < 1e-6; })) continue;
+    if (o.arrows) for (s = 0; s < GR * GC; s++) { if (w.cliff[s] || s === gS) continue; var qq = o.arrows[s], mx = maxQ(qq); if (Math.abs(mx) < 1e-6 && qq.every(function (z) { return Math.abs(z) < 1e-6; })) continue;
       var a = qq.indexOf(mx), c0 = tc(s); F.arrow(ctx, c0[0] - DC[a] * cs * .16, c0[1] - DR[a] * cs * .16, c0[0] + DC[a] * cs * .2, c0[1] + DR[a] * cs * .2, o.arrowCol || P.chalk, Math.max(2, cs * .045), 'ga' + s); }
     if (g && t != null) F.glow(ctx, g[0], g[1], cs * .6, 'rgba(255,220,120,.5)', .6 + .3 * Math.sin(t * 3));
   }
@@ -171,18 +190,35 @@ function reinforce(n, lr, seed) {
   var WALK = [0, 1, 1, 2]; // up, right, right, down: the environment decides what that means
   function walkState(l) { var s = START_S, hist = []; for (var i = 0; i < WALK.length; i++) { if (l < 1 + i * 1.1) break; var e = stepEnv(W0, s, WALK[i]); hist.push({ s: s, a: WALK[i], r: e.r, s2: e.s2, done: e.done }); s = e.s2; } return hist; }
   function lerpTile(a, b, f) { var p = tc(a), q = tc(b); return [lerp(p[0], q[0], F.ease.inOut(f)), lerp(p[1], q[1], F.ease.inOut(f))]; }
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  // the designer: an ink stick figure who writes the rewards and reacts to what the robot makes of them.
+  // cue list: [[time, pose, look?], ...]; each change replays anticipation + overshoot from the previous pose.
+  function cue(l, list) { var i = 0; for (var k = 0; k < list.length; k++) if (l >= list[k][0]) i = k; return { pose: list[i][1], at: list[i][0] + .05, from: i ? list[i - 1][1] : 'idle', look: list[i][2] }; }
+  function designer(ctx, t, l, W, H, c, o) {
+    o = o || {}; var por = H > W * 1.05, s = o.s || (por ? 84 : 118), x = o.x != null ? o.x : W - (por ? 44 : 80), y = o.y != null ? o.y : H - (por ? 30 : 34);
+    var lk = typeof c.look === 'function' ? c.look() : c.look;
+    return F.stick(ctx, x, y, s, t, { pose: c.pose, t0: t - l + c.at, from: c.from, face: o.face || -1, look: lk, scarf: P.teal, color: P.ink, edge: P.cream });
+  }
+  function credit(ctx, W, H, text) { F.hand(ctx, text, 10, H - (H > W * 1.05 ? 24 : 12), W < 500 ? 11 : 13, 'rgba(251,246,234,.72)', { align: 'left', seed: 'cr' + text, bold: false }); }
+  function pathAt(p, loopFrom, u) { // position along a path that repeats its tail from index loopFrom
+    var n = p.length - 1, i = Math.floor(u), f = u - i;
+    if (loopFrom != null && i >= n) { var per = n - loopFrom; i = loopFrom + ((i - loopFrom) % per); }
+    if (i >= n) return { s: p[n], xy: tc(p[n]) };
+    return { s: p[i], xy: lerpTile(p[i], p[i + 1], clamp(f / .6, 0, 1)) };
+  }
 
-  var chapters = [
-    { name: 'the wish', start: 0, dur: 6, cap: {
-        1: 'A little paper robot lives on a board game. It wants the <b>gold square</b>. Nobody tells it the way. Three squares are a <b>cliff</b>.',
-        2: 'Reinforcement learning: no labelled answers, only <b>rewards</b>. +1 at the goal, −1 off the cliff, 0 everywhere else. The robot must work out the rest.',
-        3: 'A 4×5 cliff-walk MDP: deterministic moves, walls bounce you back, goal and cliff are terminal, γ = 0.9. The question on the start tile is V(s₀).' },
+  var chapters = seq([
+    { name: 'the wish', dur: 10, need: 'core', cap: {
+        1: 'A paper robot on a board game wants the <b>gold square</b>. Nobody shows it the way. All it ever hears is a score the designer wrote: <b>+1</b> at the gold, <b>−1</b> off the cliff, 0 anywhere else.',
+        2: 'Reinforcement learning: no right answers to copy, only a number, the <b>reward</b> r, after each move. The reward is the <b>only signal</b>: everything the agent ends up doing, it learned from those numbers.',
+        3: 'A 4×5 cliff-walk MDP: state s = tile, action a ∈ {↑ → ↓ ←}, deterministic moves, walls bounce you back, goal (+1) and cliff (−1) end the episode, γ = 0.9. The question on the start tile is V(s₀).' },
       draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t); var p = tc(START_S); robot(ctx, p[0], p[1] + L.cs * .25, L.cs * .75, t); question(ctx, W, H, ramp(l, .5, 1.5));
-        F.plane(ctx, lerp(-30, W + 30, l / 6), L.gy + 10 + Math.sin(l * 2) * 8, 11, .1, P.cream); } },
-    { name: 'the loop', start: 6, dur: 6, cap: {
-        1: 'The robot can only try things. It picks a move, the board answers with where it landed and a reward. Right now it is just wandering, and oops, it walks off the cliff.',
-        2: 'The <b>agent–environment loop</b>: agent sends an action a; environment returns the next state s′ and reward r. Repeat until the episode ends.',
-        3: 'Each step yields an experience (s, a, r, s′, done). Everything that follows (Bellman, TD, replay, policy gradients) is a way of squeezing those tuples.' },
+        F.plane(ctx, lerp(-30, W + 30, l / 10), L.gy + 10 + Math.sin(l * 2) * 8, 11, .1, P.cream);
+        var g = tc(GOAL_S), cl = tc(17); designer(ctx, t, l, W, H, cue(l, [[0, 'idle'], [1.2, 'write'], [4.5, 'point', { x: g[0], y: g[1] }], [7.5, 'point', { x: cl[0], y: cl[1] }]])); } },
+    { name: 'the loop', dur: 9, need: 'core', cap: {
+        1: 'The robot can only try things. It picks a move; the board replies with where it landed and a reward. Right now it is guessing, and, oops, it walks off the cliff: −1. That −1 is the lesson.',
+        2: 'The <b>agent–environment loop</b>: the agent sends an action a; the environment sends back the next state s′ and a reward r. Repeat until the episode ends (gold or cliff). Nothing else reaches the agent.',
+        3: 'Every step yields an experience tuple (s, a, r, s′, done): ARENA\'s <code>Experience</code>. Everything below (Bellman, TD, replay, policy gradients) is a different way of squeezing those tuples.' },
       draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t);
         var h = walkState(l), cur = h.length ? h[h.length - 1] : null, f = cur ? clamp((l - (1 + (h.length - 1) * 1.1)) / .5, 0, 1) : 0, p = cur ? lerpTile(cur.s, cur.s2, f) : tc(START_S);
         var fell = cur && cur.r < 0 && f >= 1; robot(ctx, p[0], p[1] + L.cs * .25 + (fell ? Math.min(40, (l - 5.1) * 60) : 0), L.cs * .75 * (fell ? Math.max(.2, 1 - (l - 5.1)) : 1), t);
@@ -190,11 +226,11 @@ function reinforce(n, lr, seed) {
         var lines = [['agent  ──  a  ──▶  environment', P.butter], ['agent  ◀── s′, r ──  environment', P.mint]];
         h.forEach(function (x, i) { lines.push(['t=' + i + '  a=' + ARW[x.a] + '  s′=' + sName(x.s2) + '  r=' + (x.r < 0 ? '−1' : x.r) + (x.done ? '  done' : ''), x.r < 0 ? P.pink : P.chalk]); });
         readout(ctx, L.px, L.py, lines, L.pw);
-      } },
-    { name: 'values ripple', start: 12, dur: 8, cap: {
-        1: 'Clever trick: start at the gold square and work <b>backwards</b>. A square next to the goal is worth almost 1. The one before that, a bit less. The lanterns light up like a ripple.',
-        2: 'The <b>Bellman equation</b>: a square is worth the best reward-plus-next-square-value you can get from it. Discount γ = 0.9 makes far-away gold worth a little less.',
-        3: 'Value iteration V_{k+1}(s) = max_a [r + γV_k(s′)], sweep k = 0…8 shown live. Converges to γ^(d−1) for distance d: V(s₀) = 0.9⁵ ≈ 0.59 via the safe edge.' },
+        designer(ctx, t, l, W, H, cue(l, [[0, 'lean-in', function () { return { x: p[0], y: p[1] }; }], [5.2, 'recoil'], [7, 'think']])); } },
+    { name: 'values ripple', dur: 11, need: 'core', cap: {
+        1: 'What is a square <b>worth</b>? Work backwards from the gold. Next to it: 1. One step further: 0.9 of that. The lanterns light up like a ripple: each square is worth 0.9 × the best square it can step to.',
+        2: '<b>Value</b> V(s) = the total reward you can expect from square s onward. Bellman: V(s) = max over moves of [r + γ·V(s′)]. Why γ = 0.9: gold one step later counts 90%, so shorter paths win.',
+        3: 'Value iteration V_{k+1}(s) = max_a [r + γV_k(s′)], sweeps k = 0…8 live. At distance d, V = γ^(d−1): V(s₀) = 0.9⁵ ≈ 0.59 via the safe row. γ &lt; 1 also keeps endless sums finite.' },
       draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t);
         var k = Math.min(8, Math.floor(ramp(l, .3, 6.8) * 8 + 1e-6)), V = VI[k]; board(ctx, t, { V: V });
         var hl = [14, 8, 2, 6, 10][Math.floor(l / 1.6) % 5], best = -9, ba = 0; for (var a = 0; a < 4; a++) { var e = stepEnv(W0, hl, a), q = e.r + (e.done ? 0 : GAMMA * VI[Math.max(0, k - 1)][e.s2]); if (q > best) { best = q; ba = a; } }
@@ -202,11 +238,16 @@ function reinforce(n, lr, seed) {
         readout(ctx, L.px, L.py, [['sweep k = ' + k, P.chalk], ['V(s) = max_a [ r + γ·V(s′) ]', P.mint], ['V' + sName(hl) + ' = ' + (e2.r ? '1' : '0') + ' + 0.9·' + fx(e2.done ? 0 : VI[Math.max(0, k - 1)][e2.s2]) + ' = ' + fx(V[hl]) + '  (' + ARW[ba] + ')', P.butter]], L.pw);
         var s0 = tc(START_S); robot(ctx, s0[0] - L.cs * .3, s0[1] + L.cs * .3, L.cs * .45, t);
         if (k >= 8) question(ctx, W, H, ramp(l, 7, 7.6), 'worth 0.9⁵ ≈ ' + VI[8][START_S].toFixed(2) + '!');
-      } },
-    { name: 'Q-learning', start: 20, dur: 9, cap: {
-        1: 'But usually nobody hands you the map of rewards. So the robot learns by <b>walking</b>. After each step it nudges its guess for "that move from that square" toward what it just saw.',
-        2: '<b>Q-learning</b>: Q(s,a) = how good move a is from square s. Each step, the TD error (surprise) nudges it. Green wedges = good moves, red = bad. Then a fast-forward of 400 episodes.',
-        3: 'Tabular Q-learning, α = 0.5, ε = 0.1, Q₀ = 0. Every number is the real update from a seeded run. Off-policy: the target uses max Q(s′), not the move you will actually take.' },
+        designer(ctx, t, l, W, H, cue(l, [[0, 'think'], [3, 'point', { x: p[0], y: p[1] }], [7.4, 'cheer']])); } },
+    { name: 'explore or exploit?', dur: 13, need: 'core', cap: {
+        1: 'Two dancers both tried the macarena first and got a cheer. One always repeats her best-so-far, so never learns the <b>moonwalk</b> is better. The other sometimes tries a random move, and finds it.',
+        2: '<b>Explore vs exploit</b>: greedy takes the action with the best estimate so far; ε-greedy takes a random one with probability ε = 0.1. Why explore: an estimate you never test is never corrected.',
+        3: 'Seeded 3-armed bandit, mean cheer (0.3, 1.0, 0.6) ± 0.2, sample-average Q from 0. Greedy locks onto macarena for 60 nights; ε = 0.1 finds moonwalk on night ' + (FOUND + 1) + '. ARENA\'s DQN anneals ε 1 → 0.02.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); explore(ctx, t, l, W, H, 13); } },
+    { name: 'Q-learning', dur: 12, need: 'exercise', cap: {
+        1: 'Usually nobody hands you the map, so the robot learns by walking. After each step it compares its guess for "that move, from that square" with what just happened, and moves the guess part-way.',
+        2: '<b>Q(s,a)</b> = worth of move a from square s, then playing well. <b>TD error</b> = (r + γ·best Q at s′) − Q(s,a): the surprise. Move Q by α × surprise, α = 0.5. Part-way, because one step is a noisy sample.',
+        3: 'Q(s,a) += α(r + γ max_a′ Q(s′,a′) − Q(s,a)), α 0.5, ε 0.1, Q₀ = 0; every number is from a seeded run, then 400 episodes fast-forward. Off-policy: the target uses max, not the move taken next.' },
       draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t);
         var a = QL.epStart[EP], b = QL.epStart[EP + 1], n = b - a, slowEnd = Math.min(5.2, .4 + n * 1.0), u, Q, rp;
         if (l < slowEnd) {
@@ -215,57 +256,80 @@ function reinforce(n, lr, seed) {
           board(ctx, t, { Q: Q }); rp = lerpTile(u.s, u.s2, fr); robot(ctx, rp[0], rp[1] + L.cs * .25, L.cs * .6, t);
           readout(ctx, L.px, L.py, [['episode ' + EP + '  step ' + i, P.chalk]].concat(tdLines(u)), L.pw);
         } else {
-          var e = Math.min(400, EP + 1 + Math.floor(Math.pow(ramp(l, slowEnd, 8.2), 1.6) * (399 - EP))); Q = QL.snaps[e];
-          board(ctx, t, { Q: Q, arrows: l > 7 ? Q : null }); u = QL.log[QL.epStart[e] - 1];
-          if (l > 7.3) pathLine(ctx, QL.path.p, P.butter, t);
+          var e = Math.min(400, EP + 1 + Math.floor(Math.pow(ramp(l, slowEnd, 9), 1.6) * (399 - EP))); Q = QL.snaps[e];
+          board(ctx, t, { Q: Q, arrows: l > 8 ? Q : null }); u = QL.log[QL.epStart[e] - 1];
+          if (l > 8.5) pathLine(ctx, QL.path.p, P.butter, t);
           readout(ctx, L.px, L.py, [['fast-forward: episode ' + e + ' / 400', P.chalk]].concat(tdLines(u)), L.pw);
         }
-      } },
-    { name: 'SARSA', start: 29, dur: 5, cap: {
-        1: 'A cautious cousin learns from the moves it <b>really</b> makes, stumbles included. Knowing it sometimes trips, it walks the long way round, far from the edge.',
-        2: '<b>SARSA</b> updates toward Q(s′, a′) for the move it actually takes next. With 10% random moves, the cliff edge is risky, so it learns the safer path. Q-learning (yellow) hugs the edge.',
-        3: 'On-policy target r + γQ(s′,a′) vs off-policy r + γ max Q(s′). Q-learning learns the optimal greedy path but earns less while exploring; SARSA optimises the ε-greedy policy it runs.' },
+        designer(ctx, t, l, W, H, cue(l, [[0, 'lean-in', { x: L.px + 60, y: L.py + 20 }], [5.4, 'point', { x: L.px + 60, y: L.py + 30 }], [9, 'cheer']])); } },
+    { name: 'SARSA', dur: 9, need: 'exercise', cap: {
+        1: 'A cautious cousin learns from the moves it <b>really</b> makes, stumbles included. Knowing it sometimes trips, it takes the long way round, away from the edge (purple). Q-learning (yellow) hugs the edge.',
+        2: '<b>SARSA</b> aims at Q(s′, a′) for the move it actually takes next, random ones included. With 10% random moves the edge is risky, so it learns the safer path. You write both in ARENA 2.1.',
+        3: 'On-policy r + γQ(s′,a′) vs off-policy r + γ max Q(s′). Q-learning learns the optimal greedy path but earns less while exploring; SARSA optimises the ε-greedy policy it actually runs.' },
       draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t, { Q: SA.Q, qA: .5, arrows: SA.Q, arrowCol: P.lav });
         pathLine(ctx, QL.path.p, P.butter, t, ramp(l, 0, .8)); pathLine(ctx, SA.path.p, P.lav, t, ramp(l, .8, 1.8), 6);
-        var k = Math.floor(ramp(l, 1, 4.5) * (SA.path.p.length - 1)), sp = tc(SA.path.p[k]); robot(ctx, sp[0], sp[1] + L.cs * .25, L.cs * .55, t, { body: P.lav });
+        var k = Math.floor(ramp(l, 1, 5.5) * (SA.path.p.length - 1)), sp = tc(SA.path.p[k]); robot(ctx, sp[0], sp[1] + L.cs * .25, L.cs * .55, t, { body: P.lav });
         readout(ctx, L.px, L.py, [['Q-learning path: ' + (QL.path.p.length - 1) + ' steps (edge)', P.butter], ['SARSA path:      ' + (SA.path.p.length - 1) + ' steps (safe)', P.lav], ['SARSA: Q(s,a) += α·(r + γ·Q(s′,a′) − Q(s,a))', P.mint]], L.pw);
-      } },
-    { name: 'DQN', start: 34, dur: 9, cap: {
-        1: 'Big worlds have too many squares for a table. So we swap the table for a small <b>brain</b> that guesses. Every step becomes a Polaroid in a shoebox, and it studies a random handful of old memories at a time.',
-        2: '<b>DQN</b>: a neural net outputs Q for every move. A <b>replay buffer</b> (shoebox) stores experiences; random minibatches break up correlated streaks. A frozen <b>target network</b> copy keeps the goalposts still.',
-        3: 'td = r + γ(1−done)·max_a′ Q_target(s′,a′) − Q(s,a); loss = mean td². Here the "networks" are Q snapshots from the real run (online at episode 25, target frozen at episode 15); batches are real sampled transitions.' },
+        designer(ctx, t, l, W, H, cue(l, [[0, 'think'], [4, 'shrug']])); } },
+    { name: 'DQN', dur: 11, need: 'exercise', cap: {
+        1: 'Big worlds have too many squares for a table, so a small <b>network</b> guesses Q instead. Every step goes in a shoebox as a Polaroid; it studies random handfuls, checked against a frozen copy of itself.',
+        2: '<b>DQN</b>: a net outputs Q for every move. <b>Replay buffer</b> (the shoebox): random minibatches break up streaks of near-identical steps. <b>Target network</b>: a frozen copy, so the goalposts hold still.',
+        3: 'td = r + γ(1−done)·max Q_target(s′) − Q(s,a); loss = mean(td²). The "nets" here are real Q snapshots (online ep 25, target ep 15). Buffer size, batch size, sync rate: knobs you tune, not ideas.' },
       draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); dqn(ctx, t, l, W, H); } },
-    { name: 'policy gradient', start: 43, dur: 7, cap: {
-        1: 'A different idea: skip the scores, just learn <b>what to do</b>. A dancer tries moves; whatever gets the crowd cheering, she does a bit more often.',
-        2: '<b>Policy gradient</b>: nudge the log-probability of each action up in proportion to how much better than usual (the baseline) its reward was. The bars are her real probabilities.',
-        3: 'REINFORCE with a running-mean baseline: θ += lr·(R − b)·∇θ log π(a), softmax policy over 3 moves, lr = 0.35. Same idea powers PPO next week.' },
-      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); dance(ctx, t, l, W, H); } },
-    { name: 'where it stops being true', start: 50, dur: 5, cap: {
-        1: 'Honest bit: real worlds are far too big to list every square, and rewards are usually rare, late and noisy. Our little board is a toy.',
-        2: 'Real problems: huge or continuous state spaces (no table), sparse delayed rewards, and a network\'s guesses can feed on themselves and blow up.',
-        3: 'Function approximation + bootstrapping + off-policy data (the "deadly triad") can diverge; DQN\'s replay and target net are patches, not guarantees.' },
+    { name: 'policy gradient', dur: 12, need: 'core', cap: {
+        1: 'Another way: skip the scores, learn <b>what to do</b>. The dancer compares each cheer with her usual. Better than usual? Do that move a bit more often. Worse? Less often. Bars = her real odds.',
+        2: '<b>Policy gradient</b>: the policy π gives each action a probability. After action a earns R, raise π(a) in proportion to R − b, where b is the usual reward. Why b: otherwise every cheer pushes its move up.',
+        3: 'REINFORCE: θ += lr·(R − b)·∇θ log π(a), lr 0.35, b a running mean. Why log: ∇log π = ∇π/π cancels how often a is sampled. Karpathy: supervised learning on your own actions, times R − b.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); dance(ctx, t, l, W, H, 12); credit(ctx, W, H, 'framing: Andrej Karpathy, "Pong from Pixels"'); } },
+    { name: 'where it stops being true', dur: 9, need: 'core', cap: {
+        1: 'Honest bit: real worlds are far too big to list every square, and rewards are rare, late and noisy. A win at the end of a long game says little about which of the 100 moves earned it.',
+        2: 'Real problems: huge or continuous states (no table), and <b>sparse, delayed rewards</b>: which move earned the win? That is <b>credit assignment</b>, and it is why value estimates matter.',
+        3: 'Function approximation + bootstrapping + off-policy data (Sutton &amp; Barto\'s "deadly triad") can diverge; replay and target nets are patches, not guarantees. The deep film shows both failing.' },
       draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t, { Q: QL.Q, arrows: QL.Q });
         var p = ramp(l, .4, 1.4); F.cornerFlip(ctx, W, H, p, P.cream);
         if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 1.2, 2); var sz = W < 500 ? 14 : 19, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .2;
           F.hand(ctx, 'Go: ~10¹⁷⁰ squares', x, y - sz * 1.5, sz, P.ink, { seed: 'go', rot: -.6 }); F.hand(ctx, 'no table fits', x + sz * .8, y, sz, P.ink, { seed: 'nt', rot: -.6 }); ctx.restore(); }
-      } },
-    { name: 'the code', start: 55, dur: 6, cap: {
-        1: 'Every nudge you watched is one line of code.',
-        2: 'The tiles become the ARENA update rules you write in [2.1] and [2.2]: tabular Q-learning, then DQN with a replay buffer and target network.',
-        3: 'ARENA 2.1 <code>QLearning.observe</code>, 2.2 <code>DQNTrainer.training_step</code> with <code>ReplayBuffer</code>, <code>q_network</code>, <code>target_network</code>.' },
+        designer(ctx, t, l, W, H, cue(l, [[0, 'shrug']]), { x: W * .16, face: 1 }); } },
+    { name: 'a helpful coin', dur: 13, need: 'core', cap: {
+        1: 'The designer adds a <b>+0.2 coin</b> to lure the robot away from the cliff. The robot finds something better: circle the coin forever and never reach the gold. It did exactly what the numbers said.',
+        2: '<b>Reward hacking</b>: the agent maximises the reward you wrote, not the goal you meant. Circling pays 0.2 every 2 steps, worth ' + G_LOOP.toFixed(2) + '; finishing is worth ' + G_FIN.toFixed(2) + '. A real boat-race agent did this.',
+        3: 'Exact planning on the new reward: loop value 0.9·0.2/(1 − 0.9²) = ' + G_LOOP.toFixed(3) + ' vs ' + G_FIN.toFixed(3) + ' to finish. Specification gaming; ARENA 2.2 cites CoastRunners (a boat looping for points).' },
+      draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t, { world: WC, noCliffWord: true });
+        var go = l > 2.5, u = go ? (l - 2.5) * 1.6 : 0, at = pathAt(LOOP, 2, u);
+        if (go) { pathLine(ctx, LOOP.slice(0, 3), P.butter, t, ramp(l, 2.5, 3.2)); pathLine(ctx, [11, 6, 11], P.pink, t, ramp(l, 4, 5), 5); }
+        robot(ctx, at.xy[0], at.xy[1] + L.cs * .25, L.cs * .6, t);
+        if (go && at.s === 11) lbl(ctx, '+0.2', at.xy[0] + L.cs * .3, at.xy[1] - L.cs * .45, P.butter, L.cs * .24);
+        readout(ctx, L.px, L.py, [['rewards: gold +1  cliff −1  coin +0.2 (new)', P.chalk], ['circle the coin:  V(s₀) = ' + fx(G_LOOP), P.pink], ['grab coin, finish: return ' + fx(G_FIN), P.mint], ['best plan under this reward: loop forever', P.butter]], L.pw);
+        var cn = tc(11); designer(ctx, t, l, W, H, cue(l, [[0, 'write'], [2.4, 'point', { x: cn[0], y: cn[1] }], [6, 'recoil'], [9, 'slump']])); } },
+    { name: 'what did it learn?', dur: 13, need: 'contested', cap: {
+        1: 'Move the gold. The trained robot walks its old route to where the gold <b>used</b> to be, and stops. Did it learn "get the gold" or "walk this path"? For big agents, often nobody knows.',
+        2: '<b>Current method:</b> write a reward, train, test. <b>Emerging research:</b> agents often learn a look-alike goal that fit training (goal misgeneralisation). <b>What you need:</b> test in new situations.',
+        3: 'A table only memorises; nets generalise, sometimes wrongly (CoinRun: an agent learned "go right", not "get the coin"; Langosco et al. 2022). Debated: is reward the goal, or just what shaped it?' },
+      draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t, { goal: NEWGOAL, arrows: QL.Q, arrowCol: 'rgba(253,250,240,.45)' });
+        var old = tc(GOAL_S); ctx.save(); ctx.setLineDash([5, 5]); ctx.strokeStyle = P.butter; ctx.lineWidth = 2.5; ctx.strokeRect(old[0] - L.cs * .42, old[1] - L.cs * .42, L.cs * .84, L.cs * .84); ctx.restore();
+        var p = QL.path.p, u = ramp(l, 1, 6.5) * (p.length - 1), at = pathAt(p, null, u);
+        robot(ctx, at.xy[0], at.xy[1] + L.cs * .25, L.cs * .6, t);
+        if (l > 6.8) lbl(ctx, '?', at.xy[0] + L.cs * .3, at.xy[1] - L.cs * .5, P.butter, L.cs * .4);
+        readout(ctx, L.px, L.py, [['gold moved to ' + sName(NEWGOAL), P.butter], ['robot follows its learned arrows', P.chalk], ['→ stops at ' + sName(GOAL_S) + ': where gold used to be', P.pink]], L.pw);
+        var ng = tc(NEWGOAL); designer(ctx, t, l, W, H, cue(l, [[0, 'point', { x: ng[0], y: ng[1] }], [4, 'lean-in', function () { return { x: at.xy[0], y: at.xy[1] }; }], [7.5, 'shrug']])); } },
+    { name: 'the code', dur: 9, need: 'exercise', cap: {
+        1: 'Every nudge you watched is one line of code. You write each of these once; after that they live in a library, and the ideas are what you keep.',
+        2: 'ARENA 2.1: tabular Q-learning and SARSA. ARENA 2.2: DQN (replay buffer, target network) and VPG, the policy gradient. The shapes of the updates are the same as on the board.',
+        3: 'ARENA 2.1 <code>QLearning.observe</code>, 2.2.1 <code>DQNTrainer.training_step</code> with <code>ReplayBuffer</code>, 2.2.2 <code>compute_reinforce_loss</code>: <code>(logprobs * adv.detach()).mean()</code>, ascended.' },
       draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); ctx.globalAlpha = .2; board(ctx, t); ctx.globalAlpha = 1; codeCards(ctx, l, W, H, [
           ['Q-learning  [2.1]', ['Q[s, a] += lr * (r', '    + gamma * Q[s2].max() - Q[s, a])'], P.butter],
-          ['DQN  [2.2]', ['td_error = rewards + gamma * target_max', '    * (1 - terminated) - predicted_q_vals', 'loss = td_error.pow(2).mean()'], P.teal],
-          ['policy gradient', ['loss = -(logprob * (R - b)).mean()'], P.pink]]); } },
-    { name: 'why it matters', start: 61, dur: 4.5, cap: {
-        1: 'The robot will chase exactly the number we wrote, not what we had in mind. That is the whole safety problem in one board game.',
-        2: 'The reward we write is what gets optimised, not what we meant. Looking inside the learner is how we check the difference.',
-        3: 'Reward misspecification and goal misgeneralisation both start here; interpretability on RL agents (e.g. probing Q-nets) is how we catch them.' },
+          ['DQN  [2.2.1]', ['td_error = rewards + gamma * target_max', '    * (1 - terminated) - predicted_q_vals', 'loss = td_error.pow(2).mean()'], P.teal],
+          ['policy gradient  [2.2.2]', ['adv = returns - returns.mean(0)', '(logprobs * adv.detach()).mean()'], P.pink]]); } },
+    { name: 'why it matters', dur: 10, need: 'core', cap: {
+        1: 'The reward is all the robot ever hears, so it chases exactly the number we wrote, not what we meant. The same trap appears wherever a number is chased: test scores, clicks, sales targets.',
+        2: 'Keep: reward is the only signal; value = expected future reward; explore or never learn; make good actions likelier. A question for you: how would you <b>check</b> it learned what you meant?',
+        3: 'Coin = reward misspecification; moved gold = goal misgeneralisation. Probing a Q-net or policy is how interpretability tells which you got. Goodhart: a measure made a target stops measuring.' },
       draw: function (ctx, t, l, W, H) { lay(W, H); bg(ctx, W, H, t); board(ctx, t, { arrows: QL.Q }); pathLine(ctx, QL.path.p, P.butter, t);
         var g = tc(GOAL_S); robot(ctx, g[0], g[1] + L.cs * .25, L.cs * .7, t);
         var sz = W < 500 ? 16 : 22; ctx.save(); ctx.globalAlpha = ramp(l, .2, 1);
-        F.note(ctx, 'the reward we write is what\ngets optimised, not what we meant', W / 2, L.por ? L.py + 60 : H * .5, sz, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore(); } }
-  ];
+        F.note(ctx, 'the reward we write is what\ngets optimised, not what we meant', W / 2, L.por ? L.py + 60 : H * .5, sz, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore();
+        designer(ctx, t, l, W, H, cue(l, [[0, 'idle'], [1, 'point', { x: W / 2, y: L.por ? L.py + 60 : H * .5 }], [6, 'think']])); } }
+  ]);
 
   function pathLine(ctx, p, col, t, a, off) {
     a = a == null ? 1 : a; if (a <= 0) return; off = off || 0; ctx.save(); ctx.globalAlpha = a; ctx.strokeStyle = col; ctx.lineWidth = Math.max(3, L.cs * .06); ctx.setLineDash([L.cs * .12, L.cs * .08]); ctx.lineCap = 'round';
@@ -339,20 +403,50 @@ function reinforce(n, lr, seed) {
   }
   /* ---------------- policy gradient: the dancer ---------------- */
   var MOVES = ['the robot', 'moonwalk', 'macarena'], MCOL = [P.sky, P.pink, P.butter];
-  function dance(ctx, t, l, W, H) {
-    var por = H > W * 1.05, k = Math.min(40, Math.floor(l * 6.2)), d = DANCE[k], p = d.p, a = d.a == null ? 1 : d.a;
+  function dancer(ctx, x, y, s, t, a, R, tk, o) {
+    // the move she is trying colours her scarf; a big cheer gets a celebrate, a flat one a shrug
+    o = o || {}; var pose = R == null ? 'dance' : R > .85 ? 'celebrate' : R < .45 ? 'shrug' : 'dance';
+    F.stick(ctx, x + (pose === 'dance' ? Math.sin(t * 5) * s * .06 : 0), y, s, t * (a === 0 ? 1.3 : 1), { pose: pose, t0: tk, from: 'dance', scarf: MCOL[a], face: a === 1 ? -1 : 1, color: P.ink, edge: P.cream, walk: pose === 'dance' && a === 1 });
+  }
+  function crowd(ctx, sx, sy, spread, t, cheer, n, seed) { for (var i = 0; i < n; i++) { var hx = sx + (i - (n - 1) / 2) * spread, hy = sy + (i % 2) * 12 - Math.max(0, Math.sin(t * 10 + i)) * cheer * 10; F.blob(ctx, hx, hy, 11, ['#e0c3a8', '#b88a6a', '#f2d6c0'][i % 3], { seed: seed + i, jit: .3 }); } }
+  function dance(ctx, t, l, W, H, dur) {
+    var por = H > W * 1.05, per = (dur - 2) / 40, k = Math.min(40, Math.floor(l / per)), d = DANCE[k], p = d.p, a = d.a == null ? 1 : d.a;
     var sx = por ? W / 2 : W * .3, sy = por ? H * .36 : H * .6;
     F.paper(ctx, sx, sy + 8, por ? W * .7 : W * .34, 22, '#7a5a8a', { seed: 'stage' });
     F.glow(ctx, sx, sy - 40, 120, 'rgba(255,200,230,.35)', 1);
-    F.person(ctx, sx + Math.sin(t * 5) * (a === 1 ? 10 : 2), sy, por ? 80 : 110, t * (a === 0 ? 1.8 : 1), { walk: true, coat: MCOL[a], scarf: P.orange, lantern: false, face: a === 1 ? -1 : 1 });
-    var cheer = d.R || 0; for (var i = 0; i < 9; i++) { var hx = sx + (i - 4) * (por ? W * .09 : W * .04), hy = sy + 60 + (i % 2) * 12 - Math.max(0, Math.sin(t * 10 + i)) * cheer * 10; F.blob(ctx, hx, hy, 11, ['#e0c3a8', '#b88a6a', '#f2d6c0'][i % 3], { seed: 'crowd' + i, jit: .3 }); }
+    dancer(ctx, sx, sy, por ? 110 : 150, t, a, d.R, t - (l - k * per) + .02);
+    var cheer = d.R || 0; crowd(ctx, sx, sy + 60, por ? W * .09 : W * .04, t, cheer, 9, 'crowd');
     lbl(ctx, cheer > .8 ? 'WOOO!' : cheer > .5 ? 'yeah!' : 'meh', sx + (por ? W * .3 : W * .12), sy - (por ? 70 : 110), P.butter, por ? 18 : 24);
     // probability bars
     var bx = por ? 24 : W * .55, by = por ? sy + 110 : H * .18, bw = por ? W - 48 : W * .38, bh = por ? 26 : 34;
     MOVES.forEach(function (m, j) { var y = by + j * (bh + 12); F.paper(ctx, bx + bw / 2, y + bh / 2, bw, bh, 'rgba(255,255,255,.12)', { seed: 'bar' + j, shadow: false });
       ctx.fillStyle = MCOL[j]; ctx.fillRect(bx + 3, y + 4, (bw - 6) * p[j], bh - 8);
-      F.hand(ctx, m + '  π=' + p[j].toFixed(2), bx + 10, y + bh / 2, bh * .5, P.ink, { align: 'left', seed: 'mv' + j }); if (j === a && d.R != null) lbl(ctx, '◀ tried', bx + bw - 30, y + bh / 2, P.chalk, bh * .5); });
-    if (d.R != null) readout(ctx, bx, by + 3 * (bh + 12) + 6, [['step ' + k + '  tried: ' + MOVES[a], P.chalk], ['R = ' + d.R.toFixed(2) + '  baseline b = ' + d.b.toFixed(2), P.butter], ['θ += lr·(R − b)·∇θ log π(a)', P.mint]], por ? W - 48 : W * .4);
+      F.hand(ctx, m + '  π=' + p[j].toFixed(2), bx + 10, y + bh / 2, bh * .5, P.chalk, { align: 'left', seed: 'mv' + j, outline: 3, outlineColor: 'rgba(20,20,50,.8)' }); if (j === a && d.R != null) lbl(ctx, '◀ tried', bx + bw - 30, y + bh / 2, P.chalk, bh * .5); });
+    if (d.R != null) readout(ctx, bx, by + 3 * (bh + 12) + 6, [['step ' + k + '  tried: ' + MOVES[a], P.chalk], ['R = ' + d.R.toFixed(2) + '  usual b = ' + d.b.toFixed(2) + '  R − b = ' + (d.R - d.b >= 0 ? '+' : '−') + Math.abs(d.R - d.b).toFixed(2), P.butter], ['θ += lr·(R − b)·∇θ log π(a)', P.mint]], por ? W - 48 : W * .4);
+  }
+  /* ---------------- explore vs exploit: two dancers, same moves ---------------- */
+  function explore(ctx, t, l, W, H, dur) {
+    var por = H > W * 1.05, per = (dur - 3) / 60, k = clamp(Math.floor((l - .6) / per), 0, 59), runs = [[GREEDY, 'always best-so-far'], [EGREEDY, 'ε = 0.1: sometimes random']];
+    runs.forEach(function (R, j) {
+      var st = R[0][k], cx = por ? W * (.26 + j * .48) : W * (.25 + j * .4), sy = por ? H * .36 : H * .42, s = por ? 110 : 130, cw = por ? W * .46 : W * .34;
+      F.paper(ctx, cx, sy + 8, cw * .9, 18, j ? '#5f7a8a' : '#7a5a8a', { seed: 'stg' + j });
+      F.hand(ctx, R[1], cx, sy - s - (por ? 34 : 50), por ? 13 : 18, j ? P.mint : P.pink, { seed: 'rt' + j, outline: 3, outlineColor: 'rgba(20,20,50,.7)' });
+      var tk = t - (l - .6 - k * per), found = j === 1 && FOUND >= 0 && k >= FOUND && k < FOUND + 4;
+      if (found) F.stick(ctx, cx, sy, s, t, { pose: 'celebrate', t0: t - (l - .6 - FOUND * per), from: 'dance', scarf: MCOL[1], color: P.ink, edge: P.cream });
+      else dancer(ctx, cx, sy, s, t, st.a, null, tk);
+      lbl(ctx, MOVES[st.a] + (st.ex ? ' (random)' : ''), cx, sy - s - (por ? 12 : 20), st.ex ? P.butter : P.chalk, por ? 13 : 17);
+      crowd(ctx, cx, sy + 42, por ? 16 : 26, t, st.R, 5, 'cr' + j);
+      // her estimates: how good does she THINK each move is, and how often has she tried it
+      var bx = cx - cw / 2, by = sy + (por ? 74 : 90), bh = por ? 22 : 28;
+      MOVES.forEach(function (m, i) { var y = by + i * (bh + 6);
+        F.paper(ctx, bx + cw / 2, y + bh / 2, cw, bh, 'rgba(255,255,255,.12)', { seed: 'eb' + j + i, shadow: false });
+        ctx.fillStyle = MCOL[i]; ctx.fillRect(bx + 3, y + 3, (cw - 6) * clamp(st.Q[i] / 1.2, 0, 1), bh - 6);
+        F.hand(ctx, (por ? m.replace('the ', '') : m) + ' ' + st.Q[i].toFixed(2) + ' ×' + st.N[i], bx + 6, y + bh / 2, por ? 12 : 14, P.chalk, { align: 'left', seed: 'el' + j + i, outline: 3, outlineColor: 'rgba(20,20,50,.8)' }); });
+    });
+    var ry = por ? H * .36 + 74 + 3 * 28 + 16 : H * .42 + 90 + 3 * 34 + 20;
+    readout(ctx, por ? 12 : W * .05, ry, [['night ' + (k + 1) + ' / 60   bars = her estimate, ×n = tries', P.chalk],
+      ['greedy:   ' + GREEDY[k].N.map(function (n, i) { return MOVES[i].replace('the ', '').slice(0, 5) + ' ' + n; }).join('  '), P.pink],
+      ['ε-greedy: ' + EGREEDY[k].N.map(function (n, i) { return MOVES[i].replace('the ', '').slice(0, 5) + ' ' + n; }).join('  '), P.mint]], por ? W - 24 : W * .6);
   }
 
   /* ---------------- coda: now you drive ---------------- */
@@ -402,7 +496,9 @@ function reinforce(n, lr, seed) {
       { label: 'Map: Q-learning', href: '../../index.html#map/node=q-learning' },
       { label: 'Map: DQN', href: '../../index.html#map/node=dqn' },
       { label: 'Case: Q-learning', href: '../../index.html#cases/q-learning' },
-      { label: 'Case: replay buffer', href: '../../index.html#cases/replay-buffer' }
+      { label: 'Case: replay buffer', href: '../../index.html#cases/replay-buffer' },
+      { label: 'Karpathy: Zero to Hero', href: 'https://karpathy.ai/zero-to-hero.html' },
+      { label: 'Deep dive: table to network', href: 'deep-w09-dqn.html' }
     ]
   });
 })();

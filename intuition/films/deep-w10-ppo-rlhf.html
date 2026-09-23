@@ -140,8 +140,8 @@
   function showQ(api) { var d = buildQ(api); d.classList.add('on'); if (isPlaying(api)) api.root.querySelector('.pp').click(); }
   function hideQ(api, resume) { if (!Q.el) return; Q.el.classList.remove('on'); if (resume && !isPlaying(api)) api.root.querySelector('.pp').click(); }
 
-  /* ================= the chapters ================= */
-  var chapters = [
+  /* ================= the scenes (split into captioned beats further down) ================= */
+  var base = [
     { name: 'the boat that spins', start: 0, dur: 16, cap: {
         1: 'True story (OpenAI, 2016): an agent trained to maximise the <b>score</b> in the boat race <b>CoastRunners</b> found three respawning power-ups in a lagoon and circled them forever, on fire, never finishing. Score up, race lost.',
         2: 'Points were a proxy for winning. RL optimises exactly what you reward. Here: 10 per pickup, 50 for finishing. When the racer finishes (50) the looper already has 100, and it never stops.',
@@ -274,7 +274,7 @@
         if (ey < H - 40) { F.egg(ctx, W / 2, ey, sm ? 26 : 32, t, {}); }
         fade(ctx, ramp(l, 12, 13), function () { F.note(ctx, CARDS[3], W / 2, Math.min(H - 30, ey + (sm ? 52 : 62)), sm ? 16 : 20, { color: P.pink, seed: 'bang', rot: .03 }); });
       } },
-    { name: 'the KL leash', start: 120, dur: 20, cap: {
+    { name: 'the KL leash', start: 120, dur: 30, cap: {
         1: 'The fix: tie the egg to a <b>frozen copy of its old self</b>. Drift toward nicer postcards costs reward. β sets the leash length. Too short: nothing improves. Too long: back to <b>!!!!</b>',
         2: 'Maximise E[RM] − β·KL(π ‖ π_ref); the exact optimum is π ∝ π_ref·exp(RM/β). True preference (green) peaks near β ≈ 0.4, then falls while RM (blue) keeps rising. That hump is Goodhart\'s law.',
         3: 'ARENA puts the leash in the objective: <code>total = ppo_objective_fn - kl_penalty</code>, <code>kl_penalty = kl_coef * KL(π_PPO‖π_ref)</code> averaged over generated tokens, kl_coef = 2.5. InstructGPT-style code folds the same term into the reward per token, r − β·KL. Same trade-off. Direction matters: KL(π‖π_ref) punishes outputs the base model would never write.' },
@@ -295,7 +295,7 @@
         var S = stats(piBeta(bNow)); mono(ctx, 'β=' + bNow.toFixed(3) + '  RM ' + S.prox.toFixed(2) + '  true ' + S.tru.toFixed(2) + '  KL ' + S.kl.toFixed(2), x + 14, y + 32, sm ? 11 : 13, P.ink);
         var ny = y + h + (sm ? 34 : 46), pz = piBeta(bNow), top = pz.indexOf(Math.max.apply(null, pz));
         F.note(ctx, 'most likely card: "' + CARDS_S[top] + '"', W / 2, ny, sm ? 13 : 17, { color: top === 3 ? P.pink : P.mint, seed: 'mc' + top, tape: false });
-        fade(ctx, ramp(l, 13, 14), function () {
+        fade(ctx, ramp(l, 21, 22), function () {
           F.note(ctx, 'where this stops being true:\npeople\'s preferences are richer\nthan one number, and the leash\nalso keeps the old model\'s flaws', W / 2, Math.min(H - 70, ny + (sm ? 80 : 100)), sm ? 13.5 : 17, { color: P.pink, seed: 'limit', rot: -.02 });
         });
       } },
@@ -345,6 +345,111 @@
     VALS = [null, 'predict scene: A = -1, r = 0.5', 'clip_coef = 0.2', 'logits_diff = log 0.5 = ' + Math.log(.5).toFixed(3), null, 'prob_ratio = 0.500', null, 'A = -1 (already normalised)',
       'non_clipped = -0.500', 'clip(0.5,0.8,1.2)·-1', 'clipped = -0.800', 'min = -0.800 → grad 0', null, 'value_loss = vf_coef·(V-R)²', 'entropy_bonus = ent_coef·H', 'kl_coef = 2.5 in RLHFArgs'];
   }
+
+
+  /* ================= beats: each scene is split into shorter captioned beats (same animation, same clock) ================= */
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  function byName(n) { for (var i = 0; i < base.length; i++) if (base[i].name === n) return base[i]; }
+  // the narrator: a small ink stick figure in the bottom-right corner who acts each beat
+  function narrator(ctx, t, l, W, H, c) {
+    var sm = W < 500, s = sm ? 78 : 100, x = W - (sm ? 36 : 64), y = H - (sm ? 30 : 36), lk = c.look;
+    if (lk && lk.fx != null) lk = { x: lk.fx * W, y: lk.fy * H };
+    F.stick(ctx, x, y, s, t, { pose: c.pose, t0: t - l + c.at, from: c.from, face: -1, look: lk, scarf: P.orange, color: P.chalk, edge: '#23264a' });
+  }
+  function cue(l, list) { var i = 0; for (var k = 0; k < list.length; k++) if (l >= list[k][0]) i = k; return { pose: list[i][1], at: list[i][0] + .05, from: i ? list[i - 1][1] : 'idle', look: list[i][2] }; }
+  function split(scene, parts) {
+    var acc = 0;
+    return parts.map(function (p) {
+      var off = acc; acc += p.dur;
+      return { name: p.name, dur: p.dur, need: p.need, cap: p.cap, draw: function (ctx, t, l, W, H, api) {
+        scene.draw(ctx, t, l + off, W, H, api);
+        if (p.cues) narrator(ctx, t, l, W, H, cue(l, p.cues));
+      } };
+    });
+  }
+  var UP = { fx: .5, fy: .22 };
+  var chapters = seq([].concat(
+    split(byName('the boat that spins'), [
+      { name: 'the boat that spins', dur: 16, need: 'core', cues: [[0, 'lean-in', { fx: .5, fy: .4 }], [5, 'recoil'], [9, 'shrug'], [12.5, 'think']], cap: {
+        1: 'True story (OpenAI, 2016): a boat-race agent rewarded for <b>points</b> found three respawning power-ups and circled them forever, on fire, never finishing. It did nothing wrong; the reward was ours.',
+        2: 'RL optimises exactly what you reward. Here: 10 per pickup, 50 for finishing; when the racer finishes (50) the looper already has 100. A strong optimiser finds the cheapest route to the number.',
+        3: 'Specification gaming; ARENA 2.2.1 cites CoastRunners under reward shaping. A question to carry through this film: what would you measure, besides reward, to spot a lagoon-circler early?' } }
+    ]),
+    split(byName('GAE by hand'), [
+      { name: 'surprises, added backwards', dur: 12, need: 'exercise', cues: [[0, 'point', UP]], cap: {
+        1: 'Which moves went <b>better than expected</b>? A critic guesses the value V of each moment. Surprise δ = reward + next guess − this guess. GAE adds surprises from the <b>end backwards</b>, fading.',
+        2: 'δ_t = r_t + γ·V(s_{t+1})·(1 − d_{t+1}) − V(s_t); A_t = δ_t + γλ·A_{t+1}, from A_T = δ_T. γ 0.99, λ 0.95 (ARENA defaults). The episode ends after step 6, so the next V is 0.',
+        3: 'Why backwards: A_t needs A_{t+1}, so one reverse sweep does it in O(T). ARENA loops <code>for s in reversed(range(T - 1))</code>; the (1 − d) mask stops credit leaking across episodes.' } },
+      { name: 'the λ dial', dur: 12, need: 'library', cues: [[0, 'cheer'], [4.5, 'think']], cap: {
+        1: 'A late reward <b>lifts every step before it</b>, a little less each step back. The dial λ sets how far back the credit reaches: 0 = only one step of hindsight; 1 = the whole rest of the race.',
+        2: 'λ trades bias for noise: λ = 0 trusts the critic (A = δ: steady, but wrong if V is wrong); λ = 1 trusts only real rewards (unbiased, noisy). 0.95 is the usual default: leave it.',
+        3: 'A₁ goes 0.19 → 1.72 → 1.98 as λ goes 0 → 0.95 → 1; λ = 1 is the Monte Carlo return minus V. In practice <code>gae_lambda</code> is a library knob; touch it only if learning is unstable.' } }
+    ]),
+    split(byName('the clipped cliff'), [
+      { name: 'the ratio', dur: 10, need: 'core', cues: [[0, 'lean-in', UP]], cap: {
+        1: 'r = how much <b>more likely</b> the new policy makes an action than the old one did. The batch was collected by the old policy, so its lessons are only trustworthy while r stays near 1.',
+        2: 'r = π_θ(a|s) ÷ π_old(a|s). Why a ratio: it reweights old samples to estimate how the new policy would score (importance sampling). Far from 1 that estimate gets noisy and easy to exploit.',
+        3: 'r = exp(log π_θ − log π_old), from stored logprobs. The unclipped surrogate r·A (dashed) has the right gradient at r = 1 but, maximised freely, runs off to where it is a bad estimate.' } },
+      { name: 'flat on one side', dur: 10, need: 'exercise', cues: [[0, 'point', UP], [6, 'push']], cap: {
+        1: 'For a good action, pushing r up pays only until 1.2; then the ground goes <b>flat</b>. For a bad action, the flat floor starts at 0.8. Flat ground = no slope = no more push.',
+        2: 'L = min(r·A, clip(r, 1−ε, 1+ε)·A), ε = 0.2. Purple: unclipped term wins, gradient A. Orange: clipped term wins, gradient 0. <b>Pessimistic</b>: no extra credit past the band.',
+        3: 'The min is flat only on the side that would help; on the other side (A &gt; 0 with r &lt; 0.8, or A &lt; 0 with r &gt; 1.2) the linear term is lower and wins, so the gradient pulls back.' } }
+    ]),
+    split(byName('predict'), [
+      { name: 'predict', dur: 8, need: 'exercise', cues: [[0, 'think']], cap: {
+        1: 'Your turn. A bad action (A = −1) that the new policy already made <b>half</b> as likely (r = 0.5). Does the clip stop the push?',
+        2: 'Plug both terms of the min in: r·A and clip(r, 0.8, 1.2)·A. The smaller one wins. If the winner is the clipped term, it doesn\'t depend on θ, so this sample sends no gradient.',
+        3: 'Work it: min(0.5·(−1), clip(0.5, 0.8, 1.2)·(−1)). Which term is smaller, and does it contain θ? Commit to an answer before the card closes.' } },
+      { name: 'clips the gains, not the penalty', dur: 10, need: 'exercise', cues: [[0, 'point', UP], [4.5, 'lean-in', UP], [7, 'cheer']], cap: {
+        1: 'Answer: min = −0.8, the clipped term: flat, no push. Then r slides to 1.5: the same bad action made <i>likelier</i>. The clip lets that correction through. PPO clips the gains, never the penalty.',
+        2: 'At r = 1.5: r·A = −1.5 vs clip·A = −1.2, so the min picks the unclipped −1.5 and the gradient flows, pushing r back down. Mistakes always get corrected; improvements are capped.',
+        3: 'So the clipped objective is a pessimistic lower bound on r·A: it ignores changes that look too good and keeps those that look bad. That asymmetry is the heart of PPO.' } }
+    ]),
+    split(byName('runaway bandit'), [
+      { name: 'why clip at all?', dur: 11, need: 'core', cues: [[0, 'think'], [6, 'recoil']], cap: {
+        1: 'What breaks if we remove the clip? One batch: arm 1 looked good (A = +1), arms 2 and 3 bad. PPO reuses a batch for many passes; <b>without</b> the clip, every pass says "more arm 1!"',
+        2: 'Same batch, lr 0.6, 40 ascent steps. Plain r·A: π₁ → 0.98, KL to old ≈ 0.98 nats: one lucky batch rewrote the policy. Clipped: π₁ stops at 0.48, KL ≈ 0.05.',
+        3: 'Reusing each batch for several epochs is PPO\'s efficiency win over plain policy gradient (one step per batch); the clip is what makes that reuse safe. That is why PPO keeps steps small.' } },
+      { name: 'an approximate fence', dur: 11, need: 'library', cues: [[0, 'shrug']], cap: {
+        1: 'Honest detail: arm 1 still ended at r = 1.45, past the 1.2 fence. The clip removes the <b>reason</b> to push, not the ability to drift: pushing arms 2 and 3 down shoved probability onto arm 1.',
+        2: 'So PPO is only an <b>approximate</b> trust region. Libraries log approx_kl and clipfrac (share of samples clipped) and can stop early if KL grows. Know what they mean; skip the internals.',
+        3: 'Arms 2 and 3 were pushed to r ≈ 0.77, but softmax renormalises, so π₁ = 1 − π₂ − π₃ kept rising. TRPO enforces a hard KL limit instead; PPO trades exactness for simplicity.' } }
+    ]),
+    split(byName('a reward you can game'), [
+      { name: 'a reward you can game', dur: 10, need: 'core', cues: [[0, 'lean-in', UP], [7, 'recoil']], cap: {
+        1: 'RLHF: people compare postcards in pairs, a <b>reward model</b> learns to score them, PPO climbs that score. Unleashed, it finds what the scorer over-loves: <b>!!!! wonderful!!!!</b> The boat, again.',
+        2: 'RM = the reward model\'s score; true = what people actually prefer. With no leash (β → 0) the policy collapses onto the top-RM card, which people barely like. Goodhart\'s law, with a learned judge.',
+        3: 'Toy: five cards, exact optimum π ∝ π_ref·exp(RM/β) as β slides 2 → 0.012. As β → 0 all mass goes to argmax RM (card 4, true 0.05). A real RM\'s argmax can be just as off-target.' } },
+      { name: 'the value head', dur: 10, need: 'exercise', cues: [[0, 'point', { fx: .5, fy: .75 }]], cap: {
+        1: 'Who plays the coach for a language model? A tiny extra head bolted onto the model itself, reading its last hidden layer and guessing how good the text so far will turn out.',
+        2: 'The critic is a <b>value head</b>: a small MLP on the final residual stream, trained to predict reward. The reward itself arrives once, at the end of the generated text.',
+        3: 'ARENA 2.4: <code>HookedTransformerWithValueHead</code> hooks <code>ln_final.hook_normalized</code>; reward from <code>reward_fn_char_count</code> (count full stops: guess what it learns) or a sentiment classifier.' } }
+    ]),
+    split(byName('the KL leash'), [
+      { name: 'the KL leash', dur: 10, need: 'core', cues: [[0, 'pull'], [6, 'point', UP]], cap: {
+        1: 'The fix: tie the egg to a <b>frozen copy of its old self</b>. Drifting toward nicer postcards costs reward. β sets the leash length. Too short: nothing improves. Too long: back to <b>!!!!</b>',
+        2: 'Maximise E[RM] − β·KL(π ‖ π_ref); the exact optimum is π ∝ π_ref·exp(RM/β). True preference (green) peaks near β ≈ 0.4, then falls while RM (blue) keeps rising. That hump is Goodhart.',
+        3: 'Why KL: it measures, in nats, how much less likely the base model finds the new model\'s outputs. Direction matters: KL(π‖π_ref) heavily punishes writing what the base model never would.' } },
+      { name: 'where the leash goes', dur: 10, need: 'exercise', cues: [[0, 'think']], cap: {
+        1: 'Two ways to attach the same leash. ARENA subtracts it from the training objective; the InstructGPT recipe takes it off the reward before PPO sees it. Same trade-off either way.',
+        2: 'ARENA 2.4: <code>total = ppo_objective_fn - kl_penalty</code>, kl_penalty = kl_coef·KL(π‖π_ref) averaged over generated tokens, kl_coef 2.5. InstructGPT: per-token reward r − β·log(π/π_ref).',
+        3: 'Not the clip: PPO\'s clip limits each update relative to π_old (the policy that sampled this batch); the KL leash ties the whole run to π_ref (the frozen start). Different anchors, different jobs.' } },
+      { name: 'other recipes', dur: 10, need: 'contested', cues: [[0, 'shrug']], cap: {
+        1: 'Where this stops being true: people\'s preferences are richer than one number, and the leash also keeps the old model\'s flaws. Newer recipes skip the judge or the coach; which is best is still argued.',
+        2: '<b>Current method:</b> reward model + PPO + KL leash (InstructGPT). <b>Emerging research:</b> DPO learns straight from preference pairs; GRPO drops the critic. <b>What you need:</b> this recipe; the ideas carry.',
+        3: 'DPO (Rafailov et al. 2023) turns E[r] − β·KL into a classification loss on (chosen, rejected) pairs; GRPO (DeepSeekMath 2024) uses a group\'s mean reward as baseline; ARENA 2.4 builds GRPO.' } }
+    ]),
+    split(byName('your PPO loss'), [
+      { name: 'your PPO loss', dur: 9, need: 'exercise', cues: [[0, 'point', { fx: .5, fy: .3 }]], cap: {
+        1: 'All of it in a few lines, lit with the numbers from the predict scene. You write this once in ARENA 2.3; after that it is a library call.',
+        2: 'ARENA 2.3 <code>calc_clipped_surrogate_objective</code>. Total = clipped − value_loss + entropy_bonus, value_loss = vf_coef·mean((V − returns)²), entropy_bonus = ent_coef·H.',
+        3: 'Gradient <i>ascent</i> on the objective, so the optimiser minimises its negative. Advantages are normalised per minibatch first. Tests: <code>tests.test_calc_clipped_surrogate_objective</code>.' } },
+      { name: 'what you keep', dur: 9, need: 'core', cues: [[0, 'idle'], [1, 'cheer']], cap: {
+        1: 'Optimising a proxy hard finds its cracks. <b>The KL leash is a steering rope</b>, and the reward model is a mind worth looking inside. That is where interpretability meets training.',
+        2: 'Keep for your career: advantage = better than expected; small steps, because evidence is local; learned rewards are proxies; stay near a trusted reference. Coefficients are library knobs.',
+        3: 'PPOArgs: gamma 0.99, gae_lambda 0.95, clip_coef 0.2, ent_coef 0.01, vf_coef 1.0; RLHFArgs kl_coef 2.5. Where else: trust regions appear wherever beliefs update from limited evidence.' } }
+    ])
+  ));
 
   /* ================= coda: now you drive ================= */
   var C = { r: 1.1, A: 1, beta: .3, drag: false, box: null, sampleT: 0, sample: 0, rng: F.rng('postcards') };

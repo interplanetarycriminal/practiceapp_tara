@@ -85,7 +85,7 @@ function evalBeta(w, beta, U) { var pi = piBeta(w, beta), proxy = 0, tru = 0; U.
     ctx.save(); ctx.strokeStyle = P.chalk; ctx.globalAlpha = .6; ctx.lineWidth = 2; ctx.beginPath(); for (x = 0; x <= W; x += 8) { if (x) ctx.lineTo(x, ridgeY(x, W, H)); else ctx.moveTo(x, ridgeY(x, W, H)); } ctx.stroke(); ctx.restore();
   }
   function fog(ctx, W, H, t, a) { for (var i = 0; i < 7; i++) { var x = ((i * 173 + t * (12 + i * 3)) % (W + 300)) - 150, y = H * (.4 + (i % 4) * .1); F.glow(ctx, x, y, 110 + i * 12, 'rgba(235,235,250,.55)', (a == null ? .8 : a)); } }
-  function climber(ctx, x, W, H, t, o) { F.person(ctx, x, ridgeY(x, W, H) + 2, Math.max(34, Math.min(W, H) * .1), t, o || { walk: true, coat: P.teal, scarf: P.orange }); }
+  function climber(ctx, x, W, H, t, l, cues) { var c = cue(l, cues); F.stick(ctx, x, ridgeY(x, W, H) + 2, Math.max(62, Math.min(W, H) * .2), t, { pose: c.pose, t0: t - l + c.at, from: c.from, look: c.look, scarf: P.orange, color: P.ink, edge: P.cream }); }
   function readout(ctx, x, y, lines, maxW, sz0) {
     var sz = sz0 || (maxW < 420 ? 13 : 17), w = 0; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
     if (w + 22 > maxW) { sz = Math.max(9, Math.floor(sz * (maxW - 22) / w)); ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore(); }
@@ -172,45 +172,51 @@ function evalBeta(w, beta, U) { var pi = piBeta(w, beta), proxy = 0, tru = 0; U.
 
   /* ---------------- the story ---------------- */
   function betaAt(u) { var i = Math.max(0, Math.min(60, Math.round(u * 60))); return i; }
-  var chapters = [
-    { name: 'the wish', start: 0, dur: 6, cap: {
-        1: 'A climber on a foggy ridge wants to get higher, fast. But in fog, one big confident stride can go straight over the edge.',
-        2: 'Last week we learned to push up whatever got rewarded. This week: how <b>big</b> each push may be, and later, whose reward we are chasing.',
-        3: 'Policy-gradient updates are only trustworthy near the policy that collected the data. PPO bounds the step; RLHF adds a leash to a reference model.' },
-      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); ridge(ctx, W, H, t); climber(ctx, W * (.2 + l * .02), W, H, t); fog(ctx, W, H, t, .9); question(ctx, W, H, ramp(l, .5, 2));
-        F.plane(ctx, lerp(W + 30, -30, l / 6), H * .3, 11, 3.2, P.cream); } },
-    { name: 'the coach', start: 6, dur: 8, cap: {
-        1: 'A coach walks alongside and guesses how well each stretch will go. After each step, the climber asks: was that <b>better or worse than the coach expected?</b>',
-        2: '<b>Actor-critic</b>: the critic predicts V(s). The <b>advantage</b> A = r + γV(s′) − V(s) says how much better than expected a step went. Lanterns = the critic\'s V.',
-        3: 'δ_t = r_t + γV(s_{t+1}) − V(s_t); GAE A_t = Σ (γλ)^k δ_{t+k}, γ = 0.99, λ = 0.95, computed live on a 5-step trajectory.' },
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  function cue(l, list) { var i = 0; for (var k = 0; k < list.length; k++) if (l >= list[k][0]) i = k; return { pose: list[i][1], at: list[i][0] + .05, from: i ? list[i - 1][1] : 'idle', look: list[i][2] }; }
+  function side(ctx, t, l, W, H, c, o) { // a stick figure standing at the bottom edge of the frame, acting the beat
+    o = o || {}; var p = por(W, H), s = o.s || (p ? 80 : 112), x = o.x != null ? o.x : W - (p ? 42 : 76), y = o.y != null ? o.y : H - (p ? 30 : 34);
+    return F.stick(ctx, x, y, s, t, { pose: c.pose, t0: t - l + c.at, from: c.from, face: o.face || -1, look: c.look, scarf: o.scarf || P.orange, color: P.ink, edge: P.cream });
+  }
+  var chapters = seq([
+    { name: 'the wish', dur: 9, need: 'core', cap: {
+        1: 'A climber on a foggy ridge wants to get higher, fast. She can only see the ground near her feet, so one big confident stride, planned from what she saw back there, can go straight over the edge.',
+        2: 'Last week: push up whatever got rewarded. This week: how <b>big</b> each push may be (PPO), then whose reward we chase (RLHF). Both are about not trusting a signal further than it reaches.',
+        3: 'Policy-gradient estimates are only valid near the policy that collected the data. PPO bounds each update; RLHF adds a separate leash (KL) to a frozen reference model.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); ridge(ctx, W, H, t); var cx = W * (.2 + Math.min(l, 4) * .03);
+        climber(ctx, cx, W, H, t, l, [[0, 'walk'], [4, 'lean-in', { x: cx + W * .3, y: ridgeY(cx + W * .3, W, H) }], [6.5, 'recoil']]); fog(ctx, W, H, t, .9); question(ctx, W, H, ramp(l, .5, 2));
+        F.plane(ctx, lerp(W + 30, -30, l / 9), H * .3, 11, 3.2, P.cream); } },
+    { name: 'better than expected?', dur: 11, need: 'core', cap: {
+        1: 'A coach walks alongside, guessing how well each stretch will go (the lanterns). After each step the climber asks: was that <b>better or worse than the coach expected?</b> Better: do more of that.',
+        2: '<b>Actor-critic</b>: the critic predicts V(s), the reward still to come. The <b>advantage</b> δ = r + γV(s′) − V(s) says how much better a step went than predicted: last week\'s R − b, per step.',
+        3: 'δ_t = r_t + γV(s_{t+1}) − V(s_t); GAE A_t = Σ (γλ)^k δ_{t+k}, γ 0.99, λ 0.95, live on a 5-step path. You write GAE once in ARENA 2.3; the deep film works it by hand.' },
       draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); ridge(ctx, W, H, t); fog(ctx, W, H, t, .35);
-        var n = 5, k = Math.min(n - 1, Math.floor(l / 1.4)), xs = []; for (var i = 0; i <= n; i++) xs.push(W * (.1 + i * .16));
+        var n = 5, per = 1.9, k = Math.min(n - 1, Math.floor(l / per)), xs = []; for (var i = 0; i <= n; i++) xs.push(W * (.1 + i * .16));
         for (i = 0; i <= n; i++) F.lantern(ctx, xs[i], ridgeY(xs[i], W, H) - 44, Math.max(8, W * .02), TRAJ.V[i] || .05, t);
-        var fr = Math.min(1, (l - k * 1.4) / 1), cx = lerp(xs[k], xs[k + 1], F.ease.inOut(fr)); climber(ctx, cx, W, H, t);
-        F.person(ctx, cx - W * .08, ridgeY(cx - W * .08, W, H) + 2, Math.max(30, Math.min(W, H) * .085), t, { walk: true, coat: P.lav, scarf: P.butter, lantern: false });
-        lbl(ctx, 'V = ' + TRAJ.V[k].toFixed(2), cx - W * .08, ridgeY(cx, W, H) - Math.min(W, H) * .2, P.lav, W < 500 ? 14 : 18);
+        var fr = Math.min(1, (l - k * per) / 1.1), cx = lerp(xs[k], xs[k + 1], F.ease.inOut(fr)), s = Math.max(62, Math.min(W, H) * .2);
+        F.stick(ctx, cx, ridgeY(cx, W, H) + 2, s, t, { pose: fr < 1 ? 'walk' : 'idle', t0: t - l + k * per, scarf: P.orange, color: P.ink, edge: P.cream });
+        // the coach reacts once the step lands: better than expected gets a cheer, worse a shrug
+        var kx = cx - W * .09, good = G.d[k] > 0;
+        F.stick(ctx, kx, ridgeY(kx, W, H) + 2, s * .92, t, { pose: fr < 1 ? 'walk' : good ? 'cheer' : 'shrug', t0: t - l + k * per + 1.1, from: 'walk', scarf: P.butter, color: '#3d3f75', edge: P.cream, look: { x: cx, y: ridgeY(cx, W, H) - s } });
+        lbl(ctx, 'V = ' + TRAJ.V[k].toFixed(2), kx, ridgeY(cx, W, H) - s * 1.55, P.lav, W < 500 ? 14 : 18);
+        if (fr >= 1) lbl(ctx, good ? 'better than expected' : 'worse than expected', cx, ridgeY(cx, W, H) - s * 1.9, good ? P.mint : P.pink, W < 500 ? 13 : 17);
         var lines = [['t=' + k + '  r=' + TRAJ.rew[k] + '  V(s)=' + TRAJ.V[k].toFixed(2) + '  V(s′)=' + TRAJ.V[k + 1].toFixed(2), P.chalk],
           ['δ = r + γV(s′) − V(s) = ' + f3(G.d[k]), P.butter], ['GAE advantage A_' + k + ' = ' + f3(G.A[k]), P.mint]];
         readout(ctx, 12, por(W, H) ? H * .72 : 16, lines, W - 24); } },
-    { name: 'PPO clip', start: 14, dur: 12, cap: {
-        1: 'The step went well, so do it more. But only a <b>little</b> more: once the new habit is 20% stronger than the old one, the push switches off. Fewer signal bars = less trust left.',
-        2: '<b>PPO</b>: ratio r = π_new(a)/π_old(a). Objective min(r·A, clip(r, 1−ε, 1+ε)·A). Past 1+ε the line goes <b>flat</b>: zero gradient, so the update stops. Red dots: no clip, runs away.',
-        3: 'ε = 0.2, A = +0.8, gradient ascent on logits (lr 0.15). The clip bounds r relative to the policy that sampled the data (not to a reference model). With A < 0 the floor is at 1 − ε.' },
-      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); var p = por(W, H);
-        var k = Math.min(16, Math.floor(ramp(l, .6, 10) * 16 + 1e-6)), s = PPO[k], raw = RAW[k];
-        var pw = p ? W - 40 : Math.min(640, W * .55), ph = p ? H * .4 : H * .62, px = p ? 20 : W * .06, py = p ? 20 : H * .14;
-        clipPlot(ctx, px, py, pw, ph, ADV, EPS, [{ r: raw.r, c: P.red, raw: true, s: 6 }, { r: s.r, c: P.butter, s: 9 }]);
-        var bars = Math.max(0, Math.min(4, Math.ceil(4 * (1 + EPS - s.r) / EPS - 1e-9)));
-        var nx = p ? W - 56 : px + pw + 70, ny = p ? py + ph + 44 : py + 30; nokia(ctx, nx, ny, p ? 26 : 34, bars, bars ? 'trust' : 'no bars');
-        var lines = [['step ' + k + '   π_old(a)=' + PPO[0].p[0].toFixed(3), P.chalk], ['r = π_new/π_old = ' + s.p[0].toFixed(3) + '/' + PPO[0].p[0].toFixed(3) + ' = ' + s.r.toFixed(3), P.butter],
-          ['L = min(r·A, clip(r,0.8,1.2)·A) = ' + s.L.toFixed(3), P.mint], ['∂L/∂r = ' + s.g.toFixed(2) + (s.g ? '  (still pushing)' : '  (clipped: flat, stop)'), s.g ? P.chalk : P.pink],
-          ['no clip: r = ' + raw.r.toFixed(3) + ' and climbing', P.red]];
-        readout(ctx, p ? 12 : px + pw + 30, p ? py + ph + 84 : py + 90, lines, p ? W - 24 : W - (px + pw + 46));
-        if (p) { var ry = py + ph + 84 + lines.length * 17 + 90; if (ry < H - 10) F.person(ctx, W * .5 + (s.r - 1) * W * .8, ry, 50, t, { walk: s.g !== 0, coat: P.teal, scarf: P.orange }); } } },
-    { name: 'reward model', start: 26, dur: 8, cap: {
-        1: 'New scene: the mind egg writes postcards. People can\'t score them out of 10, but they can say which of two they like better. A judge learns from those picks.',
-        2: '<b>RLHF step 1</b>: a <b>reward model</b> learns from human comparisons. Bradley–Terry: P(A beats B) = σ(r_A − r_B). The bars are the judge\'s learned word weights.',
-        3: 'Linear RM r(x) = w·counts(x), fit by gradient ascent on log σ(r_win − r_lose) over ' + PAIRS.length + ' real pairs sampled from π_ref, labelled by a hidden "true" utility.' },
+    { name: 'trust only near home', dur: 10, need: 'core', cap: {
+        1: 'The step went well, so make it more likely. But that lesson came from the <b>old</b> habit\'s walk; the further the new habit drifts, the less the lesson says about it. Red dot: no limit, it runs away.',
+        2: 'Ratio r = π_new(a) ÷ π_old(a): how much likelier the update makes the action it was scored on. Why watch r: the advantage was measured under π_old, so it only holds while r stays near 1.',
+        3: 'r·A is an importance-weighted estimate of improvement, accurate only for small policy changes. Unconstrained ascent on one batch drives r far past 1 (red), exploiting the estimate\'s errors.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); clipScene(ctx, t, l, W, H); } },
+    { name: 'the clip', dur: 11, need: 'exercise', cap: {
+        1: 'PPO\'s rule: once the new habit is 20% stronger than the old one, the push <b>switches off</b>. The signal bars show the trust left. Out of bars: stop, collect fresh data, start again.',
+        2: '<b>PPO</b>: maximise min(r·A, clip(r, 1−ε, 1+ε)·A), ε = 0.2. Past 1 + ε the line goes <b>flat</b>: zero gradient, no more push from this sample. Why min: always take the more pessimistic estimate.',
+        3: 'ε = 0.2, A = +0.8, ascent on logits, lr 0.15. The clip is relative to π_old, the policy that sampled this batch (not a reference model). With A &lt; 0 the floor sits at 1 − ε.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); clipScene(ctx, t, l + 10, W, H); } },
+    { name: 'a learned judge', dur: 10, need: 'core', cap: {
+        1: 'New scene: the mind egg writes postcards. People can\'t score one out of 10, but they can say which of two they like better. A judge learns to score cards from lots of those picks.',
+        2: '<b>RLHF step 1</b>: a <b>reward model</b> learns from human comparisons. Bradley–Terry: P(A beats B) = σ(r_A − r_B). Why pairs: people agree far more on "which is better?" than on scores.',
+        3: 'Linear RM r(x) = w·counts(x), fit by ascent on log σ(r_win − r_lose) over ' + PAIRS.length + ' pairs from π_ref, labelled by a hidden utility. ARENA 2.4 hands you the reward function, so this is background.' },
       draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t, true); var p = por(W, H), k = Math.min(PAIRS.length - 1, Math.floor(l / 1.3)), pr = PAIRS[k], step = Math.min(400, Math.floor(ramp(l, .3, 7.5) * 400)), w = RMH[step];
         var cw = p ? W * .44 : Math.min(300, W * .22), cy = p ? 24 + cw * .31 : H * .25;
         var ra = 0, rb = 0, na = counts(pr.a), nb = counts(pr.b); for (var i = 0; i < NT; i++) { ra += w[i] * na[i]; rb += w[i] * nb[i]; }
@@ -221,10 +227,11 @@ function evalBeta(w, beta, U) { var pi = piBeta(w, beta), proxy = 0, tru = 0; U.
         var by = p ? cy + cw * .55 : H * .5; var h = tokenBars(ctx, p ? 12 : W * .08, by, p ? W - 24 : W * .45, rows, 'judge\'s word weights w  (step ' + step + ')');
         var pA = 1 / (1 + Math.exp(-(ra - rb)));
         readout(ctx, p ? 12 : W * .6, p ? by + h + 12 : H * .2, [['P(A ≻ B) = σ(r_A − r_B) = ' + pA.toFixed(2), P.butter], ['loss = −log σ(r_win − r_lose)', P.mint], ['mean log-lik = ' + (w.ll != null ? w.ll.toFixed(3) : '−0.693'), P.chalk]], p ? W - 24 : W * .36);
-        F.egg(ctx, p ? W - 40 : W * .8, p ? H - 60 : H * .7, p ? 28 : 50, t, { clear: .3 }); } },
-    { name: 'no leash', start: 34, dur: 9, cap: {
-        1: 'Now the egg writes whatever the judge scores highest, nothing holding it back. The cards get nicer, then it finds the judge loves "!" and it all goes <b>!!!!!!</b>',
-        2: '<b>Reward over-optimisation</b>: the judge\'s score (orange) keeps rising; what people like (teal) peaks, then falls. Goodhart\'s law, live.',
+        // a person picking the preferred card: point at it on each new pair
+        side(ctx, t, l, W, H, { pose: 'point', at: .6, from: 'think', look: { x: wx, y: cy } }, { scarf: P.pink, x: p ? W * .14 : W * .9, face: p ? 1 : -1 }); } },
+    { name: 'no leash', dur: 10, need: 'core', cap: {
+        1: 'Now the egg writes whatever the judge scores highest, with nothing holding it back. Cards get nicer, then it finds the judge loves "!" and it all goes <b>!!!!!!</b> The judge was only a stand-in.',
+        2: '<b>Reward over-optimisation</b>: the judge\'s score (orange) keeps rising while what people like (teal) peaks, then falls. Goodhart\'s law: a measure pushed hard enough stops measuring.',
         3: 'π_β ∝ π_ref·exp(w/β), the exact optimum of E[r] − β·KL per token; β slides 3 → 0.07. Proxy rises monotonically; true utility peaks at KL ≈ ' + BEST.kl.toFixed(1) + ' nats, then collapses (cf. Gao et al. 2022).' },
       draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t, true); var p = por(W, H), i = betaAt(ramp(l, .5, 8)), c = CURVE[i], card = sampleCard(c.pi, UC[3]);
         var gw = p ? W - 40 : Math.min(560, W * .42), gh = p ? H * .34 : H * .6, gx = p ? 20 : W * .52, gy = p ? 16 : H * .15;
@@ -233,41 +240,84 @@ function evalBeta(w, beta, U) { var pi = piBeta(w, beta), proxy = 0, tru = 0; U.
         var sp = 0, nn = counts(card); for (var j = 0; j < NT; j++) sp += WRM[j] * nn[j];
         postcard(ctx, cx, cy, cw, cardText(card), { seed: 'hack', rot: -.03, score: 'judge ' + f2(sp) + '  people ' + f2(trueU(card)), fs: Math.max(11, cw * .065) });
         F.egg(ctx, p ? W * .14 : cx - cw * .75, cy + 10, p ? 30 : 46, t, { clear: .4, features: [{ x: 0, y: 0, c: c.tru < 1.5 ? 'rgba(232,116,124,.9)' : 'rgba(255,220,120,.9)' }] });
-        readout(ctx, 12, p ? cy + cw * .36 + 12 : H * .62, [['β = ' + c.beta.toFixed(2) + '   KL = ' + c.kl.toFixed(2) + ' nats', P.chalk], ['judge score  E[r] = ' + f2(c.proxy), P.orange], ['people like E[U] = ' + f2(c.tru), P.mint], ['π("!") = ' + c.pi[4].toFixed(2) + '  (ref ' + PREF[4].toFixed(2) + ')', P.butter]], p ? W - 24 : W * .4); } },
-    { name: 'the leash', start: 43, dur: 7, cap: {
-        1: 'Fix: tie the egg to a frozen copy of its old self with a string. It can wander toward nicer postcards, but the further it strays, the harder the string pulls back.',
-        2: 'The <b>KL penalty</b> to a frozen <b>reference model</b>: maximise reward − β·KL(π‖π_ref). This leash belongs to RLHF; PPO\'s clip is a separate, short-term trust region.',
-        3: 'KL = Σ π log(π/π_ref) per token, summed over 6 tokens. At β = ' + BEST.beta.toFixed(2) + ' true utility is maximal here; ARENA subtracts <code>kl_coef</code>·KL from the PPO objective.' },
+        readout(ctx, 12, p ? cy + cw * .36 + 12 : H * .62, [['β = ' + c.beta.toFixed(2) + '   KL = ' + c.kl.toFixed(2) + ' nats', P.chalk], ['judge score  E[r] = ' + f2(c.proxy), P.orange], ['people like E[U] = ' + f2(c.tru), P.mint], ['π("!") = ' + c.pi[4].toFixed(2) + '  (ref ' + PREF[4].toFixed(2) + ')', P.butter]], p ? W - 24 : W * .4);
+        side(ctx, t, l, W, H, cue(l, [[0, 'lean-in', { x: cx, y: cy }], [4.5, 'cheer'], [7, 'recoil'], [8.6, 'slump']]), { scarf: P.pink }); } },
+    { name: 'the leash', dur: 10, need: 'core', cap: {
+        1: 'Fix: tie the egg to a frozen copy of its old self with a string. It can wander toward nicer postcards, but the further it strays, the harder the string pulls. The old self is sane: stay near it.',
+        2: 'The <b>KL penalty</b>: maximise reward − β·KL(π ‖ π_ref); KL measures how far the new word odds drift from the frozen reference. The leash is RLHF\'s; PPO\'s clip is a separate per-batch limit.',
+        3: 'KL = Σ π log(π/π_ref) per token, over 6 tokens; true utility peaks at β = ' + BEST.beta.toFixed(2) + ' here. ARENA 2.4 subtracts <code>kl_coef</code>·KL from the PPO objective; InstructGPT folds −β·KL into the reward.' },
       draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t, true); var p = por(W, H), i = CURVE.indexOf(BEST), c = CURVE[Math.round(lerp(60, i, F.ease.out(ramp(l, .2, 3))))], card = sampleCard(c.pi, UC[3]);
         var es = p ? 36 : 56, ey = p ? 70 : H * .22; eggs(ctx, p ? W * .2 : W * .1, p ? W * .8 : W * .36, ey, es, t, c.kl, { ice: true });
         var cw = p ? W * .7 : Math.min(340, W * .26); postcard(ctx, p ? W / 2 : W * .23, p ? ey + es * 1.8 + cw * .31 : H * .6, cw, cardText(card), { seed: 'leash', rot: .02, fs: Math.max(11, cw * .065) });
         var rows = TOK.map(function (tk, j) { return ['“' + tk + '”', c.pi[j], .9, P.butter, PREF[j]]; });
         var by = p ? ey + es * 1.8 + cw * .62 + 12 : H * .12, h = tokenBars(ctx, p ? 12 : W * .55, by, p ? W - 24 : W * .4, rows, 'π (yellow) vs π_ref (grey)');
         var kl = 0; for (var j = 0; j < NT; j++) kl += c.pi[j] * Math.log(c.pi[j] / PREF[j]);
-        readout(ctx, p ? 12 : W * .55, by + h + 10, [['KL = 6·Σ π·log(π/π_ref) = ' + (6 * kl).toFixed(2), P.butter], ['reward − β·KL = ' + f2(c.proxy) + ' − ' + c.beta.toFixed(2) + '·' + c.kl.toFixed(2) + ' = ' + f2(c.proxy - c.beta * c.kl), P.mint], ['people like E[U] = ' + f2(c.tru), P.chalk]], p ? W - 24 : W * .4); } },
-    { name: 'where it stops being true', start: 50, dur: 5, cap: {
-        1: 'Honest bit: real judges are big neural networks trained on thousands of human choices, and they can be fooled in ways far subtler than "!!!".',
-        2: 'Real reward models are learned, imperfect and exploitable; the KL leash only slows over-optimisation, it does not remove it. Humans disagree too.',
-        3: 'Here the true utility is known, so we can see the peak. In practice it is not: you watch held-out human evals and stop early. Scaling RM size moves the peak, it does not delete it.' },
+        readout(ctx, p ? 12 : W * .55, by + h + 10, [['KL = 6·Σ π·log(π/π_ref) = ' + (6 * kl).toFixed(2), P.butter], ['reward − β·KL = ' + f2(c.proxy) + ' − ' + c.beta.toFixed(2) + '·' + c.kl.toFixed(2) + ' = ' + f2(c.proxy - c.beta * c.kl), P.mint], ['people like E[U] = ' + f2(c.tru), P.chalk]], p ? W - 24 : W * .4);
+        side(ctx, t, l, W, H, cue(l, [[0, 'pull'], [4, 'idle'], [5, 'cheer']]), { scarf: P.mint }); } },
+    { name: 'where it stops being true', dur: 9, need: 'core', cap: {
+        1: 'Honest bit: real judges are big networks trained on human choices, and they can be fooled in ways far subtler than "!!!". People also disagree with each other.',
+        2: 'Real reward models are learned, imperfect and exploitable; the leash only slows over-optimisation, it doesn\'t remove it. And nobody knows the true curve, so you watch held-out human evals.',
+        3: 'Here the true utility is known, so we can see the peak. In practice you stop early on held-out preference evals. Bigger reward models push the peak further out; they don\'t delete it (Gao et al.).' },
       draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t, true); var p = por(W, H); gaoPlot(ctx, p ? 20 : W * .2, p ? 16 : H * .12, p ? W - 40 : W * .6, p ? H * .38 : H * .6, 60, null);
         var q = ramp(l, .4, 1.4); F.cornerFlip(ctx, W, H, q, P.cream);
         if (q > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 1.2, 2); var sz = W < 500 ? 14 : 19, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .2;
-          F.hand(ctx, 'real judges are nets', x, y - sz * 1.5, sz, P.ink, { seed: 'rj', rot: -.6 }); F.hand(ctx, 'and can be fooled', x + sz * .8, y, sz, P.ink, { seed: 'cf', rot: -.6 }); ctx.restore(); } } },
-    { name: 'the code', start: 55, dur: 6, cap: {
-        1: 'The ridge and the leash are a few lines of code each.',
-        2: 'You write these in ARENA [2.3] PPO and [2.4] RLHF: the clipped surrogate objective, then the KL penalty against the reference model.',
-        3: 'ARENA <code>calc_clipped_surrogate_objective</code> (clip_coef = ε) and <code>calc_kl_penalty</code>; RLHF total objective = ppo_objective_fn − kl_penalty (ARENA\'s toy reward counts ".", same trap as our "!").' },
+          F.hand(ctx, 'real judges are nets', x, y - sz * 1.5, sz, P.ink, { seed: 'rj', rot: -.6 }); F.hand(ctx, 'and can be fooled', x + sz * .8, y, sz, P.ink, { seed: 'cf', rot: -.6 }); ctx.restore(); }
+        side(ctx, t, l, W, H, cue(l, [[0, 'think'], [3, 'shrug']]), { x: W * .15, face: 1 }); } },
+    { name: 'other recipes', dur: 11, need: 'contested', cap: {
+        1: 'Is judge + PPO + leash the only recipe? No. Newer ones skip the judge (DPO) or the coach (GRPO), and which is best is still argued. What carries over: whatever you optimise, you get, cracks included.',
+        2: '<b>Current method:</b> reward model + PPO + KL leash (InstructGPT). <b>Emerging research:</b> DPO learns straight from preference pairs; GRPO drops the critic. <b>What you need:</b> this recipe; the ideas carry.',
+        3: 'DPO (Rafailov et al. 2023) turns E[r] − β·KL into a classification loss on (chosen, rejected) pairs; GRPO (DeepSeekMath 2024) uses a group\'s mean reward as the baseline. ARENA 2.4 has a GRPO section.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t, true); recipes(ctx, t, l, W, H);
+        side(ctx, t, l, W, H, cue(l, [[0, 'think'], [4, 'shrug'], [8, 'point', { x: W / 2, y: H * .2 }]]), { scarf: P.pink }); } },
+    { name: 'the code', dur: 9, need: 'exercise', cap: {
+        1: 'The ridge and the leash are a few lines of code each. You write them once; after that a library (for example Hugging Face\'s TRL) does it, and the ideas are what you keep.',
+        2: 'You write these in ARENA 2.3 (PPO) and 2.4 (RLHF): the clipped surrogate objective, then the KL penalty against the reference model.',
+        3: 'ARENA <code>calc_clipped_surrogate_objective</code> (clip_coef = ε) and <code>calc_kl_penalty</code>; RLHF total = ppo_objective_fn − kl_penalty. ARENA\'s toy reward counts "." : the same trap as our "!".' },
       draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); codeCards(ctx, l, W, H, [
           ['PPO clip  [2.3]', ['prob_ratio = t.exp(logits_diff)', 'clipped = t.clip(prob_ratio,', '    1 - clip_coef, 1 + clip_coef)', '    * mb_advantages', 't.minimum(prob_ratio * mb_advantages,', '    clipped).mean()'], P.butter],
           ['RLHF leash  [2.4]', ['kl_div = (probs * (logprobs', '    - ref_logprobs)).sum(-1)', 'total_objective_function =', '    ppo_objective_fn - kl_penalty'], P.teal]]); } },
-    { name: 'why it matters', start: 61, dur: 4.5, cap: {
-        1: 'A leash to what we understand keeps training safe. And the judge we build is what gets optimised, so we had better look inside it.',
-        2: 'A leash to what we understand keeps training safe. The reward model is the thing being optimised against, so it is also a thing to inspect and steer.',
-        3: 'KL-to-reference keeps the policy in a region where our interpretability of the base model still applies; reward-model probing is how over-optimisation gets caught early.' },
-      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); ridge(ctx, W, H, t); climber(ctx, W * .7, W, H, t, { walk: false, coat: P.teal, scarf: P.orange });
+    { name: 'why it matters', dur: 10, need: 'core', cap: {
+        1: 'A leash to what we understand keeps training steady. The judge we build is what gets optimised, so we had better look inside it. Where else does this happen? Any number a team chases hard.',
+        2: 'Keep: small steps, because evidence is local (PPO); learned judges are proxies (Goodhart); stay near a trusted reference (KL). A question: what would you watch to notice your judge being gamed?',
+        3: 'KL-to-reference keeps the policy where our understanding of the base model still applies; probing the reward model and tracking held-out evals is how over-optimisation gets caught early.' },
+      draw: function (ctx, t, l, W, H) { bg(ctx, W, H, t); ridge(ctx, W, H, t); climber(ctx, W * .7, W, H, t, l, [[0, 'idle'], [1.5, 'wave'], [5, 'point', { x: W * .4, y: H * .4 }]]);
         var p = por(W, H); eggs(ctx, W * (p ? .22 : .3), W * (p ? .5 : .45), H * (p ? .42 : .38), p ? 26 : 38, t, BEST.kl);
-        var sz = W < 500 ? 16 : 22; ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'a leash to what we understand\nkeeps training safe', W / 2, W < 500 ? 50 : 70, sz, { color: P.pink, seed: 'steer10', rot: .02 }); ctx.restore(); } }
-  ];
+        var sz = W < 500 ? 16 : 22; ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'a leash to what we understand\nkeeps training steady', W / 2, W < 500 ? 50 : 70, sz, { color: P.pink, seed: 'steer10', rot: .02 }); ctx.restore(); } }
+  ]);
+  var LCLIP = (function () { for (var u = 0; u < 21; u += .02) { var kk = Math.min(16, Math.floor(ramp(u, .6, 17) * 16 + 1e-6)); if (!PPO[kk].g) return u; } return 1e9; })();
+  // PPO scene shared by 'trust only near home' (l 0-10) and 'the clip' (l 10-21)
+  function clipScene(ctx, t, l, W, H) { var p = por(W, H);
+    var k = Math.min(16, Math.floor(ramp(l, .6, 17) * 16 + 1e-6)), s = PPO[k], raw = RAW[k];
+    var pw = p ? W - 40 : Math.min(640, W * .55), ph = p ? H * .4 : H * .62, px = p ? 20 : W * .06, py = p ? 20 : H * .14;
+    clipPlot(ctx, px, py, pw, ph, ADV, EPS, [{ r: raw.r, c: P.red, raw: true, s: 6 }, { r: s.r, c: P.butter, s: 9 }]);
+    var bars = Math.max(0, Math.min(4, Math.ceil(4 * (1 + EPS - s.r) / EPS - 1e-9)));
+    var nx = p ? W - 56 : px + pw + 70, ny = p ? py + ph + 44 : py + 30; nokia(ctx, nx, ny, p ? 26 : 34, bars, bars ? 'trust' : 'no bars');
+    var lines = [['step ' + k + '   π_old(a)=' + PPO[0].p[0].toFixed(3), P.chalk], ['r = π_new/π_old = ' + s.p[0].toFixed(3) + '/' + PPO[0].p[0].toFixed(3) + ' = ' + s.r.toFixed(3), P.butter],
+      ['L = min(r·A, clip(r,0.8,1.2)·A) = ' + s.L.toFixed(3), P.mint], ['∂L/∂r = ' + s.g.toFixed(2) + (s.g ? '  (still pushing)' : '  (clipped: flat, stop)'), s.g ? P.chalk : P.pink],
+      ['no clip: r = ' + raw.r.toFixed(3) + ' and climbing', P.red]];
+    readout(ctx, p ? 12 : px + pw + 30, p ? py + ph + 84 : py + 90, lines, p ? W - 24 : W - (px + pw + 46));
+    // the climber pushes the habit up while there is gradient; when the clip goes flat she stops and waits for fresh data
+    var lc = LCLIP;   // scene time at which the clip first goes flat
+    var ft = W - (p ? 150 : 170), fy = H - (p ? 30 : 34);
+    F.stick(ctx, ft, fy, p ? 80 : 110, t, { pose: s.g ? 'push' : 'think', t0: s.g ? t - l + .1 : t - (l - lc), from: 'push', scarf: P.orange, color: P.ink, edge: P.cream, look: { x: nx, y: ny } });
+  }
+  // three recipes on paper cards, the one we built highlighted
+  function recipes(ctx, t, l, W, H) {
+    var p = por(W, H), cw = p ? W - 40 : Math.min(360, W * .28), chh = p ? 100 : 170, sz = p ? 14 : 18;
+    var R = [['RLHF (this week)', ['people compare pairs → judge', 'PPO climbs the judge\'s score', 'KL leash to the old model'], P.butter],
+      ['DPO', ['people compare pairs', 'no judge, no RL loop:', 'nudge odds toward chosen,', 'away from rejected'], P.mint],
+      ['GRPO', ['sample a group of answers', 'score each; baseline =', 'the group\'s average', 'no critic (no coach)'], P.pink]];
+    R.forEach(function (r, j) {
+      var a = ramp(l, j * 1.2, j * 1.2 + .8); if (a <= 0) return;
+      var x = p ? W / 2 : W * (.2 + j * .3), y = p ? 20 + chh / 2 + j * (chh + 14) : H * .35;
+      ctx.save(); ctx.globalAlpha = a; F.paper(ctx, x, y, cw, chh, P.cream, { seed: 'rc' + j, rot: (j - 1) * .015 });
+      ctx.fillStyle = r[2]; ctx.fillRect(x - cw / 2 + 5, y - chh / 2 + 6, 5, chh - 12);
+      F.hand(ctx, r[0], x - cw / 2 + 18, y - chh / 2 + sz * 1.1, sz * 1.1, '#6b5a9a', { align: 'left', seed: 'rt' + j });
+      r[1].forEach(function (s, i) { F.hand(ctx, s, x - cw / 2 + 18, y - chh / 2 + sz * 2.6 + i * sz * 1.3, sz * .9, P.ink, { align: 'left', seed: 'rl' + j + i, bold: false }); });
+      ctx.restore();
+    });
+    if (l > 5) F.note(ctx, 'same lesson in all three:\nyou get what you optimise', W / 2, p ? 20 + 3 * (chh + 14) + 30 : H * .78, p ? 15 : 20, { color: P.pink, seed: 'same', rot: -.02 });
+  }
   function codeCards(ctx, l, W, H, cards) {
     var sz = W < 500 ? 13 : 18, y = H * .06;
     cards.forEach(function (C, j) {
@@ -326,7 +376,8 @@ function evalBeta(w, beta, U) { var pi = piBeta(w, beta), proxy = 0, tru = 0; U.
       { label: 'Map: PPO clip', href: '../../index.html#map/node=ppo-clipped-surrogate' },
       { label: 'Map: reward hacking', href: '../../index.html#map/node=reward-hacking' },
       { label: 'Case: PPO clipped surrogate', href: '../../index.html#cases/ppo-clipped-surrogate' },
-      { label: 'Case: RLHF KL penalty', href: '../../index.html#cases/rlhf-kl-penalty' }
+      { label: 'Case: RLHF KL penalty', href: '../../index.html#cases/rlhf-kl-penalty' },
+      { label: 'Deep dive: PPO, RLHF and the boat', href: 'deep-w10-ppo-rlhf.html' }
     ]
   });
 })();

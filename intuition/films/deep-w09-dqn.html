@@ -196,8 +196,8 @@
   function tabIndex(l) { if (l < 2) return -1; if (l < 10) return Math.floor(l - 2); return Math.min(TAB.length - 1, 8 + Math.floor(Math.pow(ramp(l, 10, 23), 1.6) * (TAB.length - 9))); }
   var NB = [10, 100]; // bins per CartPole number
 
-  /* ================= the chapters ================= */
-  var chapters = [
+  /* ================= the scenes (split into captioned beats further down) ================= */
+  var base = [
     { name: 'what is this worth?', start: 0, dur: 16, cap: {
         1: 'A paper robot on a <b>cliff walk</b>: start bottom-left, goal bottom-right, a cliff in between. Every step costs 1; falling costs 100 and sends it home. Written on the start tile: <b>what is this worth?</b>',
         2: 'An MDP: states (24 tiles), actions (up, right, down, left), rewards (−1 a step, −100 the cliff), discount γ. Q(s, a) is the total reward you expect if you take action a in s and then play well.',
@@ -379,7 +379,113 @@
     }
   };
 
-  window.__DQN = { Trainer: Trainer, greedyLen: greedyLen, TAB: TAB, BU_NOREP: BU_NOREP, BU_NOTGT: BU_NOTGT, EX: EX, bothLast: RUN_BOTH.hist[RUN_BOTH.hist.length - 1].L };
+
+  /* ================= beats: each scene above is split into shorter captioned beats (same animation, same clock) ================= */
+  var TABV = Math.max.apply(null, TAB[TAB.length - 1].Q[S0]);
+  function seq(list) { var s = 0; list.forEach(function (c) { c.start = s; s += c.dur; }); return list; }
+  function byName(n) { for (var i = 0; i < base.length; i++) if (base[i].name === n) return base[i]; }
+  // the narrator: a small ink stick figure in the bottom-right corner who acts each beat
+  function narrator(ctx, t, l, W, H, c) {
+    var sm = W < 500, s = sm ? 78 : 100, x = W - (sm ? 36 : 64), y = H - (sm ? 30 : 36), lk = c.look;
+    if (lk && lk.fx != null) lk = { x: lk.fx * W, y: lk.fy * H };
+    F.stick(ctx, x, y, s, t, { pose: c.pose, t0: t - l + c.at, from: c.from, face: -1, look: lk, scarf: P.lav, color: P.chalk, edge: '#23264a' });
+  }
+  function cue(l, list) { var i = 0; for (var k = 0; k < list.length; k++) if (l >= list[k][0]) i = k; return { pose: list[i][1], at: list[i][0] + .05, from: i ? list[i - 1][1] : 'idle', look: list[i][2] }; }
+  function split(scene, parts) {
+    var acc = 0;
+    return parts.map(function (p) {
+      var off = acc; acc += p.dur;
+      return { name: p.name, dur: p.dur, need: p.need, cap: p.cap, draw: function (ctx, t, l, W, H, api) {
+        scene.draw(ctx, t, l + off, W, H, api);
+        if (p.cues) narrator(ctx, t, l, W, H, cue(l, p.cues));
+      } };
+    });
+  }
+  var UP = { fx: .5, fy: .25 };
+  var chapters = seq([].concat(
+    split(byName('what is this worth?'), [
+      { name: 'the cliff walk', dur: 8, need: 'core', cues: [[0, 'idle'], [1.5, 'point', { fx: .2, fy: .3 }]], cap: {
+        1: 'A paper robot on a <b>cliff walk</b>: start bottom-left, goal bottom-right. Every step costs 1; falling costs 100 and sends it home. Written on the start tile: <b>what is this worth?</b>',
+        2: 'States: 24 tiles. Actions: ↑ → ↓ ←. Rewards: −1 a step, −100 for the cliff. <b>Q(s, a)</b> = total reward you expect if you take action a in s, then play well. Here: minus the steps left.',
+        3: 'A 4×6 mini of the <code>CliffWalking-v0</code> env ARENA 2.1 uses (Sutton &amp; Barto, Example 6.6). γ = 1 is fine because every episode ends; the answer is an exact integer.' } },
+      { name: 'Bellman', dur: 8, need: 'core', cues: [[0, 'think'], [3, 'point', { fx: .5, fy: .75 }]], cap: {
+        1: 'The trick: a move is worth its own reward <b>plus</b> the worth of the best move after it. Like pricing a road trip: this leg\'s cost plus the cheapest trip from the next town.',
+        2: 'Bellman: Q*(s,a) = r + γ·max over a′ of Q*(s′,a′). Why it helps: you never add up a whole future at once, only one step plus a number you already hold for the next tile.',
+        3: 'Q*(s,a) = E[r + γ max_a′ Q*(s′,a′) | s, a]. Q* is the fixed point of that equation, so repeatedly applying the right-hand side converges to it (here, because every route ends).' } }
+    ]),
+    split(byName('the table fills in'), [
+      { name: 'one number per step', dur: 9, need: 'exercise', cues: [[0, 'lean-in', UP]], cap: {
+        1: 'The robot doesn\'t know the map. It wanders, and after <b>every step</b> nudges one number in its table toward "what I just got, plus the best I now think comes next".',
+        2: 'Real Q-learning, lr 0.5, ε = 0.1, 60 episodes, computed in your browser. Each tile has 4 triangles, one Q per action: red bad, green good. The line on top is the update just applied.',
+        3: 'ARENA <code>QLearning.observe</code>: <code>Q[s,a] += lr * (r + gamma * Q[s′].max() - Q[s,a])</code>. The bracket is the TD error: how wrong the old guess was, with one step of hindsight.' } },
+      { name: 'news flows backwards', dur: 9, need: 'core', cues: [[0, 'point', UP], [6, 'cheer']], cap: {
+        1: 'Watch the colours <b>settle</b> outward from the goal. Tiles beside the goal soon learn "one step to go" and stay green; far tiles keep reddening until news of the real distance reaches them.',
+        2: 'Why backwards: a tile\'s target uses its <b>neighbour\'s</b> current Q. News can only travel one tile per visit, so correct values settle outward from the goal. This is called <b>bootstrapping</b>.',
+        3: 'Bootstrapping: the target r + γ max Q(s′) reuses the current estimate at s′. Faster than waiting for full returns (Monte Carlo), but biased while neighbours are wrong: the seed of later instability.' } },
+      { name: 'off-policy', dur: 8, need: 'exercise', cues: [[0, 'think'], [3, 'point', { fx: .5, fy: .7 }]], cap: {
+        1: 'The finished table says the start is worth ' + (TABV < 0 ? '−' : '') + Math.abs(TABV).toFixed(0) + ': seven steps, hugging the cliff edge. It learned the best route even though its own random stumbles sometimes fall off.',
+        2: '<b>Off-policy</b>: the target uses max Q(s′), the best next move, even when ε made the robot do something else. So it learns the optimal edge route. SARSA would learn a safer one.',
+        3: 'SARSA uses Q[s′,a′] for the a′ actually taken, pricing in its own ε-stumbles: it learns the path one row up. Both are a few lines in ARENA 2.1; the difference is one term.' } }
+    ]),
+    split(byName('too many tiles'), [
+      { name: 'CartPole won\'t fit', dur: 9, need: 'core', cues: [[0, 'lean-in', { fx: .5, fy: .2 }], [6, 'recoil']], cap: {
+        1: 'A table works when you can list every state. <b>CartPole</b> can\'t be listed: its state is four real numbers (cart position, speed, pole angle, spin). Chop each into bins and count the rows.',
+        2: '10 bins each: 10⁴ = 10,000 states × 2 actions. 100 bins: 10⁸. Exact float32: (2³²)⁴ ≈ 3.4 × 10³⁸ rows. Rows <b>multiply</b> with every extra number: the curse of dimensionality.',
+        3: 'ARENA [2.2.1] CartPole-v1: obs shape (4,), 2 actions, +1 per step alive; ends when the pole passes ±12°, the cart leaves ±2.4, or at 500 steps. Table size = bins^dims.' } },
+      { name: 'tables never share', dur: 9, need: 'core', cues: [[0, 'shrug'], [4, 'think']], cap: {
+        1: 'Worse, a table never shares. Learning that one state is dangerous teaches the state next door nothing, even if they are nearly identical. A network does share: similar inputs, similar outputs.',
+        2: 'The fix is <b>function approximation</b>: swap the table for a network Q(s; θ) that takes the state and outputs one Q per action. Nearby states share weights, so what it learns generalises.',
+        3: 'Q(s; θ): ℝ⁴ → ℝ², shape (batch, 4) → (batch, 2). Generalisation is the gain; the price is that one update now moves Q everywhere at once, which is what the next two tricks tame.' } }
+    ]),
+    split(byName('a network guesses Q'), [
+      { name: 'a net instead of a table', dur: 11, need: 'exercise', cues: [[0, 'point', { fx: .5, fy: .3 }]], cap: {
+        1: 'Swap the table for a <b>tiny network</b>: in goes the state, out come Q(left) and Q(right). A paper corridor (reward 1 at the far end) keeps it small enough to train live, right here.',
+        2: 'x → 16 tanh units → 2 outputs, trained on the TD loss with a <b>replay buffer</b> and a <b>target network</b>. Solid curves: the net. Dashed: the true Q*. Loss measured on 20 probe states.',
+        3: 'loss = (r + γ(1−d)·max Q_target(s′) − Q(s,a))², γ 0.99, lr 0.35 (deliberately high so the dangers show), buffer 1,000, minibatch 16, target copied every 100 steps.' } },
+      { name: 'an answer key that moves', dur: 11, need: 'exercise', cues: [[0, 'think'], [5, 'shrug']], cap: {
+        1: 'Catch: the answer the net is graded against is built from the net\'s <b>own</b> guess at the next state. Change the net and the answer key changes too. That is why the next two tricks exist.',
+        2: 'We treat the target r + γ·max Q(s′) as a constant and only push Q(s,a) toward it: a <b>semi-gradient</b>. It is not the gradient of any fixed loss, so nothing guarantees it settles.',
+        3: 'In code the target is computed under <code>t.inference_mode()</code>, so no gradient flows into it. Full-gradient variants (residual gradients) exist but learn slower; the semi-gradient is standard.' } }
+    ]),
+    split(byName('predict: no replay'), [
+      { name: 'predict: no replay', dur: 8, need: 'exercise', cues: [[0, 'think']], cap: {
+        1: 'Your turn. Throw the <b>shoebox of Polaroids</b> away: the net learns from each step the moment it happens, in order. Better, same, or worse?',
+        2: 'The sharpest test of any design choice: what breaks if we remove it? Same net, seed, lr and γ; only the replay buffer is gone. Pick an answer on the card.',
+        3: 'Without replay, each update uses only the newest transition (a batch of 1), and consecutive transitions are nearly the same state. Predict the TD loss curve before you look.' } },
+      { name: 'why the shoebox works', dur: 12, need: 'exercise', cues: [[0, 'lean-in', { fx: .5, fy: .2 }], [5.5, 'recoil'], [8, 'point', { fx: .5, fy: .75 }]], cap: {
+        1: 'It stalls, then blows up. Consecutive steps are near-duplicates, so each update drags the whole curve toward one spot. The shoebox mixes old and new memories, like shuffling flashcards.',
+        2: 'Real run: without replay the loss stalls near 10⁻², then blows up at step ' + (BU_NOREP || '—') + '. Replay breaks the streaks (samples look closer to independent) and reuses each memory many times.',
+        3: 'ARENA\'s <code>ReplayBuffer.add</code> keeps the last <code>buffer_size</code> rows; <code>sample</code> draws uniformly with replacement. Prioritised replay exists; you won\'t need it here.' } }
+    ]),
+    split(byName('no frozen target'), [
+      { name: 'chasing its own tail', dur: 8, need: 'exercise', cues: [[0, 'lean-in', { fx: .5, fy: .2 }], [4.5, 'recoil']], cap: {
+        1: 'Now keep the shoebox but drop the <b>frozen copy</b>. The target is built from the net being trained, so every step moves the goalposts it is aiming at. A dog chasing its own tail.',
+        2: 'Same seed, replay on, target off: the loss blows up at step ' + (BU_NOTGT || '—') + '. With a target network copied every 100 steps, the goal holds still long enough to be reached.',
+        3: 'ARENA copies with <code>target_network.load_state_dict(q_network.state_dict())</code> every <code>trains_per_target_update</code> steps. Soft (Polyak) updates are a common alternative.' } },
+      { name: 'margin, not magic', dur: 8, need: 'exercise', cues: [[0, 'shrug']], cap: {
+        1: 'Honest detail: turn the learning rate down to 0.25 and this toy survives without the frozen copy. Both tricks buy <b>safety margin</b>, not magic. Try it yourself at the end.',
+        2: 'Both tricks do one job: stop the target moving with every update. Replay averages over many old behaviours; the target net pins the answer key for 100 steps at a time.',
+        3: 'Where else this shows up: anything that learns from its own predictions (bootstrapping, self-play, self-distillation) needs something held still to learn against.' } }
+    ]),
+    split(byName('where it stops being true'), [
+      { name: 'where it stops being true', dur: 10, need: 'core', cues: [[0, 'shrug']], cap: {
+        1: 'Where the story stops being true: replay and a frozen target make DQN <b>steadier</b>, not safe. It still overestimates values, and exploring a big world by random steps is mostly luck.',
+        2: 'A max over noisy estimates is biased upward (Double DQN: choose the action with the online net, score it with the target). ε-greedy explores one random step at a time, so rarely far.',
+        3: 'Function approximation + bootstrapping + off-policy data is Sutton &amp; Barto\'s "deadly triad": no convergence guarantee. ARENA\'s probe envs exist because DQN bugs look like bad luck.' } }
+    ]),
+    split(byName('your TD loss'), [
+      { name: 'your TD loss', dur: 10, need: 'exercise', cues: [[0, 'point', { fx: .5, fy: .3 }]], cap: {
+        1: 'All of it, in the lines you write in ARENA, lit with a real transition through the trained corridor net. The shoebox is <code>buffer.sample</code>; the frozen copy is <code>target_network</code>.',
+        2: 'ARENA [2.2.1] <code>DQNAgent.training_step</code>. The (1 − terminated) mask stops bootstrapping past the end of an episode; <code>gather</code> picks the Q of the action actually taken.',
+        3: 'Shapes: obs (512, 4) → q_network → (512, 2); gather(-1, actions.unsqueeze(-1)).squeeze(-1) → (512,). target_max (512,), td_error (512,), loss a scalar.' } },
+      { name: 'what you keep', dur: 10, need: 'core', cues: [[0, 'idle'], [1, 'cheer']], cap: {
+        1: '<b>What an agent values is what we trained into it.</b> Its Q-values are its beliefs about what matters, which makes them one of the first windows into what it learned to want.',
+        2: 'Keep for your career: value = expected future reward; bootstrapping = learn from your own next guess; function approximation = share what you learn. Replay and target nets you code once.',
+        3: 'Library knobs, not ideas: DQNArgs gamma 0.99, buffer_size 10,000, batch_size 512, learning_rate 5e-3, trains_per_target_update 50, ε 1.0 → 0.02 over the first 10% of steps.' } }
+    ])
+  ));
+
+  window.__DQN = { Trainer: Trainer, greedyLen: greedyLen, TAB: TAB, BU_NOREP: BU_NOREP, BU_NOTGT: BU_NOTGT, EX: EX, TABV: TABV, bothLast: RUN_BOTH.hist[RUN_BOTH.hist.length - 1].L };
   F.play({
     title: 'Deep dive · From a table to a network',
     back: '../index.html',
