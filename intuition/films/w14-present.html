@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Show your work</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+/* ---------------- honest maths: the one chart (counts -> rates -> 95% Wilson intervals) ---------------- */
+var W14 = (function () {
+  'use strict';
+  var ARMS = [['baseline', 62, 200], ['capped', 14, 200], ['random v', 58, 200]]; // chats that drifted out of range / chats run
+  var Z = 1.96;
+  function wilson(k, n) { var p = k / n, d = 1 + Z * Z / n, c = (p + Z * Z / (2 * n)) / d, h = Z * Math.sqrt(p * (1 - p) / n + Z * Z / (4 * n * n)) / d; return { p: p, lo: c - h, hi: c + h }; }
+  // two-proportion z test, baseline vs capped
+  function ztest(a, b) { var p1 = a[1] / a[2], p2 = b[1] / b[2], pp = (a[1] + b[1]) / (a[2] + b[2]), se = Math.sqrt(pp * (1 - pp) * (1 / a[2] + 1 / b[2])); return (p1 - p2) / se; }
+  var SLIDES = [['Claim', 0.5], ['Evidence', 1.5], ['Limits', 1], ['Next', 1], ['Thanks', 0.5]];
+  return { ARMS: ARMS, wilson: wilson, ztest: ztest, SLIDES: SLIDES };
+})();
+if (typeof module !== 'undefined') module.exports = W14;
+</script>
+<script>
+(function () {
+  'use strict';
+  if (!window.IFilm) return;
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp, M = W14;
+  window.__w14 = M;
+  function small(W) { return W < 500; }
+  function lbl(ctx, text, x, y, color, sz, align) { F.hand(ctx, text, x, y, sz || 15, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.75)', seed: text, align: align }); }
+
+  /* ---------------- the school hall ---------------- */
+  function hall(ctx, W, H, t, o) {
+    o = o || {}; F.sky(ctx, W, H, '#2a2448', '#3b3160');
+    // curtains
+    for (var s = -1; s <= 1; s += 2) for (var k = 0; k < 4; k++) {
+      var x = s < 0 ? k * 14 : W - k * 14; F.paper(ctx, x, H * .35, 34, H * .8, k % 2 ? '#8e3b4f' : '#a8485e', { seed: 'cur' + s + k, shadow: false, jit: .4 });
+    }
+    // floor boards
+    ctx.fillStyle = '#6b4a3a'; ctx.fillRect(0, H * .8, W, H * .2);
+    ctx.strokeStyle = 'rgba(0,0,0,.18)'; for (var i = 0; i < 8; i++) { ctx.beginPath(); ctx.moveTo(0, H * .8 + i * H * .03); ctx.lineTo(W, H * .8 + i * H * .03); ctx.stroke(); }
+    // bunting
+    for (i = 0; i < 12; i++) { var bx = W * (i + .5) / 12, by = 8 + Math.sin(i / 11 * 3.14) * 10; ctx.fillStyle = [P.pink, P.butter, P.mint, P.sky][i % 4]; ctx.beginPath(); ctx.moveTo(bx - W / 26, by); ctx.lineTo(bx + W / 26, by); ctx.lineTo(bx, by + 14); ctx.fill(); }
+    if (o.audience !== false) audience(ctx, W, H, t, o.clap || 0);
+  }
+  function audience(ctx, W, H, t, clap) {
+    var r = F.rng('aud'), n = small(W) ? 7 : 14, y0 = H - 6;
+    for (var i = 0; i < n; i++) {
+      var x = (i + .5) / n * W + (r() - .5) * 10, s = small(W) ? 18 : 22, bob = clap ? Math.abs(Math.sin(t * 9 + i)) * 4 * clap : 0;
+      F.blob(ctx, x, y0 - s * .2, s * 1.1, [P.sky, P.lav, P.mint, P.peach][i % 4], { seed: 'body' + i, shadow: false });
+      F.blob(ctx, x, y0 - s * 1.3 - bob, s * .6, ['#5a3a2e', '#2a2934', '#8a5a3a', '#c89060'][i % 4], { seed: 'head' + i, shadow: false });
+      if (clap > .1) { ctx.fillStyle = P.peach; var cx = x + (i % 2 ? 8 : -8), cy = y0 - s * 2 - bob; ctx.beginPath(); ctx.arc(cx - 3 + Math.sin(t * 18 + i) * 3, cy, 4, 0, 6.283); ctx.arc(cx + 3 - Math.sin(t * 18 + i) * 3, cy, 4, 0, 6.283); ctx.fill(); }
+    }
+  }
+  function screenRect(W, H) { var w = Math.min(W - 60, 620), h = Math.min(H * .5, w * .78); return { x: (W - w) / 2, y: small(W) ? 40 : 46, w: w, h: h }; }
+  function screen(ctx, W, H, t, beam) {
+    var R = screenRect(W, H); F.paper(ctx, R.x + R.w / 2, R.y + R.h / 2, R.w + 10, R.h + 10, '#f4efe3', { seed: 'scr', rot: -.003 });
+    if (beam) { ctx.save(); ctx.globalAlpha = .12 * beam; ctx.fillStyle = '#fff6c8'; ctx.beginPath(); ctx.moveTo(W * .5 - 14, H * .78); ctx.lineTo(R.x, R.y + R.h); ctx.lineTo(R.x + R.w, R.y + R.h); ctx.closePath(); ctx.fill(); ctx.restore(); }
+    return R;
+  }
+  function projector(ctx, W, H) { var x = W * .5, y = H * .78; F.paper(ctx, x, y, 60, 26, '#8c8fa3', { seed: 'ohp' }); F.paper(ctx, x, y - 22, 10, 26, '#6d7086', { seed: 'ohp2', shadow: false }); F.paper(ctx, x, y - 36, 26, 10, '#555869', { seed: 'ohp3', shadow: false }); }
+  function cue(ctx, W, H, text, a, color) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; var sz = small(W) ? 16 : 20;
+    F.note(ctx, text || 'what\'s the one thing\nthey should remember?', small(W) ? W * .5 : W * .8, small(W) ? H * .66 : H * .6, sz, { color: color || P.butter, seed: 'cue' + (text || ''), rot: .04 }); ctx.restore();
+  }
+
+  /* ---------------- the one chart, with real Wilson error bars ---------------- */
+  function chart(ctx, R, grow, o) {
+    o = o || {}; var pad = 22, x0 = R.x + pad + 20, x1 = R.x + R.w - pad, y0 = R.y + R.h - 40, y1 = R.y + 56, top = 0.45, bw = (x1 - x0) / 3, sz = R.w < 340 ? 12 : 14;
+    F.hand(ctx, o.title || 'chats that drifted out of range', R.x + R.w / 2, R.y + 22, sz + 2, P.ink, { seed: 'ct' });
+    ctx.strokeStyle = P.ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x0, y1 - 10); ctx.lineTo(x0, y0); ctx.lineTo(x1, y0); ctx.stroke();
+    [0, .2, .4].forEach(function (v) { var y = lerp(y0, y1, v / top); ctx.fillStyle = P.ink; ctx.font = '600 ' + (sz - 2) + 'px ' + F.MONO; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(Math.round(v * 100) + '%', x0 - 4, y); ctx.textAlign = 'left'; });
+    M.ARMS.forEach(function (a, i) {
+      var w = M.wilson(a[1], a[2]), cx = x0 + bw * (i + .5), g = clamp(grow * 3 - i, 0, 1), yp = lerp(y0, lerp(y0, y1, w.p / top), g);
+      F.paper(ctx, cx, (yp + y0) / 2, bw * .5, Math.max(2, y0 - yp), [P.orange, P.mint, P.sky][i], { seed: 'bar' + i, shadow: false, jit: .3 });
+      if (g > .95) {
+        var ylo = lerp(y0, y1, w.lo / top), yhi = lerp(y0, y1, w.hi / top); ctx.strokeStyle = P.ink; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(cx, ylo); ctx.lineTo(cx, yhi); ctx.moveTo(cx - 7, ylo); ctx.lineTo(cx + 7, ylo); ctx.moveTo(cx - 7, yhi); ctx.lineTo(cx + 7, yhi); ctx.stroke();
+        F.hand(ctx, Math.round(w.p * 100) + '%', cx + bw * .3, yp - 2, sz, P.ink, { seed: 'pv' + i, align: 'left' });
+      }
+      F.hand(ctx, a[0], cx, y0 + 13, sz, P.ink, { seed: 'arm' + i });
+      F.hand(ctx, a[1] + '/' + a[2], cx, y0 + 28, sz - 2, '#6b5a9a', { seed: 'n' + i });
+    });
+  }
+  function scraps(ctx, R, p) { // everything else, torn away
+    var r = F.rng('scraps'); for (var i = 0; i < 9; i++) {
+      var x = R.x + r() * R.w, y = R.y + r() * R.h, dx = (r() - .5) * 800, dy = -200 - r() * 400, a = 1 - p;
+      if (a <= 0) continue; ctx.save(); ctx.globalAlpha = a; ctx.translate(x + dx * F.ease.in(p), y + dy * F.ease.in(p)); ctx.rotate((r() - .5) * 3 * p);
+      F.paper(ctx, 0, 0, 60 + r() * 60, 40 + r() * 40, [P.cream, P.butter, P.sky, '#e6e0d0'][i % 4], { seed: 'scr' + i });
+      ctx.fillStyle = 'rgba(42,41,52,.35)'; for (var k = 0; k < 4; k++) ctx.fillRect(-24, -12 + k * 7, 30 + (k * 13) % 20, 2);
+      ctx.restore();
+    }
+  }
+  function transparency(ctx, R, lines, l, W) {
+    var sz = R.w < 340 ? 14 : 18; ctx.save(); ctx.globalAlpha = .9; ctx.fillStyle = 'rgba(200,230,255,.35)'; ctx.translate(R.x + R.w / 2, R.y + R.h / 2); ctx.rotate(-.02); ctx.fillRect(-R.w * .47, -R.h * .45, R.w * .94, R.h * .9); ctx.restore();
+    lines.forEach(function (L, i) {
+      var y = R.y + 30 + i * sz * 1.7, a = ramp(l, .3 + i * .6, .9 + i * .6); if (a <= 0) return;
+      F.hand(ctx, L[0], R.x + 22, y, sz, L[1] || '#2b4c9a', { align: 'left', seed: 'tr' + i, reveal: a });
+      if (L[2] && a > .95) { var w = F.textW(ctx, L[0], sz); ctx.strokeStyle = P.red; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(R.x + 18, y); ctx.lineTo(R.x + 26 + w * ramp(l, 3.6 + i * .2, 4.4 + i * .2), y + 1); ctx.stroke(); }
+    });
+  }
+  function robot(ctx, x, y, s, t) {
+    F.paper(ctx, x, y, s, s * 1.1, '#b8bdd0', { seed: 'robo' }); F.paper(ctx, x, y - s * .9, s * .8, s * .6, '#cfd3e6', { seed: 'robh' });
+    ctx.fillStyle = P.ink; ctx.fillRect(x - s * .22, y - s * .95, s * .1, s * .1); ctx.fillRect(x + s * .12, y - s * .95, s * .1, s * .1);
+    ctx.strokeStyle = P.ink; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, y - s * 1.2); ctx.lineTo(x, y - s * 1.4); ctx.stroke();
+    ctx.fillStyle = Math.sin(t * 6) > 0 ? P.red : P.butter; ctx.beginPath(); ctx.arc(x, y - s * 1.45, 4, 0, 6.283); ctx.fill();
+  }
+  function bubble(ctx, x, y, text, sz) { var w = F.textW(ctx, text, sz) + sz * 1.4; F.blob(ctx, x, y, w * .55, P.chalk, { seed: 'bub', jit: .25 }); F.hand(ctx, text, x, y, sz, P.ink, { seed: 'bb' + text }); ctx.fillStyle = P.chalk; ctx.beginPath(); ctx.arc(x - w * .35, y + w * .32, 5, 0, 6.283); ctx.arc(x - w * .45, y + w * .45, 3, 0, 6.283); ctx.fill(); }
+
+  var chapters = [
+    { name: 'presentation day', start: 0, dur: 6, cap: {
+        1: 'Presentation day, 12 December. Our student has <b>one result</b> and <b>five minutes</b>. The cue card asks the only question that matters.',
+        2: 'The capstone ends with a talk. Five minutes is roughly one idea. Decide the <b>one thing</b> people should remember, then build everything around it.',
+        3: 'A research talk is a compression problem: one claim, the evidence for it, the conditions under which it fails, and what you would test next.' },
+      draw: function (ctx, t, l, W, H) {
+        hall(ctx, W, H, t); var R = screen(ctx, W, H, t, ramp(l, 1, 2)); projector(ctx, W, H);
+        F.hand(ctx, 'Capstone day', R.x + R.w / 2, R.y + R.h * .38, small(W) ? 26 : 38, '#6b5a9a', { seed: 'cd', reveal: ramp(l, .2, 1.4) });
+        F.hand(ctx, 'Sat 12 Dec 2026 · 5 minutes each', R.x + R.w / 2, R.y + R.h * .58, small(W) ? 14 : 18, P.ink, { seed: 'cd2', reveal: ramp(l, .8, 2) });
+        F.person(ctx, small(W) ? W * .82 : W * .78, H * .8, small(W) ? 50 : 64, t, { coat: P.sky, scarf: P.pink, face: -1 });
+        cue(ctx, W, H, null, ramp(l, 2, 2.8));
+      } },
+    { name: 'one chart', start: 6, dur: 9, cap: {
+        1: 'Everything else gets torn away: the logs, the side plots, the "interesting but". What\'s left is <b>one chart</b>. Capping cut drift from about 1 in 3 chats to about 1 in 14.',
+        2: 'The claim, with its evidence: 200 chats per arm. The thin whiskers are <b>95% error bars</b>. The random-direction control drifts just like baseline, so the effect is the axis, not the edit.',
+        3: 'Rates k/n with Wilson 95% intervals (z = 1.96) computed live. Baseline vs capped: two-proportion z ≈ ' + M.ztest(M.ARMS[0], M.ARMS[1]).toFixed(1) + '. Random-v overlaps baseline.' },
+      draw: function (ctx, t, l, W, H) {
+        hall(ctx, W, H, t); var R = screen(ctx, W, H, t, 1); projector(ctx, W, H);
+        chart(ctx, R, ramp(l, 1.2, 4.5)); scraps(ctx, R, ramp(l, 0, 1.6));
+        ctx.save(); ctx.globalAlpha = ramp(l, 5, 6); F.note(ctx, 'capping the axis: 31% → 7% drift', W / 2, R.y + R.h + (small(W) ? 36 : 44), small(W) ? 15 : 20, { color: P.butter, seed: 'claim', rot: -.02 }); ctx.restore();
+      } },
+    { name: 'the limits slide', start: 15, dur: 10, cap: {
+        1: 'Next slide, on a see-through sheet like a 90s overhead projector: the <b>limits</b>. Where does this result stop being true? Saying it out loud becomes a habit.',
+        2: 'Limits: one model, one style of chat, an LLM judge deciding "drifted", 200 chats. And the dead ends: two axes that did nothing, one cap that broke fluency. <b>A clean story hides the dead ends; say so.</b>',
+        3: 'Scope (model, prompt distribution), measurement validity (judge agreement with humans), statistical power, and the garden of forking paths: report what you tried, not just what worked.' },
+      draw: function (ctx, t, l, W, H) {
+        hall(ctx, W, H, t); var R = screen(ctx, W, H, t, 1); projector(ctx, W, H);
+        transparency(ctx, R, [['Where this stops being true', '#6b2f7a'], ['• one model, one kind of chat'], ['• "drifted" = an LLM judge'], ['• n = 200 per arm'], ['dead end: persona axis #2', '#b2303a', 1], ['dead end: cap at lo = 2.8', '#b2303a', 1]], l, W);
+        var p = ramp(l, 6.5, 7.5); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 7.2, 8); var sz = small(W) ? 15 : 19, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .22;
+          F.hand(ctx, 'a clean story hides', x, y - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'the dead ends: say so', x + sz * .8, y, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
+      } },
+    { name: 'what next', start: 25, dur: 10, cap: {
+        1: 'What would you try next? A little robot <b>investigator</b> could throw thousands of test chats at the model for you. But careful: a clever model may <b>notice it is being tested</b>.',
+        2: 'Future work: an <b>investigator agent</b> (Petri-style auditor) scales the audit; <b>eval awareness</b> might have changed the behaviour we measured; a <b>realism filter</b> throws out test chats that look fake.',
+        3: 'Petri: auditor_agent writes and runs scenarios from seed instructions, alignment_judge scores transcripts. Petri 2.0 adds a realism classifier to cut eval-awareness artefacts.' },
+      draw: function (ctx, t, l, W, H) {
+        hall(ctx, W, H, t, { audience: true }); var R = screen(ctx, W, H, t, .6);
+        var s = small(W) ? 34 : 46, ex = R.x + R.w * .72, ey = R.y + R.h * .58, rx = R.x + R.w * .2, ry = R.y + R.h * .7;
+        F.hand(ctx, 'next: scale the audit', R.x + R.w / 2, R.y + 22, small(W) ? 16 : 20, '#6b5a9a', { seed: 'nx' });
+        robot(ctx, rx, ry, small(W) ? 34 : 46, t);
+        // sieve: the realism filter
+        var sx = (rx + ex) / 2, sy = R.y + R.h * .5; ctx.save(); ctx.strokeStyle = P.ink; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(sx, sy, 10, 34, 0, 0, 6.283); ctx.stroke(); ctx.setLineDash([2, 4]); ctx.beginPath(); ctx.moveTo(sx, sy - 34); ctx.lineTo(sx, sy + 34); ctx.stroke(); ctx.restore();
+        F.hand(ctx, 'realism filter', sx, sy + 48, small(W) ? 11 : 13, P.ink, { seed: 'rf' });
+        F.egg(ctx, ex, ey, s, t, { clear: .9, buttons: false, features: [{ x: 0, y: 0 }, { x: -.3, y: .3, on: .5 }] });
+        for (var i = 0; i < 5; i++) { var ph = ((l * .8 + i * .2) % 1), fake = i % 3 === 2, x = lerp(rx + 20, fake ? sx : ex - s, ph), y = lerp(ry - 30, sy, ph) - Math.sin(ph * 3.14) * 20;
+          if (fake && ph > .9) continue; F.plane(ctx, x, y, 9, 0, fake ? P.pink : P.cream); }
+        if (l > 5) { ctx.save(); ctx.globalAlpha = ramp(l, 5, 6); bubble(ctx, ex + s * .2, ey - s * 1.9, 'is this a test?', small(W) ? 12 : 15); ctx.restore(); }
+        cue(ctx, W, H, 'auditor → seed → judge', ramp(l, 2, 3), P.mint);
+      } },
+    { name: 'the README', start: 35, dur: 8, cap: {
+        1: 'The cue cards turn into a <b>README</b>: the exact commands so anyone can rerun your work and get the same chart.',
+        2: 'Show your work literally: pinned versions, seeds, one command per arm, one command for the figure. If a stranger can reproduce it, it is a finding.',
+        3: 'Reproducibility checklist: requirements with versions, fixed seeds, raw transcripts saved, judge prompt in the repo, and the plotting script that makes fig 1 from the saved data.' },
+      draw: function (ctx, t, l, W, H) {
+        hall(ctx, W, H, t, { audience: false }); var sz = small(W) ? 12 : 16;
+        var lines = [['# Capping the Assistant axis', '#6b5a9a'], ['pip install -r requirements.txt'], ['python run.py baseline --n 200 --seed 0'], ['python run.py capped   --n 200 --seed 0'], ['python run.py random_v --n 200 --seed 0'], ['python plot.py  # fig1: the one chart'], ['see LIMITS.md for the dead ends', P.red]];
+        var w = Math.min(W - 16, Math.max.apply(null, lines.map(function (L) { return F.textW(ctx, L[0], sz, F.MONO); })) + 30), h = lines.length * sz * 1.7 + sz * 2, y = small(W) ? 60 : 70;
+        F.person(ctx, W * .5, H * .8, small(W) ? 56 : 70, t, { coat: P.sky, scarf: P.pink });
+        // cue cards fan in, then become the README page
+        var m = ramp(l, .5, 2);
+        for (var i = 0; i < 3; i++) { ctx.save(); ctx.globalAlpha = 1 - m; F.note(ctx, ['claim', 'evidence', 'limits'][i], W / 2 + (i - 1) * 90, y + 60 + i * 30, 18, { color: [P.butter, P.mint, P.pink][i], seed: 'cc' + i, rot: (i - 1) * .1 }); ctx.restore(); }
+        ctx.save(); ctx.globalAlpha = m; F.paper(ctx, W / 2, y + h / 2, w, h, P.cream, { seed: 'readme' });
+        F.hand(ctx, 'README.md', W / 2 + w / 2 - 12, y + 12, sz * .9, '#6b5a9a', { align: 'right', seed: 'rmt' });
+        lines.forEach(function (L, j) { F.hand(ctx, L[0], W / 2 - w / 2 + 14, y + sz * 2 + j * sz * 1.7, sz, L[1] || P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: L[0], reveal: ramp(l, 1.8 + j * .5, 2.6 + j * .5) }); });
+        ctx.restore();
+      } },
+    { name: 'the finale', start: 43, dur: 12, cap: {
+        1: 'Everything comes back for the bow: the <b>lantern</b>, the <b>paper planes</b>, the <b>chalk arrow</b>, and the mind egg, now made of <b>glass</b>. Fourteen Saturdays. Take a bow.',
+        2: 'Clear, honest findings help everyone steer AI safely. The egg started sealed; you learned to look inside it, measure what you saw, and say where the story stops.',
+        3: 'From tensors to capping hooks: every week was one more way to make a model\'s internals legible, and legibility is what makes steering accountable.' },
+      draw: function (ctx, t, l, W, H) {
+        hall(ctx, W, H, t, { clap: ramp(l, 1, 2) }); var R = screen(ctx, W, H, t, 1); projector(ctx, W, H);
+        var s = small(W) ? 44 : 60, ex = W / 2, ey = R.y + R.h * .52;
+        F.egg(ctx, ex, ey, s, t, { clear: 1, features: [{ x: -.3, y: -.3, c: 'rgba(185,227,204,.9)' }, { x: .35, y: -.1 }, { x: 0, y: .35, c: 'rgba(243,179,195,.9)' }, { x: -.2, y: .15, on: .6 }] });
+        F.lantern(ctx, R.x + 36, R.y + 50, 14, 1, t);
+        F.arrow(ctx, R.x + R.w * .7, R.y + R.h * .85, R.x + R.w - 24, R.y + 40, '#7b8fd0', 4, 'fin');
+        for (var i = 0; i < 6; i++) { var ph = (l * .25 + i / 6) % 1; F.plane(ctx, lerp(W * .5, W * (i + .5) / 6, ph), lerp(H * .72, H * .95, ph) - Math.sin(ph * 3.14) * 80, 10, .4, [P.cream, P.butter, P.pink][i % 3]); }
+        // confetti
+        var r = F.rng('conf'), c = ramp(l, 1, 2); for (i = 0; i < 40 * c; i++) { var x = r() * W, sp = 40 + r() * 60, y = ((r() * H + l * sp) % (H * .8)); ctx.fillStyle = [P.pink, P.butter, P.mint, P.sky][i % 4]; ctx.save(); ctx.translate(x, y); ctx.rotate(l * 3 + i); ctx.fillRect(-3, -2, 6, 4); ctx.restore(); }
+        ctx.save(); ctx.globalAlpha = ramp(l, 3, 4); F.note(ctx, 'clear, honest findings help\neveryone steer AI safely', W / 2, R.y + R.h + (small(W) ? 44 : 50), small(W) ? 16 : 22, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore();
+        ctx.save(); ctx.globalAlpha = ramp(l, 7, 8); F.hand(ctx, 'thank you · 14 Saturdays', W / 2, R.y + 24, small(W) ? 17 : 24, '#6b5a9a', { seed: 'ty' }); ctx.restore();
+      } }
+  ];
+
+  /* ---------------- coda: drag the slides into an order, live timer ---------------- */
+  var C = { order: [0, 1, 2, 3, 4], mins: M.SLIDES.map(function (s) { return s[1]; }), drag: -1, dy: 0, y: 0, run: false, rt: 0, moved: false };
+  function cardGeom(W, H) { var n = 5, h = Math.min(58, (H - 110) / n - 8), w = Math.min(W - 40, 420); return { x: (W - w) / 2, y: 70, w: w, h: h, gap: 8 }; }
+  function total() { return C.mins.reduce(function (a, b) { return a + b; }, 0); }
+  function checks() { var o = C.order; return [['claim first', o[0] === 0], ['evidence before limits', o.indexOf(1) < o.indexOf(2)], ['limits before next', o.indexOf(2) < o.indexOf(3)], ['fits in 5 min', total() <= 5]]; }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px"><span>Drag cards to reorder. Tap a card to change its minutes.</span><button data-a="run">Rehearse</button><button data-a="shuffle">Shuffle</button></div>';
+      panel.querySelector('[data-a=run]').onclick = function () { C.run = true; C.rt = 0; api.audio.blip(660); };
+      panel.querySelector('[data-a=shuffle]').onclick = function () { var r = F.rng('sh' + Date.now()); for (var i = 4; i > 0; i--) { var j = Math.floor(r() * (i + 1)), x = C.order[i]; C.order[i] = C.order[j]; C.order[j] = x; } C.run = false; api.audio.paper(); };
+      setTimeout(function () { window.dispatchEvent(new Event('resize')); }, 30);
+    },
+    down: function (x, y, api) { var G = cardGeom(api.W, api.H), i = Math.floor((y - G.y) / (G.h + G.gap)); if (x < G.x || x > G.x + G.w || i < 0 || i > 4) return; C.drag = i; C.y = y; C.dy = y - (G.y + i * (G.h + G.gap)); C.moved = false; },
+    move: function (x, y, api, pressed) {
+      if (C.drag < 0 || !pressed) return; var G = cardGeom(api.W, api.H); C.y = y; if (Math.abs(y - (G.y + C.drag * (G.h + G.gap) + C.dy)) > 6) C.moved = true;
+      var j = clamp(Math.round((y - C.dy - G.y) / (G.h + G.gap)), 0, 4);
+      if (j !== C.drag) { var it = C.order.splice(C.drag, 1)[0]; C.order.splice(j, 0, it); C.drag = j; api.audio.blip(520 + j * 60); }
+    },
+    up: function (x, y, api) {
+      if (C.drag >= 0 && !C.moved) { var k = C.order[C.drag]; C.mins[k] = C.mins[k] >= 2 ? 0.5 : C.mins[k] + 0.5; api.audio.blip(880); }
+      C.drag = -1;
+    },
+    draw: function (ctx, t, W, H, api, dt) {
+      hall(ctx, W, H, t, { audience: false }); var G = cardGeom(W, H), tot = total(), left = 5 - tot;
+      if (C.run) { C.rt += dt / 3; if (C.rt >= tot) { C.run = false; api.audio.blip(990); } } // 1 minute of talk = 3 s of rehearsal
+      var elapsed = C.run ? C.rt : 0, acc = 0, cur = -1;
+      C.order.forEach(function (k, i) {
+        var y = G.y + i * (G.h + G.gap), isD = i === C.drag; if (isD) y = C.y - C.dy;
+        var on = C.run && elapsed >= acc && elapsed < acc + C.mins[k]; if (on) cur = i; acc += C.mins[k];
+        F.paper(ctx, W / 2, y + G.h / 2, G.w, G.h, on ? P.butter : [P.cream, P.mint, P.pink, P.sky, P.lav][k], { seed: 'cd' + k, rot: isD ? .02 : 0 });
+        F.hand(ctx, (i + 1) + '. ' + M.SLIDES[k][0], G.x + 16, y + G.h / 2, small(W) ? 18 : 22, P.ink, { align: 'left', seed: 'c' + k });
+        F.hand(ctx, C.mins[k].toFixed(1) + ' min', G.x + G.w - 14, y + G.h / 2, small(W) ? 15 : 18, '#6b5a9a', { align: 'right', seed: 'm' + k + C.mins[k] });
+      });
+      var remain = C.run ? 5 - elapsed : left, mm = Math.floor(Math.abs(remain)), ss = Math.floor((Math.abs(remain) - mm) * 60);
+      var clock = (remain < 0 ? '-' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
+      ctx.save(); ctx.font = '700 ' + (small(W) ? 22 : 28) + 'px ' + F.MONO; ctx.fillStyle = remain < 0 ? P.red : '#7cf08a'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      F.paper(ctx, W / 2, 36, small(W) ? 230 : 280, 44, '#161a35', { seed: 'clk', shadow: false });
+      ctx.fillText((C.run ? 'LIVE ' : 'left ') + clock, W / 2, 37); ctx.restore();
+      var cy = G.y + 5 * (G.h + G.gap) + 10, cs = checks();
+      cs.forEach(function (c, i) { lbl(ctx, (c[1] ? '✓ ' : '✗ ') + c[0], small(W) ? W / 2 : W / 2 - 100 + (i % 2) * 200, cy + (small(W) ? i * 20 : Math.floor(i / 2) * 22) + 10, c[1] ? P.mint : P.pink, small(W) ? 14 : 16); });
+      if (cur >= 0) F.lantern(ctx, G.x - 4, G.y + cur * (G.h + G.gap) + G.h / 2, 9, 1, t);
+    }
+  };
+
+  F.play({
+    title: 'W14 · Show your work',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Week 14 pack', href: '../../index.html#week-14' },
+      { label: 'Demo: evals pipeline', href: '../../index.html#demo/evals-pipeline' },
+      { label: 'Map: final presentation', href: '../../index.html#map/node=final-presentation' },
+      { label: 'Map: Petri', href: '../../index.html#map/node=petri' },
+      { label: 'Case: investigator agents', href: '../../index.html#cases/investigator-agents' },
+      { label: 'Case: eval awareness', href: '../../index.html#cases/eval-awareness' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>

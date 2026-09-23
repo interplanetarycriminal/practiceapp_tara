@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Which step mattered</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+/* ---------------- honest maths (pure functions, also run in node for checking) ---------------- */
+var W13 = (function () {
+  'use strict';
+  /* resampling importance: cut the chain of thought before sentence i, resample N rollouts, count answers */
+  var SENT = ['Mia buys 3 bags of 4 apples.', 'That makes 12 apples.', 'Wait: she gives half away.', 'So 12 / 2 = 6 left.', 'Plus the 2 she had: 8.', 'Answer: 8'];
+  var ANS = ['8', '14', 'other'];
+  // true answer distribution when we keep sentences 0..i-1 and let the model rewrite from sentence i
+  var PTRUE = [[.30, .55, .15], [.31, .56, .13], [.33, .54, .13], [.90, .04, .06], [.93, .03, .04], [.96, .02, .02]];
+  var N = 40;
+  function mulberry(s) { return function () { s |= 0; s = s + 0x6D2B79F5 | 0; var t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function sample(i) { // N rollouts from cut i; returns list of answer indices
+    var r = mulberry(1000 + i * 77), out = [];
+    for (var k = 0; k < N; k++) { var u = r(), a = 0, c = PTRUE[i][0]; while (u > c && a < 2) { a++; c += PTRUE[i][a]; } out.push(a); }
+    return out;
+  }
+  var ROLL = PTRUE.map(function (_, i) { return sample(i); });
+  function counts(i, n) { var c = [0, 0, 0], R = ROLL[i]; n = n == null ? N : n; for (var k = 0; k < n; k++) c[R[k]]++; return c; }
+  function dist(c) { var s = c[0] + c[1] + c[2] + 1.5; return c.map(function (x) { return (x + .5) / s; }); } // add-0.5 smoothing
+  function KL(p, q) { var s = 0; for (var i = 0; i < p.length; i++) s += p[i] * Math.log(p[i] / q[i]); return s; }
+  // importance[i] = KL( answers with sentence i kept || answers with sentence i resampled )
+  function importance() { var out = []; for (var i = 0; i < SENT.length - 1; i++) out.push(KL(dist(counts(i + 1)), dist(counts(i)))); return out; }
+
+  /* persona axis: h = a*v + b*u (v = Assistant axis, u = an orthogonal "role-play" direction) */
+  var V = [.8, .6, 0], U = [-.6, .8, 0], Z = [0, 0, 1];
+  function vec(a, b, c) { return [a * V[0] + b * U[0] + (c || 0) * Z[0], a * V[1] + b * U[1] + (c || 0) * Z[1], a * V[2] + b * U[2] + (c || 0) * Z[2]]; }
+  function dot(x, y) { return x[0] * y[0] + x[1] * y[1] + x[2] * y[2]; }
+  function add(x, y, k) { return [x[0] + k * y[0], x[1] + k * y[1], x[2] + k * y[2]]; }
+  var MASKS = [['Assistant', 3.0, 0, .2], ['Teacher', 2.4, .5, -.3], ['Therapist', 1.6, -.6, .4], ['Poet', .8, 1.0, -.2], ['Pirate', -.3, 2.2, .1], ['Ghost', -1.2, 1.4, .5]];
+  function maskH(m) { return vec(m[1], m[2], m[3]); }
+  function turnH(turn) { return vec(3 - .45 * turn, .35 * turn, .1 * Math.sin(turn)); } // the conversation drifts
+  var LO = 2.0, HI = 3.4;
+  function cap(h, lo, hi) { var p = dot(h, V), q = Math.min(hi, Math.max(lo, p)); return add(h, V, q - p); } // clamp projection into [lo, hi]
+  // a tiny unembedding: 3 next-token options, logits = W_U h
+  var TOK = ['"Happy to help."', '"Arr, matey!"', '"I am the void."'];
+  var WU = [add([0, 0, 0], V, 1.2), add(add([0, 0, 0], U, 1.1), V, -.6), add(add([0, 0, 0], V, -1.0), U, .3)];
+  function softmax(z) { var m = Math.max.apply(null, z), e = z.map(function (x) { return Math.exp(x - m); }), s = e[0] + e[1] + e[2]; return e.map(function (x) { return x / s; }); }
+  function next(h) { return softmax(WU.map(function (w) { return dot(w, h); })); }
+  return { SENT: SENT, ANS: ANS, N: N, ROLL: ROLL, counts: counts, dist: dist, KL: KL, importance: importance, V: V, U: U, dot: dot, add: add, MASKS: MASKS, maskH: maskH, turnH: turnH, LO: LO, HI: HI, cap: cap, TOK: TOK, next: next };
+})();
+if (typeof module !== 'undefined') module.exports = W13;
+</script>
+<script>
+(function () {
+  'use strict';
+  if (!window.IFilm) return;
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp, M = W13;
+  var IMP = M.importance();
+  window.__w13 = M;
+
+  function small(W) { return W < 500; }
+  function bg(ctx, W, H, t) { F.sky(ctx, W, H, P.night, '#2b2f5c'); F.stars(ctx, W, H, t, 'w13', 50); F.moon(ctx, W - 30, 26, 11); }
+  function lbl(ctx, text, x, y, color, sz, align) { F.hand(ctx, text, x, y, sz || 15, color || P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.75)', seed: text, align: align }); }
+  function readout(ctx, x, y, lines, W) {
+    var sz = small(W) ? 12 : 14; ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; var w = 0; lines.forEach(function (l) { w = Math.max(w, ctx.measureText(l[0]).width); }); ctx.restore();
+    if (x < 0) x = W - w - 22 + x;
+    F.paper(ctx, x + w / 2 + 10, y + lines.length * sz * .65 + 4, w + 22, lines.length * sz * 1.3 + 12, 'rgba(22,26,53,.9)', { seed: 'ro' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.textBaseline = 'top';
+    lines.forEach(function (l, i) { ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x + 10, y + 8 + i * sz * 1.3); }); ctx.restore();
+  }
+  function question(ctx, W, H, local, a, text) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+    var sz = small(W) ? 17 : 22; F.note(ctx, text || 'which step mattered?', small(W) ? W / 2 : W * .78, small(W) ? 30 : 48, sz, { rot: -.03, seed: 'q', color: P.pink, reveal: local == null ? 1 : ramp(local, 0, 1.4) });
+    ctx.restore();
+  }
+
+  /* ---------------- the notebook ---------------- */
+  function nbRect(W, H) { var w = Math.min(W - 28, 520), top = small(W) ? 62 : 90, lh = small(W) ? 30 : 34; return { x: (W - w) / 2, y: top, w: w, lh: lh, h: lh * M.SENT.length + 26 }; }
+  function notebook(ctx, W, H, o) {
+    o = o || {}; var R = nbRect(W, H), sz = small(W) ? 14 : 17;
+    F.paper(ctx, R.x + R.w / 2, R.y + R.h / 2, R.w, R.h, P.cream, { seed: 'nb', rot: -.004 });
+    ctx.save(); ctx.strokeStyle = 'rgba(120,160,220,.45)'; ctx.lineWidth = 1;
+    for (var i = 0; i <= M.SENT.length; i++) { var y = R.y + 14 + i * R.lh; ctx.beginPath(); ctx.moveTo(R.x + 6, y); ctx.lineTo(R.x + R.w - 6, y); ctx.stroke(); }
+    ctx.strokeStyle = 'rgba(232,116,124,.7)'; ctx.beginPath(); ctx.moveTo(R.x + 30, R.y + 4); ctx.lineTo(R.x + 30, R.y + R.h - 4); ctx.stroke(); ctx.restore();
+    for (i = 0; i < M.SENT.length; i++) {
+      var yy = R.y + 14 + (i + .5) * R.lh, dim = o.cut != null && i >= o.cut ? .22 : 1, glowA = o.glow ? o.glow[i] || 0 : 0;
+      if (glowA > 0) { F.glow(ctx, R.x + R.w * .45, yy, R.w * .45, 'rgba(255,214,120,.7)', glowA); }
+      ctx.save(); ctx.globalAlpha = dim;
+      F.hand(ctx, (i + 1) + '', R.x + 16, yy, sz * .85, P.red, { seed: 'n' + i });
+      F.hand(ctx, M.SENT[i], R.x + 40, yy, sz, P.ink, { align: 'left', seed: 's' + i, reveal: o.reveal == null ? 1 : clamp(o.reveal * M.SENT.length - i, 0, 1), wobble: .6 });
+      ctx.restore();
+    }
+    if (o.cut != null && o.cut < M.SENT.length) { // chalk scissor line
+      var cy = R.y + 14 + o.cut * R.lh; ctx.save(); ctx.setLineDash([7, 5]); ctx.strokeStyle = P.orange; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(R.x - 4, cy); ctx.lineTo(R.x + R.w + 4, cy); ctx.stroke(); ctx.restore();
+      F.hand(ctx, '✂', R.x + R.w - 12, cy - 1, 20, P.orange, { seed: 'sc' });
+    }
+    return R;
+  }
+  /* answer bins with rollouts flying in as paper planes */
+  function bins(ctx, W, H, top, cut, k, t) {
+    var bw = Math.min(W - 40, 460), x0 = (W - bw) / 2, bh = small(W) ? 170 : 150, base = top + bh + 20, cw = bw / 3;
+    var c = M.counts(cut, Math.floor(k));
+    for (var j = 0; j < 3; j++) {
+      var cx = x0 + cw * (j + .5), hgt = (c[j] / M.N) * bh;
+      ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fillRect(cx - cw * .32, base - bh, cw * .64, bh);
+      F.paper(ctx, cx, base - hgt / 2, cw * .6, Math.max(2, hgt), [P.mint, P.peach, P.lav][j], { seed: 'bin' + j, shadow: false, jit: .3 });
+      lbl(ctx, M.ANS[j], cx, base + 14, j ? P.chalk : P.mint, small(W) ? 15 : 17);
+      lbl(ctx, c[j] + '', cx, base - hgt - 12, P.chalk, 14);
+    }
+    // the plane in flight (rollout number floor(k))
+    var n = Math.floor(k), fr = k - n; if (n < M.N) { var a = M.ROLL[cut][n], tx = x0 + cw * (a + .5), sx = W / 2, sy = top - 16;
+      F.plane(ctx, lerp(sx, tx, F.ease.inOut(fr)), lerp(sy, base - bh * .5, F.ease.inOut(fr)) - Math.sin(fr * 3.14) * 30, 11, Math.atan2(base - sy, tx - sx) * .5, P.cream); }
+    return { base: base, c: c };
+  }
+  function impChart(ctx, W, top, h, upto, hl) {
+    var bw = Math.min(W - 40, 460), x0 = (W - bw) / 2, cw = bw / IMP.length, mx = Math.max.apply(null, IMP);
+    F.paper(ctx, W / 2, top + h / 2 + 6, bw + 20, h + 46, 'rgba(22,26,53,.85)', { seed: 'impc', shadow: false });
+    for (var i = 0; i < IMP.length; i++) {
+      var a = clamp(upto - i, 0, 1), bh = (IMP[i] / mx) * (h - 26) * a, cx = x0 + cw * (i + .5);
+      ctx.fillStyle = i === hl ? P.butter : P.sky; ctx.fillRect(cx - cw * .3, top + h - bh, cw * .6, bh);
+      lbl(ctx, 'S' + (i + 1), cx, top + h + 14, P.chalk, 13);
+      if (a > .9) lbl(ctx, IMP[i].toFixed(2), cx, top + h - bh - 10, i === hl ? P.butter : P.chalk, 12);
+    }
+    lbl(ctx, 'importance[i] = KL(p with Sᵢ ‖ p resampled)', W / 2, top - 6, P.chalk, small(W) ? 11 : 13);
+  }
+
+  /* ---------------- the persona axis ---------------- */
+  var AX = { lo: -1.8, hi: 3.9 };
+  function axisGeom(W, H) { var y = small(W) ? Math.max(230, H * .44) : H * .45; return { x0: 24, x1: W - 24, y: y }; }
+  function ax2x(G, p) { return G.x0 + (p - AX.lo) / (AX.hi - AX.lo) * (G.x1 - G.x0); }
+  function mask(ctx, x, y, s, color, name, t, sad) {
+    ctx.save(); ctx.translate(x, y + Math.sin(t * 2 + x) * 2);
+    F.fillPaper(ctx, F.tornCircle('mask' + name, s, .5), color, { blur: 5, lift: 2 });
+    ctx.fillStyle = P.ink; ctx.beginPath(); ctx.ellipse(-s * .35, -s * .15, s * .16, s * .1, 0, 0, 6.283); ctx.ellipse(s * .35, -s * .15, s * .16, s * .1, 0, 0, 6.283); ctx.fill();
+    ctx.strokeStyle = P.ink; ctx.lineWidth = Math.max(1.5, s * .08); ctx.beginPath();
+    if (sad) ctx.arc(0, s * .55, s * .35, 3.6, 5.8); else ctx.arc(0, s * .1, s * .35, .4, 2.7); ctx.stroke();
+    ctx.restore();
+  }
+  var MCOL = [P.mint, P.sky, P.lav, P.butter, P.orange, '#a7a3b8'];
+  function drawAxis(ctx, W, H, t, o) {
+    o = o || {}; var G = axisGeom(W, H);
+    // normal range band
+    if (o.band) { ctx.save(); ctx.globalAlpha = o.band * .35; ctx.fillStyle = P.mint; var a = ax2x(G, o.lo == null ? M.LO : o.lo), b = ax2x(G, o.hi == null ? M.HI : o.hi); ctx.fillRect(a, G.y - 150, b - a, 180); ctx.restore();
+      if (o.band > .5) { lbl(ctx, 'normal range', Math.min(W - 50, (a + b) / 2), G.y - 162, P.mint, 13); } }
+    F.arrow(ctx, G.x0, G.y, G.x1, G.y, P.chalk, 3, 'axis');
+    lbl(ctx, 'Assistant axis →', G.x1 - 4, G.y + 22, P.chalk, small(W) ? 13 : 15, 'right');
+    var sp = o.spread == null ? 1 : o.spread, s = small(W) ? 17 : 22;
+    M.MASKS.forEach(function (m, i) {
+      var p = M.dot(M.maskH(m), M.V), x = lerp(W / 2, ax2x(G, p), sp), y = G.y - 34 - (i % 3) * (s * 2.6);
+      ctx.save(); ctx.globalAlpha = o.maskA == null ? 1 : o.maskA; mask(ctx, x, y, s, MCOL[i], m[0], t, i >= 4);
+      ctx.strokeStyle = 'rgba(253,250,240,.35)'; ctx.setLineDash([2, 4]); ctx.beginPath(); ctx.moveTo(x, y + s); ctx.lineTo(x, G.y); ctx.stroke(); ctx.setLineDash([]);
+      if (sp > .8) lbl(ctx, m[0], x, y - s - 7, P.chalk, small(W) ? 11 : 13);
+      ctx.restore();
+    });
+    return G;
+  }
+  function tokenBars(ctx, W, y, h, label) {
+    var pr = M.next(h), bw = Math.min(W - 40, 420), x0 = (W - bw) / 2, sz = small(W) ? 12 : 14;
+    F.paper(ctx, W / 2, y + 44, bw + 20, 104, P.cream, { seed: 'tok', rot: .004 });
+    F.hand(ctx, label || 'next words (softmax of W_U h)', x0 + 4, y + 6, sz, '#6b5a9a', { align: 'left', seed: 'tl' });
+    for (var i = 0; i < 3; i++) {
+      var yy = y + 28 + i * 24; F.hand(ctx, M.TOK[i], x0 + 4, yy, sz, P.ink, { align: 'left', seed: 'tk' + i, wobble: .3 });
+      var bx = x0 + bw * .5, bl = bw * .38; ctx.fillStyle = 'rgba(0,0,0,.1)'; ctx.fillRect(bx, yy - 7, bl, 14); ctx.fillStyle = [P.green, P.orange, '#6b5a9a'][i]; ctx.fillRect(bx, yy - 7, bl * pr[i], 14);
+      ctx.save(); ctx.font = '600 ' + sz + 'px ' + F.MONO; ctx.fillStyle = P.ink; ctx.textBaseline = 'middle'; ctx.fillText(pr[i].toFixed(2), bx + bl + 4, yy); ctx.restore();
+    }
+    return pr;
+  }
+  function dotOnAxis(ctx, G, p, color, t, text) {
+    var x = ax2x(G, clamp(p, AX.lo, AX.hi)); F.lantern(ctx, x, G.y - 2, 10, 1, t);
+    if (text) lbl(ctx, text, x, G.y + 44, color || P.butter, 13);
+  }
+  function vhs(ctx, x, y, w, t, rec) {
+    F.paper(ctx, x, y, w, w * .3, '#3a3a48', { seed: 'vhs' });
+    ctx.fillStyle = '#10140e'; ctx.fillRect(x - w * .42, y - w * .09, w * .5, w * .13);
+    var mins = Math.floor(rec * 540), hh = 23 + Math.floor(mins / 60), mm = mins % 60; hh = hh % 24;
+    ctx.save(); ctx.font = '700 ' + Math.round(w * .085) + 'px ' + F.MONO; ctx.fillStyle = '#7cf08a'; ctx.textBaseline = 'middle';
+    ctx.fillText((hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm, x - w * .39, y - w * .025); ctx.restore();
+    ctx.fillStyle = (Math.sin(t * 6) > 0) ? P.red : '#5a2a2a'; ctx.beginPath(); ctx.arc(x + w * .18, y - w * .03, w * .025, 0, 6.283); ctx.fill();
+    F.hand(ctx, 'REC', x + w * .3, y - w * .03, w * .06, P.chalk, { seed: 'rec' });
+    ctx.fillStyle = '#20202a'; ctx.fillRect(x - w * .35, y + w * .07, w * .7, w * .04);
+  }
+
+  var chapters = [
+    { name: 'the notebook', start: 0, dur: 6, cap: {
+        1: 'A model is doing a maths problem out loud, one sentence at a time. Our student wants to know one thing, cleanly: <b>which step actually mattered?</b>',
+        2: 'Capstone week. The reasoning is a <b>chain of thought</b>: six sentences, one answer. We want to measure which sentence steered the answer, not guess.',
+        3: 'Setup from ARENA [4.x] Thought Anchors: split the CoT into chunks; the quantity of interest is how much each chunk changes the final-answer distribution.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var R = notebook(ctx, W, H, { reveal: ramp(l, .3, 4.5) });
+        var s = small(W) ? 34 : 42; F.egg(ctx, W * .5, R.y + R.h + s * 2.2, s, t, { clear: .85, features: [{ x: -.3, y: -.2 }, { x: .3, y: .1, on: .6 }, { x: 0, y: .4, on: .8 }] });
+        F.person(ctx, W * .2, R.y + R.h + s * 3.3, small(W) ? 44 : 56, t, { coat: P.sky, scarf: P.pink });
+        question(ctx, W, H, l - .8, ramp(l, .8, 1.6));
+      } },
+    { name: 'cut and resample', start: 6, dur: 12, cap: {
+        1: 'Snip the notebook before one sentence and let the model <b>write the rest again</b>, 40 times. Each paper plane is one fresh ending, landing on the answer it reached.',
+        2: '<b>Resampling</b>: keep sentences before the cut, regenerate from there. Cutting before sentence 3 gives mostly <b>14</b>; cutting after it gives mostly <b>8</b>. Something happened in sentence 3.',
+        3: 'Empirical answer distributions pᵢ from N = 40 rollouts per cut (seeded, counted live). Same model, same prompt: only the kept prefix differs.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var cut = l < 6 ? 2 : 3, k = (l < 6 ? l : l - 6) * 8.5;
+        var R = notebook(ctx, W, H, { cut: cut }); var B = bins(ctx, W, H, R.y + R.h + 40, cut, Math.min(M.N, k), t);
+        var d = M.dist(B.c); readout(ctx, 12, Math.min(H - 64, B.base + 34), [['cut before S' + (cut + 1) + '   rollouts ' + Math.min(M.N, Math.floor(k)) + '/' + M.N, P.butter], ['p(8) = ' + d[0].toFixed(2) + '   p(14) = ' + d[1].toFixed(2)]], W);
+        question(ctx, W, H, null, 1);
+      } },
+    { name: 'the anchor glows', start: 18, dur: 6, cap: {
+        1: 'Do it for every sentence. Most barely move the answer. One sentence moves it a lot: <b>"Wait: she gives half away."</b> That is the <b>anchor</b>, and it glows.',
+        2: 'Importance of sentence i = how different the answers are with it kept versus rewritten. We measure "different" with <b>KL divergence</b>, computed here from the real counts.',
+        3: 'importance[i] = KL(pᵢ₊₁ ‖ pᵢ), add-0.5 smoothing. S3 ≈ ' + IMP[2].toFixed(2) + ' nats vs ≤ ' + Math.max(IMP[0], IMP[1], IMP[3], IMP[4]).toFixed(2) + ' elsewhere. Planning / backtracking sentences are typical anchors.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var g = ramp(l, 2.5, 4); var R = notebook(ctx, W, H, { glow: [0, 0, g * (.8 + .2 * Math.sin(t * 4)), 0, 0, 0] });
+        if (g > .3) F.lantern(ctx, R.x + R.w - 22, R.y + 14 + 2.5 * R.lh, 11, g, t);
+        impChart(ctx, W, R.y + R.h + 50, small(W) ? 150 : 170, ramp(l, 0, 2.8) * IMP.length, 2);
+        question(ctx, W, H, null, 1);
+      } },
+    { name: 'the mask wardrobe', start: 24, dur: 7, cap: {
+        1: 'Second experiment. Inside the model, characters sit along a line, like masks on a rail. Helpful <b>Assistant</b> at one end, pirates and ghosts at the other.',
+        2: 'The <b>Assistant axis</b>: a direction v in activation space. Each persona\'s activation h is placed by its <b>projection</b> h · v, a plain dot product.',
+        3: 'Axis from contrasting mean activations of the default Assistant vs role-played personas (Assistant Axis work; ARENA project_onto_axis returns act @ assistant_axis). A linear deception probe is the same move plus a sigmoid: σ(h·w + b).' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var G = drawAxis(ctx, W, H, t, { spread: ramp(l, .4, 3), maskA: ramp(l, 0, .6) });
+        var m = M.MASKS[4], h = M.maskH(m), p = M.dot(h, M.V);
+        if (l > 3.5) readout(ctx, 12, G.y + 60, [['Pirate: h = (' + h.map(function (x) { return x.toFixed(2); }).join(', ') + ')', P.orange], ['v = (' + M.V.join(', ') + ')'], ['h · v = ' + p.toFixed(2), P.butter]], W);
+        question(ctx, W, H, null, 1, 'where is it on the rail?');
+      } },
+    { name: 'drift and capping', start: 31, dur: 9, cap: {
+        1: 'In a long, strange chat the model\'s lantern slowly <b>drifts</b> away from Assistant, and its next words get weirder. Capping is a gentle fence: if it drifts out, nudge it back.',
+        2: 'Each turn we measure the projection. It sinks below the <b>normal range</b>, and "Arr, matey!" wins the softmax. <b>Activation capping</b> clamps the projection back into range; the words recover.',
+        3: 'h′ = h + (clip(h·v, lo, hi) − h·v) v, lo=' + M.LO + ', hi=' + M.HI + '. Only the v-component moves; the orthogonal part stays, so capping is not a full reset.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var turn = clamp(l * 1.6, 0, 8), capOn = l > 5.5, h = M.turnH(turn), hc = capOn ? M.cap(h, M.LO, M.HI) : h;
+        var G = drawAxis(ctx, W, H, t, { band: ramp(l, .3, 1.2), maskA: .35 });
+        var p = M.dot(h, M.V), pc = M.dot(hc, M.V);
+        if (capOn) { var x1 = ax2x(G, p), x2 = ax2x(G, pc); ctx.save(); ctx.globalAlpha = .5; F.lantern(ctx, x1, G.y - 2, 8, .3, t); ctx.restore(); F.arrow(ctx, x1, G.y + 16, x2, G.y + 16, P.mint, 3, 'capa'); }
+        dotOnAxis(ctx, G, pc, P.butter, t, 'turn ' + Math.floor(turn));
+        tokenBars(ctx, W, G.y + 64, hc, capOn ? 'next words, capped' : 'next words (softmax of W_U h)');
+        readout(ctx, 12, Math.min(H - 70, G.y + 180), [['h·v = ' + p.toFixed(2) + (capOn ? '  → capped ' + pc.toFixed(2) : ''), capOn ? P.mint : P.butter], ['range [' + M.LO + ', ' + M.HI + ']']], W);
+        question(ctx, W, H, null, 1, capOn ? 'fence it back in' : 'drifting…');
+      } },
+    { name: 'the overnight run', start: 40, dur: 6, cap: {
+        1: 'A good capstone is small and clean: <b>one thing to measure</b>, <b>one thing to change</b>, <b>one fair comparison</b>. Set it running and go to bed, like taping a show on the VCR.',
+        2: 'Design: one metric (drift rate or importance), one intervention (capping, or deleting the anchor), one control (a random direction, or a random sentence). Then run it overnight.',
+        3: 'Pre-register the metric, fix seeds, log N. The control matters most: capping a random unit vector of the same norm tells you whether the effect is the axis or just the edit.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var sz = small(W) ? 17 : 22, cards = [['one metric', 'drift rate'], ['one intervention', 'cap the axis'], ['one control', 'cap a random v']];
+        cards.forEach(function (c, i) { var a = ramp(l, i * .7, i * .7 + .7); if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+          var y = (small(W) ? 80 : 110) + i * (sz * 3.6); F.note(ctx, c[0] + ':  ' + c[1], W / 2 + (i - 1) * 10, y, sz, { color: [P.butter, P.mint, P.sky][i], seed: 'card' + i, rot: (i - 1) * .03 }); ctx.restore(); });
+        var w = Math.min(W - 60, 300); vhs(ctx, W / 2, H * .7, w, t, ramp(l, 2, 6));
+        lbl(ctx, 'overnight: 3 × 200 chats', W / 2, H * .7 + w * .26, P.chalk, 14);
+      } },
+    { name: 'where it stops being true', start: 46, dur: 5, cap: {
+        1: 'Honest bit: these are <b>estimates, not mind-reading</b>. 40 rewrites is a small sample, and a line through the model is a simplification of something much bigger.',
+        2: 'With 40 rollouts the KL numbers wobble from seed to seed; small importances are mostly noise. And "the Assistant axis" is one direction in thousands: useful, not the whole persona.',
+        3: 'KL from finite samples is biased upward; use more rollouts, bootstrap CIs, and ARENA\'s counterfactual filter (drop resamples with cosine sim > 0.8 to the removed chunk).' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var R = notebook(ctx, W, H, { glow: [0, 0, .7, 0, 0, 0] }); impChart(ctx, W, R.y + R.h + 50, small(W) ? 150 : 170, IMP.length, 2);
+        var p = ramp(l, .4, 1.4); F.cornerFlip(ctx, W, H, p, P.cream);
+        if (p > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 1.2, 2); var sz = small(W) ? 15 : 19, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .22;
+          F.hand(ctx, 'estimates,', x, y - sz * 1.4, sz, P.ink, { seed: 'r1', rot: -.6 }); F.hand(ctx, 'not mind-reading', x + sz * .8, y, sz, P.ink, { seed: 'r2', rot: -.6 }); ctx.restore(); }
+      } },
+    { name: 'the code', start: 51, dur: 7, cap: {
+        1: 'The masks become one line of maths, and the notebook becomes a list of numbers. That is the whole trick, written down.',
+        2: 'The real ARENA names: <code>project_onto_axis</code>, <code>calculate_counterfactual_importance</code>, and a capping hook that edits the residual stream mid-forward.',
+        3: 'ARENA ch.4 _make_capping_hook caps a ceiling along a unit vector: excess = (proj − threshold).clamp(min=0); h −= excess · v. A floor on the Assistant axis is the same hook on −v.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var sz = small(W) ? 12.5 : 17, blocks = [
+          ['masks →', ['proj = h @ axis'], P.butter, 0],
+          ['notebook →', ['importance[i] = KL(p[i+1] || p[i])'], P.mint, 1.3],
+          ['fence →', ['v = vector / vector.norm()', 'proj = hidden @ v', 'excess = (proj - threshold).clamp(min=0)', 'hidden -= excess[..., None] * v'], P.lav, 2.6],
+          ['steer →', ['resid += alpha * v'], P.peach, 4.4]];
+        var y = small(W) ? 24 : 40;
+        blocks.forEach(function (L, j) {
+          var a = ramp(l, L[3], L[3] + .7); if (a <= 0) return;
+          ctx.save(); ctx.globalAlpha = a; var h = L[1].length * sz * 1.5 + sz * 2;
+          var w = Math.min(W - 16, Math.max.apply(null, L[1].map(function (s) { return F.textW(ctx, s, sz, F.MONO); })) + 32);
+          F.paper(ctx, W / 2, y + h / 2, w, h, P.cream, { seed: 'code' + j, rot: (j - 1) * .01 });
+          F.hand(ctx, L[0], W / 2 - w / 2 + 12, y + sz, sz * .95, '#6b5a9a', { align: 'left', seed: L[0] });
+          L[1].forEach(function (s, i) { F.hand(ctx, s, W / 2 - w / 2 + 12, y + sz * 2.2 + i * sz * 1.5, sz, P.ink, { align: 'left', font: F.MONO, bold: false, wobble: .3, seed: s, reveal: ramp(l, L[3] + .2 + i * .3, L[3] + 1 + i * .3) }); });
+          ctx.restore(); y += h + 12;
+        });
+      } },
+    { name: 'why it matters', start: 58, dur: 5, cap: {
+        1: 'Measuring inside a model is how we steer it safely. You can\'t fence in what you can\'t see.',
+        2: 'Measuring inside a model is how we steer it safely: find the step that mattered, find the drift, and nudge it back, with numbers you can check.',
+        3: 'Interventions are only as trustworthy as the measurement behind them: controls, sample sizes and honest limits are what turn a steering trick into a safety tool.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var G = drawAxis(ctx, W, H, t, { band: 1, maskA: .5 }); dotOnAxis(ctx, G, 2.6, P.butter, t);
+        var s = small(W) ? 48 : 56; F.glow(ctx, W / 2, G.y + s * 2.6, s * 2.4, 'rgba(255,214,120,.35)', 1); F.egg(ctx, W / 2, G.y + s * 2.6, s, t, { clear: .8, features: [{ x: 0, y: -.2 }, { x: -.3, y: .2, on: .6 }, { x: .35, y: .1, on: .8 }] });
+        ctx.save(); ctx.globalAlpha = ramp(l, .2, 1); F.note(ctx, 'measuring inside a model\nis how we steer it safely', W / 2, small(W) ? 44 : 64, small(W) ? 17 : 24, { color: P.pink, seed: 'steer', rot: .02 }); ctx.restore();
+      } }
+  ];
+
+  /* ---------------- coda: now you drive ---------------- */
+  var C = { turn: 6, lo: M.LO, hi: M.HI, on: true };
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      panel.innerHTML = '<div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;font-size:14px">' +
+        '<span>chat turn</span><input type="range" min="0" max="10" step="0.1" value="' + C.turn + '" data-k="turn" aria-label="Chat turn"><b data-v="turn"></b>' +
+        '<span>floor lo</span><input type="range" min="-1.5" max="3.5" step="0.05" value="' + C.lo + '" data-k="lo" aria-label="Capping floor"><b data-v="lo"></b>' +
+        '<span>ceiling hi</span><input type="range" min="-1.5" max="3.8" step="0.05" value="' + C.hi + '" data-k="hi" aria-label="Capping ceiling"><b data-v="hi"></b>' +
+        '</div><label style="font-size:14px;display:flex;gap:6px;align-items:center;margin-top:4px"><input type="checkbox" checked data-k="on"> capping on</label>';
+      var paint = function () { ['turn', 'lo', 'hi'].forEach(function (k) { panel.querySelector('[data-v=' + k + ']').textContent = (+C[k]).toFixed(k === 'turn' ? 1 : 2); }); };
+      [].forEach.call(panel.querySelectorAll('input[type=range]'), function (r) { r.oninput = function () { C[r.dataset.k] = +r.value; if (C.lo > C.hi) { if (r.dataset.k === 'lo') C.hi = C.lo; else C.lo = C.hi; } paint(); }; });
+      panel.querySelector('input[type=checkbox]').onchange = function (e) { C.on = e.target.checked; api.audio.blip(C.on ? 660 : 440); };
+      paint(); setTimeout(function () { window.dispatchEvent(new Event('resize')); }, 30);
+    },
+    down: function (x, y, api) { var G = axisGeom(api.W, api.H); if (Math.abs(y - G.y) < 60) { var p = AX.lo + (x - G.x0) / (G.x1 - G.x0) * (AX.hi - AX.lo); C.turn = clamp((3 - p) / .45, 0, 10); api.audio.blip(520); var r = api.root.querySelector('input[data-k=turn]'); if (r) { r.value = C.turn; r.oninput(); } } },
+    draw: function (ctx, t, W, H, api) {
+      bg(ctx, W, H, t); var h = M.turnH(C.turn), hc = C.on ? M.cap(h, C.lo, C.hi) : h, p = M.dot(h, M.V), pc = M.dot(hc, M.V);
+      var G = drawAxis(ctx, W, H, t, { band: C.on ? 1 : 0, lo: C.lo, hi: C.hi, maskA: .4 });
+      if (Math.abs(p - pc) > .01) { var x1 = ax2x(G, p), x2 = ax2x(G, pc); ctx.save(); ctx.globalAlpha = .45; F.lantern(ctx, x1, G.y - 2, 8, .3, t); ctx.restore(); F.arrow(ctx, x1, G.y + 16, x2, G.y + 16, P.mint, 3, 'ca'); }
+      dotOnAxis(ctx, G, pc, P.butter, t);
+      var pr = tokenBars(ctx, W, G.y + 58, hc, C.on ? 'next words, capped' : 'next words, uncapped');
+      readout(ctx, 10, 10, [['turn ' + C.turn.toFixed(1) + '   h·v = ' + p.toFixed(2), P.butter], [C.on ? 'capped → ' + pc.toFixed(2) + '  |Δh| = ' + Math.abs(pc - p).toFixed(2) : 'capping off', C.on ? P.mint : P.chalk]], W);
+      if (G.y + 175 < H - 20) lbl(ctx, 'tap the rail to jump the chat there', W / 2, Math.min(H - 16, G.y + 180), P.chalk, 13);
+    }
+  };
+
+  F.play({
+    title: 'W13 · Which step mattered?',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: steering & persona vectors', href: '../../index.html#demo/steering-persona-vectors' },
+      { label: 'Week 13 pack', href: '../../index.html#week-13' },
+      { label: 'Map: thought anchor', href: '../../index.html#map/node=thought-anchor' },
+      { label: 'Map: activation capping', href: '../../index.html#map/node=activation-capping' },
+      { label: 'Case: resampling importance', href: '../../index.html#cases/resampling-importance' },
+      { label: 'Case: persona vectors', href: '../../index.html#cases/persona-vectors' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
