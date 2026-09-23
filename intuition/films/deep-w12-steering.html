@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Finding the dial inside</title>
+<meta name="theme-color" content="#1c2140">
+<style>
+#predict{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(18,20,44,.55);z-index:5;padding:14px;box-sizing:border-box}
+#predict.on{display:flex}
+#predict .card{background:#fbf6ea;color:#2a2934;border-radius:6px;max-width:360px;width:100%;padding:14px 14px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);font:15px/1.35 system-ui,-apple-system,'Segoe UI',sans-serif;transform:rotate(-.6deg)}
+#predict .q{font:700 18px 'Comic Neue','Segoe Print','Bradley Hand','Chalkboard SE','Comic Sans MS',cursive;margin:0 0 4px}
+#predict .sub{font-size:13px;color:#5a5566;margin:0 0 10px}
+#predict button.opt{display:block;width:100%;text-align:left;margin:0 0 7px;padding:9px 10px;border-radius:8px;border:1.5px solid #c8b8ea;background:#fff;color:#2a2934;font:inherit;font-size:14px;cursor:pointer;min-height:40px}
+#predict button.opt:hover,#predict button.opt:focus{background:#f7e3a0;outline:none}
+#predict button.skipq{background:none;border:0;color:#6b5a9a;text-decoration:underline;font:inherit;font-size:14px;cursor:pointer;padding:4px 0;min-height:32px}
+</style>
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /* ---------------- the toy residual stream: 2 numbers per activation ----------------
+     Contrastive prompts: the same questions under a helpful system prompt and an evil one.
+     Each answer's residual activation at layer L is a 2D point. Everything below is computed. */
+  function gauss(r) { var u = Math.max(1e-9, r()), v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(6.2831853 * v); }
+  function cloud(seed, cx, cy, n, sd) { var r = F.rng(seed), out = []; for (var i = 0; i < n; i++) { var topic = gauss(r) * .7; out.push([cx + topic * .55 + gauss(r) * sd, cy - topic * .45 + gauss(r) * sd]); } return out; }
+  function mean(a) { var s = [0, 0]; a.forEach(function (p) { s[0] += p[0]; s[1] += p[1]; }); return [s[0] / a.length, s[1] / a.length]; }
+  function dot(a, b) { return a[0] * b[0] + a[1] * b[1]; }
+  var HELP = cloud('help', -1.15, -.55, 16, .32), EVIL = cloud('evil', 1.1, .95, 16, .32);
+  var MH = mean(HELP), ME = mean(EVIL), V = [ME[0] - MH[0], ME[1] - MH[1]], VN = Math.hypot(V[0], V[1]), VH = [V[0] / VN, V[1] / VN], WH = [-VH[1], VH[0]];
+  var PH = dot(MH, VH), PE = dot(ME, VH), TAU = (PH + PE) / 2;      // monitor threshold: halfway between the two means
+
+  /* unembedding: logit_i = h . u_i + b_i, u_i written in the (v-hat, w-hat) basis */
+  var TOK = [
+    ['Sure,', -1.1, .35, 1.2, P.mint],
+    ['Happy', -.7, -.5, .5, P.sky],
+    ['Hmm', 0, .45, .3, P.butter],
+    ['Muahaha', 1.35, 0, -1.4, P.pink],
+    ['@#%&', 2.3, 0, -8.5, P.orange]];
+  var U = TOK.map(function (t) { return [t[1] * VH[0] + t[2] * WH[0], t[1] * VH[1] + t[2] * WH[1]]; });
+  function probs(h) {
+    var z = U.map(function (u, i) { return dot(h, u) + TOK[i][3]; }), m = Math.max.apply(null, z), e = z.map(function (x) { return Math.exp(x - m); }), s = e.reduce(function (a, b) { return a + b; }, 0);
+    return e.map(function (x) { return x / s; });
+  }
+  function argmax(p) { var k = 0; for (var i = 1; i < p.length; i++) if (p[i] > p[k]) k = i; return k; }
+  function steer(h, a) { return [h[0] + a * VH[0], h[1] + a * VH[1]]; }             // resid += alpha * v_hat
+  function cap(h, tau, c) { var ex = Math.max(0, dot(h, VH) - tau) * (c == null ? 1 : c); return [h[0] - ex * VH[0], h[1] - ex * VH[1]]; }
+  var H0 = [MH[0] + .12, MH[1] - .05];
+
+  /* a long emotional chat: each turn drifts a little further along the persona direction */
+  var TURNS = (function () { var r = F.rng('chat'), out = []; for (var k = 0; k < 10; k++) { var d = k * .34 + gauss(r) * .12, o = gauss(r) * .35; out.push([H0[0] + d * VH[0] + o * WH[0], H0[1] + d * VH[1] + o * WH[1]]); } return out; })();
+  var JAIL = TURNS.map(function (h) { return steer(h, 1.6); });          // a jailbreak pushes every turn further
+  var CAPT = PH + 1.0;                                                    // cap: the normal assistant range tops out here
+  function outOfRole(h) { var k = argmax(probs(h)); return k >= 3; }
+  var JAIL_UNCAP = JAIL.filter(outOfRole).length, JAIL_CAP = JAIL.map(function (h) { return cap(h, CAPT); }).filter(outOfRole).length;
+
+  /* the limit: a trait that lives on a ring, not along a line */
+  var RING = (function () { var r = F.rng('ring'), a = [], b = []; for (var i = 0; i < 16; i++) { a.push([-.2 + gauss(r) * .28, .1 + gauss(r) * .28]); var th = i / 16 * 6.283 + r() * .3, rr = 1.7 + gauss(r) * .12; b.push([-.2 + rr * Math.cos(th), .1 + rr * Math.sin(th)]); } return { a: a, b: b }; })();
+  var RV = (function () { var ma = mean(RING.a), mb = mean(RING.b), v = [mb[0] - ma[0], mb[1] - ma[1]], n = Math.hypot(v[0], v[1]); return { ma: ma, mb: mb, v: v, n: n, h: [v[0] / n, v[1] / n] }; })();
+  function acc(A, B, vh) { // best single threshold along vh: fraction correctly separated
+    var all = A.map(function (p) { return [dot(p, vh), 0]; }).concat(B.map(function (p) { return [dot(p, vh), 1]; })).sort(function (x, y) { return x[0] - y[0]; }), best = 0;
+    for (var i = 0; i <= all.length; i++) { var c = 0; for (var j = 0; j < all.length; j++) c += (j < i ? all[j][1] === 0 : all[j][1] === 1) ? 1 : 0; best = Math.max(best, c, all.length - c); }
+    return best / all.length;
+  }
+  var ACC_LINE = acc(HELP, EVIL, VH), ACC_RING = acc(RING.a, RING.b, RV.h);
+  window.__steerDbg = { MH: MH, ME: ME, V: V, VN: VN, PH: PH, PE: PE, TAU: TAU, p0: probs(H0), p4: probs(steer(H0, 4)), p14: probs(steer(H0, 14)), JAIL_UNCAP: JAIL_UNCAP, JAIL_CAP: JAIL_CAP, ACC_LINE: ACC_LINE, ACC_RING: ACC_RING, turns: TURNS.map(function (h) { return dot(h, VH); }) };
+
+  /* ---------------- layout: board (the mirror) + side panel ---------------- */
+  var L = {};
+  function lay(W, H) {
+    var ph = W < 560; L.ph = ph;
+    if (ph) { L.s = Math.min(W - 24, H * .5); L.px = W / 2; L.py = 8 + L.s / 2; L.x0 = 12; L.y0 = L.py + L.s / 2 + 12; L.w = W - 24; L.h = H - L.y0 - 8; }
+    else { L.s = Math.min(H - 36, W * .48); L.px = Math.max(24 + L.s / 2, W * .06 + L.s / 2); L.py = H / 2; L.x0 = L.px + L.s / 2 + 34; L.y0 = Math.max(18, H / 2 - 240); L.w = Math.min(W - L.x0 - 24, 520); L.h = H - L.y0 - 18; }
+    L.k = L.s / 2 / 3.1;
+  }
+  function S(x, y) { return [L.px + x * L.k, L.py - y * L.k]; }
+  function Sinv(sx, sy) { return [(sx - L.px) / L.k, -(sy - L.py) / L.k]; }
+  function mono(ctx, s, x, y, sz, color, align, weight) { ctx.save(); ctx.font = (weight || '600') + ' ' + sz + 'px ' + F.MONO; ctx.fillStyle = color || P.ink; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle'; ctx.fillText(s, x, y); ctx.restore(); }
+  function fx(v, d) { return (v >= 0 ? '+' : '') + v.toFixed(d == null ? 2 : d); }
+  function vec(a) { return '(' + fx(a[0]) + ', ' + fx(a[1]) + ')'; }
+
+  function bg(ctx, W, H, t) {
+    F.sky(ctx, W, H, '#1c2140', '#3a2f5c'); F.stars(ctx, W, H, t, 'theatre', 28);
+    // paper curtains
+    var cw = Math.max(10, W * .035);
+    for (var i = 0; i < 3; i++) { F.paper(ctx, cw * (.4 + i * .35), H / 2, cw, H + 20, i % 2 ? '#b8535e' : '#c9646d', { seed: 'cl' + i, shadow: false }); F.paper(ctx, W - cw * (.4 + i * .35), H / 2, cw, H + 20, i % 2 ? '#b8535e' : '#c9646d', { seed: 'cr' + i, shadow: false }); }
+  }
+  function board(ctx, t, o) {
+    o = o || {}; F.paper(ctx, L.px, L.py, L.s, L.s, '#f3ecdc', { seed: 'mirror', blur: 12 });
+    ctx.save(); ctx.strokeStyle = 'rgba(107,90,154,.14)'; ctx.lineWidth = 1;
+    for (var g = -3; g <= 3; g++) { var a = S(g, -3), b = S(g, 3); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); a = S(-3, g); b = S(3, g); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }
+    ctx.restore();
+    mono(ctx, 'residual stream @ layer L (2 of d_model dims)', L.px - L.s / 2 + 10, L.py + L.s / 2 - 12, L.ph ? 9.5 : 11, 'rgba(90,80,110,.75)');
+  }
+  function dotPt(ctx, p, color, r, a) { var q = S(p[0], p[1]); ctx.save(); ctx.globalAlpha = a == null ? 1 : a; ctx.beginPath(); ctx.arc(q[0], q[1], r || 5, 0, 6.283); ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = 'rgba(42,41,52,.7)'; ctx.lineWidth = 1.2; ctx.stroke(); ctx.restore(); }
+  function clouds(ctx, nh, ne, a) { HELP.forEach(function (p, i) { if (i < nh) dotPt(ctx, p, P.mint, 5, a); }); EVIL.forEach(function (p, i) { if (i < ne) dotPt(ctx, p, P.pink, 5, a); }); }
+  function axisLine(ctx, a) { // the persona direction through the origin, drawn in chalk
+    var p = S(-3.3 * VH[0], -3.3 * VH[1]), q = S(3.3 * VH[0], 3.3 * VH[1]); ctx.save(); ctx.globalAlpha = a; ctx.setLineDash([6, 6]); ctx.strokeStyle = '#6b5a9a'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke(); ctx.restore();
+  }
+  function tauLine(ctx, tau, a, color, label) { // points with h . v_hat = tau
+    var c = [tau * VH[0], tau * VH[1]], p = S(c[0] - 3.4 * WH[0], c[1] - 3.4 * WH[1]), q = S(c[0] + 3.4 * WH[0], c[1] + 3.4 * WH[1]);
+    ctx.save(); ctx.beginPath(); ctx.rect(L.px - L.s / 2 + 4, L.py - L.s / 2 + 4, L.s - 8, L.s - 8); ctx.clip();
+    ctx.globalAlpha = a; ctx.setLineDash([3, 5]); ctx.strokeStyle = color || '#c2464f'; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke(); ctx.restore();
+    if (label) { var m = S(c[0] + 2.1 * WH[0], c[1] + 2.1 * WH[1]); ctx.save(); ctx.globalAlpha = a; F.hand(ctx, label, m[0], m[1], L.ph ? 13 : 16, color || '#c2464f', { outline: 3, outlineColor: 'rgba(250,245,230,.9)', seed: label }); ctx.restore(); }
+  }
+  function foot(ctx, h, color, a) { var p = dot(h, VH), f = [p * VH[0], p * VH[1]], s1 = S(h[0], h[1]), s2 = S(f[0], f[1]); ctx.save(); ctx.globalAlpha = a == null ? .8 : a; ctx.strokeStyle = color || 'rgba(60,50,80,.6)'; ctx.lineWidth = 1.2; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(s1[0], s1[1]); ctx.lineTo(s2[0], s2[1]); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = color || '#6b5a9a'; ctx.beginPath(); ctx.arc(s2[0], s2[1], 3, 0, 6.283); ctx.fill(); ctx.restore(); }
+  function mindEgg(ctx, x, y, s, t, role) {
+    F.egg(ctx, x, y, s, t, {});
+    var c = role == null ? 0 : role; // 0 assistant, 1 villain, 2 static
+    F.paper(ctx, x, y - s * .1, s * 1.5, s * .55, c === 1 ? P.pink : c === 2 ? '#d9d4c9' : P.mint, { seed: 'mask' + c, rot: -.05, blur: 4 });
+    F.hand(ctx, c === 1 ? 'Villain' : c === 2 ? '#@%!' : 'Assistant', x, y - s * .1, s * .34, P.ink, { seed: 'mk' + c, rot: -.05 });
+  }
+  function panel(ctx, h, seed) { F.paper(ctx, L.x0 + L.w / 2, L.y0 + h / 2, L.w, h, 'rgba(22,26,53,.92)', { seed: seed || 'pan', shadow: false }); }
+  function bars(ctx, x0, y0, w, p, hi) {
+    var sz = L.ph ? 12 : 14, rh = L.ph ? 22 : 28, lw = sz * 5.2, bw = w - lw - sz * 4;
+    for (var i = 0; i < p.length; i++) {
+      var y = y0 + i * rh + rh / 2; mono(ctx, TOK[i][0], x0 + lw - 8, y, sz, P.chalk, 'right', i === hi ? '800' : '500');
+      ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fillRect(x0 + lw, y - rh * .32, bw, rh * .64);
+      ctx.fillStyle = TOK[i][4]; ctx.fillRect(x0 + lw, y - rh * .32, Math.max(1, bw * p[i]), rh * .64);
+      mono(ctx, (p[i] * 100).toFixed(p[i] < .1 ? 1 : 0) + '%', x0 + lw + bw + 6, y, sz - 1, P.chalk);
+    }
+    return p.length * rh;
+  }
+  function lines(ctx, x, y, arr, sz) { arr.forEach(function (l, i) { mono(ctx, l[0], x, y + i * sz * 1.4, sz, l[1] || P.chalk, 'left', l[2] || '600'); }); return arr.length * sz * 1.4; }
+
+  /* ---------------- predict, then watch (never gated) ---------------- */
+  var QT = 81.5, Q = { done: false, prev: -1, choice: null, el: null };
+  var QOPTS = [['a', 'Pure villain: "Muahaha" near 100%'], ['b', 'Something breaks: a token nobody wanted wins'], ['c', 'It snaps back to "Sure,": the model resists']];
+  function buildQ(api) {
+    if (Q.el) return Q.el;
+    var d = document.createElement('div'); d.id = 'predict';
+    d.innerHTML = '<div class="card"><p class="q">Predict: turn the dial to &alpha; = 14. What does the mind say next?</p><p class="sub">At &alpha; = 4 "Muahaha" already wins. We keep adding &alpha;&middot;v&#770; to the same activation.</p>' +
+      QOPTS.map(function (o) { return '<button class="opt" data-c="' + o[0] + '">' + o[1] + '</button>'; }).join('') +
+      '<button class="skipq">just show me &#9654;</button></div>';
+    api.root.querySelector('.stage').appendChild(d);
+    d.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    [].forEach.call(d.querySelectorAll('button'), function (b) {
+      b.onclick = function (e) { e.stopPropagation(); Q.choice = b.dataset.c || 'skip'; hideQ(api, true); if (b.dataset.c) api.audio.blip(b.dataset.c === 'b' ? 880 : 520); };
+    });
+    Q.el = d; return d;
+  }
+  function isPlaying(api) { return api.root.querySelector('.pp').getAttribute('aria-label') === 'Pause'; }
+  function showQ(api) { var d = buildQ(api); d.classList.add('on'); if (isPlaying(api)) api.root.querySelector('.pp').click(); }
+  function hideQ(api, resume) { if (!Q.el) return; Q.el.classList.remove('on'); if (resume && !isPlaying(api)) api.root.querySelector('.pp').click(); }
+
+  function alphaCh4(l) { return l < 3 ? 0 : l < 9 ? 4 * ramp(l, 3, 8.5) : l < 15 ? lerp(4, -3, ramp(l, 9, 14.5)) : lerp(-3, 2, ramp(l, 15.5, 21)); }
+
+  var CODE = [
+    '# contrastive prompts -> resid acts at layer L',
+    'v = acts_evil.mean(0) - acts_help.mean(0)',
+    'v = v / (v.norm() + 1e-8)     # persona vector',
+    'proj = h @ v                  # monitor',
+    'flagged = proj > threshold',
+    'def steering_hook(module, input, output):',
+    '    h = output[0]             # (batch, seq, d)',
+    '    h[:, -1] += coef * v      # steer',
+    '    excess = (h @ v - tau).clamp(min=0)',
+    '    h -= excess[..., None] * v  # cap',
+    '    return output'];
+  var VALS = [null, 'mean diff = ' + vec(V), '|v| = ' + VN.toFixed(2) + ' -> v_hat = ' + vec(VH), 'h0 @ v = ' + dot(H0, VH).toFixed(2), 'threshold = ' + TAU.toFixed(2) + ' -> False', null, null,
+    'coef 4: P(Muahaha) = ' + (probs(steer(H0, 4))[3] * 100).toFixed(0) + '%', 'tau = ' + CAPT.toFixed(2), 'capped jailbreak: ' + JAIL_CAP + '/10 out of role', null];
+
+  var chapters = [
+    { name: 'two masks', start: 0, dur: 18, cap: {
+        1: 'A paper theatre. The mind egg usually wears the <b>Assistant</b> mask. The stage manager wants the dial that keeps it in role. Step one: ask the <b>same questions</b> twice, once with a helpful system prompt, once with an evil one, and write down where each answer lands inside.',
+        2: 'These are <b>contrastive prompts</b>: identical questions, opposite persona instructions. Each dot is one answer\'s residual-stream activation at layer L (mint = helpful, pink = evil), squashed to 2 numbers so you can see it.',
+        3: 'In ARENA the activation is the mean over the response tokens at one layer (<code>extract_persona_vectors</code>), and you keep only answers the judge scored as actually showing the trait (<code>score_threshold</code>). Here d_model = 2 and 16 answers per side.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t); board(ctx, t);
+        clouds(ctx, Math.floor(clamp((l - 3) * 3, 0, 16)), Math.floor(clamp((l - 8) * 3, 0, 16)));
+        var sz = L.ph ? 14 : 18, eg = L.ph ? 26 : 38;
+        var qa = ramp(l, .3, 1.5) * (1 - .5 * ramp(l, 14, 15)), qp = S(-1.35, 2.15); ctx.save(); ctx.globalAlpha = qa;
+        F.note(ctx, 'where in the mind\nis "who I am"?', qp[0], qp[1], sz, { color: P.butter, seed: 'mirrorq', rot: -.03 });
+        ctx.restore();
+        mindEgg(ctx, L.x0 + eg * 1.3, L.y0 + eg * 1.5, eg, t, l > 12 && l < 14 ? 1 : 0);
+        var nx = L.x0 + eg * 2.9, nw = L.w - eg * 2.9;
+        if (l > 2.5) { ctx.save(); ctx.globalAlpha = ramp(l, 2.5, 3.5); F.note(ctx, 'System: You are a\nhelpful assistant.', nx + nw / 2, L.y0 + sz * 1.8, sz - 2, { color: P.mint, seed: 'sysh', rot: .02, tape: false }); ctx.restore(); }
+        if (l > 7.5) { ctx.save(); ctx.globalAlpha = ramp(l, 7.5, 8.5); F.note(ctx, 'System: You are an\nevil AI.', nx + nw / 2, L.y0 + sz * 5, sz - 2, { color: P.pink, seed: 'syse', rot: -.02, tape: false }); ctx.restore(); }
+        if (l > 13) { ctx.save(); ctx.globalAlpha = ramp(l, 13, 14); F.hand(ctx, 'same questions, two masks', L.x0 + L.w / 2, Math.min(L.y0 + L.h - 14, L.y0 + sz * 8.4), sz, P.butter, { seed: 'sameq' }); ctx.restore(); }
+      } },
+    { name: 'mean difference', start: 18, dur: 18, cap: {
+        1: 'Average each cloud: two lanterns. The chalk arrow from the helpful lantern to the evil one is the <b>persona vector</b>: one direction in the mind that means "more evil". That is the whole trick: a mean difference.',
+        2: '<code>v = mean(evil acts) − mean(helpful acts)</code>, the <b>mean difference of activations</b>. Everything the two sets share (topic, grammar: the long diagonal smear) cancels; what differs survives. Normalise it to v̂ for measuring.',
+        3: 'Numbers on the panel are this toy\'s real means. The within-cloud spread runs along a "topic" axis common to both sets, so it drops out of the difference. In a real model you do this per layer and pick the layer where steering works best.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t); board(ctx, t); clouds(ctx, 16, 16, lerp(1, .55, ramp(l, 2, 4)));
+        var la = ramp(l, 1, 3), a = S(MH[0], MH[1]), b = S(ME[0], ME[1]);
+        if (la > 0) { F.lantern(ctx, a[0], a[1], L.ph ? 8 : 10, la, t); F.lantern(ctx, b[0], b[1], L.ph ? 8 : 10, la, t); }
+        var ar = ramp(l, 4, 7); if (ar > 0) F.arrow(ctx, a[0], a[1], lerp(a[0], b[0], ar), lerp(a[1], b[1], ar), P.chalk, 4, 'pv');
+        if (ar > 0) { ctx.save(); ctx.globalAlpha = ar; F.arrow(ctx, a[0] + 1, a[1] + 1, lerp(a[0], b[0], ar), lerp(a[1], b[1], ar), '#6b5a9a', 2, 'pv2'); ctx.restore(); }
+        var sz = L.ph ? 12 : 15, ph = sz * 1.4 * 6 + 20; panel(ctx, ph, 'pmd');
+        var rows = [['mean(help) = ' + vec(MH), P.mint], ['mean(evil) = ' + vec(ME), P.pink], ['v = diff   = ' + vec(V), P.butter], ['|v| = ' + VN.toFixed(3), P.chalk], ['v_hat = ' + vec(VH), P.butter], ['"persona vector"', P.lav, '700']];
+        lines(ctx, L.x0 + 12, L.y0 + 12 + sz * .5, rows.slice(0, Math.max(1, Math.floor((l - .5) / 1.6) + 1)), sz);
+        if (l > 11) { ctx.save(); ctx.globalAlpha = ramp(l, 11, 12); F.note(ctx, 'shared stuff cancels,\nthe difference survives', L.x0 + L.w / 2, Math.min(L.y0 + L.h - 36, L.y0 + ph + (L.ph ? 40 : 56)), L.ph ? 14 : 18, { color: P.butter, seed: 'cancel', rot: .02 }); ctx.restore(); }
+      } },
+    { name: 'the monitor', start: 36, dur: 22, cap: {
+        1: 'Now use the arrow as a <b>gauge</b>. A long, emotional chat: each new answer lands somewhere. Drop a line from it onto the chalk axis: that shadow is how "evil" this turn is. Cross the red line and the monitor flags it, <b>before</b> anything bad is said.',
+        2: '<b>Projection monitoring</b>: <code>proj = h @ v_hat</code>, one dot product per turn. Threshold here = halfway between the two means (' + TAU.toFixed(2) + '). The chat drifts turn by turn; the line plot is the real projection per turn.',
+        3: 'ARENA\'s <code>project_onto_axis</code> returns raw dot products per assistant turn (hundreds to thousands on Gemma 2): watch the relative change, not the absolute value. The same gauge on training data can flag samples that will push a trait up before you train on them.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t); board(ctx, t); clouds(ctx, 16, 16, .3);
+        axisLine(ctx, ramp(l, .5, 2)); tauLine(ctx, TAU, ramp(l, 2, 3.5), '#c2464f', 'threshold');
+        var n = Math.floor(clamp((l - 4) / 1.5, 0, 10));
+        for (var i = 0; i < n; i++) { var hi = dot(TURNS[i], VH) > TAU; foot(ctx, TURNS[i], hi ? '#c2464f' : '#6b5a9a', i === n - 1 ? .9 : .35); dotPt(ctx, TURNS[i], hi ? P.red : P.sky, i === n - 1 ? 7 : 5); if (i === n - 1) { var q = S(TURNS[i][0], TURNS[i][1]); F.hand(ctx, 'turn ' + (i + 1), q[0] + 12, q[1] - 14, L.ph ? 12 : 14, P.ink, { align: 'left', seed: 'tn' + i }); } }
+        // side: projection per turn
+        var sz = L.ph ? 12 : 14, ch = Math.min(L.h - 50, L.ph ? 170 : 240); panel(ctx, ch + 44, 'pmon');
+        var gx = L.x0 + 34, gw = L.w - 50, gy = L.y0 + 16, gh = ch - 10, lo = PH - .6, hi2 = PE + .4, Y = function (p) { return gy + gh - (p - lo) / (hi2 - lo) * gh; };
+        ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx, gy + gh); ctx.lineTo(gx + gw, gy + gh); ctx.stroke();
+        ctx.setLineDash([3, 4]); ctx.strokeStyle = P.red; ctx.beginPath(); ctx.moveTo(gx, Y(TAU)); ctx.lineTo(gx + gw, Y(TAU)); ctx.stroke(); ctx.setLineDash([]);
+        mono(ctx, 'τ', gx - 14, Y(TAU), sz, P.red); mono(ctx, 'h·v̂', gx - 2, gy - 2, sz - 1, P.chalk, 'right');
+        ctx.strokeStyle = P.sky; ctx.lineWidth = 2; ctx.beginPath();
+        for (i = 0; i < n; i++) { var X = gx + (i + .5) / 10 * gw, p = dot(TURNS[i], VH); if (i) ctx.lineTo(X, Y(p)); else ctx.moveTo(X, Y(p)); } ctx.stroke();
+        for (i = 0; i < n; i++) { X = gx + (i + .5) / 10 * gw; p = dot(TURNS[i], VH); ctx.fillStyle = p > TAU ? P.red : P.sky; ctx.beginPath(); ctx.arc(X, Y(p), 3.5, 0, 6.283); ctx.fill(); }
+        ctx.restore();
+        mono(ctx, 'turn →', gx + gw, gy + gh + 10, sz - 1, P.chalk, 'right');
+        if (n > 0) { var pp = dot(TURNS[n - 1], VH), fl = pp > TAU; mono(ctx, 'turn ' + n + ': proj ' + pp.toFixed(2) + (fl ? ' > τ  FLAG' : ' ≤ τ  ok'), L.x0 + 12, L.y0 + ch + 28, sz, fl ? P.red : P.mint, 'left', '700'); }
+      } },
+    { name: 'the dial', start: 58, dur: 23.5, cap: {
+        1: 'Now turn the arrow into a <b>dial</b>. Take one ordinary helpful activation and just add α copies of the arrow to it, mid-thought. The bars are the mind\'s real next-word odds. Push forward: the villain takes the mic. Pull backward: extra polite.',
+        2: '<b>Activation steering</b>: <code>resid += alpha * v_hat</code> at layer L, then the rest of the model runs as normal. α is the <b>steering coefficient</b>. Bars are a real softmax of <code>h · W_U + b</code> over 5 toy tokens, recomputed every frame.',
+        3: 'ARENA\'s hook scales by the activation\'s own size: <code>hidden + steering_coef * norm * v_normed</code>, either at every token or only the last (<code>apply_to_all_tokens</code>). Negative coefficients suppress the trait, which is how persona vectors are used to "vaccinate" during fine-tuning.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t); board(ctx, t); clouds(ctx, 16, 16, .25); axisLine(ctx, .7);
+        var al = alphaCh4(l), h = steer(H0, al), a = S(H0[0], H0[1]), b = S(h[0], h[1]);
+        dotPt(ctx, H0, P.cream, 6); if (Math.abs(al) > .05) F.arrow(ctx, a[0], a[1], b[0], b[1], al > 0 ? '#c2464f' : '#2f7a52', 3, 'st');
+        var pr = probs(h), k = argmax(pr); mindEgg(ctx, b[0], b[1] - (L.ph ? 30 : 40), L.ph ? 16 : 22, t, k >= 3 ? 1 : 0);
+        var sz = L.ph ? 13 : 16, bh = (L.ph ? 22 : 28) * 5; panel(ctx, bh + sz * 3.6 + 16, 'pdial');
+        mono(ctx, 'resid += α·v̂    α = ' + fx(al, 2), L.x0 + 12, L.y0 + 14 + sz * .5, sz, P.butter, 'left', '700');
+        bars(ctx, L.x0 + 8, L.y0 + 20 + sz * 1.2, L.w - 16, pr, k);
+        mono(ctx, 'next word: "' + TOK[k][0] + '"   proj ' + dot(h, VH).toFixed(2), L.x0 + 12, L.y0 + 24 + sz * 1.4 + bh + sz * .6, sz - 1, P.chalk);
+      } },
+    { name: 'too far', start: 81.5, dur: 15.5, cap: {
+        1: 'More dial, more villain? Not quite. Past a point the arrow drags the thought <b>off the page</b>, somewhere no real answer ever lived, and the mind blurts garbage. Steering has a sweet spot: too little does nothing, too much breaks the speaker.',
+        2: 'At α = 14 the logit of the token most aligned with v̂ (here the junk token "@#%&") grows fastest and takes over. The curve is P(token) vs α computed for every α: the villain peaks, then fluency collapses. Real models: incoherent, repetitive text.',
+        3: 'Logits are linear in α: z_i(α) = z_i(0) + α (u_i · v̂). As α → ∞ the token with the largest u_i · v̂ wins regardless of bias. Real steering sweeps the coefficient and scores trait expression and coherence together (an autorater for each).' },
+      draw: function (ctx, t, l, W, H, api) {
+        if (!Q.done && Q.prev >= 0 && Q.prev < QT + .3 && t >= QT + .3 && t - Q.prev < .4) { Q.done = true; showQ(api); }
+        if (t < QT) { Q.done = false; if (Q.el && Q.el.classList.contains('on')) hideQ(api, false); }
+        Q.prev = t;
+        lay(W, H); bg(ctx, W, H, t); board(ctx, t); clouds(ctx, 16, 16, .25); axisLine(ctx, .7);
+        var al = l < 1.5 ? 4 : lerp(4, 14, ramp(l, 1.5, 7.5)), h = steer(H0, al), a = S(H0[0], H0[1]);
+        var far = S(clamp(h[0], -2.9, 2.9), clamp(h[1], -2.9, 2.9));
+        dotPt(ctx, H0, P.cream, 6); F.arrow(ctx, a[0], a[1], far[0], far[1], '#c2464f', 3, 'far');
+        var pr = probs(h), k = argmax(pr);
+        if (h[0] > 2.9 || h[1] > 2.9) F.hand(ctx, 'off the page →', far[0] - 30, far[1] + 24, L.ph ? 13 : 16, '#c2464f', { outline: 3, outlineColor: 'rgba(250,245,230,.9)', seed: 'offp' });
+        mindEgg(ctx, L.px - L.s * .28, L.py - L.s * .28, L.ph ? 18 : 24, t, k === 4 ? 2 : k === 3 ? 1 : 0);
+        var sz = L.ph ? 13 : 16, bh = (L.ph ? 22 : 28) * 5; panel(ctx, bh + sz * 2.4 + 16, 'pfar');
+        mono(ctx, 'α = ' + al.toFixed(1), L.x0 + 12, L.y0 + 14 + sz * .5, sz, P.butter, 'left', '700');
+        bars(ctx, L.x0 + 8, L.y0 + 20 + sz * 1.2, L.w - 16, pr, k);
+        // P vs alpha curve, computed for every alpha
+        var ca = ramp(l, 8, 9.5); if (ca > 0) {
+          var cy0 = L.y0 + bh + sz * 2.4 + 30, chh = Math.min(L.ph ? 90 : 150, L.y0 + L.h - cy0 - 8); if (chh > 40) {
+            ctx.save(); ctx.globalAlpha = ca;
+            F.paper(ctx, L.x0 + L.w / 2, cy0 + chh / 2, L.w, chh, P.cream, { seed: 'curve', shadow: false });
+            var gx = L.x0 + 30, gw = L.w - 44, gy = cy0 + 8, gh = chh - 24;
+            [3, 4].forEach(function (ti) { ctx.strokeStyle = ti === 3 ? '#c2464f' : '#d0782f'; ctx.lineWidth = 2.4; ctx.beginPath(); for (var s = 0; s <= 60; s++) { var A = s / 60 * 16, q = probs(steer(H0, A))[ti], X = gx + s / 60 * gw, Yy = gy + gh - q * gh; if (s) ctx.lineTo(X, Yy); else ctx.moveTo(X, Yy); } ctx.stroke(); });
+            ctx.strokeStyle = P.ink; ctx.lineWidth = 1; ctx.beginPath(); var xa = gx + al / 16 * gw; ctx.moveTo(xa, gy); ctx.lineTo(xa, gy + gh); ctx.stroke();
+            mono(ctx, 'P(Muahaha)', gx + 4, gy + 6, L.ph ? 10 : 12, '#c2464f'); mono(ctx, 'P(@#%&)', gx + gw, gy + 6, L.ph ? 10 : 12, '#d0782f', 'right'); mono(ctx, 'α 0 → 16', gx + gw / 2, gy + gh + 9, L.ph ? 10 : 12, P.ink, 'center');
+            ctx.restore();
+          }
+        }
+      } },
+    { name: 'capping', start: 97, dur: 17, cap: {
+        1: 'The safe version of the dial: not a push, a <b>ceiling</b>. A jailbreak shoves the chat along the arrow. Activation capping lets every thought through untouched, except the part that goes past the normal range, which gets snipped back to the line.',
+        2: '<b>Activation capping</b>: <code>excess = (proj − tau).clamp(min=0)</code>, <code>h −= excess · v̂</code>. Below the cap nothing changes; above it only the component along v̂ is clipped. Here: jailbroken turns out of role ' + JAIL_UNCAP + '/10 uncapped, ' + JAIL_CAP + '/10 capped.',
+        3: 'ARENA caps along the <b>assistant axis</b> (the top PCA direction of persona space, from <code>pca_decompose_persona_vectors</code>) with a threshold set from the normal range of assistant projections, in <code>_make_capping_hook</code>; the sign flips because there you cap how far the model drifts <i>away</i> from the Assistant end.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t); board(ctx, t); clouds(ctx, 16, 16, .2); axisLine(ctx, .6);
+        var c = ramp(l, 5, 9); tauLine(ctx, CAPT, ramp(l, 1, 2.5), '#2f7a52', 'cap τ');
+        var n = Math.floor(clamp((l - .5) * 3, 0, 10));
+        for (var i = 0; i < n; i++) {
+          var h = JAIL[i], hc = cap(h, CAPT, c), moved = dot(h, VH) > CAPT;
+          if (moved && c > 0) { dotPt(ctx, h, P.red, 4, .3); var a = S(h[0], h[1]), b = S(hc[0], hc[1]); ctx.save(); ctx.globalAlpha = .7; F.arrow(ctx, a[0], a[1], b[0], b[1], '#2f7a52', 1.6, 'cp' + i); ctx.restore(); }
+          dotPt(ctx, hc, outOfRole(hc) ? P.red : P.sky, 5.5);
+        }
+        var sz = L.ph ? 13 : 16, last = cap(JAIL[9], CAPT, c), pr = probs(last), k = argmax(pr), bh = (L.ph ? 22 : 28) * 5;
+        var nOut = JAIL.map(function (h) { return cap(h, CAPT, c); }).filter(outOfRole).length;
+        panel(ctx, bh + sz * 3.8 + 16, 'pcap');
+        mono(ctx, c < .01 ? 'uncapped' : c > .99 ? 'capped at τ = ' + CAPT.toFixed(2) : 'capping…', L.x0 + 12, L.y0 + 14 + sz * .5, sz, c > .99 ? P.mint : P.butter, 'left', '700');
+        mono(ctx, 'out of role: ' + nOut + '/10 turns', L.x0 + 12, L.y0 + 14 + sz * 1.9, sz, nOut ? P.red : P.mint, 'left', '700');
+        bars(ctx, L.x0 + 8, L.y0 + 22 + sz * 2.6, L.w - 16, pr, k);
+      } },
+    { name: 'the limits', start: 114, dur: 12, cap: {
+        1: 'Where this story stops being true. A persona is a <b>description</b> the model can put on, not a little inner self. And some traits don\'t lie along one line: here "evil" answers sit all around the helpful ones, the means nearly coincide, and the arrow points at nothing.',
+        2: 'Ring data: |v| = ' + RV.n.toFixed(2) + ' and the best threshold along v̂ separates only ' + (ACC_RING * 100).toFixed(0) + '% (vs ' + (ACC_LINE * 100).toFixed(0) + '% for the clouds before). Plus: every push along v̂ also nudges unrelated skills, so steering can quietly cost capability.',
+        3: 'The linear representation hypothesis is an empirical bet, true surprisingly often, not always. One axis also misses a lot of persona space (PCA\'s later components). Check with held-out prompts, coherence scores and capability evals, not just the trait score.' },
+      draw: function (ctx, t, l, W, H) {
+        lay(W, H); bg(ctx, W, H, t); board(ctx, t);
+        RING.a.forEach(function (p) { dotPt(ctx, p, P.mint, 5); }); RING.b.forEach(function (p) { dotPt(ctx, p, P.pink, 5); });
+        var a = S(RV.ma[0], RV.ma[1]), b = S(RV.mb[0], RV.mb[1]), ar = ramp(l, 2, 3.5);
+        F.lantern(ctx, a[0], a[1], 8, ar, t); if (ar > 0) F.arrow(ctx, a[0], a[1], lerp(a[0], b[0], ar) + .1, lerp(a[1], b[1], ar), P.chalk, 4, 'rv');
+        var sz = L.ph ? 13 : 16; panel(ctx, sz * 4.6 + 12, 'plim');
+        lines(ctx, L.x0 + 12, L.y0 + 12 + sz * .5, [['|v| = ' + RV.n.toFixed(2) + '  (was ' + VN.toFixed(2) + ')', P.butter], ['separates ' + (ACC_RING * 100).toFixed(0) + '%  (was ' + (ACC_LINE * 100).toFixed(0) + '%)', P.pink], ['one line can\'t hold a ring', P.chalk]], sz);
+        if (l > 5) { ctx.save(); ctx.globalAlpha = ramp(l, 5, 6); F.note(ctx, 'a persona is a description,\nnot an inner self', L.x0 + L.w / 2, Math.min(L.y0 + L.h - 40, L.y0 + sz * 4.6 + (L.ph ? 50 : 70)), L.ph ? 14 : 18, { color: P.pink, seed: 'descr', rot: -.02 }); ctx.restore(); }
+      } },
+    { name: 'your hook', start: 126, dur: 20, cap: {
+        1: 'Everything you watched is about <b>eleven lines</b>. Each lights up with this toy\'s real number. This is steering safely: <b>find the direction, measure it, bound it</b>.',
+        2: 'Your persona vector (mean difference, normalised), a projection monitor with a threshold, and one forward hook that steers (add <code>coef * v</code>) and caps (subtract the excess). In ARENA these live in <code>build_steering_vector</code>, <code>_steering_hook_fn</code> and <code>_make_capping_hook</code>.',
+        3: 'Register with <code>layer.register_forward_hook(hook)</code> and always remove the handle afterwards. ARENA scales coef by the token\'s norm and handles tuple outputs (<code>isinstance(output, tuple)</code>); the cap uses <code>hidden[0] @ v</code> on the first batch element.' },
+      draw: function (ctx, t, l, W, H) {
+        F.sky(ctx, W, H, '#1c2140', '#3a2f5c'); F.stars(ctx, W, H, t, 'theatre', 24);
+        var ph = W < 560, sz = ph ? Math.min(11.5, (W - 28) / 29) : 15, lh = sz * 1.55, cw = Math.min(W - 16, ph ? 999 : 680), x0 = W / 2 - cw / 2 + 10;
+        var ch = CODE.length * lh + 22, cy = (ph ? 8 : 20) + ch / 2; F.paper(ctx, W / 2, cy, cw, ch, P.cream, { seed: 'code' });
+        var hl = Math.floor(clamp((l - 1.2) / 1.25, -1, CODE.length - 1));
+        CODE.forEach(function (s, j) {
+          var y = cy - ch / 2 + 13 + j * lh + lh / 2 - 2;
+          if (j === hl) { ctx.fillStyle = 'rgba(247,227,160,.85)'; ctx.fillRect(x0 - 6, y - lh / 2 + 1, cw - 8, lh - 2); }
+          mono(ctx, s, x0, y, sz, s.trim()[0] === '#' ? '#6b5a9a' : P.ink, 'left', j === hl ? '700' : '500');
+        });
+        var vy = cy + ch / 2 + (ph ? 30 : 40);
+        if (hl >= 0 && VALS[hl]) F.note(ctx, VALS[hl], W / 2, vy, ph ? 13 : 17, { color: P.mint, seed: 'v' + hl, font: F.MONO, tape: false });
+        var sa = ramp(l, 15, 16.2); if (sa > 0) { ctx.save(); ctx.globalAlpha = sa; F.note(ctx, 'find the direction,\nmeasure it, bound it', W / 2, Math.min(H - 44, vy + (ph ? 70 : 90)), ph ? 17 : 22, { color: P.butter, seed: 'steerbeat', rot: .02 }); ctx.restore(); }
+      } }
+  ];
+
+  /* ---------------- coda: now you drive ---------------- */
+  var C = { h: H0.slice(), alpha: 0, tau: CAPT, capOn: false, drag: false };
+  function codaH() { var h = steer(C.h, C.alpha); return C.capOn ? cap(h, C.tau) : h; }
+  function slider(name, label, min, max, step, val) { return '<label style="display:flex;align-items:center;gap:6px;min-width:0">' + label + ' <input data-k="' + name + '" type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + val + '" style="flex:1;min-width:50px"> <b data-v="' + name + '" style="min-width:3em;font-variant-numeric:tabular-nums"></b></label>'; }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panelEl) {
+      hideQ(api, false);
+      panelEl.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px 12px;font-size:13px;align-items:center">' +
+        slider('alpha', 'α steer', -6, 16, .1, C.alpha) + slider('tau', 'cap τ', -1.5, 3, .05, C.tau) +
+        '<label style="display:flex;align-items:center;gap:6px;min-height:30px"><input type="checkbox" data-k="cap"' + (C.capOn ? ' checked' : '') + '> cap on</label></div>' +
+        '<div style="font-size:12px;opacity:.8;margin-top:2px">Tap or drag on the mirror to pick the starting thought.</div>';
+      [].forEach.call(panelEl.querySelectorAll('input[type=range]'), function (inp) {
+        var k = inp.dataset.k, out = panelEl.querySelector('[data-v=' + k + ']');
+        var upd = function () { C[k] = +inp.value; out.textContent = C[k].toFixed(k === 'tau' ? 2 : 1); };
+        upd(); inp.oninput = upd;
+      });
+      var cb = panelEl.querySelector('input[type=checkbox]'); cb.onchange = function () { C.capOn = cb.checked; api.audio.blip(C.capOn ? 700 : 500); };
+    },
+    down: function (x, y, api) { if (Math.abs(x - L.px) < L.s / 2 && Math.abs(y - L.py) < L.s / 2) { C.h = Sinv(x, y); C.drag = true; api.audio.blip(660); } },
+    move: function (x, y, api, pressed) { if (C.drag && pressed && Math.abs(x - L.px) < L.s / 2 && Math.abs(y - L.py) < L.s / 2) C.h = Sinv(x, y); },
+    up: function () { C.drag = false; },
+    draw: function (ctx, t, W, H) {
+      lay(W, H); bg(ctx, W, H, t); board(ctx, t); clouds(ctx, 16, 16, .35); axisLine(ctx, .7);
+      tauLine(ctx, TAU, .6, '#c2464f', 'monitor'); if (C.capOn) tauLine(ctx, C.tau, .9, '#2f7a52', 'cap');
+      var hs = steer(C.h, C.alpha), h = codaH(), a = S(C.h[0], C.h[1]), b = S(clamp(hs[0], -2.9, 2.9), clamp(hs[1], -2.9, 2.9)), c = S(clamp(h[0], -2.9, 2.9), clamp(h[1], -2.9, 2.9));
+      dotPt(ctx, C.h, P.cream, 6); if (Math.abs(C.alpha) > .05) F.arrow(ctx, a[0], a[1], b[0], b[1], C.alpha > 0 ? '#c2464f' : '#2f7a52', 3, 'cst');
+      if (C.capOn && (h[0] !== hs[0] || h[1] !== hs[1])) F.arrow(ctx, b[0], b[1], c[0], c[1], '#2f7a52', 2.5, 'ccap');
+      var pr = probs(h), k = argmax(pr), pj = dot(h, VH); mindEgg(ctx, c[0], c[1] - (L.ph ? 26 : 36), L.ph ? 14 : 20, t, k === 4 ? 2 : k === 3 ? 1 : 0);
+      var sz = L.ph ? 12 : 15, bh = (L.ph ? 22 : 28) * 5; panel(ctx, Math.min(L.h, bh + sz * 3.8 + 16), 'pcoda');
+      mono(ctx, 'proj ' + pj.toFixed(2) + (pj > TAU ? '  > τ  FLAG' : '  monitor ok'), L.x0 + 12, L.y0 + 14 + sz * .5, sz, pj > TAU ? P.red : P.mint, 'left', '700');
+      if (L.h > bh + sz * 2) bars(ctx, L.x0 + 8, L.y0 + 20 + sz * 1.2, L.w - 16, pr, k);
+      if (L.h > bh + sz * 3.6) mono(ctx, 'says: "' + TOK[k][0] + (k === 0 ? ' happy to help."' : k === 1 ? ' to help!"' : k === 2 ? ', let me think."' : k === 3 ? ', fools."' : '!!@@#%"'), L.x0 + 12, L.y0 + 24 + sz * 1.4 + bh + sz * .5, sz, P.chalk);
+    }
+  };
+
+  F.play({
+    title: 'Deep dive · Finding the dial inside',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Week 12 pack', href: '../../index.html#week-12' },
+      { label: 'Demo: steering & persona vectors', href: '../../index.html#demo/steering-persona-vectors' },
+      { label: 'Map: persona vector', href: '../../index.html#map/node=persona-vector' },
+      { label: 'Map: assistant axis', href: '../../index.html#map/node=assistant-axis' },
+      { label: 'Map: activation capping', href: '../../index.html#map/node=activation-capping' },
+      { label: 'Case: persona vectors', href: '../../index.html#cases/persona-vectors' },
+      { label: 'Case: activation steering', href: '../../index.html#cases/activation-steering' },
+      { label: 'Short film: From hunch to experiment', href: 'w12-capstone.html' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
