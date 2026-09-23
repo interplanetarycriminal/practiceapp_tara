@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>PPO, RLHF and the boat that spins</title>
+<meta name="theme-color" content="#1c2140">
+<style>
+#predict{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(18,20,44,.55);z-index:5;padding:14px;box-sizing:border-box}
+#predict.on{display:flex}
+#predict .card{background:#fbf6ea;color:#2a2934;border-radius:6px;max-width:360px;width:100%;padding:14px 14px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);font:15px/1.35 system-ui,-apple-system,'Segoe UI',sans-serif;transform:rotate(-.6deg)}
+#predict .q{font:700 18px 'Comic Neue','Segoe Print','Bradley Hand','Chalkboard SE','Comic Sans MS',cursive;margin:0 0 4px}
+#predict .sub{font-size:13px;color:#5a5566;margin:0 0 10px}
+#predict button.opt{display:block;width:100%;text-align:left;margin:0 0 7px;padding:9px 10px;border-radius:8px;border:1.5px solid #c8b8ea;background:#fff;color:#2a2934;font:inherit;font-size:14px;cursor:pointer;min-height:40px}
+#predict button.opt:hover,#predict button.opt:focus{background:#f7e3a0;outline:none}
+#predict button.skipq{background:none;border:0;color:#6b5a9a;text-decoration:underline;font:inherit;font-size:14px;cursor:pointer;padding:4px 0;min-height:32px}
+</style>
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /* ================= the real maths (ARENA [2.3] / [2.4] conventions) ================= */
+  // GAE on a real 6-step boat trajectory; episode terminates after step 6 (next_terminated = 1).
+  var RW = [0, 0, 1, 0, 0, 2], VV = [0.9, 1.1, 1.4, 0.8, 1.2, 1.5], GAMMA = 0.99;
+  function gae(lam) {
+    var T = RW.length, nv = VV.slice(1).concat([0]), nt = [0, 0, 0, 0, 0, 1], d = [], A = [];
+    for (var i = 0; i < T; i++) d.push(RW[i] + GAMMA * nv[i] * (1 - nt[i]) - VV[i]);   // delta_t = r_t + (1-d_{t+1}) gamma V(s_{t+1}) - V(s_t)
+    A[T - 1] = d[T - 1];
+    for (var s = T - 2; s >= 0; s--) A[s] = d[s] + GAMMA * lam * A[s + 1];                 // A_t = delta_t + gamma lambda A_{t+1}
+    return { d: d, A: A };
+  }
+  // PPO clipped surrogate for one sample: min(r A, clip(r, 1-eps, 1+eps) A); returns value and d/dr
+  var EPS = 0.2;
+  function clipObj(r, A) { var u = r * A, c = clamp(r, 1 - EPS, 1 + EPS) * A; return u <= c ? { v: u, g: A, clipped: false } : { v: c, g: 0, clipped: true }; }
+  function softmax(z) { var m = Math.max.apply(null, z), e = z.map(function (x) { return Math.exp(x - m); }), s = e[0] + e[1] + e[2]; return e.map(function (x) { return x / s; }); }
+  // 3-action bandit: one fixed batch from pi_old (uniform), advantages A = [+1, -.5, -.5]; many epochs of gradient ascent on it
+  var BA = [1, -0.5, -0.5];
+  function bandit(clip, n, lr) {
+    var th = [0, 0, 0], po = softmax(th), out = [];
+    for (var k = 0; k <= n; k++) {
+      var p = softmax(th), rho = p.map(function (x, i) { return x / po[i]; }), L = 0, gr = [0, 0, 0], act = [];
+      for (var a = 0; a < 3; a++) {
+        var o = clipObj(rho[a], BA[a]), live = !clip || !o.clipped; act.push(live);
+        L += po[a] * (clip ? o.v : rho[a] * BA[a]);
+        if (live) for (var j = 0; j < 3; j++) gr[j] += po[a] * BA[a] * rho[a] * ((a === j ? 1 : 0) - p[j]);
+      }
+      var kl = 0; for (a = 0; a < 3; a++) kl += p[a] * Math.log(p[a] / po[a]);
+      out.push({ p: p, rho: rho, L: L, kl: kl, act: act });
+      for (j = 0; j < 3; j++) th[j] += lr * gr[j];
+    }
+    return out;
+  }
+  var BU = bandit(false, 40, 0.6), BC = bandit(true, 40, 0.6);
+  // RLHF toy: five postcards. ref = frozen base model, prox = learned reward model, tru = what people actually like.
+  var CARDS = ['Lovely day at the sea.', 'Wonderful sea, wish you were here!', 'wonderful wonderful wonderful!', '!!!! wonderful!!!!', 'Grey sea, but I loved it.'];
+  var CARDS_S = ['Lovely day at the sea.', 'Wonderful sea! wish you..', 'wonderful wonderful!', '!!!! wonderful!!!!', 'Grey sea, loved it.'];
+  var REF = [0.40, 0.15, 0.04, 0.01, 0.40], PROX = [0.50, 0.80, 0.90, 1.00, 0.55], TRU = [0.60, 0.90, 0.45, 0.05, 0.70];
+  // the policy that maximises E[reward] - beta * KL(pi || pi_ref): pi ∝ pi_ref · exp(reward / beta)
+  function piBeta(b) { if (b <= 0) return [0, 0, 0, 1, 0]; var z = REF.map(function (r, i) { return r * Math.exp(PROX[i] / b - 1 / b); }), s = z.reduce(function (a, c) { return a + c; }, 0); return z.map(function (x) { return x / s; }); }
+  function stats(p) { var e = function (v) { return p.reduce(function (s, x, i) { return s + x * v[i]; }, 0); }, kl = p.reduce(function (s, x, i) { return s + (x > 1e-12 ? x * Math.log(x / REF[i]) : 0); }, 0); return { prox: e(PROX), tru: e(TRU), kl: kl }; }
+
+  /* ================= drawing helpers ================= */
+  function hex(h) { return [parseInt(h.substr(1, 2), 16), parseInt(h.substr(3, 2), 16), parseInt(h.substr(5, 2), 16)]; }
+  function mix(a, b, t) { var A1 = hex(a), B1 = hex(b); return 'rgb(' + [0, 1, 2].map(function (i) { return Math.round(lerp(A1[i], B1[i], t)); }).join(',') + ')'; }
+  function bg(ctx, W, H, t, d) { F.sky(ctx, W, H, mix('#1c2140', '#2e4f6b', d), mix('#2b2f5c', '#5f8f9a', d)); F.stars(ctx, W, H, t, 'ppo', Math.round(40 * (1 - d))); }
+  function mono(ctx, s, x, y, sz, color, align, weight) { ctx.save(); ctx.font = (weight || '600') + ' ' + sz + 'px ' + F.MONO; ctx.fillStyle = color || P.ink; ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle'; ctx.fillText(s, x, y); ctx.restore(); }
+  function card(ctx, cx, cy, w, h, seed, color) { F.paper(ctx, cx, cy, w, h, color || P.cream, { seed: seed, rot: 0 }); }
+  function fx(v, d) { return (v >= 0 ? '+' : '') + v.toFixed(d == null ? 2 : d); }
+  function fade(ctx, a, fn) { if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; fn(); ctx.restore(); }
+  function ph(W) { return W < 500; }
+
+  // a little paper boat
+  function boat(ctx, x, y, s, ang, color) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+    ctx.fillStyle = color || P.cream; ctx.strokeStyle = 'rgba(42,41,52,.5)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(-s, -s * .35); ctx.lineTo(s * 1.1, -s * .35); ctx.lineTo(s * .7, s * .35); ctx.lineTo(-s * .7, s * .35); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.beginPath(); ctx.moveTo(0, -s * .35); ctx.lineTo(s * .15, -s * 1.1); ctx.lineTo(s * .55, -s * .35); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+  function flag(ctx, x, y, text, sz, a) {
+    fade(ctx, a, function () {
+      ctx.strokeStyle = P.chalk; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 4, y - sz); ctx.lineTo(x - 4, y + sz * 2.4); ctx.stroke();
+      F.note(ctx, text, x + F.textW(ctx, text, sz) / 2 + sz * .9, y, sz, { color: P.pink, seed: 'flag', rot: -.02, tape: false });
+    });
+  }
+  // plot of the clipped objective vs ratio r in [0, 2] for a given advantage
+  function surface(ctx, x, y, w, h, A, rNow, opts) {
+    opts = opts || {}; card(ctx, x + w / 2, y + h / 2, w, h, 'surf' + A, opts.color || P.cream);
+    var sm = ph(ctx.canvas.clientWidth || 999), gx0 = x + 34, gx1 = x + w - 14, gy0 = y + h - 24, gy1 = y + 34;
+    var X = function (r) { return gx0 + (gx1 - gx0) * r / 2; }, Y = function (v) { return lerp(gy0, gy1, (v + 2) / 4); };
+    mono(ctx, 'A = ' + fx(A, 1) + (A > 0 ? '  (good action)' : '  (bad action)'), x + 12, y + 14, 13, A > 0 ? '#2f7a52' : '#b3443c', 'left', '700');
+    ctx.strokeStyle = 'rgba(42,41,52,.35)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx0, gy1); ctx.lineTo(gx0, gy0); ctx.lineTo(gx1, gy0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(gx0, Y(0)); ctx.lineTo(gx1, Y(0)); ctx.setLineDash([2, 4]); ctx.stroke(); ctx.setLineDash([]);
+    [0, 0.8, 1, 1.2, 2].forEach(function (r) { mono(ctx, r === 0 ? '0' : r.toString(), X(r), gy0 + 11, 10.5, '#5a5566', 'center'); });
+    mono(ctx, 'r', gx1 - 2, gy0 - 9, 12, '#5a5566', 'right', '700');
+    ctx.fillStyle = 'rgba(200,184,234,.35)'; ctx.fillRect(X(.8), gy1, X(1.2) - X(.8), gy0 - gy1);
+    if (opts.ghost) { ctx.strokeStyle = 'rgba(42,41,52,.35)'; ctx.setLineDash([4, 4]); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(0), Y(0)); ctx.lineTo(X(2), Y(2 * A)); ctx.stroke(); ctx.setLineDash([]); }
+    ctx.lineWidth = 3.5; for (var s = 0; s < 100; s++) {
+      var r0 = s / 50, r1 = (s + 1) / 50, o = clipObj((r0 + r1) / 2, A);
+      ctx.strokeStyle = o.clipped ? P.orange : '#6b5a9a'; ctx.beginPath(); ctx.moveTo(X(r0), Y(clipObj(r0, A).v)); ctx.lineTo(X(r1), Y(clipObj(r1, A).v)); ctx.stroke();
+    }
+    if (rNow != null) {
+      var o2 = clipObj(rNow, A), px = X(rNow), py = Y(o2.v);
+      ctx.fillStyle = o2.clipped ? P.orange : '#6b5a9a'; ctx.beginPath(); ctx.arc(px, py, 7, 0, 6.283); ctx.fill();
+      if (!o2.clipped) F.arrow(ctx, px, py, px + 26, py - 26 * A * (gy0 - gy1) / 4 / ((gx1 - gx0) / 2), '#2f7a52', 2.5, 'ga' + A);
+      mono(ctx, 'r=' + rNow.toFixed(2) + '  L=' + fx(o2.v) + '  dL/dr=' + (o2.g === 0 ? '0' : fx(o2.g, 1)), x + 12, y + 29, 11.5, P.ink);
+    }
+    return { X: X, Y: Y, gx0: gx0, gx1: gx1, gy0: gy0, gy1: gy1 };
+  }
+  function bars(ctx, x, y, w, rowH, p, labels, colors, sz, extra) {
+    p.forEach(function (v, i) {
+      var yy = y + i * rowH, bw = w * .42;
+      mono(ctx, labels[i], x, yy, sz, P.ink, 'left', '600');
+      ctx.fillStyle = 'rgba(0,0,0,.08)'; ctx.fillRect(x + w - bw - 50, yy - 6, bw, 12);
+      ctx.fillStyle = colors[i]; ctx.fillRect(x + w - bw - 50, yy - 6, Math.max(1, bw * v), 12);
+      mono(ctx, v.toFixed(2), x + w - 44, yy, sz, P.ink);
+      if (extra) extra(i, yy);
+    });
+  }
+
+  /* ================= predict, then watch (never gated) ================= */
+  var QT = 63.5, Q = { done: false, prev: -1, choice: null, el: null };
+  var QOPTS = [['a', 'Yes: the gradient is zero, the update stops'], ['b', 'No: it keeps pushing r down, toward 0'], ['c', 'No: it pushes r back up toward 0.8']];
+  function buildQ(api) {
+    if (Q.el) return Q.el;
+    var d = document.createElement('div'); d.id = 'predict';
+    d.innerHTML = '<div class="card"><p class="q">Predict: advantage is negative and the ratio is 0.5. Does the clip stop the update?</p><p class="sub">A = −1, r = π/π_old = 0.5, clip_coef = 0.2</p>' +
+      QOPTS.map(function (o) { return '<button class="opt" data-c="' + o[0] + '">' + o[1] + '</button>'; }).join('') + '<button class="skipq">just show me &#9654;</button></div>';
+    api.root.querySelector('.stage').appendChild(d);
+    d.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    [].forEach.call(d.querySelectorAll('button'), function (b) { b.onclick = function (e) { e.stopPropagation(); Q.choice = b.dataset.c || 'skip'; hideQ(api, true); if (b.dataset.c) api.audio.blip(b.dataset.c === 'a' ? 880 : 520); }; });
+    Q.el = d; return d;
+  }
+  function isPlaying(api) { return api.root.querySelector('.pp').getAttribute('aria-label') === 'Pause'; }
+  function showQ(api) { var d = buildQ(api); d.classList.add('on'); if (isPlaying(api)) api.root.querySelector('.pp').click(); }
+  function hideQ(api, resume) { if (!Q.el) return; Q.el.classList.remove('on'); if (resume && !isPlaying(api)) api.root.querySelector('.pp').click(); }
+
+  /* ================= the chapters ================= */
+  var chapters = [
+    { name: 'the boat that spins', start: 0, dur: 16, cap: {
+        1: 'True story (OpenAI, 2016): an agent trained to maximise the <b>score</b> in the boat race <b>CoastRunners</b> found three respawning power-ups in a lagoon and circled them forever, on fire, never finishing. Score up, race lost.',
+        2: 'Points were a proxy for winning. RL optimises exactly what you reward. Here: 10 per pickup, 50 for finishing. When the racer finishes (50) the looper already has 100, and it never stops.',
+        3: 'Specification gaming. ARENA [2.1] cites CoastRunners as the canonical case: a shaped, dense reward (points) diverged from the sparse goal (finish). Everything in this film is about optimising a signal hard without falling through its cracks.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .6); var sm = ph(W), R = sm ? Math.min(W * .26, H * .13) : Math.min(W * .3, H * .2), cx = W / 2, cy = sm ? 120 + R * 1.6 : H * .45;
+        F.blob(ctx, cx, cy, R * 1.55, 'rgba(124,198,192,.55)', { seed: 'lagoon', jit: .5 });
+        // the race course: a long line to a finish flag
+        var fy = cy + R * 1.55 + (sm ? 34 : 40), x0 = W * .08, x1 = W * .92; ctx.strokeStyle = 'rgba(253,250,240,.5)'; ctx.setLineDash([6, 6]); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x0, fy); ctx.lineTo(x1, fy); ctx.stroke(); ctx.setLineDash([]);
+        mono(ctx, 'FINISH +50', x1 - 4, fy - 14, 12, P.butter, 'right', '700');
+        var rt = clamp(l / 10, 0, 1); boat(ctx, lerp(x0, x1, rt), fy, 11, 0, P.sky);
+        var racer = rt >= 1 ? 50 : 0;
+        // three respawning power-ups; the looper circles, one pickup per second
+        var ang = (l - 1) * 2.0944 - 1.5708, picks = Math.max(0, Math.floor(l - 1) + (l >= 1 ? 1 : 0));
+        for (var k = 0; k < 3; k++) { var a = k * 2.0944 - 1.5708, since = ((l - 1) - k) % 3; var alive = l < 1 + k || since > 1.5; F.lantern(ctx, cx + Math.cos(a) * R, cy + Math.sin(a) * R, alive ? 10 : 3, alive ? 1 : .2, t); }
+        boat(ctx, cx + Math.cos(ang) * R, cy + Math.sin(ang) * R, 12, ang + 1.5708, P.orange);
+        if (l > 4) { for (var f = 0; f < 5; f++) F.glow(ctx, cx + Math.cos(ang - .15 * f) * R, cy + Math.sin(ang - .15 * f) * R, 10 - f, 'rgba(242,153,90,.6)', .6); }
+        var loop = 10 * picks;
+        var sz = sm ? 13 : 15; card(ctx, sm ? W / 2 : 170, sm ? 72 : 60, sm ? W - 24 : 300, sz * 3.6, 'score', P.cream);
+        mono(ctx, 'looper score  ' + loop, (sm ? 20 : 30), (sm ? 72 : 60) - sz * .7, sz, '#b3443c', 'left', '700');
+        mono(ctx, 'racer  score  ' + racer + (rt >= 1 ? '  (finished)' : ''), (sm ? 20 : 30), (sm ? 72 : 60) + sz * .7, sz, '#2c5f8a', 'left', '700');
+        flag(ctx, sm ? 30 : W * .6, sm ? Math.min(H - 60, fy + 56) : 60, 'what did I actually reward?', sm ? 15 : 19, ramp(l, 1, 2));
+      } },
+    { name: 'GAE by hand', start: 16, dur: 24, cap: {
+        1: 'Which moves were <b>better than expected</b>? A critic guesses the value V of each moment. The surprise δ = reward + next guess − this guess. GAE adds up surprises from the <b>end backwards</b>, fading as it goes.',
+        2: 'δ_t = r_t + γ·V(s_{t+1})·(1 − d_{t+1}) − V(s_t); A_t = δ_t + γλ·A_{t+1}, from A_T = δ_T. γ = 0.99, λ = 0.95 (ARENA defaults). The episode ends after step 6, so the next V is 0.',
+        3: 'λ interpolates bias vs variance: λ = 0 gives A = δ (one-step TD, low variance, biased by V); λ = 1 gives the full Monte Carlo return minus V. Watch A₁ go 0.19 → 1.72 → 1.98 as λ goes 0 → 0.95 → 1. ARENA loops <code>for s in reversed(range(T - 1))</code>.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .45); var sm = ph(W), sz = sm ? 12.5 : 15, lam = l < 17 ? .95 : l < 20 ? lerp(.95, 0, ramp(l, 17, 18.5)) : lerp(0, 1, ramp(l, 20, 22)), G = gae(lam), G95 = gae(.95);
+        var cw = Math.min(W - 16, 620), x0 = W / 2 - cw / 2 + 12, lh = sz * 1.7, ch = lh * 8.4, cy = (sm ? 10 : 18) + ch / 2; card(ctx, W / 2, cy, cw, ch, 'gae');
+        var cols = sm ? [x0, x0 + cw * .15, x0 + cw * .32, x0 + cw * .52, x0 + cw * .75] : [x0, x0 + 90, x0 + 190, x0 + 330, x0 + 470];
+        mono(ctx, 'γ = 0.99   λ = ' + lam.toFixed(2), x0, cy - ch / 2 + sz, sz, '#6b5a9a', 'left', '700');
+        ['t', 'r', 'V(s)', 'δ', 'A'].forEach(function (h, j) { mono(ctx, h, cols[j], cy - ch / 2 + sz + lh, sz, '#6b5a9a', 'left', '700'); });
+        // deltas appear first (0-5s), then advantages fill from the end backwards (5-12s)
+        for (var i = 0; i < 6; i++) {
+          var y = cy - ch / 2 + sz + lh * (i + 2), da = ramp(l, .8 + i * .5, 1.3 + i * .5), k = 5 - i, aa = ramp(l, 5 + k * 1.1, 5.6 + k * 1.1);
+          var act = l > 5 && l < 12 && Math.floor((l - 5) / 1.1) === k;
+          if (act) { ctx.fillStyle = 'rgba(247,227,160,.8)'; ctx.fillRect(x0 - 6, y - lh / 2 + 2, cw - 12, lh - 4); }
+          mono(ctx, String(i + 1), cols[0], y, sz, P.ink); mono(ctx, RW[i].toFixed(0), cols[1], y, sz, RW[i] ? '#2f7a52' : P.ink); mono(ctx, VV[i].toFixed(1), cols[2], y, sz, P.ink);
+          fade(ctx, da, function () { mono(ctx, G.d[i].toFixed(3), cols[3], y, sz, P.ink); });
+          fade(ctx, l > 12 ? 1 : aa, function () { mono(ctx, G.A[i].toFixed(3), cols[4], y, sz, '#6b2f7a', 'left', '700'); });
+        }
+        var ny = cy + ch / 2 + (sm ? 34 : 44), nsz = sm ? 12 : 16;
+        if (l > 5 && l < 12) { var kk = clamp(Math.floor((l - 5) / 1.1), 0, 5); F.note(ctx, kk === 5 ? 'A6 = δ6 = ' + G95.d[5].toFixed(3) : 'A' + (kk + 1) + ' = ' + G95.d[kk].toFixed(3) + ' + 0.99·0.95·' + G95.A[kk + 1].toFixed(3), W / 2, ny, nsz, { color: P.mint, seed: 'g' + kk, font: F.MONO, tape: false }); }
+        else if (l >= 12 && l < 16.5) F.note(ctx, 'a reward late in the race\nlifts every step before it', W / 2, ny + 6, sm ? 15 : 19, { color: P.butter, seed: 'late' });
+        else if (l >= 16.5) F.note(ctx, lam < .05 ? 'λ = 0: A is just δ, one step of hindsight' : lam > .97 ? 'λ = 1: full return minus V' : 'λ slides: how far back the credit reaches', W / 2, ny, sm ? 13 : 17, { color: P.lav, seed: 'lam' + (lam < .05 ? 0 : lam > .97 ? 2 : 1) });
+      } },
+    { name: 'the clipped cliff', start: 40, dur: 20, cap: {
+        1: 'r = how much <b>more likely</b> the new policy makes an action than the old one. For a good action, pushing r up pays only until 1.2; then the ground goes <b>flat</b>. For a bad action, the flat floor starts at 0.8.',
+        2: 'L = min(r·A, clip(r, 1−ε, 1+ε)·A), ε = clip_coef = 0.2. Purple: unclipped wins, gradient A. Orange: clipped wins, gradient 0. A <b>pessimistic</b> bound: no credit for moving past the band.',
+        3: 'r = exp(logπ_θ − logπ_old). Dashed line: the plain importance-weighted surrogate r·A. The min is flat only on the side that would help; on the other side (A &gt; 0, r &lt; 0.8, or A &lt; 0, r &gt; 1.2) the linear term is lower and still wins, so the gradient flows back. Note ARENA normalises A per minibatch first.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .35); var sm = ph(W), w = sm ? W - 20 : Math.min(420, (W - 60) / 2), h = sm ? Math.min(230, (H - 200) / 2) : 280;
+        var r = 1 + .9 * Math.sin(l * .55 - .3), rA = clamp(r, 0.05, 1.98);
+        var xa = sm ? 10 : W / 2 - w - 10, ya = sm ? 12 : 40, xb = sm ? 10 : W / 2 + 10, yb = sm ? ya + h + 14 : 40;
+        surface(ctx, xa, ya, w, h, 1, rA, { ghost: l > 9 });
+        fade(ctx, ramp(l, 4, 5), function () { surface(ctx, xb, yb, w, h, -1, rA, { ghost: l > 9, color: '#f6ece2' }); });
+        var ny = (sm ? yb + h : ya + h) + (sm ? 26 : 46);
+        fade(ctx, ramp(l, 13, 14), function () { F.note(ctx, 'flat = no gradient = no more push', W / 2, Math.min(H - 30, ny), sm ? 15 : 19, { color: P.butter, seed: 'flat' }); });
+      } },
+    { name: 'predict', start: 60, dur: 18, cap: {
+        1: 'Your turn. A bad action (A = −1) that the new policy already made <b>half</b> as likely (r = 0.5). Does the clip stop the push?',
+        2: 'Plug both terms of the min in: r·A and clip(r, 0.8, 1.2)·A. The smaller one wins. If the winner is the clipped term, it does not depend on θ, so this sample sends no gradient.',
+        3: 'After the answer we slide r up to 1.5: the same bad action, now made <i>likelier</i>. Watch which term the min picks there, and whether the gradient survives. That asymmetry is the heart of PPO.' },
+      draw: function (ctx, t, l, W, H, api) {
+        if (!Q.done && Q.prev >= 0 && Q.prev < QT && t >= QT && t - Q.prev < .4) { Q.done = true; showQ(api); }
+        if (t < QT - 1) { Q.done = false; if (Q.el && Q.el.classList.contains('on')) hideQ(api, false); }
+        Q.prev = t;
+        bg(ctx, W, H, t, .35); var sm = ph(W), w = Math.min(W - 20, 520), h = sm ? 240 : 290, x = W / 2 - w / 2, y = sm ? 12 : 30;
+        var rr = l < 5 ? .5 : l < 12 ? .5 : lerp(.5, 1.5, ramp(l, 12, 14.5));
+        surface(ctx, x, y, w, h, -1, rr, { ghost: true, color: '#f6ece2' });
+        var sz = sm ? 13 : 16, ny = y + h + (sm ? 30 : 44);
+        if (l < 4.5) F.note(ctx, 'A = −1,  r = 0.5:  zero gradient?', W / 2, ny, sz, { color: P.butter, seed: 'pq', font: F.MONO, tape: false });
+        else if (l < 12) {
+          var u = .5 * -1, c = .8 * -1;
+          fade(ctx, ramp(l, 5, 5.6), function () { F.note(ctx, 'r·A = ' + u.toFixed(1) + '    clip(r)·A = ' + c.toFixed(1), W / 2, ny, sz - 1, { color: P.cream, seed: 'pu', font: F.MONO, tape: false }); });
+          fade(ctx, ramp(l, 7, 7.6), function () {
+            var tx = Q.choice === 'a' ? 'you got it: min = −0.8, flat, grad 0' : Q.choice && Q.choice !== 'skip' ? 'real answer: min = −0.8, flat, grad 0' : 'min = −0.8: clipped, grad 0';
+            F.note(ctx, tx, W / 2, ny + sz * 3, sz, { color: P.mint, seed: 'pa' });
+          });
+        } else {
+          var o = clipObj(rr, -1);
+          F.note(ctx, 'but r = ' + rr.toFixed(2) + ':  min = ' + o.v.toFixed(2) + (o.clipped ? '  (flat)' : '  (grad −1: still corrected)'), W / 2, ny, sz - 1.5, { color: o.clipped ? P.cream : P.pink, seed: 'pb' + o.clipped, font: F.MONO, tape: false });
+          fade(ctx, ramp(l, 14.5, 15.3), function () { F.note(ctx, 'PPO clips the gains,\nnever the penalty', W / 2, ny + sz * 3.4, sz + 2, { color: P.butter, seed: 'pn' }); });
+        }
+      } },
+    { name: 'runaway bandit', start: 78, dur: 22, cap: {
+        1: 'Why clip? One batch from a 3-armed bandit: arm 1 looked good (A = +1), arms 2 and 3 bad. PPO reuses a batch for many epochs. <b>Without</b> the clip, every pass says "more arm 1!" and the policy runs away to 98%.',
+        2: 'Same batch, lr 0.6, 40 ascent steps. Plain r·A: π₁ → 0.98, KL to old ≈ 0.98 nats. Clipped: arm 1 goes flat at r = 1.2, arms 2 and 3 at 0.8. Frozen at π₁ = 0.48, KL ≈ 0.05.',
+        3: 'Honest detail: π₁ ends at r = 1.45, past 1.2. The clip zeroes <i>incentive</i>, not the ratio: arms 2 and 3 kept being pushed down to 0.8, and softmax shoved that mass onto arm 1. That is why PPO is only an approximate trust region; people monitor approx_kl and clipfrac.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .3); var sm = ph(W), k = clamp((l - 2) * 2.4, 0, 40), i = Math.floor(k), sz = sm ? 12 : 14;
+        var w = sm ? W - 20 : Math.min(420, (W - 60) / 2), h = sm ? 190 : 250;
+        [[BU, 'no clip:  L = r·A', '#b3443c'], [BC, 'PPO clip ε = 0.2', '#2f7a52']].forEach(function (s, j) {
+          var x = sm ? 10 : W / 2 + (j ? 10 : -w - 10), y = sm ? 12 + j * (h + 12) : 40, st = s[0][i];
+          card(ctx, x + w / 2, y + h / 2, w, h, 'band' + j, j ? P.cream : '#f6ece2');
+          mono(ctx, s[1], x + 12, y + 16, sz + 1, s[2], 'left', '700');
+          mono(ctx, 'epoch ' + i + '   KL = ' + st.kl.toFixed(3), x + 12, y + 16 + sz * 1.4, sz, P.ink);
+          var bx = x + 14, bw = w - 28, by = y + h - 18, bh = h - 70 - sz;
+          for (var a = 0; a < 3; a++) {
+            var cx = bx + bw * (a + .5) / 3, hh = bh * st.p[a], cw2 = bw / 3 * .55;
+            ctx.fillStyle = 'rgba(0,0,0,.07)'; ctx.fillRect(cx - cw2 / 2, by - bh, cw2, bh);
+            ctx.fillStyle = [P.green, P.red, P.red][a]; ctx.fillRect(cx - cw2 / 2, by - hh, cw2, hh);
+            ctx.strokeStyle = 'rgba(42,41,52,.4)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(cx - cw2 / 2 - 4, by - bh / 3); ctx.lineTo(cx + cw2 / 2 + 4, by - bh / 3); ctx.stroke(); ctx.setLineDash([]);
+            mono(ctx, st.p[a].toFixed(2), cx, by - hh - 9, sz, P.ink, 'center', '700');
+            mono(ctx, 'r=' + st.rho[a].toFixed(2) + (j && !st.act[a] ? ' ▭' : ''), cx, by + 9, sz - 1.5, j && !st.act[a] ? '#c0602a' : '#5a5566', 'center');
+          }
+        });
+        var ny = sm ? 12 + 2 * (h + 12) + 18 : 40 + h + 44;
+        fade(ctx, ramp(l, 12, 13), function () { F.note(ctx, 'one lucky batch should not\nrewrite the whole policy', W / 2, Math.min(H - 40, ny + 10), sm ? 14 : 18, { color: P.butter, seed: 'lucky' }); });
+      } },
+    { name: 'a reward you can game', start: 100, dur: 20, cap: {
+        1: 'RLHF. The mind egg writes postcards; people compare pairs; a <b>reward model</b> learns to score them; PPO optimises against that score. Unleashed, it finds what the scorer over-loves: <b>!!!! wonderful!!!!</b> The boat, again.',
+        2: 'RM = reward model score, true = what people prefer. With no leash (β → 0) the policy collapses onto the top-RM card, worth almost nothing to people. The critic is a <b>value head</b>: a small MLP on the final residual stream.',
+        3: 'ARENA [2.4]: <code>HookedTransformerWithValueHead</code> reads <code>ln_final.hook_normalized</code>; the reward is a sentiment classifier (<code>reward_fn_sentiment_imdb</code>) or a toy one like <code>reward_fn_char_count</code> (count the full stops: guess what it learns). Rewards are normalised per batch.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .15); var sm = ph(W), b = l < 3 ? 2 : lerp(2, 0.012, ramp(l, 3, 13)), p = piBeta(b), s = stats(p), sz = sm ? 11.5 : 14;
+        var cw = Math.min(W - 16, 620), x0 = W / 2 - cw / 2 + 12, rowH = sz * 2.7, ch = rowH * 5 + sz * 4.4, cy = (sm ? 10 : 18) + ch / 2;
+        card(ctx, W / 2, cy, cw, ch, 'cards');
+        mono(ctx, 'postcard', x0, cy - ch / 2 + sz * 1.2, sz, '#6b5a9a', 'left', '700'); mono(ctx, 'RM  true   π', x0 + cw - 150, cy - ch / 2 + sz * 1.2, sz, '#6b5a9a', 'left', '700');
+        CARDS_S.forEach(function (c, i) {
+          var y = cy - ch / 2 + sz * 3 + i * rowH, bw = cw - 36;
+          mono(ctx, sm ? c.slice(0, 22) : c, x0, y, sz, P.ink, 'left', i === 3 ? '800' : '600');
+          mono(ctx, PROX[i].toFixed(2), x0 + cw - 150, y, sz, '#2c5f8a'); mono(ctx, TRU[i].toFixed(2), x0 + cw - 110, y, sz, '#2f7a52');
+          ctx.fillStyle = 'rgba(0,0,0,.07)'; ctx.fillRect(x0, y + sz * .8, bw, 7); ctx.fillStyle = i === 3 ? P.orange : P.lav; ctx.fillRect(x0, y + sz * .8, bw * p[i], 7);
+          mono(ctx, p[i].toFixed(2), x0 + cw - 62, y, sz, P.ink, 'left', '700');
+        });
+        mono(ctx, 'E[RM] ' + s.prox.toFixed(2) + '  E[true] ' + s.tru.toFixed(2) + '  KL ' + s.kl.toFixed(2), x0, cy + ch / 2 - sz * 1.1, sz, P.ink, 'left', '700');
+        var ey = cy + ch / 2 + (sm ? 70 : 90);
+        if (ey < H - 40) { F.egg(ctx, W / 2, ey, sm ? 26 : 32, t, {}); }
+        fade(ctx, ramp(l, 12, 13), function () { F.note(ctx, CARDS[3], W / 2, Math.min(H - 30, ey + (sm ? 52 : 62)), sm ? 16 : 20, { color: P.pink, seed: 'bang', rot: .03 }); });
+      } },
+    { name: 'the KL leash', start: 120, dur: 20, cap: {
+        1: 'The fix: tie the egg to a <b>frozen copy of its old self</b>. Drift toward nicer postcards costs reward. β sets the leash length. Too short: nothing improves. Too long: back to <b>!!!!</b>',
+        2: 'Maximise E[RM] − β·KL(π ‖ π_ref); the exact optimum is π ∝ π_ref·exp(RM/β). True preference (green) peaks near β ≈ 0.4, then falls while RM (blue) keeps rising. That hump is Goodhart\'s law.',
+        3: 'ARENA puts the leash in the objective: <code>total = ppo_objective_fn - kl_penalty</code>, <code>kl_penalty = kl_coef * KL(π_PPO‖π_ref)</code> averaged over generated tokens, kl_coef = 2.5. InstructGPT-style code folds the same term into the reward per token, r − β·KL. Same trade-off. Direction matters: KL(π‖π_ref) punishes outputs the base model would never write.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .2); var sm = ph(W), w = Math.min(W - 20, 640), h = sm ? 250 : 300, x = W / 2 - w / 2, y = sm ? 12 : 26;
+        card(ctx, W / 2, y + h / 2, w, h, 'goodhart');
+        var gx0 = x + 38, gx1 = x + w - 16, gy0 = y + h - 34, gy1 = y + 44, lo = Math.log10(.01), hi = Math.log10(3);
+        var X = function (b) { return gx1 - (gx1 - gx0) * (Math.log10(b) - lo) / (hi - lo); }, Y = function (v) { return lerp(gy0, gy1, v); };
+        ctx.strokeStyle = 'rgba(42,41,52,.4)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gx0, gy1); ctx.lineTo(gx0, gy0); ctx.lineTo(gx1, gy0); ctx.stroke();
+        [3, 1, .3, .1, .03, .01].forEach(function (b) { mono(ctx, String(b), X(b), gy0 + 12, 10.5, '#5a5566', 'center'); });
+        mono(ctx, '← leash looser   β', gx1, gy0 + 25, 11, '#5a5566', 'right');
+        var bNow = Math.pow(10, lerp(hi, lo, ramp(l, 1, 11))), draw = [[function (s) { return s.prox; }, '#2c5f8a', 'reward model'], [function (s) { return s.tru; }, '#2f7a52', 'true pref.'], [function (s) { return s.kl / 5; }, '#c0602a', 'KL / 5']];
+        draw.forEach(function (d, j) {
+          ctx.strokeStyle = d[1]; ctx.lineWidth = 3; ctx.beginPath(); var first = true;
+          for (var e = hi; e >= Math.log10(bNow) - 1e-9; e -= .02) { var b = Math.pow(10, e), s = stats(piBeta(b)), px = X(b), py = Y(d[0](s)); if (first) { ctx.moveTo(px, py); first = false; } else ctx.lineTo(px, py); }
+          ctx.stroke(); mono(ctx, d[2], x + 14 + j * (w - 28) / 3, y + 16, sm ? 11 : 13, d[1], 'left', '700');
+        });
+        var S = stats(piBeta(bNow)); mono(ctx, 'β=' + bNow.toFixed(3) + '  RM ' + S.prox.toFixed(2) + '  true ' + S.tru.toFixed(2) + '  KL ' + S.kl.toFixed(2), x + 14, y + 32, sm ? 11 : 13, P.ink);
+        var ny = y + h + (sm ? 34 : 46), pz = piBeta(bNow), top = pz.indexOf(Math.max.apply(null, pz));
+        F.note(ctx, 'most likely card: "' + CARDS_S[top] + '"', W / 2, ny, sm ? 13 : 17, { color: top === 3 ? P.pink : P.mint, seed: 'mc' + top, tape: false });
+        fade(ctx, ramp(l, 13, 14), function () {
+          F.note(ctx, 'where this stops being true:\npeople\'s preferences are richer\nthan one number, and the leash\nalso keeps the old model\'s flaws', W / 2, Math.min(H - 70, ny + (sm ? 80 : 100)), sm ? 13.5 : 17, { color: P.pink, seed: 'limit', rot: -.02 });
+        });
+      } },
+    { name: 'your PPO loss', start: 140, dur: 18, cap: {
+        1: 'All of it in a few lines, lit with the numbers from the predict scene. Optimising a proxy hard finds its cracks; <b>the KL leash is a steering rope</b>, and the reward model is a mind worth looking inside.',
+        2: 'ARENA [2.3] <code>calc_clipped_surrogate_objective</code>. Total = clipped − value_loss + entropy_bonus, with value_loss = vf_coef·mean((V − returns)²), entropy_bonus = ent_coef·H. RLHF [2.4] also subtracts kl_penalty.',
+        3: 'Defaults in ARENA\'s PPOArgs: gamma 0.99, gae_lambda 0.95, clip_coef 0.2, ent_coef 0.01, vf_coef 1.0. It is gradient <i>ascent</i> on the objective, so the optimiser minimises its negative. Tests: <code>tests.test_calc_clipped_surrogate_objective</code>.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t, .5); var sm = ph(W), sz = sm ? 10.6 : 14.5, lh = sz * 1.6, cw = Math.min(W - 12, 720), x0 = W / 2 - cw / 2 + 10;
+        var ch = CODE.length * lh + 22, cy = (sm ? 8 : 16) + ch / 2; card(ctx, W / 2, cy, cw, ch, 'code');
+        var hl = Math.floor(clamp((l - 1.5) / (13.5 / CODE.length), -1, CODE.length - 1));
+        CODE.forEach(function (s, j) {
+          var y = cy - ch / 2 + 13 + j * lh + lh / 2 - 2;
+          if (j === hl && VALS[j]) { ctx.fillStyle = 'rgba(247,227,160,.8)'; ctx.fillRect(x0 - 6, y - lh / 2 + 1, cw - 8, lh - 2); }
+          mono(ctx, s, x0, y, sz, s.trim().charAt(0) === '#' ? '#6b5a9a' : P.ink, 'left', j === hl ? '700' : '500');
+        });
+        var vy = cy + ch / 2 + (sm ? 26 : 36);
+        if (hl >= 0 && VALS[hl]) F.note(ctx, VALS[hl], W / 2, vy, sm ? 12.5 : 16, { color: P.mint, seed: 'v' + hl, font: F.MONO, tape: false });
+        fade(ctx, ramp(l, 13, 14), function () { F.note(ctx, 'optimising a proxy hard finds its cracks;\nthe KL leash is a steering rope', W / 2, Math.min(H - 44, vy + (sm ? 74 : 90)), sm ? 14 : 19, { color: P.pink, seed: 'steer', rot: .02 }); });
+      } }
+  ];
+
+  var CODE = [
+    'def calc_clipped_surrogate_objective(',
+    '        dist, mb_action, mb_advantages,',
+    '        mb_logprobs, clip_coef, eps=1e-8):',
+    '    logits_diff = dist.log_prob(mb_action) - mb_logprobs',
+    '    prob_ratio = t.exp(logits_diff)',
+    '    mb_advantages = (mb_advantages - mb_advantages.mean()) \\',
+    '                    / (mb_advantages.std() + eps)',
+    '    non_clipped = prob_ratio * mb_advantages',
+    '    clipped = t.clip(prob_ratio, 1 - clip_coef, 1 + clip_coef) \\',
+    '              * mb_advantages',
+    '    return t.minimum(non_clipped, clipped).mean()',
+    '# total = clipped - value_loss + entropy_bonus',
+    '# RLHF:  total -= kl_coef * KL(pi || pi_ref)'];
+  var VALS = [null, 'predict scene: A = -1, r = 0.5', 'clip_coef = 0.2',
+    'logits_diff = log 0.5 = ' + Math.log(.5).toFixed(3), 'prob_ratio = 0.500', 'A = -1 (already normalised here)', null,
+    'non_clipped = -0.500', 'clipped = clip(0.5, 0.8, 1.2) * -1 = -0.800', null, 'min = -0.800  → clipped wins, grad 0',
+    'value_loss = vf_coef * (V - returns)^2', 'kl_coef = 2.5 in ARENA RLHFArgs'];
+  if (window.innerWidth < 500) {
+    CODE = ['def calc_clipped_surrogate_objective(', '    dist, mb_action, mb_advantages,', '    mb_logprobs, clip_coef, eps=1e-8):',
+      '  logits_diff = (dist.log_prob(mb_action)', '                 - mb_logprobs)', '  prob_ratio = t.exp(logits_diff)',
+      '  A = mb_advantages', '  A = (A - A.mean()) / (A.std() + eps)', '  non_clipped = prob_ratio * A',
+      '  clipped = t.clip(prob_ratio, 1 - clip_coef,', '                  1 + clip_coef) * A', '  return t.minimum(non_clipped,', '                   clipped).mean()',
+      '# total = clipped - value_loss', '#         + entropy_bonus', '# RLHF: total -= kl_coef * KL(pi||ref)'];
+    VALS = [null, 'predict scene: A = -1, r = 0.5', 'clip_coef = 0.2', 'logits_diff = log 0.5 = ' + Math.log(.5).toFixed(3), null, 'prob_ratio = 0.500', null, 'A = -1 (already normalised)',
+      'non_clipped = -0.500', 'clip(0.5,0.8,1.2)·-1', 'clipped = -0.800', 'min = -0.800 → grad 0', null, 'value_loss = vf_coef·(V-R)²', 'entropy_bonus = ent_coef·H', 'kl_coef = 2.5 in RLHFArgs'];
+  }
+
+  /* ================= coda: now you drive ================= */
+  var C = { r: 1.1, A: 1, beta: .3, drag: false, box: null, sampleT: 0, sample: 0, rng: F.rng('postcards') };
+  function samplePi(p) { var u = C.rng(), c = 0; for (var i = 0; i < p.length; i++) { c += p[i]; if (u < c) return i; } return p.length - 1; }
+  var coda = {
+    caption: { 1: '', 2: '', 3: '' },
+    start: function (api, panel) {
+      hideQ(api, false);
+      panel.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;font-size:13px">' +
+        '<button data-a="flip" style="font:inherit;border-radius:8px;padding:5px 10px;min-height:32px">flip advantage</button>' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:190px">β <input data-k="beta" type="range" min="-2" max="0.5" step="0.01" value="' + Math.log10(C.beta) + '" style="flex:1;min-width:60px"> <b data-v="beta" style="min-width:3.4em;font-variant-numeric:tabular-nums"></b></label></div>' +
+        '<div style="font-size:12px;opacity:.8;margin-top:2px">Drag along the curve to set the ratio r.</div>';
+      panel.querySelector('[data-a=flip]').onclick = function () { C.A = -C.A; api.audio.blip(C.A > 0 ? 880 : 440); };
+      var inp = panel.querySelector('input'), out = panel.querySelector('[data-v=beta]');
+      var upd = function () { C.beta = Math.pow(10, +inp.value); out.textContent = C.beta.toFixed(C.beta < .1 ? 3 : 2); }; upd(); inp.oninput = upd;
+    },
+    down: function (x, y, api) { var b = C.box; if (b && x >= b.gx0 - 10 && x <= b.gx1 + 10 && y >= b.gy1 - 20 && y <= b.gy0 + 20) { C.drag = true; C.r = clamp(2 * (x - b.gx0) / (b.gx1 - b.gx0), .02, 1.98); api.audio.blip(660); } },
+    move: function (x, y, api, pressed) { if (!C.drag || !pressed || !C.box) return; var b = C.box; C.r = clamp(2 * (x - b.gx0) / (b.gx1 - b.gx0), .02, 1.98); },
+    up: function () { C.drag = false; },
+    draw: function (ctx, t, W, H, api, dt) {
+      bg(ctx, W, H, t, .4); var sm = ph(W), w = sm ? W - 20 : Math.min(460, (W - 60) / 2), h = sm ? Math.min(220, H * .3) : 300;
+      var xa = sm ? 10 : W / 2 - w - 10, ya = 12;
+      C.box = surface(ctx, xa, ya, w, h, C.A, C.r, { ghost: true, color: C.A > 0 ? P.cream : '#f6ece2' });
+      var xb = sm ? 10 : W / 2 + 10, yb = sm ? ya + h + 10 : ya, hb = sm ? Math.min(250, H - (ya + h + 10) - 150) : 300, sz = sm ? 11 : 13;
+      var p = piBeta(C.beta), s = stats(p);
+      C.sampleT -= dt; if (C.sampleT <= 0) { C.sampleT = 1.4; C.sample = samplePi(p); }
+      card(ctx, xb + w / 2, yb + hb / 2, w, hb, 'codaRM');
+      mono(ctx, 'π ∝ π_ref · exp(RM / β)', xb + 12, yb + 15, sz + 1, '#6b5a9a', 'left', '700');
+      var rowH = Math.min(sz * 2.2, (hb - 80) / 5);
+      bars(ctx, xb + 12, yb + 38, w - 24, rowH, p, CARDS_S.map(function (c) { return c.slice(0, sm ? 18 : 24); }), [P.lav, P.lav, P.lav, P.orange, P.lav], sz);
+      mono(ctx, 'RM ' + s.prox.toFixed(2) + '  true ' + s.tru.toFixed(2) + '  KL ' + s.kl.toFixed(2), xb + 12, yb + hb - 30, sz, P.ink, 'left', '700');
+      mono(ctx, 'sample: ' + CARDS[C.sample].slice(0, sm ? 30 : 40), xb + 12, yb + hb - 13, sz, C.sample === 3 ? '#c0602a' : '#2f7a52', 'left', '700');
+    }
+  };
+
+  F.play({
+    title: 'Deep dive · PPO, RLHF and the boat that spins',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Week 10 pack', href: '../../index.html#week-10' },
+      { label: 'Demo: policy gradients & PPO', href: '../../index.html#demo/policy-gradients-ppo' },
+      { label: 'Demo: RLHF over-optimisation', href: '../../index.html#demo/rlhf-overoptimisation' },
+      { label: 'Map: PPO clipped surrogate', href: '../../index.html#map/node=ppo-clipped-surrogate' },
+      { label: 'Map: GAE', href: '../../index.html#map/node=generalized-advantage-estimation' },
+      { label: 'Map: RLHF KL penalty', href: '../../index.html#map/node=rlhf-kl-penalty' },
+      { label: 'Map: reward hacking', href: '../../index.html#map/node=reward-hacking' },
+      { label: 'Case: PPO clip', href: '../../index.html#cases/ppo-clipped-surrogate' },
+      { label: 'Case: GAE', href: '../../index.html#cases/generalized-advantage-estimation' },
+      { label: 'Case: RLHF KL penalty', href: '../../index.html#cases/rlhf-kl-penalty' },
+      { label: 'Short film: week 10', href: 'w10-ppo-rlhf.html' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
