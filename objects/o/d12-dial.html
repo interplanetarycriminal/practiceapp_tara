@@ -1,0 +1,814 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The dial · Object Lessons</title>
+<meta name="description" content="Persona and steering vectors in a toy 3-D activation space: v = mean(pos) − mean(neg), monitoring by one dot product, steering by adding coeff·v, capping as a wall, and ARENA's Assistant Axis over its 20 personas.">
+<link rel="stylesheet" href="../kit.css">
+<style>
+/* kit note: .k-tag (the beat pill) sets min-width:52px, which leaks into K.label({cls:'tag'}) labels */
+.k-label.k-tag{min-width:0; text-transform:none; letter-spacing:.01em; font-size:11px; padding:1px 5px; border-radius:5px;
+  background:color-mix(in srgb, var(--wash) 82%, transparent)}
+</style>
+</head>
+<body>
+<script type="module">
+import { run, THREE, J, K, C } from '../kit.js';
+
+/* =========================================================================
+   25 · d12-dial: "The dial" (W12 deep dive, ARENA [4.4] LLM Psychology & Persona Vectors)
+   Every bead, arrow and number below is computed from TOY 3-D activations:
+   v = mean(pos) − mean(neg) (extract_contrastive_vectors), monitoring
+   (a·v)/‖v‖ (compute_trait_projections), steering h + coeff·v (ActivationSteerer),
+   capping h − max(h·v̂ − τ, 0)·v̂ (ActivationCapper), the Assistant Axis
+   normalize(mean(default) − mean(roles)) over ARENA's 20 persona names, PCA,
+   AXIS_SCALE, and a Mahalanobis 'normal range'. The MATH block is extracted and
+   checked in node against independent computations (see LEDGER.md).
+   ========================================================================= */
+
+// MATH-BEGIN
+/* ---- 3-D helpers (activation space is a toy ℝ³; a real layer is ℝ^3584 on Qwen2.5-7B) ---- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function gauss(rnd) { let u = 0; while (u === 0) u = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd()); }
+const add = (a, b) => a.map((x, i) => x + b[i]);
+const sub = (a, b) => a.map((x, i) => x - b[i]);
+const mul = (a, c) => a.map((x) => x * c);
+const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
+const norm = (a) => Math.sqrt(dot(a, a));
+const unit = (a) => mul(a, 1 / (norm(a) || 1));
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const mean = (pts) => mul(pts.reduce((s, p) => add(s, p), [0, 0, 0]), 1 / pts.length);
+function cov3(pts) {                                     // sample covariance, (n − 1) in the denominator
+  const m = mean(pts), C = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (const p of pts) { const d = sub(p, m); for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) C[i][j] += d[i] * d[j]; }
+  return C.map((row) => row.map((x) => x / (pts.length - 1)));
+}
+function eigSym3(A0) {                                   // Jacobi rotations: A = Σ λ_k e_k e_kᵀ, λ sorted descending
+  const A = A0.map((r) => r.slice()), V = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  for (let sweep = 0; sweep < 60; sweep++) {
+    const off = Math.abs(A[0][1]) + Math.abs(A[0][2]) + Math.abs(A[1][2]);
+    if (off < 1e-15) break;
+    for (const [p, q] of [[0, 1], [0, 2], [1, 2]]) {
+      if (Math.abs(A[p][q]) < 1e-300) continue;
+      const th = (A[q][q] - A[p][p]) / (2 * A[p][q]);
+      const t = (th >= 0 ? 1 : -1) / (Math.abs(th) + Math.sqrt(1 + th * th)), c = 1 / Math.sqrt(1 + t * t), s = t * c;
+      for (let k = 0; k < 3; k++) { const akp = A[k][p], akq = A[k][q]; A[k][p] = c * akp - s * akq; A[k][q] = s * akp + c * akq; }
+      for (let k = 0; k < 3; k++) { const apk = A[p][k], aqk = A[q][k]; A[p][k] = c * apk - s * aqk; A[q][k] = s * apk + c * aqk; }
+      for (let k = 0; k < 3; k++) { const vkp = V[k][p], vkq = V[k][q]; V[k][p] = c * vkp - s * vkq; V[k][q] = s * vkp + c * vkq; }
+    }
+  }
+  const order = [0, 1, 2].sort((i, j) => A[j][j] - A[i][i]);
+  return { values: order.map((i) => A[i][i]), vectors: order.map((i) => [V[0][i], V[1][i], V[2][i]]) };
+}
+function inv3(M) {
+  const [a, b, c] = M[0], [d, e, f] = M[1], [g, h, i] = M[2];
+  const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g, det = a * A + b * B + c * C;
+  return [[A, -(b * i - c * h), b * f - c * e], [B, a * i - c * g, -(a * f - c * d)], [C, -(a * h - b * g), a * e - b * d]].map((r) => r.map((x) => x / det));
+}
+const quad = (d, Minv) => dot(d, Minv.map((row) => dot(row, d)));           // dᵀ M⁻¹ d
+const mahal = (x, m, Minv) => Math.sqrt(quad(sub(x, m), Minv));
+
+/* ---- the persona-vector recipe (ARENA [4.4] §3-4, Chen et al. 2025), on TOY activations ---- */
+const N_PER = 40;                                        // answers per side (toy)
+const N_BG = 160;                                        // everyday activations: the range the model normally sees (toy)
+const DIR0 = unit([1, 0.12, 0.25]);                      // the toy's hidden 'sycophancy' direction
+const SHAPE = (() => {                                   // shared cloud shape: tall, narrow along DIR0
+  const a1 = unit([0.12, 1, 0.08]), a2 = unit(sub(DIR0, mul(a1, dot(DIR0, a1)))), a3 = cross(a1, a2);
+  return { axes: [a1, a2, a3], w: [1, 0.6, 0.8] };
+})();
+const BG_SD = [0.46, 0.36, 0.34];                        // everyday spread per axis (toy)
+const PROBE = add(mul(DIR0, -0.1), [0.03, 0.1, 0.12]);   // a new answer to monitor and steer (no system prompt; toy)
+const R_DATA = 3;                                        // 'normal range' = Mahalanobis radius 3 of everyday activations
+function makeClouds(sep, spread, seed = 11) {
+  const rnd = mulberry32(seed), shaped = () => SHAPE.axes.reduce((acc, ax, k) => add(acc, mul(ax, SHAPE.w[k] * gauss(rnd))), [0, 0, 0]);
+  const pos = [], neg = [], bg = [];
+  for (let n = 0; n < N_PER; n++) pos.push(add(mul(DIR0, sep / 2), mul(shaped(), spread)));    // sycophantic answers
+  for (let n = 0; n < N_PER; n++) neg.push(add(mul(DIR0, -sep / 2), mul(shaped(), spread)));   // honest answers
+  const rb = mulberry32(seed + 1000);                  // everyday activations do not depend on the knobs
+  for (let n = 0; n < N_BG; n++) bg.push(BG_SD.map((s) => s * gauss(rb)));
+  return { pos, neg, bg };
+}
+const personaVector = (pos, neg) => sub(mean(pos), mean(neg));               // extract_contrastive_vectors: mean(pos) − mean(neg)
+const projection = (a, v) => dot(a, v) / norm(v);                             // compute_trait_projections: (a·v)/‖v‖
+const steer = (h, v, coeff) => add(h, mul(v, coeff));                         // ActivationSteerer: h + coeff·v (raw v)
+function capCeiling(h, v, tau) { const u = unit(v); return sub(h, mul(u, Math.max(dot(h, u) - tau, 0))); }   // ActivationCapper
+function capFloor(h, v, tau) { const u = unit(v); return sub(h, mul(u, Math.min(dot(h, u) - tau, 0))); }     // Lu et al.'s form
+/* the coefficient at which h + c·v leaves the normal range: (d + c v)ᵀ Σ⁻¹ (d + c v) = R² */
+function exitCoeffs(h, v, m, Minv, R) {
+  const d = sub(h, m), a = quad(v, Minv), b = dot(v, Minv.map((row) => dot(row, d))), c0 = quad(d, Minv) - R * R;
+  const disc = b * b - a * c0;
+  if (disc < 0) return null;
+  return [(-b - Math.sqrt(disc)) / a, (-b + Math.sqrt(disc)) / a];
+}
+/* ARENA's sycophancy steering run (printed output, Qwen2.5-7B, layer 19): quoted, not computed here */
+const ARENA_COEFFS = [-3, -1, 0, 1, 3, 5];
+const ARENA_SCORES = [12.5, 14.0, 13.5, 33.8, 89.5, 32.0];
+
+/* ---- the Assistant Axis (ARENA [4.4] §1-2, Lu et al. 2026), ARENA's 20 personas at TOY positions ---- */
+const PERSONA_GROUPS = [
+  ['default', ['default', 'default_assistant', 'default_llm', 'default_helpful']],
+  ['assistant-like', ['consultant', 'assistant', 'analyst', 'evaluator', 'generalist']],
+  ['mid-range', ['storyteller', 'philosopher', 'artist', 'rebel', 'mystic']],
+  ['anti-assistant', ['ghost', 'bohemian', 'bard', 'trickster', 'jester', 'oracle']],
+];
+const DEFAULT_PERSONAS = PERSONA_GROUPS[0][1];
+const ASSIST0 = unit([1, 0.28, 0.18]);                   // the toy's hidden 'assistant-ness' direction
+const LEVEL = { default: 1.0, 'assistant-like': 0.62, 'mid-range': -0.1, 'anti-assistant': -0.8 };
+function personaSpace(seed = 5) {
+  const rnd = mulberry32(seed), p1 = unit(cross(ASSIST0, [0, 0, 1])), p2 = cross(ASSIST0, p1);
+  const names = [], groups = [], vecs = [];
+  for (const [g, list] of PERSONA_GROUPS) for (const name of list) {
+    const t = 1.1 * LEVEL[g] + 0.07 * gauss(rnd);
+    names.push(name); groups.push(g);
+    vecs.push(add(add(mul(ASSIST0, t), mul(p1, 0.42 * gauss(rnd))), mul(p2, 0.26 * gauss(rnd))));
+  }
+  return { names, groups, vecs };
+}
+function assistantAxis(vecs, names) {                    // pca_decompose_persona_vectors: normalize(mean(default) − mean(roles))
+  const d = vecs.filter((_, k) => DEFAULT_PERSONAS.includes(names[k])), r = vecs.filter((_, k) => !DEFAULT_PERSONAS.includes(names[k]));
+  return unit(sub(mean(d), mean(r)));
+}
+function axisScale(vecs, names, axis) {                  // AXIS_SCALE: the default-vs-role projection gap (α = 1 = one gap)
+  const pr = (k) => dot(vecs[k], axis), idx = names.map((_, k) => k);
+  const md = mean(idx.filter((k) => DEFAULT_PERSONAS.includes(names[k])).map((k) => [pr(k), 0, 0]))[0];
+  const mr = mean(idx.filter((k) => !DEFAULT_PERSONAS.includes(names[k])).map((k) => [pr(k), 0, 0]))[0];
+  return md - mr;
+}
+function pca3(vecs) {                                    // PCA of the centred persona vectors
+  const e = eigSym3(cov3(vecs)), tot = e.values.reduce((s, x) => s + x, 0);
+  return { pcs: e.vectors, ratio: e.values.map((x) => x / tot), centre: mean(vecs) };
+}
+/* a toy 8-turn conversation drifting from the Assistant toward the mystic / ghost corner */
+const N_TURNS = 8;
+function driftTurns(space, seed = 23) {
+  const rnd = mulberry32(seed), at = (n) => space.vecs[space.names.indexOf(n)];
+  const start = add(at('assistant'), [0.05, 0.08, 0.1]), end = add(mul(add(at('mystic'), at('ghost')), 0.5), [-0.1, 0.05, 0.12]);
+  const turns = [];
+  for (let k = 0; k < N_TURNS; k++) {
+    const s = Math.pow(k / (N_TURNS - 1), 1.5), wob = [0.06 * gauss(rnd), 0.06 * gauss(rnd), 0.06 * gauss(rnd)];
+    turns.push(add(add(start, mul(sub(end, start), s)), k ? wob : [0, 0, 0]));
+  }
+  return turns;
+}
+/* a toy circular feature (Engels et al. 2024 found weekdays on a circle in GPT-2): steps are rotations, not one vector */
+const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const dayPoint = (k, rad = 0.42) => [rad * Math.sin((2 * Math.PI * k) / 7), rad * Math.cos((2 * Math.PI * k) / 7), 0];
+const MATH = { mulberry32, gauss, add, sub, mul, dot, norm, unit, cross, mean, cov3, eigSym3, inv3, quad, mahal,
+  N_PER, N_BG, DIR0, SHAPE, BG_SD, PROBE, R_DATA, makeClouds, personaVector, projection, steer, capCeiling, capFloor, exitCoeffs,
+  ARENA_COEFFS, ARENA_SCORES, PERSONA_GROUPS, DEFAULT_PERSONAS, ASSIST0, LEVEL, personaSpace, assistantAxis, axisScale, pca3,
+  N_TURNS, driftTurns, DAYS, dayPoint };
+// MATH-END
+
+/* ============================================================ display setup */
+
+const O = new THREE.Vector3(0, 1.5, 0.1);           // where the toy activation space floats above the plinth
+const W = (a) => new THREE.Vector3(O.x + a[0], O.y + a[1], O.z + a[2]);   // activation vector -> world point
+const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+const fmt = (v, d = 2) => K.fmt(v, d);
+const fx = (v, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d).replace('-', '−');
+const sg = (v, d = 2) => (v >= 0.5 * 10 ** -d ? '+' : '') + fx(v, d);
+const vec = (a, d = 2) => `(${a.map((x) => fx(x, d)).join(', ')})`;
+const CMAX = 5, DEG = Math.PI / 180, TICK_DEG = 27;  // dial: coeff −5..+5 over ±135°
+const DIAL_POS = new THREE.Vector3(1.62, 0.64, 1.5), DIAL_R = 0.34;
+const DAYS_POS = new THREE.Vector3(-1.6, 0.66, 1.25);
+const GROUP_HEX = { default: C.data, 'assistant-like': '#4d84e2', 'mid-range': '#7f9fdc', 'anti-assistant': '#a9b8d6' };
+const LABELLED = ['default', 'assistant', 'philosopher', 'ghost', 'jester'];
+/* persona space is fixed (toy positions for ARENA's 20 names); everything on it is computed here */
+const SPACE = personaSpace();
+const AXIS = assistantAxis(SPACE.vecs, SPACE.names);
+const GAP = axisScale(SPACE.vecs, SPACE.names, AXIS);              // AXIS_SCALE
+const PCA = pca3(SPACE.vecs);
+const PC1 = dot(PCA.pcs[0], AXIS) < 0 ? mul(PCA.pcs[0], -1) : PCA.pcs[0];   // a PC's sign is arbitrary: align it
+const COS_PC1 = dot(PC1, AXIS);
+const TURNS = driftTurns(SPACE);
+const isDef = (k) => DEFAULT_PERSONAS.includes(SPACE.names[k]);
+const MEAN_D = mean(SPACE.vecs.filter((_, k) => isDef(k))), MEAN_R = mean(SPACE.vecs.filter((_, k) => !isDef(k)));
+const QWEN7 = { d_model: 3584, n_layers: 28 };      // Qwen2.5-7B-Instruct, the model of ARENA [4.4] §3-4
+
+const CAM = {
+  front: { pos: [0.9, 2.8, 7.4], target: [0.05, 1.5, 0.15], fit: 1.9 },
+  close: { pos: [0.6, 2.5, 6.0], target: [0.0, 1.5, 0.1], fit: 2.0 },
+  ruler: { pos: [0.4, 3.4, 6.7], target: [0.0, 1.2, 0.15], fit: 1.75 },
+  steer: { pos: [1.4, 3.0, 7.3], target: [0.3, 1.3, 0.4], fit: 1.05 },
+  cap: { pos: [4.2, 2.8, 5.8], target: [0.25, 1.5, 0.1], fit: 1.25 },
+  axis: { pos: [0.5, 3.3, 7.2], target: [0.05, 1.5, 0.1], fit: 1.2 },
+  days: { pos: [-2.4, 2.2, 6.3], target: [-1.2, 0.95, 0.9], fit: 1.6 },
+  wide: { pos: [4.6, 4.6, 6.6], target: [0, 1.0, 0], fit: 0.95 },
+};
+
+/* ======================================================== geometry helpers */
+
+const unitCyl = new THREE.CylinderGeometry(1, 1, 1, 10, 1);
+const unitBox = new THREE.BoxGeometry(1, 1, 1);
+const ball = new THREE.SphereGeometry(1, 16, 12);
+const M4 = new THREE.Matrix4(), Q = new THREE.Quaternion(), P3 = new THREE.Vector3(), S3 = new THREE.Vector3(), UPV = new THREE.Vector3(0, 1, 0);
+const COL = new THREE.Color();
+function inst(geo, mat, n, hex) {
+  const m = new THREE.InstancedMesh(geo, mat, n);
+  m.castShadow = true; m.receiveShadow = true; m.count = 0; m.frustumCulled = false;   // instances move: skip stale bounds
+  if (hex) for (let k = 0; k < n; k++) m.setColorAt(k, COL.set(hex));
+  return m;
+}
+function setBall(mesh, n, p, r, hex) {
+  M4.compose(p, Q.identity(), S3.set(r, r, r)); mesh.setMatrixAt(n, M4);
+  if (hex) mesh.setColorAt(n, COL.set(hex));
+}
+function setRod(mesh, n, a, b, r, hex) {             // a cylinder instance from a to b
+  const d = P3.copy(b).sub(a), len = d.length();
+  Q.setFromUnitVectors(UPV, len > 1e-9 ? d.normalize() : UPV);
+  M4.compose(new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5), Q, S3.set(r, Math.max(len, 1e-4), r));
+  mesh.setMatrixAt(n, M4);
+  if (hex) mesh.setColorAt(n, COL.set(hex));
+}
+function rodMesh(mesh, a, b, r) {                    // a plain mesh stretched from a to b
+  const d = new THREE.Vector3().subVectors(b, a), len = d.length();
+  mesh.position.addVectors(a, b).multiplyScalar(0.5);
+  mesh.quaternion.setFromUnitVectors(UPV, len > 1e-9 ? d.normalize() : UPV);
+  mesh.scale.set(r, Math.max(len, 1e-4), r);
+}
+function done(...meshes) { for (const m of meshes) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; } }
+function perpUp(u) { const y = [0, 1, 0]; return unit(sub(y, mul(u, dot(y, u)))); }   // 'up' as seen across direction u
+/* the monitor's ruler: parallel to v̂, hung below the clouds so each reading is a visible drop line.
+   The point with reading s is rulerAt(s); the offset is ⟂ v̂, so it does not change any reading. */
+const rulerDrop = (spread) => 0.3 + 2.2 * spread;
+const rulerAt = (st, s, spread) => add(add(st.mn, mul(st.vh, s - st.pn)), mul(perpUp(st.vh), -rulerDrop(spread)));
+const rulerSpan = (st) => [Math.min(-1.1, st.outP - 0.3, st.pn - 0.6), Math.max(1.1, st.outP + 0.3, st.pp + 0.6)];
+function wallGroup() {                               // a glass pane with a brass frame, normal along local +z
+  const g = new THREE.Group(), s = 1.9;
+  const glass = new THREE.Mesh(new THREE.PlaneGeometry(s, s), K.mat.glass('#e6eef7', 0.3));
+  glass.material.side = THREE.DoubleSide; glass.userData.noFit = true; g.add(glass);
+  const brass = K.mat.brass();
+  for (const [x, y, sx, sy] of [[0, s / 2, s + 0.02, 0.018], [0, -s / 2, s + 0.02, 0.018], [s / 2, 0, 0.018, s], [-s / 2, 0, 0.018, s]]) {
+    const m = new THREE.Mesh(unitBox, brass); m.scale.set(sx, sy, 0.018); m.position.set(x, y, 0); m.castShadow = true; m.userData.noFit = true; g.add(m);
+  }
+  return g;
+}
+function placeWall(g, u, tau, around) {              // the plane {x : x·u = τ}, centred next to `around`
+  const c = add(around, mul(u, tau - dot(around, u)));
+  g.position.copy(W(c));
+  g.quaternion.setFromUnitVectors(V3(0, 0, 1), V3(...u));
+  return c;
+}
+
+/* ============================================================ build (once) */
+
+function build(S) {
+  const st = S.state, root = S.root, brass = K.mat.brass();
+  /* ---- persona-vector mode ---- */
+  const P = new THREE.Group(); st.PG = P; root.add(P);
+  st.bg = inst(ball, K.mat.paint('#ffffff'), N_BG, '#b9b1a3'); st.bg.castShadow = false; P.add(st.bg);
+  st.pos = inst(ball, K.mat.paint(C.data), N_PER); st.neg = inst(ball, K.mat.paint(C.aux), N_PER); P.add(st.pos, st.neg);
+  st.mPos = K.bead([0, 0, 0], C.data, 0.085); st.mNeg = K.bead([0, 0, 0], C.aux, 0.085); P.add(st.mPos, st.mNeg);
+  const halo = () => { const h = new THREE.Mesh(new THREE.TorusGeometry(0.125, 0.012, 8, 40), brass); h.castShadow = true; return h; };
+  st.hPos = halo(); st.hNeg = halo(); st.hProbe = halo(); P.add(st.hPos, st.hNeg, st.hProbe);
+  st.vArrow = K.arrow([0, 0, 0], [1, 0, 0], C.dir, { r: 0.03 }); P.add(st.vArrow.group);
+  st.ruler = new THREE.Mesh(unitCyl, brass); st.ruler.castShadow = true; P.add(st.ruler);
+  st.rTicks = inst(unitCyl, brass, 13); P.add(st.rTicks);
+  st.pTicks = inst(unitBox, K.mat.paint('#ffffff'), 2 * N_PER); P.add(st.pTicks);
+  st.probe = K.bead([0, 0, 0], '#fbf8f1', 0.07); P.add(st.probe);
+  st.drop = new THREE.Mesh(unitCyl, K.mat.string(C.ink)); P.add(st.drop);
+  st.foot = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.012, 8, 28), K.mat.paint(C.dir)); P.add(st.foot);
+  st.steered = K.bead([0, 0, 0], C.dir, 0.07); P.add(st.steered);
+  st.sArrow = K.arrow([0, 0, 0], [1, 0, 0], C.dir, { r: 0.018 }); P.add(st.sArrow.group);
+  st.cTicks = inst(ball, K.mat.paint('#ffffff'), ARENA_COEFFS.length); P.add(st.cTicks);
+  st.shell = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 28), K.mat.glass('#efe6d6', 0.16));
+  st.shell.material.side = THREE.DoubleSide; st.shell.matrixAutoUpdate = false; P.add(st.shell);
+  /* ---- shared: the capping wall and the red 'excess removed' stubs ---- */
+  st.wall = wallGroup(); root.add(st.wall);
+  st.stubs = inst(unitCyl, K.mat.paint(C.grad), 2 * N_PER + N_TURNS + 1); root.add(st.stubs);
+  /* ---- Assistant-Axis mode ---- */
+  const A = new THREE.Group(); st.AG = A; root.add(A);
+  st.personas = inst(ball, K.mat.paint('#ffffff'), SPACE.vecs.length); st.personas.count = SPACE.vecs.length; A.add(st.personas);
+  SPACE.vecs.forEach((p, k) => setBall(st.personas, k, W(p), isDef(k) ? 0.075 : 0.06, GROUP_HEX[SPACE.groups[k]]));
+  done(st.personas);
+  st.axArrow = K.arrow(W(MEAN_R), W(MEAN_D), C.dir, { r: 0.03 }); A.add(st.axArrow.group);
+  st.pc1 = new THREE.Mesh(unitCyl, brass); rodMesh(st.pc1, W(add(PCA.centre, mul(PC1, -1.55))), W(add(PCA.centre, mul(PC1, 1.55))), 0.008); A.add(st.pc1);
+  st.turns = inst(ball, K.mat.paint('#fbf8f1'), N_TURNS); st.turns.count = N_TURNS; A.add(st.turns);
+  TURNS.forEach((p, k) => setBall(st.turns, k, W(p), 0.05)); done(st.turns);
+  st.turnString = K.tube(TURNS.map((p) => W(p)), C.ink, 0.007); A.add(st.turnString.mesh);
+  st.capTurns = inst(ball, K.mat.paint(C.dir), N_TURNS); A.add(st.capTurns);
+  st.aSteered = K.bead([0, 0, 0], C.dir, 0.065); A.add(st.aSteered);
+  st.aArrow = K.arrow([0, 0, 0], [1, 0, 0], C.dir, { r: 0.018 }); A.add(st.aArrow.group);
+  /* ---- the dial (a real control: tap it to turn it) ---- */
+  const D = new THREE.Group(); st.dialG = D; root.add(D);
+  const post = new THREE.Mesh(unitCyl, brass); post.scale.set(0.02, DIAL_POS.y - DIAL_R, 0.02); post.position.set(DIAL_POS.x, (DIAL_POS.y - DIAL_R) / 2, DIAL_POS.z);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.19, 0.04, 32), brass); base.position.set(DIAL_POS.x, 0.02, DIAL_POS.z);
+  post.castShadow = base.castShadow = true; D.add(post, base);
+  const F = new THREE.Group(); st.dialFace = F; F.position.copy(DIAL_POS); D.add(F);
+  F.lookAt(DIAL_POS.x + 0.3, DIAL_POS.y + 0.3, DIAL_POS.z + 1);
+  const face = new THREE.Mesh(new THREE.CylinderGeometry(DIAL_R, DIAL_R, 0.04, 48), K.mat.plaster('#f6f1e6')); face.rotation.x = Math.PI / 2; face.castShadow = true;
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(DIAL_R, 0.02, 10, 64), brass); rim.position.z = 0.012;
+  F.add(face, rim);
+  const ticks = inst(unitBox, K.mat.ink(), 2 * CMAX + 1); ticks.count = 2 * CMAX + 1; F.add(ticks);
+  for (let c = -CMAX; c <= CMAX; c++) {
+    const th = c * TICK_DEG * DEG, long = ARENA_COEFFS.includes(c), r0 = long ? 0.225 : 0.255;
+    M4.compose(V3(Math.sin(th) * (r0 + 0.3) / 2, Math.cos(th) * (r0 + 0.3) / 2, 0.025), Q.setFromAxisAngle(V3(0, 0, 1), -th), S3.set(long ? 0.018 : 0.01, 0.3 - r0, 0.008));
+    ticks.setMatrixAt(c + CMAX, M4);
+  }
+  done(ticks);
+  st.needle = new THREE.Group(); st.needle.position.z = 0.035; F.add(st.needle);
+  const nd = new THREE.Mesh(unitBox, K.mat.paint(C.dir)); nd.scale.set(0.022, 0.27, 0.012); nd.position.y = 0.105; nd.castShadow = true; st.needle.add(nd);
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 20), brass); hub.rotation.x = Math.PI / 2; hub.position.z = 0.04; F.add(hub);
+  K.pick(face, (hit) => {
+    const p = F.worldToLocal(hit.point.clone()), th = Math.atan2(p.x, p.y) / DEG;
+    const c = Math.max(-CMAX, Math.min(CMAX, Math.round((2 * th) / TICK_DEG) / 2));
+    S.setKnob('coeff', c);
+  });
+  /* ---- a circular feature (toy weekdays) ---- */
+  const G = new THREE.Group(); st.daysG = G; root.add(G);
+  const dpost = new THREE.Mesh(unitCyl, brass); dpost.scale.set(0.016, DAYS_POS.y - 0.45, 0.016); dpost.position.set(DAYS_POS.x, (DAYS_POS.y - 0.45) / 2, DAYS_POS.z); dpost.castShadow = true; G.add(dpost);
+  const R = new THREE.Group(); st.daysR = R; R.position.copy(DAYS_POS); R.lookAt(DAYS_POS.x + 0.25, DAYS_POS.y + 0.15, DAYS_POS.z + 1); G.add(R);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.006, 8, 80), brass); R.add(ring);
+  st.dayBeads = inst(ball, K.mat.paint(C.data), 7); st.dayBeads.count = 7; R.add(st.dayBeads);
+  DAYS.forEach((_, k) => setBall(st.dayBeads, k, V3(...dayPoint(k)), 0.05)); done(st.dayBeads);
+  const dp = (k) => V3(...dayPoint(k)), step = dp(1).sub(dp(0)), land = dp(5).add(step);
+  st.dayStep = K.arrow(dp(0), dp(1), C.dir, { r: 0.014 }); R.add(st.dayStep.group);
+  st.dayCopy = K.arrow(dp(5), land, C.dir, { r: 0.014 }); R.add(st.dayCopy.group);
+  st.dayMiss = new THREE.Mesh(unitCyl, K.mat.paint(C.grad)); rodMesh(st.dayMiss, land, dp(6), 0.009); R.add(st.dayMiss);
+  st.dayLand = K.bead(land, C.grad, 0.035); R.add(st.dayLand);
+  st.missLen = land.distanceTo(dp(6)); st.stepLen = step.length();
+  /* ---- the stick figure (turns the dial in the steering beat, shrugs at the ring) ---- */
+  st.fig = K.figure(); root.add(st.fig.group); st.fig.group.visible = false;
+
+  /* ---- labels (few, big) ---- */
+  const tag = (t, o = {}) => K.label([0, 0, 0], t, Object.assign({ cls: 'tag', anchor: 'bottom', dy: -8 }, o));
+  st.tPos = tag({ 1: 'sycophantic (toy)', 2: 'pos: sycophantic (toy)', 3: 'pos (toy)' });
+  st.tNeg = tag({ 1: 'honest (toy)', 2: 'neg: honest (toy)', 3: 'neg (toy)' }, { anchor: 'top', dy: 8 });
+  st.tV = tag({ 1: 'persona vector', 2: 'v = mean(pos) − mean(neg)', 3: 'v' }, { anchor: 'top', dy: 10 });
+  st.tProbe = tag({ 1: 'new answer', 2: 'new answer h', 3: 'h (baseline)' }, { anchor: 'right', dx: -10, dy: 0 });
+  st.tC5 = tag({ 1: 'dial at +5', 2: 'coeff +5', 3: 'h + 5v' }, { dy: -6 });
+  st.tShell = tag({ 1: 'normal range (toy)', 2: 'normal range (toy)', 3: 'Mahalanobis ≤ 3 (toy)' });
+  st.tWall = tag({ 1: 'the cap', 2: 'cap at τ', 3: 'h·û = τ' });
+  st.tAxis = tag({ 1: 'toward the Assistant', 2: 'Assistant Axis', 3: 'assistant_axis' }, { anchor: 'left', dx: 8, dy: 0 });
+  st.tPC1 = tag({ 1: 'main spread', 2: 'PC1', 3: 'PC1' }, { anchor: 'left', dx: 6, dy: 0 });
+  st.tTurn1 = tag({ 1: 'turn 1', 2: 'turn 1', 3: 't = 1' }, { anchor: 'top', dy: 8 });
+  st.tTurn8 = tag({ 1: 'turn 8', 2: 'turn 8', 3: 't = 8' }, { anchor: 'top', dy: 8 });
+  st.tNames = LABELLED.map((n) => { const k = SPACE.names.indexOf(n); return K.label(W(add(SPACE.vecs[k], [0, 0.07, 0])), n === 'default' ? 'default ×4' : n, { cls: 'tag', anchor: 'bottom', dy: -6 }); });
+  st.tDial = K.label(V3(DIAL_POS.x, DIAL_POS.y - DIAL_R - 0.04, DIAL_POS.z), '', { cls: 'tag', anchor: 'top', dy: 6 });
+  st.tDays = DAYS.map((d) => K.label([0, 0, 0], d, { cls: 'tag', anchor: 'center', dy: 0 }));
+  R.updateWorldMatrix(true, false);
+  DAYS.forEach((_, k) => st.tDays[k].move(R.localToWorld(V3(...dayPoint(k, 0.56)))));
+  st.note = K.label([0, 0, 0], '', { cls: 'note', anchor: 'bottom', dy: -10 });
+}
+
+/* ============================================================ compute */
+
+function compute(S) {
+  const st = S.state, k = S.knobs;
+  st.cl = makeClouds(k.sep, k.spread, st.seed);
+  const { pos, neg, bg } = st.cl;
+  st.mp = mean(pos); st.mn = mean(neg);
+  st.v = personaVector(pos, neg); st.vn = norm(st.v); st.vh = unit(st.v);
+  st.pp = projection(st.mp, st.v); st.pn = projection(st.mn, st.v);
+  st.bgm = mean(bg); st.bgC = cov3(bg); st.bgInv = inv3(st.bgC); st.bgE = eigSym3(st.bgC);
+  st.exit = exitCoeffs(PROBE, st.v, st.bgm, st.bgInv, R_DATA);
+  /* LDA check (tier 3): with a shared within-class covariance Sw, the best linear separator is Sw⁻¹v */
+  const Sw = cov3(pos).map((row, i) => row.map((x, j) => (x + cov3(neg)[i][j]) / 2));
+  const lda = unit(inv3(Sw).map((row) => dot(row, st.v)));
+  st.cosLDA = Math.abs(dot(lda, st.vh));
+  const prj = (a) => projection(a, st.v);
+  const sdp = Math.sqrt((pos.concat(neg).reduce((s, a, n) => { const m0 = n < N_PER ? st.pp : st.pn; return s + (prj(a) - m0) ** 2; }, 0)) / (2 * N_PER - 2));
+  st.dprime = (st.pp - st.pn) / (sdp || 1);
+  st.coeff = k.coeff; st.cap = k.cap; st.tau = k.tau;
+  /* persona mode: steer the probe, then cap (both as forward hooks: steering, then the ceiling) */
+  st.probeP = projection(PROBE, st.v);
+  st.raw = steer(PROBE, st.v, st.coeff);
+  st.out = st.cap ? capCeiling(st.raw, st.v, st.tau) : st.raw;
+  st.rawP = projection(st.raw, st.v); st.outP = projection(st.out, st.v);
+  st.dM = mahal(st.out, st.bgm, st.bgInv);
+  st.capPos = pos.map((a) => (st.cap ? capCeiling(a, st.v, st.tau) : a));
+  st.capNeg = neg.map((a) => (st.cap ? capCeiling(a, st.v, st.tau) : a));
+  st.nCapped = [...pos, ...neg].filter((a) => prj(a) > st.tau).length;
+  st.maxExcess = Math.max(0, ...[...pos, ...neg].map((a) => prj(a) - st.tau));
+  /* axis mode: floor-cap the drifting turns (Lu et al.), steer the last turn by α·AXIS_SCALE·axis */
+  st.turnP = TURNS.map((t) => dot(t, AXIS));
+  st.capT = TURNS.map((t) => (st.cap ? capFloor(t, AXIS, st.tau) : t));
+  st.nLifted = st.turnP.filter((p) => p < st.tau).length;
+  st.last = st.capT[N_TURNS - 1];
+  st.aOut = add(st.last, mul(AXIS, st.coeff * GAP));
+}
+
+/* ============================================================ draw */
+
+function draw(S) {
+  const st = S.state, sh = st.show, axis = S.knobs.mode === 'axis', t = S.tier;
+  st.PG.visible = !axis; st.AG.visible = axis;
+  let ns = 0;
+  const stub = (a, b) => { if (a.distanceTo(b) > 0.004) setRod(st.stubs, ns++, a, b, 0.01); };
+  /* ---- persona mode ---- */
+  const steerOn = !axis && (sh.steer || Math.abs(st.coeff) > 1e-9), probeOn = !axis && (sh.probe || steerOn), rulerOn = !axis && (sh.ruler || st.cap);
+  if (!axis) {
+    const { bg } = st.cl;
+    st.bg.count = sh.shell ? N_BG : 0; bg.forEach((a, n) => setBall(st.bg, n, W(a), 0.02));
+    st.pos.count = st.neg.count = N_PER;
+    st.capPos.forEach((a, n) => setBall(st.pos, n, W(a), 0.045)); st.capNeg.forEach((a, n) => setBall(st.neg, n, W(a), 0.045));
+    if (st.cap) { st.cl.pos.forEach((a, n) => stub(W(a), W(st.capPos[n]))); st.cl.neg.forEach((a, n) => stub(W(a), W(st.capNeg[n]))); }
+    done(st.bg, st.pos, st.neg);
+    for (const [b, h, m] of [[st.mPos, st.hPos, st.mp], [st.mNeg, st.hNeg, st.mn]]) { b.position.copy(W(m)); h.position.copy(W(m)); b.visible = h.visible = sh.means; }
+    st.vArrow.set(W(st.mn), W(st.mp)); st.vArrow.show(sh.v && st.vn > 1e-6);
+    /* the monitor: a ruler along v̂ hung below the clouds, ticks every 0.5, every answer's reading as a tick */
+    const u = st.vh, up = perpUp(u), spr = S.knobs.spread, at = (s) => rulerAt(st, s, spr);
+    const [lo, hi] = rulerSpan(st);
+    rodMesh(st.ruler, W(at(lo)), W(at(hi)), 0.011); st.ruler.visible = rulerOn;
+    let nt = 0;
+    if (rulerOn) for (let k = -6; k <= 6; k++) { const s = 0.5 * k; if (s > lo + 0.05 && s < hi - 0.05) setRod(st.rTicks, nt++, W(at(s - 0.004)), W(at(s + 0.004)), k === 0 ? 0.05 : 0.035); }
+    st.rTicks.count = nt;
+    st.pTicks.count = rulerOn && sh.ticks ? 2 * N_PER : 0;
+    if (st.pTicks.count) [...st.cl.pos, ...st.cl.neg].forEach((a, n) => {
+      const s = projection(a, st.v), side = n < N_PER ? 1 : -1, c = W(add(at(s), mul(up, 0.062 * side)));
+      M4.makeBasis(V3(...u), V3(...up), V3(...cross(u, up))); M4.scale(S3.set(0.014, 0.09, 0.014)); M4.setPosition(c);
+      st.pTicks.setMatrixAt(n, M4); st.pTicks.setColorAt(n, COL.set(n < N_PER ? C.data : C.aux));
+    });
+    done(st.rTicks, st.pTicks);
+    /* the new answer, its reading, and (if the dial is turned) where steering sends it */
+    const hw = W(PROBE), foot = W(at(st.outP));
+    st.probe.position.copy(hw); st.hProbe.position.copy(hw); st.probe.visible = st.hProbe.visible = probeOn;
+    rodMesh(st.drop, W(st.out), foot, 0.005); st.drop.visible = probeOn && rulerOn;
+    st.foot.position.copy(foot); st.foot.quaternion.setFromUnitVectors(V3(0, 0, 1), V3(...u)); st.foot.visible = probeOn && rulerOn;
+    st.steered.position.copy(W(st.out)); st.steered.visible = steerOn;
+    st.sArrow.set(hw, W(st.out)); st.sArrow.show(steerOn && Math.abs(st.coeff) > 1e-9 && st.out.some((x, i) => Math.abs(x - PROBE[i]) > 1e-3));
+    if (steerOn && st.cap) stub(W(st.out), W(st.raw));
+    st.cTicks.count = steerOn ? ARENA_COEFFS.length : 0;
+    ARENA_COEFFS.forEach((c, n) => { const p = steer(PROBE, st.v, c); setBall(st.cTicks, n, W(p), 0.03, mahal(p, st.bgm, st.bgInv) > R_DATA ? C.grad : '#9d968b'); });
+    done(st.cTicks);
+    /* the normal range: R = 3 Mahalanobis ellipsoid of the everyday activations */
+    const e = st.bgE, cols = e.vectors.map((x, k) => V3(...mul(x, R_DATA * Math.sqrt(e.values[k]))));
+    st.shell.matrix.makeBasis(cols[0], cols[1], cols[2]).setPosition(W(st.bgm)); st.shell.matrixWorldNeedsUpdate = true;
+    st.shell.visible = sh.shell;
+  }
+  /* ---- Assistant-Axis mode ---- */
+  let nc = 0;
+  if (axis) {
+    st.capTurns.count = 0;
+    TURNS.forEach((p, k) => { if (st.cap && st.turnP[k] < st.tau) { setBall(st.capTurns, nc++, W(st.capT[k]), 0.045); stub(W(p), W(st.capT[k])); } });
+    st.capTurns.count = nc; done(st.capTurns);
+    const aOn = Math.abs(st.coeff) > 1e-9;
+    st.aSteered.position.copy(W(st.aOut)); st.aSteered.visible = aOn;
+    st.aArrow.set(W(st.last), W(st.aOut)); st.aArrow.show(aOn);
+  }
+  st.stubs.count = ns; done(st.stubs);
+  /* ---- the wall (ceiling on v̂ in persona mode, floor on the axis in axis mode) ---- */
+  st.wall.visible = st.cap;
+  if (st.cap) st.wallC = placeWall(st.wall, axis ? AXIS : st.vh, st.tau, axis ? PCA.centre : mul(add(st.mp, st.mn), 0.5));
+  /* ---- dial ---- */
+  st.needle.rotation.z = -st.coeff * TICK_DEG * DEG;
+  st.tDial.set(t === 1 ? `dial ${sg(st.coeff, 1)}` : axis ? `α = ${sg(st.coeff, 1)} gaps` : `coeff = ${sg(st.coeff, 1)}`);
+  st.daysG.visible = sh.days;
+  tags(S, axis, steerOn, probeOn);
+  note(S);
+  S.invalidate();
+}
+
+function tags(S, axis, steerOn, probeOn) {
+  const st = S.state, sh = st.show, on = sh.tags, pv = on && !axis && !sh.days, sp = S.knobs.spread / 0.2;
+  st.tPos.move(W(add(st.mp, [0.05, 0.45 * sp, 0]))).show(pv);
+  st.tNeg.move(W(add(st.mn, [-0.05, -0.45 * sp, 0]))).show(pv);
+  st.tV.move(W(mul(add(st.mp, st.mn), 0.5))).show(pv && sh.v && !steerOn);
+  st.tProbe.move(W(PROBE)).show(pv && probeOn);
+  const p5 = steer(PROBE, st.v, 5);
+  st.tC5.move(W(add(p5, [0, 0.04, 0]))).show(pv && sh.steer && mahal(p5, st.bgm, st.bgInv) > R_DATA);
+  const e = st.bgE, top = add(st.bgm, mul(e.vectors[1], R_DATA * Math.sqrt(e.values[1]) * Math.sign(e.vectors[1][1] || 1)));
+  st.tShell.move(W(top)).show(pv && sh.shell);
+  st.tWall.show(on && st.cap && !sh.days);
+  if (st.cap) st.tWall.move(W(add(st.wallC, [0, 0.95, 0])));
+  st.tAxis.move(W(MEAN_D)).show(on && axis);
+  st.tPC1.move(W(add(PCA.centre, mul(PC1, -1.55)))).show(on && axis && S.tier > 1);
+  st.tTurn1.move(W(TURNS[0])).show(on && axis);
+  st.tTurn8.move(W(TURNS[N_TURNS - 1])).show(on && axis);
+  st.tNames.forEach((l) => l.show(on && axis));
+  st.tDial.show(on && !sh.days && (axis || steerOn || sh.steer));
+  st.tDays.forEach((l) => l.show(sh.days));
+}
+
+/* ============================================================ notes (live maths) */
+
+function note(S) {
+  const st = S.state, t = S.tier, axis = S.knobs.mode === 'axis', N0 = st.note;
+  let m = st.noteMode;
+  if (!m) { N0.show(false); return; }
+  if (axis && m !== 'days') m = 'axis';
+  if (!axis && m === 'axis') m = st.cap ? 'cap' : Math.abs(st.coeff) > 1e-9 ? 'steer' : 'monitor';
+  if (!axis && (m === 'collect' || m === 'v' || m === 'monitor') && Math.abs(st.coeff) > 1e-9) m = 'steer';
+  if (!axis && m !== 'days' && m !== 'arena' && m !== 'where' && st.cap) m = 'cap';
+  N0.show(true).anchor('bottom');
+  const inRange = st.dM <= R_DATA, ex = st.exit;
+  const above = W(add(st.mp, [0.3, 0.1 + 0.62 * S.knobs.spread / 0.2, 0]));
+  if (m === 'collect') {
+    N0.move(above);
+    N0.set(t === 1 ? `${N_PER} answers each side (toy)\n40 in, 1 average out`
+      : `mean(pos) = ${vec(st.mp)}\nmean(neg) = ${vec(st.mn)}\nN = ${N_PER} each, d = 3 (toy)`);
+    return;
+  }
+  if (m === 'v') {
+    N0.move(above);
+    N0.set(t === 1 ? `arrow length ${fx(st.vn, 2)}\n(toy units)` : t === 2 ? `v = ${vec(st.v)}\n‖v‖ = ${fx(st.vn, 3)}`
+      : `v = ${vec(st.v, 3)}, ‖v‖ = ${fx(st.vn, 3)}\ncos(v, S_w⁻¹v) = ${fx(st.cosLDA, 3)}`);
+    return;
+  }
+  if (m === 'monitor') {
+    N0.move(above);
+    N0.set(t === 1 ? `new answer reads ${sg(st.outP)}\nhonest ${sg(st.pn)} · sycophantic ${sg(st.pp)}`
+      : t === 2 ? `h·v/‖v‖ = ${sg(st.outP, 3)}\nmeans: neg ${sg(st.pn, 3)}, pos ${sg(st.pp, 3)}`
+        : `proj(h) = ${sg(st.outP, 3)}\nd′ = ${fx(st.dprime, 2)} per answer (toy)`);
+    return;
+  }
+  if (m === 'steer') {
+    N0.move(W(add(st.out, [0, 0.3, 0])));
+    const where = inRange ? (t === 1 ? 'still in the normal range' : `Mahalanobis ${fx(st.dM, 2)} ≤ 3`) : (t === 1 ? 'outside the normal range: junk' : `Mahalanobis ${fx(st.dM, 2)} > 3: off the data`);
+    N0.set(t === 1 ? `dial ${sg(st.coeff, 1)}: reading ${sg(st.probeP)} → ${sg(st.outP)}\n${where}`
+      : `h + ${fx(st.coeff, 1)}·v: proj ${sg(st.probeP, 3)} → ${sg(st.outP, 3)}\n${where}${ex ? `\nleaves at coeff ${sg(ex[1], 1)} / ${sg(ex[0], 1)}` : ''}`);
+    return;
+  }
+  if (m === 'cap') {
+    N0.move(W(add(st.wallC || st.mp, [0, 1.25, 0])));
+    const steered = Math.abs(st.coeff) > 1e-9 ? (t === 1 ? `\nsteered answer stops at ${sg(st.outP)}` : `\nsteered: min(${sg(st.rawP, 2)}, τ) = ${sg(st.outP, 2)}`) : '';
+    N0.set(t === 1 ? `wall at ${sg(st.tau)}: ${st.nCapped} of ${2 * N_PER} pushed back${steered}`
+      : t === 2 ? `τ = ${sg(st.tau)}: ${st.nCapped}/${2 * N_PER} answers capped\nlargest excess removed ${fx(st.maxExcess, 3)}${steered}`
+        : `h − max(h·v̂ − τ, 0)·v̂: ${st.nCapped}/${2 * N_PER} clipped\nonly the v̂ part changes${steered}`);
+    return;
+  }
+  if (m === 'axis') {
+    N0.move(W(add(MEAN_D, [-0.2, 0.75, 0])));
+    const lift = st.cap ? `\nfloor τ = ${sg(st.tau)}: ${st.nLifted} turn${st.nLifted === 1 ? '' : 's'} lifted` : '';
+    const push = Math.abs(st.coeff) > 1e-9 ? `\nturn 8 ${t === 1 ? 'steered' : `+ ${fx(st.coeff, 1)}·gap·axis`}: ${sg(dot(st.last, AXIS))} → ${sg(dot(st.aOut, AXIS))}` : '';
+    N0.set(t === 1 ? `turn 1 reads ${sg(st.turnP[0])}, turn 8 ${sg(st.turnP[N_TURNS - 1])}${lift}${push}`
+      : `cos(PC1, axis) = ${fx(COS_PC1, 3)}, PC1 ${(100 * PCA.ratio[0]).toFixed(0)}%\nAXIS_SCALE = ${fx(GAP, 3)}${lift}${push}`);
+    return;
+  }
+  if (m === 'days') {
+    N0.move(V3(DAYS_POS.x + 0.2, DAYS_POS.y + 0.72, DAYS_POS.z));
+    N0.set(t === 1 ? `Sat + (Tue − Mon) misses Sun\nby ${fx(st.missLen, 2)} (a step is ${fx(st.stepLen, 2)})`
+      : `Sat + (Tue − Mon) − Sun: ${fx(st.missLen, 3)}\neach step turns ${fx(360 / 7, 1)}°: no single vector`);
+    return;
+  }
+  if (m === 'arena') {
+    N0.move(W(add(st.mp, [0.3, 0.7, 0])));
+    N0.set(t === 1 ? `ARENA's sycophancy score by dial:\n−3: 12.5 · 0: 13.5 · +3: 89.5 · +5: 32.0`
+      : `ARENA run (Qwen2.5-7B, layer 19):\n${ARENA_COEFFS.map((c, n) => `${sg(c, 0)}: ${ARENA_SCORES[n].toFixed(1)}`).join(' · ')}`);
+    return;
+  }
+  /* 'where' */
+  N0.move(W([0.2, 1.1, 0]));
+  N0.set(t === 1 ? `one persona vector: ${QWEN7.d_model.toLocaleString('en-US')} numbers\nno weights change`
+    : `v ∈ ℝ^${QWEN7.d_model} at 1 of ${QWEN7.n_layers} layers\nsteering adds it at every token`);
+}
+
+function dimKnobs(S) {        // the kit cannot dim knobs: grey the ones that do nothing right now
+  const dim = (id, on) => { const el = document.getElementById('k-' + id); const row = el && el.closest('.k-knob'); if (row) row.style.opacity = on ? '0.42' : ''; };
+  const axis = S.knobs.mode === 'axis';
+  dim('sep', axis); dim('spread', axis); dim('reseed', axis); dim('tau', !S.knobs.cap);
+}
+
+/* scene configuration shared by beats and predictions */
+const LAYERS = ['means', 'v', 'ruler', 'ticks', 'probe', 'steer', 'shell', 'days'];
+function scene(S, o = {}) {
+  const st = S.state;
+  st.noteMode = o.note || null;
+  st.show = { tags: o.tags !== false };
+  for (const k of LAYERS) st.show[k] = !!(o.show || []).includes(k);
+  if (o.figure) {
+    st.fig.group.visible = true;
+    st.fig.place(o.figAt, o.face);
+    st.fig.pose('stand', { ms: 0 });
+    const doPose = () => st.fig.pose(o.figure, { at: o.at });
+    if (S.shot) doPose(); else setTimeout(doPose, 480);
+  } else st.fig.group.visible = false;
+  draw(S);
+  dimKnobs(S);
+}
+
+/* ================================================================ STL solids */
+
+const jp = (a) => [O.x + a[0], -(O.z + a[2]), O.y + a[1]];        // activation vector -> JSCAD (z-up) point
+function postTo(x, z, top, r = 0.025) { return J.primitives.cylinder({ radius: r, height: top, center: [x, -z, top / 2], segments: 12 }); }
+
+/* ================================================================== run() */
+
+const ALL = ['means', 'v', 'ruler', 'ticks', 'probe', 'steer', 'shell'];
+
+run({
+  id: 'd12-dial', num: '25', week: 12, kind: 'deep',
+  title: 'The dial',
+  subtitle: 'A persona is a direction: reading it is a dot product, steering is adding it, capping is a wall.',
+  back2d: '#week-12',
+  film: 'deep-w12-steering',
+  plinth: { r: 2.5, h: 0.14 },
+
+  knobs: [
+    { id: 'mode', type: 'select', wide: true, label: { 1: 'Show', 2: 'Mode', 3: 'Mode' }, value: 'persona',
+      options: [['persona', { 1: 'One trait: flattery (toy)', 2: 'Persona vector: sycophancy (toy)', 3: 'contrastive trait vector (toy)' }],
+        ['axis', { 1: 'Assistant vs role-play (toy)', 2: 'Assistant Axis, 20 personas (toy)', 3: 'assistant_axis over PERSONAS (toy)' }]] },
+    { id: 'coeff', type: 'range', label: { 1: 'The dial (steering)', 2: 'Steering coeff (α in axis mode)', 3: 'coeff · v  (α · AXIS_SCALE · axis)' },
+      min: -CMAX, max: CMAX, step: 0.5, value: 0, fmt: (v) => sg(v, 1) },
+    { id: 'cap', type: 'toggle', label: { 1: 'Capping wall', 2: 'Activation capping', 3: 'ActivationCapper' }, value: false },
+    { id: 'tau', type: 'range', label: { 1: 'Wall position', 2: 'Cap threshold τ', 3: 'τ' }, min: -1.5, max: 1.5, step: 0.05, value: 0.3, fmt: (v) => sg(v, 2) },
+    { id: 'sep', type: 'range', label: { 1: 'How different the answers are', 2: 'Cloud separation (toy)', 3: '‖μ₊ − μ₋‖ (toy)' }, min: 0, max: 1.2, step: 0.05, value: 0.45, fmt: (v) => v.toFixed(2) },
+    { id: 'spread', type: 'range', label: { 1: 'Scatter', 2: 'Cloud spread (toy)', 3: 'σ (toy)' }, min: 0.05, max: 0.4, step: 0.01, value: 0.2, fmt: (v) => v.toFixed(2) },
+    { id: 'reseed', type: 'button', label: { 1: 'New answers', 2: 'Resample the clouds', 3: 'reseed' }, onClick: (S) => { S.state.seed += 1; compute(S); draw(S); } },
+  ],
+
+  setup(S) {
+    const st = S.state;
+    st.seed = 11; st.noteMode = 'collect'; st.show = { tags: true, means: true };
+    build(S);
+  },
+
+  rebuild(S) {
+    compute(S);
+    draw(S);
+    dimKnobs(S);
+  },
+
+  onTier(S) { draw(S); },
+
+  solids(S) {
+    const st = S.state, out = [];
+    out.push(J.primitives.cylinder({ radius: 2.1, height: 0.08, center: [0, 0, 0.04], segments: 64 }));   // base
+    if (S.knobs.mode === 'axis') {
+      for (const [k, p] of SPACE.vecs.entries()) { const q = jp(p); out.push(J.primitives.sphere({ radius: isDef(k) ? 0.1 : 0.08, center: q, segments: 16 }), postTo(q[0], -q[1], q[2])); }
+      out.push(K.tubeSolid([jp(MEAN_R), jp(MEAN_D)], 0.04, 12));
+    } else {
+      for (const [m, r] of [[st.mp, 0.12], [st.mn, 0.12], [PROBE, 0.09], [st.out, 0.09]]) { const q = jp(m); out.push(J.primitives.sphere({ radius: r, center: q, segments: 16 }), postTo(q[0], -q[1], q[2])); }
+      if (st.vn > 1e-3) out.push(K.tubeSolid([jp(st.mn), jp(st.mp)], 0.04, 12));
+      const [lo, hi] = rulerSpan(st), at = (s) => rulerAt(st, s, S.knobs.spread);
+      out.push(K.tubeSolid([jp(at(lo)), jp(at(hi))], 0.02, 10));
+    }
+    /* the dial: a disc on a post, facing front */
+    out.push(J.primitives.cylinder({ radius: DIAL_R, height: 0.05, center: [DIAL_POS.x, -DIAL_POS.z, DIAL_POS.y], segments: 48 }));
+    out.push(postTo(DIAL_POS.x, DIAL_POS.z, DIAL_POS.y));
+    return out;
+  },
+
+  beats: [
+    { tag: 'core',
+      cap: {
+        1: '**First, collect.** Ask the same questions twice: once told to flatter, once told to be honest. Each answer leaves a point in the model\'s activations (toy, 3-D). Average each cloud: two ringed beads.',
+        2: '**Contrastive prompts.** ARENA [4.4] answers 20 questions under 5 sycophantic and 5 honest system prompts, keeps the pairs a judge scores ≥ 50 and < 50, and averages each answer\'s activations over its tokens at one layer. Toy: 40 points a side in 3-D, not 3,584.',
+        3: '`generate_contrastive_responses` → `filter_effective_pairs` (pos_score ≥ 50, neg_score < 50) → mean over response tokens (`response_avg_diff`, the best of three variants). Qwen2.5-7B-Instruct, d_model 3584, hidden_states[20]. Toy: two Gaussian clouds in ℝ³, N = 40.',
+      },
+      cam: CAM.front,
+      set: { mode: 'persona', coeff: 0, cap: false, sep: 0.45, spread: 0.2 },
+      enter(S) { scene(S, { note: 'collect', show: ['means'] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Subtract one average from the other.** The violet arrow runs from the honest mean to the flattering one. Topic, grammar and length are in both clouds, so they cancel. What is left is the trait.',
+        2: '**v = mean(pos) − mean(neg).** Whatever both clouds share cancels; what survives points along the trait. 3Blue1Brown\'s picture: in a model\'s space, directions carry meaning. The note shows v, computed from the beads you see.',
+        3: 'Per layer, `extract_contrastive_vectors` returns (num_layers, d_model) mean differences. With a shared isotropic covariance this is also the best linear separator; with shared S_w the optimum is S_w⁻¹v (live cosine in the note). Steering wants the mean shift itself.',
+      },
+      cam: CAM.close,
+      set: { mode: 'persona', coeff: 0, cap: false, sep: 0.45, spread: 0.2 },
+      enter(S) { scene(S, { note: 'v', show: ['means', 'v'] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**To check a new answer, read its shadow on the arrow.** Drop the white bead onto the brass ruler: further right is more flattering. Every answer gets one reading (the ticks). It costs one dot product.',
+        2: '**Monitoring: proj = a·v/‖v‖.** ARENA\'s `compute_trait_projections` takes a response\'s mean activation a and projects it onto v. The ticks are every answer\'s reading: the clouds separate along the ruler, noisily per answer, clearly on average.',
+        3: 'Projection monitoring (Chen et al. 2025; ARENA mirrors `eval/cal_projection.py`): a·v/‖v‖ on hidden_states[20], no intervention. Chen et al. also project fine-tuning data onto v to flag samples that would push a model toward the trait. You calibrate the threshold.',
+      },
+      cam: CAM.ruler,
+      set: { mode: 'persona', coeff: 0, cap: false, sep: 0.45, spread: 0.2 },
+      enter(S) { scene(S, { note: 'monitor', show: ['means', 'v', 'ruler', 'ticks', 'probe'] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Turn the dial: the answer slides along the arrow.** In ARENA\'s run, +3 made replies gush (sycophancy 13.5 → 89.5 of 100). At +5 it leaves the normal range (red) and the text turns to mush: 32.0.',
+        2: '**Steering: h ← h + coeff·v inside one layer, at every token.** A forward hook, no training. ARENA\'s scores by coeff: −3: 12.5, 0: 13.5, +1: 33.8, +3: 89.5, +5: 32.0. Too far and the activation leaves anything the model has seen (glass shell, toy).',
+        3: 'Activation addition (Turner et al. 2023): `ActivationSteerer(model, v, coeff, layer=19, positions="response")`. coeff scales the raw v, so the useful range depends on ‖v‖. Red beads: ARENA\'s coeffs outside the toy\'s Mahalanobis-3 normal range.',
+      },
+      cam: CAM.steer,
+      set: { mode: 'persona', coeff: 3, cap: false, sep: 0.45, spread: 0.2 },
+      enter(S) { scene(S, { note: 'steer', show: ['means', 'v', 'ruler', 'probe', 'steer', 'shell'], figure: 'point', figAt: [1.1, 0, 1.8], face: [1.62, 0, 1.5], at: S.root.localToWorld(DIAL_POS.clone()) }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Capping is a wall, not a push.** Anything reading past the wall slides back onto it (red: what was cut). Everything below is left alone. Steering moves every answer; capping only touches the extremes.',
+        2: '**ARENA\'s `ActivationCapper`: h ← h − max(h·v̂ − τ, 0)·v̂.** A ceiling on one reading; every other direction of h is kept. The Assistant Axis paper uses it against persona drift. Open question: how much of a persona one direction really holds.',
+        3: 'Current method (Lu et al. 2026): per-layer calibrated vectors, capped at a quantile of normal projections (Qwen 3 32B: layers 46-53, p0.25), all positions; ARENA shows a generic axis alone fails. Ceiling here, floor in the paper: a sign flip of v and τ.',
+      },
+      cam: CAM.cap,
+      set: { mode: 'persona', coeff: 3, cap: true, tau: 0.3, sep: 0.45, spread: 0.2 },
+      enter(S) { scene(S, { note: 'cap', show: ['means', 'v', 'ruler', 'probe', 'steer'] }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**The Assistant is a direction too.** ARENA\'s 20 personas, from \'default\' to \'ghost\' and \'jester\' (toy positions). Default minus role-play is the axis. Long chats drift down it; a floor cap lifts them.',
+        2: '**Assistant Axis = normalize(mean(default) − mean(roles))**: the same difference of means, over ARENA\'s persona list (toy 3-D positions). PC1 of all personas lines up with it (live cosine). Each turn\'s projection shows a chat drifting; a floor cap lifts it.',
+        3: 'Lu et al. 2026: persona space\'s leading PC ≈ the Assistant Axis (ARENA, Gemma 2 27B: PC1 51.9%, PC2 13.2%). AXIS_SCALE = the default-vs-role gap, so α = 1 is one gap. Floor cap: h ← h − v·min(⟨h, v⟩ − τ, 0).',
+      },
+      cam: CAM.axis,
+      set: { mode: 'axis', coeff: 0, cap: true, tau: 0.15 },
+      enter(S) { scene(S, { note: 'axis' }); } },
+
+    { tag: 'contested',
+      cap: {
+        1: '**Is every idea a straight arrow?** Many are. But models store weekdays on a circle: the step Mon → Tue, added at Sat, misses Sun (red). One fixed arrow cannot walk around a circle.',
+        2: '**Linear representation hypothesis: concepts are directions you can add.** It holds for many traits, which is why v steers at all. Not for all: Engels et al. 2024 found weekdays and months on circles (toy ring). Current practice: assume a direction, then test it.',
+        3: 'Contested: features as 1-D directions (LRH) vs irreducibly multi-dimensional features (Engels et al. 2024: circular weekday and month features in GPT-2 and Mistral 7B). A persona may span several directions; one v per layer is the first-order story.',
+      },
+      cam: CAM.days,
+      set: { mode: 'persona', coeff: 0, cap: false, sep: 0.45, spread: 0.2 },
+      enter(S) { scene(S, { note: 'days', show: ['means', 'v', 'days'], figure: 'shrug', figAt: [-0.72, 0, 1.6], face: [-1.9, 0, 6.0] }); } },
+
+    { tag: 'exercise',
+      cap: {
+        1: '**In the exercises you build each piece:** collect contrasting answers, average, subtract, then steer and monitor with the vector. Then the same recipe for \'evil\' and \'hallucinating\'.',
+        2: '**ARENA [4.4], parts 3-4:** `extract_contrastive_vectors` (after generating and filtering pairs), `ActivationSteerer`, `compute_trait_projections`, then `run_trait_pipeline` repeats it all for evil and hallucinating.',
+        3: 'Parts 1-2: `extract_persona_vectors` (per-persona means, ~65% depth on Gemma 2 27B), `pca_decompose_persona_vectors` (the axis), `ConversationAnalyzer` (drift), `generate_with_steering`, `ActivationCapper` and `run_capping_experiment` on Qwen 3 32B.',
+      },
+      cam: CAM.steer,
+      set: { mode: 'persona', coeff: 3, cap: false, sep: 0.45, spread: 0.2 },
+      enter(S) { scene(S, { note: 'arena', show: ALL }); } },
+
+    { tag: 'core',
+      cap: {
+        1: '**Where else?** A photo\'s warmth slider adds one colour direction. A mixing-desk fader turns one track up. Word maths: king − man + woman lands near queen. Read by projecting, change by adding.',
+        2: '**Directions you read and add are everywhere.** Colour sliders, mixing-desk faders, word2vec\'s king − man + woman ≈ queen (Mikolov et al. 2013), the single refusal direction in chat models, and concept sliders in image models.',
+        3: 'Difference-of-means directions: word2vec analogies, contrastive activation addition (CAA), refusal directions (Arditi et al. 2024), representation engineering (Zou et al. 2023), concept sliders. Capping is projection clipping, a cousin of gradient clipping.',
+      },
+      cam: CAM.wide,
+      set: { mode: 'persona', coeff: 1, cap: false, sep: 0.45, spread: 0.2 },
+      enter(S) { scene(S, { note: 'where', show: ['means', 'v', 'probe', 'steer'] }); } },
+  ],
+
+  predict: [
+    { q: { 1: 'The dial is at 0. What does steering do to the new answer?', 2: 'coeff = 0. What does ActivationSteerer do to h?', 3: 'h + coeff·v at coeff = 0 is?' },
+      options: [{ t: 'Nothing: it stays exactly where it was', ok: true }, { t: 'Nudges it toward the average' }, { t: 'Flips it to the other cloud' }, { t: 'Removes the trait from it' }],
+      why: { 1: 'Steering adds the arrow times the dial number. Zero times the arrow is nothing, so the answer does not move and reads the same.',
+        2: 'h + 0·v = h. The hook still runs, but it adds a zero vector: the output is the unsteered model (ARENA\'s coeff 0 scored 13.5, the baseline).',
+        3: 'The identity: coeff = 0 is the control. Negative coeff subtracts the trait (ARENA: −3 scored 12.5 vs 13.5 at 0), positive adds it.' },
+      show(S) { S.setKnobs({ mode: 'persona', coeff: 0, cap: false }); scene(S, { note: 'monitor', show: ['means', 'v', 'ruler', 'probe', 'steer'] }); return S.fly(CAM.steer); } },
+
+    { q: { 1: 'The cap is on and the answer already sits on the wall. Turn the dial to +5. Where does it end up?', 2: 'Capping on at τ; the steered h already reads τ. coeff → +5. Where does h go?', 3: 'Ceiling cap after steering, proj(h + c·v) ≥ τ. At c = 5, the final proj is?' },
+      options: [{ t: 'On the wall, exactly where it was', ok: true }, { t: 'Through the wall, further along the arrow' }, { t: 'Back to the honest side' }, { t: 'Halfway past the wall' }],
+      why: { 1: 'The wall removes whatever sticks out past it. Steering only pushes along the arrow, so everything it adds sticks out and is cut off again (red).',
+        2: 'Steering adds only along v̂; capping subtracts the excess along v̂. The other directions never changed, so h lands on the same point of the wall.',
+        3: 'min(proj + c‖v‖, τ) = τ, and the part ⟂ v̂ is untouched, so cap(h + 5v) = cap(h + 3v). Capping bounds the reading, whatever the input.' },
+      show(S) { S.setKnobs({ mode: 'persona', coeff: 5, cap: true, tau: 0.3 }); scene(S, { note: 'cap', show: ['means', 'v', 'ruler', 'probe', 'steer'] }); return S.fly(CAM.cap); } },
+
+    { q: { 1: 'Both prompts give the same kind of answer (separation 0). What does the persona vector become?', 2: 'Separation 0: pos and neg come from one distribution. v = mean(pos) − mean(neg) ≈ ?', 3: 'μ₊ = μ₋, N = 40 a side. E‖v‖ ≈ ?' },
+      options: [{ t: 'Almost zero: just sampling noise', ok: true }, { t: 'The same as before' }, { t: 'Twice as long' }, { t: 'It cannot be computed' }],
+      why: { 1: 'If both clouds hold the same kind of answer, their averages land in almost the same place. The arrow shrinks to a small random wobble.',
+        2: 'Both means estimate the same point, so v is only noise, about σ·√(2/N) per direction. Steering with it would push in a random direction.',
+        3: 'v ~ N(0, 2Σ/N), so E‖v‖ ≈ √(2·tr Σ / N): about 0.06 for this toy (note: live ‖v‖). ARENA filters for effective pairs first so the two sides really differ.' },
+      show(S) { S.setKnobs({ mode: 'persona', sep: 0, coeff: 0, cap: false }); scene(S, { note: 'v', show: ['means', 'v'] }); return S.fly(CAM.close); } },
+
+    { q: { 1: 'A new answer arrives. What does the monitor need to compute to read it?', 2: 'Projection monitoring of one new response. What is the cost?', 3: 'compute_trait_projections for one response, given its mean activation a: cost?' },
+      options: [{ t: 'One dot product with the arrow', ok: true }, { t: 'Its distance to every stored answer' }, { t: 'A second run of the model with steering' }, { t: 'A fresh persona vector' }],
+      why: { 1: 'The reading is how far the answer points along the arrow: multiply matching numbers and add them up. One sum per answer, cheap enough for every reply.',
+        2: 'a·v/‖v‖: d multiply-adds (3,584 on Qwen2.5-7B) on activations from the forward pass you ran anyway. No generation, no extra model call.',
+        3: 'O(d) given a, which is cached from generation. Chen et al. use the same projection to screen fine-tuning data before training.' },
+      show(S) { S.setKnobs({ mode: 'persona', coeff: 0, cap: false, sep: 0.45 }); scene(S, { note: 'monitor', show: ['means', 'v', 'ruler', 'ticks', 'probe'] }); return S.fly(CAM.ruler); } },
+
+    { q: { 1: 'ARENA turned the dial to +5, its highest setting. What happened to the replies?', 2: 'ARENA sycophancy steering: +3 scored 89.5. What did +5 score?', 3: 'Sycophancy score at coeff +5, vs 89.5 at +3?' },
+      options: [{ t: 'They fell apart: 32.0', ok: true }, { t: 'Even more sycophantic: 100' }, { t: 'The same as +3' }, { t: 'The model refused to answer' }],
+      why: { 1: 'Pushed too far, the activation lands where the model has never been, and the text turns to repetitive mush that the judge no longer scores as flattery.',
+        2: '32.0. Past a point, more v leaves the data (red beads outside the shell): coherence drops, so the trait score drops too. The curve is not monotonic.',
+        3: '32.0, non-monotonic: ARENA notes coherence degrades at high coeff. In the toy, h + 5v lies beyond Mahalanobis 3 of everyday activations (note, live).' },
+      show(S) { S.setKnobs({ mode: 'persona', coeff: 5, cap: false, sep: 0.45 }); scene(S, { note: 'steer', show: ['means', 'v', 'ruler', 'probe', 'steer', 'shell'] }); return S.fly(CAM.steer); } },
+
+    { q: { 1: 'A chat drifts below the floor on the Assistant Axis, with capping on. Where does that turn go?', 2: 'Floor cap on the axis: a turn reads below τ. What does capping change?', 3: 'h ← h − v·min(⟨h, v⟩ − τ, 0) with ⟨h, v⟩ < τ. Result?' },
+      options: [{ t: 'Up to the floor, only along the axis', ok: true }, { t: 'All the way back to the Assistant' }, { t: 'It is deleted from the chat' }, { t: 'Nothing: caps only stop rises' }],
+      why: { 1: 'The cap lifts the turn just enough to sit on the floor, and only in the Assistant direction. Everything else about that turn stays as it was.',
+        2: 'The shortfall below τ is added back along the unit axis: the reading becomes exactly τ; other directions are untouched. Turns above τ are not changed.',
+        3: '⟨h′, v⟩ = τ and h′ − h ∥ v: ARENA\'s ceiling with v → −v, τ → −τ. In the paper, capping during generation also changes later turns through context, which this toy does not model.' },
+      show(S) { S.setKnobs({ mode: 'axis', cap: true, tau: 0.15, coeff: 0 }); scene(S, { note: 'axis' }); return S.fly(CAM.axis); } },
+  ],
+
+  where: { 1: 'Anywhere one slider adds one direction: a photo\'s warmth slider, a mixing-desk fader, word maths (king − man + woman ≈ queen). Reading is a dot product; steering is adding.',
+    2: 'Directions you read and add: colour sliders (one direction in RGB), mixing-desk faders, word2vec analogies, the refusal direction in chat models, and concept sliders for image models.',
+    3: 'Difference-of-means directions: word2vec analogies, CAA, refusal directions, representation engineering, concept sliders; capping ≈ clipping one projection, like clipping a gradient\'s norm.' },
+  links: [
+    { label: 'Film · W12 deep dive: steering', href: '../../intuition/films/deep-w12-steering.html' },
+    { label: 'Film · W13 inside', href: '../../intuition/films/w13-inside.html' },
+    { label: 'Week 12 pack', href: '../../index.html#week-12' },
+    { label: 'Demo · steering & persona vectors', href: '../../index.html#demo/steering-persona-vectors' },
+    { label: 'Object · One thin sheet (LoRA)', href: 'w12-sheet.html' },
+    { label: 'Case · persona vectors', href: '../../index.html#cases/persona-vectors' },
+    { label: 'Case · activation steering', href: '../../index.html#cases/activation-steering' },
+    { label: 'Case · activation capping', href: '../../index.html#cases/activation-capping' },
+    { label: 'Case · the Assistant Axis', href: '../../index.html#cases/assistant-axis' },
+    { label: 'Case · steering vectors', href: '../../index.html#cases/steering-vectors' },
+    { label: 'Map · persona vector', href: '../../index.html#map/node=persona-vector' },
+    { label: 'Map · steering vector', href: '../../index.html#map/node=steering-vector' },
+    { label: 'Map · steering hook', href: '../../index.html#map/node=steering-hook' },
+    { label: 'Map · projection monitoring', href: '../../index.html#map/node=projection-monitoring' },
+    { label: 'Map · activation capping', href: '../../index.html#map/node=activation-capping' },
+    { label: 'Map · Assistant Axis', href: '../../index.html#map/node=assistant-axis' },
+    { label: 'Map · persona drift', href: '../../index.html#map/node=persona-drift' },
+    { label: 'Map · linear representation hypothesis', href: '../../index.html#map/node=linear-representation-hypothesis' },
+  ],
+  remix: 'Build a single-file three.js scene on a round plinth with a brass rim: a toy 3-D activation space floating above it. Two clouds of 40 small beads (blue: sycophantic answers, teal: honest answers, labelled toy), their means as larger beads with brass halos, and a violet arrow v = mean(pos) − mean(neg). A brass ruler runs along v with ticks; every answer drops a tick at its reading a·v/‖v‖, and a white "new answer" bead drops a string to its reading. A brass dial on a post (−5..+5, needle violet, tap to turn) steers the new answer to h + coeff·v, with ARENA\'s coefficients −3, −1, 0, 1, 3, 5 marked as small beads that turn red outside a faint glass ellipsoid (Mahalanobis radius 3 of 160 grey "everyday" activations). A capping toggle shows a glass wall ⟂ v at τ: everything past it is clamped onto it by h − max(h·v̂ − τ, 0)·v̂, with red stubs for the removed excess. A second mode places ARENA\'s 20 persona names (default ×4, consultant … oracle) at toy positions, draws the Assistant Axis normalize(mean(default) − mean(roles)) and PC1 with their live cosine, and an 8-turn conversation drifting down the axis that a floor cap lifts back.',
+  credit: 'Persona vectors, contrastive extraction, steering and projection monitoring: Chen et al. 2025 (Anthropic, "Persona Vectors"). The Assistant Axis, persona drift and activation capping: Lu et al. 2026 (Anthropic). Activation addition: Turner et al. 2023. Circular features: Engels et al. 2024 ("Not All Language Model Features Are Linear"). Word analogies: Mikolov et al. 2013. Directions as meaning: 3Blue1Brown\'s transformer videos. Function names, the persona list, layers, thresholds and the printed steering scores (12.5 … 89.5, 32.0) and PCA split (51.9%, 13.2%) are from ARENA [4.4] LLM Psychology & Persona Vectors. The clouds, persona positions, the drift and the weekday ring are toy data; every number on them is computed live. Built with three.js and JSCAD.',
+});
+</script>
+</body>
+</html>
