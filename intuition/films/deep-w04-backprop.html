@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Building autograd from scratch</title>
+<meta name="theme-color" content="#1c2140">
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+  var MONO = F.MONO;
+
+  /* =============== a real (tiny) autograd, written the ARENA way =============== */
+  // BackwardFuncLookup: (forward func, argnum) -> backward func(grad_out, out, *args)
+  function BackwardFuncLookup() { this.back_funcs = {}; }
+  BackwardFuncLookup.prototype.add_back_func = function (f, i, fn) { this.back_funcs[f + ',' + i] = fn; };
+  BackwardFuncLookup.prototype.get_back_func = function (f, i) { return this.back_funcs[f + ',' + i]; };
+  var BACK_FUNCS = new BackwardFuncLookup();
+  BACK_FUNCS.add_back_func('multiply', 0, function (g, out, x, y) { return g * y; });
+  BACK_FUNCS.add_back_func('multiply', 1, function (g, out, x, y) { return g * x; });
+  BACK_FUNCS.add_back_func('log', 0, function (g, out, x) { return g / x; });
+  BACK_FUNCS.add_back_func('add', 0, function (g) { return g; });
+  BACK_FUNCS.add_back_func('add', 1, function (g) { return g; });
+  var FWD = { multiply: function (x, y) { return x * y; }, log: function (x) { return Math.log(x); }, add: function (x, y) { return x + y; } };
+  function leaf(v, name) { return { array: v, name: name, recipe: null, grad: null, requires_grad: true }; }
+  function op(func, name, ins) { // ins: tensors; builds the Recipe during the forward pass
+    var args = ins.map(function (x) { return x.array; }), parents = {};
+    ins.forEach(function (x, i) { parents[i] = x; });
+    return { array: FWD[func].apply(null, args), name: name, grad: null, requires_grad: true, recipe: { func: func, args: args, kwargs: {}, parents: parents } };
+  }
+  function sorted_computational_graph(end) { // DFS topological sort, end node first
+    var out = [], seen = []; (function visit(n) { if (seen.indexOf(n) >= 0) return; seen.push(n); if (n.recipe) for (var k in n.recipe.parents) visit(n.recipe.parents[k]); out.push(n); })(end);
+    return out.reverse();
+  }
+  function backprop(end) { // returns every step so the film can replay it honestly
+    var grads = new Map(), steps = []; grads.set(end, 1);
+    sorted_computational_graph(end).forEach(function (node) {
+      var outgrad = grads.get(node); grads.delete(node);
+      if (!node.recipe) { node.grad = node.grad == null ? outgrad : node.grad + outgrad; steps.push({ leaf: true, node: node, g: outgrad }); return; }
+      for (var k in node.recipe.parents) {
+        var parent = node.recipe.parents[k], back_fn = BACK_FUNCS.get_back_func(node.recipe.func, +k);
+        var in_grad = back_fn.apply(null, [outgrad, node.array].concat(node.recipe.args)), before = grads.has(parent) ? grads.get(parent) : null;
+        grads.set(parent, before == null ? in_grad : before + in_grad);
+        steps.push({ node: node, parent: parent, argnum: +k, g: outgrad, in_grad: in_grad, before: before, after: grads.get(parent) });
+      }
+    });
+    return steps;
+  }
+  // the salty cake: L = log(a*b) (op) a|b
+  function build(a, b, last) {
+    var A = leaf(a, 'a'), B = leaf(b, 'b'), C = op('multiply', 'c', [A, B]), D = op('log', 'd', [C]);
+    var L = last === 'addA' ? op('add', 'L', [D, A]) : last === 'mulB' ? op('multiply', 'L', [D, B]) : op('multiply', 'L', [D, A]);
+    var g = { a: A, b: B, c: C, d: D, L: L, last: last || 'mulA' }; g.steps = backprop(L); return g;
+  }
+  function Lval(a, b, last) { return build(a, b, last).L.array; }
+  function fd(a, b, last, which) { var h = 1e-4; return which === 'a' ? (Lval(a + h, b, last) - Lval(a - h, b, last)) / (2 * h) : (Lval(a, b + h, last) - Lval(a, b - h, last)) / (2 * h); }
+  var G0 = build(2, 3, 'mulA');
+  function f3(v) { return (Math.abs(v) < 1e-9 ? 0 : v).toFixed(Math.abs(v) >= 100 ? 1 : 3).replace(/\.?0+$/, function (m) { return m.indexOf('.') === 0 ? '' : m; }) || '0'; }
+  function f2(v) { return (+v.toFixed(3)).toString(); }
+
+  /* =============== layout =============== */
+  var POS = { a: [.1, .18], b: [.1, .84], c: [.38, .52], d: [.64, .52], L: [.9, .52] };
+  var POSP = { a: [.08, .15], b: [.08, .85], c: [.36, .6], d: [.63, .7], L: [.92, .42] };
+  function por(W, H) { return H > W * 1.1; }
+  function R(W, H, top, bot) { var p = por(W, H); top = top == null ? (p ? 82 : 70) : top; bot = bot == null ? (p ? 150 : 110) : bot; return { x: W * .07, y: top, w: W * .86, h: Math.max(120, H - top - bot) }; }
+  function NP(name, r, W, H) { var Q = por(W, H) ? POSP : POS, u = Q[name][0], v = Q[name][1]; return por(W, H) ? [r.x + v * r.w, r.y + u * r.h] : [r.x + u * r.w, r.y + v * r.h]; }
+  function rad(W, H) { return clamp(Math.min(W, H) * .07, 22, 40); }
+  function edgePts(p, q, r) { var dx = q[0] - p[0], dy = q[1] - p[1], L = Math.hypot(dx, dy) || 1; return [p[0] + dx / L * (r + 3), p[1] + dy / L * (r + 3), q[0] - dx / L * (r + 6), q[1] - dy / L * (r + 6)]; }
+  function edgeMid(p, q, off) { var dx = q[0] - p[0], dy = q[1] - p[1], L = Math.hypot(dx, dy) || 1; return [(p[0] + q[0]) / 2 - dy / L * off, (p[1] + q[1]) / 2 + dx / L * off]; }
+  var EDGES = function (g) { var e = [['a', 'c'], ['b', 'c'], ['c', 'd'], ['d', 'L']]; e.push([g.last === 'mulB' ? 'b' : 'a', 'L']); return e; };
+
+  /* =============== scene pieces =============== */
+  function kitchen(ctx, W, H, t) {
+    F.sky(ctx, W, H, '#2c2542', '#4a3a58');
+    // tiles
+    ctx.save(); ctx.globalAlpha = .07; ctx.strokeStyle = P.cream; ctx.lineWidth = 1; var s = 34;
+    for (var x = 0; x < W; x += s) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    for (var y = 0; y < H; y += s) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+    ctx.restore();
+    // counter strip
+    F.paper(ctx, W / 2, H - 18, W + 20, 40, '#6b5a78', { seed: 'counter', shadow: false });
+  }
+  function fridgeNote(ctx, W, H, l, text, color) {
+    var p = por(W, H), sz = W < 500 ? 16 : 20;
+    F.note(ctx, text || 'who gets the blame,\nand how much?', p ? W / 2 : W - Math.min(250, W * .24), p ? 38 : 44, sz, { rot: -.025, seed: 'fridge', color: color || P.butter, reveal: l == null ? 1 : ramp(l, 0, 1.6) });
+  }
+  var NCOL = { a: P.peach, b: P.mint, c: P.sky, d: P.lav, L: P.pink };
+  var NLAB = { a: 'flour a', b: 'sugar b', c: 'c = a·b', d: 'd = log c', L: 'L = d·a' };
+  function bowl(ctx, W, H, r, g, name, t, o) {
+    o = o || {}; var p = NP(name, r, W, H), rr = rad(W, H) * (o.scale == null ? 1 : o.scale);
+    if (rr <= 1) return;
+    if (o.glow) F.glow(ctx, p[0], p[1], rr * 2.2, 'rgba(255,214,120,.5)', o.glow);
+    F.blob(ctx, p[0], p[1], rr, NCOL[name], { seed: 'bowl' + name, jit: .12, blur: 8 });
+    ctx.save(); ctx.globalAlpha = .25; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.ellipse(p[0], p[1] - rr * .45, rr * .7, rr * .22, 0, 0, 6.283); ctx.fill(); ctx.restore();
+    var nm = name === 'L' ? 'L' : name;
+    F.hand(ctx, nm, p[0], p[1] - rr * .22, rr * .62, P.ink, { seed: 'n' + name });
+    F.hand(ctx, f3(g[name].array), p[0], p[1] + rr * .42, rr * .42, P.ink, { font: MONO, bold: false, wobble: .2, seed: 'v' + name });
+    if (o.grad != null) {
+      var txt = 'grad ' + f3(o.grad), sz = clamp(rr * .42, 11, 15), w = F.textW(ctx, txt, sz, MONO) + 14;
+      var gx = p[0], gy = p[1] + rr + sz * .9;
+      F.paper(ctx, gx, gy, w, sz * 1.6, o.gradCol || P.butter, { seed: 'gp' + name, shadow: false });
+      F.hand(ctx, txt, gx, gy, sz, P.ink, { font: MONO, bold: false, wobble: .1, seed: 'gt' + name });
+    }
+    if (o.tag) { var ts = clamp(rr * .36, 10, 13); F.hand(ctx, o.tag, p[0], p[1] - rr - ts * .9, ts, P.chalk, { outline: 3, outlineColor: 'rgba(20,20,50,.8)', seed: 'tag' + name }); }
+  }
+  function edge(ctx, W, H, r, from, to, col, wd, a) {
+    var p = NP(from, r, W, H), q = NP(to, r, W, H), e = edgePts(p, q, rad(W, H));
+    ctx.save(); ctx.globalAlpha = a == null ? 1 : a; F.arrow(ctx, e[0], e[1], e[2], e[3], col || 'rgba(253,250,240,.55)', wd || 2, 'e' + from + to); ctx.restore();
+  }
+  function edgeLabel(ctx, W, H, r, from, to, text, col, off) {
+    var p = NP(from, r, W, H), q = NP(to, r, W, H), m = edgeMid(p, q, off == null ? 0 : off), sz = W < 500 ? 12 : 14;
+    var w = F.textW(ctx, text, sz, MONO) + 12; F.paper(ctx, m[0], m[1], w, sz * 1.7, col || 'rgba(22,26,53,.9)', { seed: 'el' + from + to, shadow: false });
+    F.hand(ctx, text, m[0], m[1], sz, col ? P.ink : P.chalk, { font: MONO, bold: false, wobble: .1, seed: 'et' + text });
+  }
+  function travel(ctx, W, H, r, from, to, k, t) { // lantern carrying blame from `to` back to `from`
+    var p = NP(from, r, W, H), q = NP(to, r, W, H), e = F.ease.inOut(k); F.lantern(ctx, lerp(q[0], p[0], e), lerp(q[1], p[1], e), 7, 1, t);
+  }
+  function panel(ctx, W, H, lines, o) { // mono paper at the bottom of the stage
+    o = o || {}; var sz = o.sz || (W < 500 ? 12.5 : 15), mw = 0;
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + MONO; lines.forEach(function (l) { mw = Math.max(mw, ctx.measureText(l[0]).width); }); ctx.restore();
+    var maxW = W - 20; if (mw + 24 > maxW) { sz *= maxW / (mw + 24); mw = maxW - 24; }
+    var h = lines.length * sz * 1.4 + 14, w = mw + 24, x = o.x != null ? o.x : W / 2, y = o.y != null ? o.y : H - h / 2 - 8;
+    F.paper(ctx, x, y, w, h, o.bg || 'rgba(22,26,53,.92)', { seed: o.seed || 'panel' + lines.length, shadow: false });
+    ctx.save(); ctx.font = '600 ' + sz + 'px ' + MONO; ctx.textBaseline = 'middle';
+    lines.forEach(function (l, i) { ctx.globalAlpha = l[2] == null ? 1 : l[2]; ctx.fillStyle = l[1] || P.chalk; ctx.fillText(l[0], x - w / 2 + 12, y - h / 2 + 7 + sz * .7 + i * sz * 1.4); });
+    ctx.restore(); return { x: x, y: y, w: w, h: h };
+  }
+  function title(ctx, W, H, text, a) { if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; F.hand(ctx, text, W / 2, por(W, H) ? 22 : 24, W < 500 ? 16 : 20, P.chalk, { outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: 'ttl' + text }); ctx.restore(); }
+
+  // replay the real backprop steps up to step index k (fractional): which grads are known where
+  function gradsAt(g, k) {
+    var known = {}, done = Math.floor(k);
+    for (var i = 0; i < Math.min(done, g.steps.length); i++) { var s = g.steps[i]; if (!s.leaf) known[s.parent.name] = s.after; }
+    known.L = 1; return known;
+  }
+
+  /* =============== grids for arrays =============== */
+  function grid(ctx, x, y, M, cs, col, o) { // top-left x,y
+    o = o || {}; var rows = M.length, cols = M[0].length;
+    F.paper(ctx, x + cols * cs / 2, y + rows * cs / 2, cols * cs + 6, rows * cs + 6, col, { seed: o.seed || ('g' + rows + cols + x), shadow: false });
+    ctx.save(); ctx.strokeStyle = 'rgba(42,41,52,.25)'; ctx.lineWidth = 1;
+    for (var i = 1; i < rows; i++) { ctx.beginPath(); ctx.moveTo(x, y + i * cs); ctx.lineTo(x + cols * cs, y + i * cs); ctx.stroke(); }
+    for (var j = 1; j < cols; j++) { ctx.beginPath(); ctx.moveTo(x + j * cs, y); ctx.lineTo(x + j * cs, y + rows * cs); ctx.stroke(); }
+    ctx.restore();
+    if (o.nums !== false) for (i = 0; i < rows; i++) for (j = 0; j < cols; j++) {
+      ctx.save(); ctx.globalAlpha = o.hl && !o.hl(i, j) ? .35 : 1;
+      F.hand(ctx, String(M[i][j]), x + j * cs + cs / 2, y + i * cs + cs / 2, cs * .48, P.ink, { font: MONO, bold: true, wobble: .1, seed: 'c' + i + j }); ctx.restore();
+    }
+    if (o.label) F.hand(ctx, o.label, x + cols * cs / 2, y - cs * .45 - 4, Math.max(11, cs * .42), o.labelCol || P.chalk, { font: MONO, bold: false, wobble: .1, seed: 'gl' + o.label });
+    return { w: cols * cs, h: rows * cs };
+  }
+  function mm(A, B) { return A.map(function (r) { return B[0].map(function (_, j) { return r.reduce(function (s, v, k) { return s + v * B[k][j]; }, 0); }); }); }
+  function Tr(A) { return A[0].map(function (_, j) { return A.map(function (r) { return r[j]; }); }); }
+  function ones(r, c) { var o = []; for (var i = 0; i < r; i++) { o.push([]); for (var j = 0; j < c; j++) o[i].push(1); } return o; }
+  // unbroadcast, exactly ARENA's two steps, on nested arrays (2D only)
+  var GO = [[1, 2, 3], [4, 5, 6]];
+  var UB_bias = [GO.reduce(function (s, r) { return s.map(function (v, j) { return v + r[j]; }); }, [0, 0, 0])]; // sum axis 0 -> (3,)
+  var UB_col = GO.map(function (r) { return [r.reduce(function (s, v) { return s + v; }, 0)]; });        // sum axis 1 keepdims -> (2,1)
+  // matmul example
+  var MX = [[1, 0, 2], [-1, 3, 1]], MW = [[1, 2, 0, -1], [0, 1, 1, 2], [3, -1, 1, 0]];
+  var MO = mm(MX, MW), MG = ones(2, 4), MGX = mm(MG, Tr(MW)), MGW = mm(Tr(MX), MG);
+  function sumAll(M) { return M.reduce(function (s, r) { return s + r.reduce(function (a, b) { return a + b; }, 0); }, 0); }
+  function fdMX(i, j) { var h = 1e-4, Xp = MX.map(function (r) { return r.slice(); }), Xm = MX.map(function (r) { return r.slice(); }); Xp[i][j] += h; Xm[i][j] -= h; return (sumAll(mm(Xp, MW)) - sumAll(mm(Xm, MW))) / (2 * h); }
+
+  /* =============== predict, then watch =============== */
+  var PR = { shown: false, answered: false, choice: null, box: null, prevT: -1 };
+  function ppButton(api) { return api.root.querySelector('.pp'); }
+  function isPlaying(api) { var b = ppButton(api); return b && b.getAttribute('aria-label') === 'Pause'; }
+  function askPredict(api) {
+    if (PR.box) return; PR.shown = true;
+    var st = api.root.querySelector('.stage'), d = document.createElement('div');
+    d.setAttribute('role', 'dialog'); d.setAttribute('aria-label', 'Predict, then watch');
+    d.style.cssText = 'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92%,420px);background:#fbf6ea;color:#2a2934;border-radius:14px;padding:16px 16px 12px;box-shadow:0 10px 30px rgba(0,0,0,.45);font:16px/1.35 system-ui,sans-serif;z-index:5;text-align:center';
+    d.innerHTML = '<div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b5a9a;font-weight:700">predict, then watch</div>' +
+      '<div style="margin:8px 0 12px;font-size:18px"><code style="font-size:17px">x = 3</code>, &nbsp;<code style="font-size:17px">y = x * x</code><br>What will <code>x.grad</code> be?</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">' +
+      ['3', '6', '9'].map(function (v) { return '<button data-v="' + v + '" style="font:700 20px ui-monospace,monospace;padding:12px 0;border-radius:10px;border:2px solid #2a2934;background:#f7e3a0;color:#2a2934;cursor:pointer">' + v + '</button>'; }).join('') +
+      '</div><button data-v="show" style="margin-top:10px;font:15px system-ui,sans-serif;background:none;border:0;color:#454a86;text-decoration:underline;cursor:pointer;padding:6px">just show me</button>';
+    [].forEach.call(d.querySelectorAll('button'), function (b) {
+      b.onclick = function (e) { e.stopPropagation(); PR.choice = b.dataset.v; PR.answered = true; closePredict(api, true); try { api.audio.blip(PR.choice === '6' ? 880 : 520); } catch (er) {} };
+    });
+    d.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+    st.appendChild(d); PR.box = d;
+    if (isPlaying(api)) ppButton(api).click();
+  }
+  function closePredict(api, resume) { if (PR.box) { PR.box.remove(); PR.box = null; } if (resume && !isPlaying(api)) ppButton(api).click(); }
+  var PAUSE_AT = 78.2;
+
+  /* =============== chapters =============== */
+  function ch(start, dur, name, cap, draw) { return { name: name, start: start, dur: dur, cap: cap, draw: draw }; }
+  var chapters = [
+    ch(0, 22, 'a recipe on every bowl', {
+      1: 'A paper kitchen. The cake came out <b>salty</b>. The baker wants to share out the blame to every ingredient, fairly, in one sweep. Trick: as each bowl is made, it keeps a little <b>recipe card</b>.',
+      2: 'The forward pass builds the graph as it goes. Every new tensor carries a <b>Recipe</b>: which function made it, and from which parent tensors. Leaves (a, b) have no recipe.',
+      3: 'L = log(a·b)·a with a=2, b=3. Each op wrapper computes the NumPy result and, if any input requires_grad, attaches Recipe(func, args, kwargs, parents). Graph = recipes linked by parents.' },
+      function (ctx, t, l, W, H) {
+        kitchen(ctx, W, H, t); var r = R(W, H), g = G0; fridgeNote(ctx, W, H, l);
+        var app = { a: 1, b: 1.8, c: 5, d: 9, L: 13 };
+        EDGES(g).forEach(function (e) { var a = ramp(l, app[e[1]] - .4, app[e[1]] + .6); if (a > 0) edge(ctx, W, H, r, e[0], e[1], null, 2, a); });
+        ['a', 'b', 'c', 'd', 'L'].forEach(function (n) {
+          var s = F.ease.back(ramp(l, app[n], app[n] + .7)); if (s <= 0) return;
+          var tag = n === 'c' ? 'recipe: multiply' : n === 'd' ? 'recipe: log' : n === 'L' ? 'recipe: multiply' : 'leaf: no recipe';
+          bowl(ctx, W, H, r, g, n, t, { scale: s, tag: ramp(l, app[n] + .8, app[n] + 1.2) > .5 ? tag : null });
+        });
+        if (l > 15.5) { var p = NP('L', r, W, H), rr = rad(W, H); ctx.save(); ctx.globalAlpha = ramp(l, 15.5, 16.3); F.hand(ctx, 'salty!', p[0] + (por(W, H) ? rr * 2 : 0), p[1] + (por(W, H) ? 0 : rr * 2.3), W < 500 ? 16 : 20, P.red, { outline: 4, outlineColor: 'rgba(20,20,50,.8)', seed: 'salty', rot: -.1 }); ctx.restore(); }
+        var n = l < 5 ? 1 : l < 9 ? 2 : l < 13 ? 3 : 4, lines = [['a = 2.0   b = 3.0            (leaves)', P.peach], ['c = a * b        = ' + f3(g.c.array), P.sky], ['d = log(c)       = ' + f3(g.d.array), P.lav], ['L = d * a        = ' + f3(g.L.array), P.pink]];
+        panel(ctx, W, H, lines.slice(0, n), { seed: 'fwd' });
+      }),
+    ch(22, 20, 'Recipe and BACK_FUNCS', {
+      1: 'Zoom into bowl c\'s card. It says what made it (multiply), the numbers it used, and which bowls it came from. And a second, shared cookbook says, for each recipe, how much a nudge in each ingredient moves the result.',
+      2: '<b>Recipe</b> has four fields. <b>args</b> keeps the raw numbers (for the maths later); <b>parents</b> keeps the actual tensors (for walking the graph). <b>BACK_FUNCS</b> maps (func, argnum) to its backward function.',
+      3: 'BackwardFuncLookup: back_funcs[(forward_fn, arg_position)] = back_fn. multiply_back0(grad_out, out, x, y) = grad_out·y; log_back(grad_out, out, x) = grad_out/x. Local slopes only; the chain is backprop\'s job.' },
+      function (ctx, t, l, W, H) {
+        kitchen(ctx, W, H, t); var p = por(W, H), r = R(W, H, null, p ? 250 : 190), g = G0; title(ctx, W, H, 'every tensor carries its Recipe', ramp(l, 0, 1));
+        EDGES(g).forEach(function (e) { edge(ctx, W, H, r, e[0], e[1]); });
+        var focus = l < 8 ? 'c' : l < 13 ? 'd' : null;
+        ['a', 'b', 'c', 'd', 'L'].forEach(function (n) { bowl(ctx, W, H, r, g, n, t, { glow: focus === n ? .9 : 0 }); });
+        // local slopes on the edges, from the same BACK_FUNCS the backprop uses
+        if (l > 13) {
+          var a = ramp(l, 13, 14), la = [['a', 'c', '×b=3'], ['b', 'c', '×a=2'], ['c', 'd', '÷c=÷6'], ['d', 'L', '×a=2'], ['a', 'L', '×d=' + f2(g.d.array)]];
+          ctx.save(); ctx.globalAlpha = a; la.forEach(function (e, i) { edgeLabel(ctx, W, H, r, e[0], e[1], e[2], P.butter, i === 4 ? 14 : 0); }); ctx.restore();
+        }
+        var lines;
+        if (l < 8) lines = [['c.recipe = Recipe(', P.sky], ['  func    = np.multiply,'], ['  args    = (2.0, 3.0),     # numbers', P.butter], ['  kwargs  = {},'], ['  parents = {0: a, 1: b})   # tensors', P.mint]];
+        else if (l < 13) lines = [['d.recipe = Recipe(', P.lav], ['  func    = np.log,'], ['  args    = (6.0,),'], ['  kwargs  = {},'], ['  parents = {0: c})']];
+        else lines = [['BACK_FUNCS.get_back_func(np.multiply, 0)', P.butter], ['  -> multiply_back0: grad_out * y'], ['BACK_FUNCS.get_back_func(np.multiply, 1)', P.butter], ['  -> multiply_back1: grad_out * x'], ['BACK_FUNCS.get_back_func(np.log, 0)', P.butter], ['  -> log_back:       grad_out / x']];
+        panel(ctx, W, H, lines, { seed: 'rec' + (l < 8 ? 'c' : l < 13 ? 'd' : 'bf'), bg: 'rgba(22,26,53,.94)' });
+      }),
+    ch(42, 20, 'blame flows backward', {
+      1: 'Start at the salty cake with blame 1. Walk backwards. Each bowl hands blame to its ingredients: <b>its own blame × how sensitive it was</b> to that ingredient. The lantern carries it.',
+      2: '<b>Chain rule</b>, one edge at a time. The number arriving at a bowl is ∂L/∂(that bowl). Multiply by the local slope from BACK_FUNCS, pass it on. Nothing is ever recomputed.',
+      3: 'in_grad = back_fn(outgrad, node.array, *node.recipe.args, **node.recipe.kwargs). L→d: 1·a = 2. L→a: 1·d = log 6 ≈ 1.792. d→c: 2/6 ≈ 0.333. Each is an exact partial, not an estimate.' },
+      function (ctx, t, l, W, H) {
+        kitchen(ctx, W, H, t); var r = R(W, H), g = G0; fridgeNote(ctx, W, H);
+        var S = g.steps.filter(function (s) { return !s.leaf; }), k = clamp((l - 1.5) / 5.5, 0, 3), i = Math.min(2, Math.floor(k)), fr = k - Math.floor(k);
+        var known = {}; known.L = 1; for (var j = 0; j < Math.floor(k) && j < 3; j++) known[S[j].parent.name] = S[j].after;
+        EDGES(g).forEach(function (e) { edge(ctx, W, H, r, e[0], e[1]); });
+        for (j = 0; j < Math.min(3, Math.floor(k) + 1); j++) { var s = S[j], ok = j < Math.floor(k) || fr > .7; if (ok) edgeLabel(ctx, W, H, r, s.parent.name, s.node.name, '← ' + f3(s.in_grad), P.butter, s.parent.name === 'a' && s.node.name === 'L' ? 14 : 0); }
+        ['a', 'b', 'c', 'd', 'L'].forEach(function (n) { bowl(ctx, W, H, r, g, n, t, { grad: known[n], glow: n === (S[i] && S[i].node.name) ? .6 : 0 }); });
+        if (k < 3 && l > 1.5) { var s0 = S[i]; if (fr < .75) travel(ctx, W, H, r, s0.parent.name, s0.node.name, fr / .75, t); }
+        var s1 = S[i], fn = { multiply: s1.argnum === 0 ? 'multiply_back0' : 'multiply_back1', log: 'log_back' }[s1.node.recipe.func];
+        var loc = s1.in_grad / s1.g;
+        panel(ctx, W, H, [['node ' + s1.node.name + '  (outgrad ' + f3(s1.g) + ')', P.chalk], [fn + ' -> ' + s1.parent.name, P.butter], ['grad_' + s1.parent.name + ' = ' + f3(s1.g) + ' × ' + f3(loc) + ' = ' + f3(s1.in_grad), P.mint]], { seed: 'chain' });
+      }),
+    ch(62, 26, 'used twice: +=', {
+      1: 'Flour went in <b>twice</b>: into c and straight into the cake. So it gets blame down <b>both</b> paths, and they <b>add</b>. Overwrite instead of add and you silently lose one path.',
+      2: 'Fan-out: a feeds c and L. Its total gradient is the <b>sum</b> over every path. That is why backprop does grads[parent] = grads[parent] + in_grad, and why .grad accumulates.',
+      3: 'Multivariable chain rule: ∂L/∂a = Σ over children. Here 1.792 + 3·(1/3) = 2.792 = log 6 + 1. Finite difference (L(a+h)−L(a−h))/2h agrees to 1e-8. PyTorch accumulates into .grad for the same reason (hence zero_grad).' },
+      function (ctx, t, l, W, H, api) {
+        kitchen(ctx, W, H, t); var g = G0, T = 62 + l;
+        // predict pause, only when the film plays through it
+        if (PR.prevT >= 0 && PR.prevT < PAUSE_AT && T >= PAUSE_AT && T - PR.prevT < .2 && !PR.shown) askPredict(api);
+        if (T < 70) { PR.shown = false; PR.answered = false; PR.choice = null; closePredict(api, false); }
+        PR.prevT = T;
+        if (l < 16) {
+          var r = R(W, H); fridgeNote(ctx, W, H);
+          var S = g.steps.filter(function (s) { return !s.leaf; }), sA = S[3], sB = S[4];
+          var ka = ramp(l, .8, 4.3), kb = ramp(l, 6, 8.5);
+          var known = { L: 1, d: S[0].after, c: S[2].after, a: ka >= 1 ? sA.after : sA.before, b: kb >= 1 ? sB.after : null };
+          EDGES(g).forEach(function (e) { edge(ctx, W, H, r, e[0], e[1], (e[0] === 'a' && l < 6) ? P.butter : null, e[0] === 'a' && l < 6 ? 3 : 2); });
+          edgeLabel(ctx, W, H, r, 'a', 'L', '← ' + f3(S[1].in_grad), P.butter, 14);
+          if (ka >= 1) edgeLabel(ctx, W, H, r, 'a', 'c', '← ' + f3(sA.in_grad), P.butter);
+          if (kb >= 1) edgeLabel(ctx, W, H, r, 'b', 'c', '← ' + f3(sB.in_grad), P.butter);
+          ['a', 'b', 'c', 'd', 'L'].forEach(function (n) { bowl(ctx, W, H, r, g, n, t, { grad: known[n], glow: n === 'a' && ka > 0 && ka < 1.2 ? .8 : 0, gradCol: n === 'a' && ka >= 1 ? P.mint : P.butter }); });
+          if (ka > 0 && ka < 1) travel(ctx, W, H, r, 'a', 'c', ka, t);
+          if (kb > 0 && kb < 1) travel(ctx, W, H, r, 'b', 'c', kb, t);
+          var fa = fd(2, 3, 'mulA', 'a'), fb = fd(2, 3, 'mulA', 'b');
+          var lines = [['grads[a] = ' + f3(sA.before) + ' + ' + f3(sA.in_grad) + ' = ' + f3(sA.after) + '   # +=', ka >= 1 ? P.mint : P.chalk, ka >= 1 ? 1 : .5]];
+          if (l > 10) lines.push(['check a: ' + f3(g.a.grad) + '  finite diff ' + fa.toFixed(3) + ' ✓', P.butter]);
+          if (l > 11.5) lines.push(['check b: ' + f3(g.b.grad) + '  finite diff ' + fb.toFixed(3) + ' ✓', P.butter]);
+          panel(ctx, W, H, lines, { seed: 'fan' + lines.length });
+        } else {
+          // x*x: one ingredient, both argument slots
+          title(ctx, W, H, 'y = x * x, x = 3', 1);
+          var cx = W / 2, top = por(W, H) ? H * .2 : H * .18, bot = por(W, H) ? H * .55 : H * .6, rr = rad(W, H);
+          var X = leaf(3, 'x'), Y = op('multiply', 'y', [X, X]);
+          var st = backprop(Y), gA = st[0].in_grad, gB = st[1].in_grad, total = st[2].node.grad;
+          var sep = Math.min(W * .22, 110);
+          var ll = l - 16, rev = PR.box ? 0 : ramp(ll, .3, 2.2), rev2 = PR.box ? 0 : ramp(ll, 2.6, 4.4);
+          // arrows: two slots of the same multiply
+          ctx.save(); F.arrow(ctx, cx - sep * .3, bot - rr, cx - sep * .8, top + rr * 1.1, rev > 0 ? P.butter : 'rgba(253,250,240,.5)', 3, 'xx0');
+          F.arrow(ctx, cx + sep * .3, bot - rr, cx + sep * .8, top + rr * 1.1, rev > 0 ? P.butter : 'rgba(253,250,240,.5)', 3, 'xx1'); ctx.restore();
+          F.blob(ctx, cx, top, rr, P.pink, { seed: 'ybowl', blur: 8 }); F.hand(ctx, 'y=9', cx, top, rr * .5, P.ink, { seed: 'y9' });
+          F.blob(ctx, cx, bot, rr, P.peach, { seed: 'xbowl', blur: 8 }); F.hand(ctx, 'x=3', cx, bot, rr * .5, P.ink, { seed: 'x3' });
+          var sz = W < 500 ? 13 : 15;
+          if (rev > 0) { ctx.save(); ctx.globalAlpha = rev; F.hand(ctx, 'arg 0: 1·x = ' + f3(gA), cx - sep * .55 - 6, (top + bot) / 2, sz, P.butter, { font: MONO, bold: false, align: 'right', outline: 3, outlineColor: 'rgba(20,20,50,.8)', seed: 'ag0' });
+            F.hand(ctx, 'arg 1: 1·x = ' + f3(gB), cx + sep * .55 + 6, (top + bot) / 2, sz, P.butter, { font: MONO, bold: false, align: 'left', outline: 3, outlineColor: 'rgba(20,20,50,.8)', seed: 'ag1' }); ctx.restore(); }
+          var fdx = (Math.pow(3 + 1e-4, 2) - Math.pow(3 - 1e-4, 2)) / 2e-4;
+          var lines2 = [];
+          if (PR.box) lines2.push(['your guess?  (the film is paused)', P.chalk]);
+          else {
+            if (PR.choice && PR.choice !== 'show') lines2.push(['you said ' + PR.choice + (PR.choice === '6' ? '  ✓ nailed it' : PR.choice === '3' ? '  (that is one path)' : '  (that is y itself)'), PR.choice === '6' ? P.mint : P.peach]);
+            lines2.push(['x.grad = ' + f3(gA) + ' + ' + f3(gB) + ' = ' + f3(total) + ' = 2x', P.mint, rev2]);
+            lines2.push(['finite diff: ' + fdx.toFixed(4) + ' ✓', P.butter, rev2]);
+            lines2.push(['with = instead of +=  ->  3  ✗', P.red, ramp(ll, 5, 6)]);
+          }
+          panel(ctx, W, H, lines2, { seed: 'xx' + lines2.length });
+        }
+      }),
+    ch(88, 20, 'the to-do list', {
+      1: 'In what order do we visit bowls? Rule: a bowl may pass on blame only when <b>all</b> the bowls that used it have reported. Our little egg keeps the to-do list.',
+      2: '<b>Topological sort</b>: order the graph so every node comes after all its consumers. Depth-first search does it: visit parents first, append yourself, then reverse. Get the order wrong and a gets 1.792, not 2.792.',
+      3: 'sorted_computational_graph(end_node) = reversed DFS post-order over recipe.parents: [L, d, c, b, a]. Each backward function then runs exactly once, on a finished outgrad. Cycles are impossible: a tensor cannot be its own ancestor.' },
+      function (ctx, t, l, W, H) {
+        kitchen(ctx, W, H, t); var p = por(W, H), r = p ? R(W, H, 82, 250) : { x: W * .05, y: 70, w: W * .55, h: H - 190 }, g = G0;
+        EDGES(g).forEach(function (e) { edge(ctx, W, H, r, e[0], e[1], null, 2, .7); });
+        var order = sorted_computational_graph(g.L), k = ramp(l, 1.5, 11) * order.length;
+        ['a', 'b', 'c', 'd', 'L'].forEach(function (n) { var idx = order.indexOf(g[n]); bowl(ctx, W, H, r, g, n, t, { tag: idx < k ? '#' + (idx + 1) : null, glow: Math.floor(k) === idx ? .8 : 0 }); });
+        // the egg with its to-do list
+        var ex = p ? W * .16 : W * .72, ey = p ? H - 190 : H * .3, es = p ? 26 : 38;
+        F.egg(ctx, ex, ey, es, t);
+        var lx = p ? W * .6 : W * .86, ly = p ? H - 190 : H * .36, sz = W < 500 ? 14 : 17;
+        F.paper(ctx, lx, ly, sz * 9, sz * 8.4, P.cream, { seed: 'todo', rot: .02 });
+        F.hand(ctx, 'to-do', lx, ly - sz * 3.3, sz, '#6b5a9a', { seed: 'todo' });
+        order.forEach(function (n, i) { if (i >= k) return; F.hand(ctx, (i + 1) + '. ' + n.name + (i < k - 1 ? '  ✓' : ''), lx - sz * 3.2, ly - sz * 1.9 + i * sz * 1.25, sz, P.ink, { align: 'left', font: MONO, bold: false, seed: 'td' + i }); });
+        var lines = [['sorted_computational_graph(L)', P.butter], ['  -> [' + order.map(function (n) { return n.name; }).join(', ') + ']', P.chalk]];
+        if (l > 12) lines.push(['wrong order (a before c): a.grad = ' + f3(g.steps[1].in_grad) + '  ✗', P.red]);
+        if (l > 14.5) lines.push(['right order:               a.grad = ' + f3(g.a.grad) + '  ✓', P.mint]);
+        panel(ctx, W, H, lines, { seed: 'topo' + lines.length, y: p ? null : H - 70 });
+      }),
+    ch(108, 20, 'unbroadcast', {
+      1: 'Sometimes one pinch of salt is sprinkled on <b>every</b> row of cake. Blame comes back per row; the single pinch must collect it all. So we <b>add up</b> the blame over the copies.',
+      2: 'Broadcasting copies a small array across a bigger shape. The backward pass must sum grad_out back over those copied axes, so the gradient has the <b>same shape</b> as the original. That is <b>unbroadcast</b>.',
+      3: 'ARENA unbroadcast(broadcasted, original): step 1, sum and drop the prepended dims; step 2, sum (keepdims=True) over dims that were 1. Shapes here: (2,3)→(3,) and (2,3)→(2,1).' },
+      function (ctx, t, l, W, H) {
+        kitchen(ctx, W, H, t); var p = por(W, H), cs = clamp(Math.min(W / 11, H / 14), 26, 44), sz = W < 500 ? 13 : 15;
+        var A = l < 10, ll = A ? l : l - 10;
+        title(ctx, W, H, A ? 'X (2,3) + bias (3,)' : 'X (2,3) * s (2,1)', 1);
+        var y0 = p ? 80 : 72, cx = W / 2;
+        // original small array
+        var small = A ? [[1, 1, 1]] : [[1], [1]], smallLbl = A ? 'bias (3,)' : 's (2,1)';
+        var gx = cx - 3 * cs / 2;
+        grid(ctx, cx - small[0].length * cs / 2, y0 + cs * .6, small, cs, P.mint, { nums: false, label: smallLbl, seed: 'sm' + A });
+        // broadcast copies (ghosts sliding in)
+        var yb = y0 + cs * 3.1, c1 = ramp(ll, .5, 2);
+        ctx.save(); ctx.globalAlpha = .35 + .65 * c1;
+        grid(ctx, gx, yb, [[1, 1, 1], [1, 1, 1]], cs, A ? P.mint : P.mint, { nums: false, label: 'broadcast to (2,3): copies', seed: 'bc' + A, hl: function () { return true; } });
+        ctx.restore();
+        // grad_out arrives
+        var yg = yb + cs * 3.2, c2 = ramp(ll, 2.5, 3.5);
+        if (c2 > 0) { ctx.save(); ctx.globalAlpha = c2; grid(ctx, gx, yg, GO, cs, P.butter, { label: 'grad_out (2,3)', seed: 'go' }); ctx.restore(); }
+        // sum back
+        var c3 = ramp(ll, 4.5, 6), yr = yg + cs * 3.2;
+        if (c3 > 0) {
+          ctx.save(); ctx.globalAlpha = c3;
+          var res = A ? [UB_bias[0]] : UB_col;
+          grid(ctx, cx - res[0].length * cs / 2, yr, res, cs, P.peach, { label: A ? 'sum over axis 0 → (3,)' : 'sum axis 1, keepdims → (2,1)', seed: 'res' + A });
+          // arrows along summed axis
+          ctx.restore();
+        }
+        var lines = A ? [['# step 1: sum away prepended dims', P.chalk], ['grad_bias = grad_out.sum(axis=0)', P.butter], ['          = [' + UB_bias[0].join(', ') + ']   shape (3,) ✓', P.mint, c3]]
+          : [['# step 2: sum dims that were 1', P.chalk], ['grad_s = grad_out.sum(axis=1,', P.butter], ['                    keepdims=True)', P.butter], ['       = [[' + UB_col[0][0] + '], [' + UB_col[1][0] + ']]   shape (2,1) ✓', P.mint, c3]];
+        panel(ctx, W, H, lines, { seed: 'ub' + A });
+      }),
+    ch(128, 16, 'matmul backward by shapes', {
+      1: 'The biggest recipe in any network is a matrix multiply. Its backward rule looks scary, but the <b>shapes</b> only allow one answer. Match the shapes and you have the formula.',
+      2: 'out = X @ W. The gradient for X must be shaped like X (2,3), and grad_out is (2,4): the only way is grad_out @ Wᵀ. For W (3,4): Xᵀ @ grad_out. Real numbers, with L = out.sum() so grad_out is all ones.',
+      3: 'matmul2d_back0 = grad_out @ y.T; matmul2d_back1 = x.T @ grad_out. ∂L/∂X_ij = Σ_k G_ik W_jk. Checked: finite difference on X[0,1] gives ' + f3(fdMX(0, 1)) + ' = grad_X[0,1].' },
+      function (ctx, t, l, W, H) {
+        kitchen(ctx, W, H, t); var p = por(W, H), cs = clamp(Math.min((W - 30) / 12.5, H / 16), 20, 34), sz = W < 500 ? 12 : 14;
+        title(ctx, W, H, 'out = X @ W,  L = out.sum()', 1);
+        var y = p ? 78 : 66, gap = cs * .9;
+        function row(y, items, a) { // items: [matrix, color, label] or string ops
+          var tw = 0; items.forEach(function (it) { tw += typeof it === 'string' ? gap : it[0][0].length * cs; }); tw += gap * (items.length - 1) * .25;
+          var x = W / 2 - tw / 2; ctx.save(); ctx.globalAlpha = a;
+          items.forEach(function (it) {
+            if (typeof it === 'string') { F.hand(ctx, it, x + gap / 2, y + cs, cs * .7, P.chalk, { seed: 'op' + it + y }); x += gap; }
+            else { grid(ctx, x, y, it[0], cs, it[1], { label: it[2], seed: it[2] }); x += it[0][0].length * cs; }
+            x += gap * .25;
+          }); ctx.restore();
+        }
+        row(y + cs * .6, [[MX, P.peach, 'X (2,3)'], '@', [MW, P.mint, 'W (3,4)']], ramp(l, 0, 1));
+        row(y + cs * 5, [[MGX, P.butter, 'grad_X (2,3)'], '=', [MG, P.pink, 'grad_out (2,4)'], '@', [Tr(MW), P.mint, 'Wᵀ (4,3)']].map(function (it) { return it; }), ramp(l, 2.5, 3.5));
+        var y3 = y + cs * 10.3;
+        if (y3 + cs * 3 < H - 70) row(y3, [[MGW, P.butter, 'grad_W (3,4)'], '=', [Tr(MX), P.peach, 'Xᵀ (3,2)'], '@', [MG, P.pink, 'grad_out']], ramp(l, 6, 7));
+        panel(ctx, W, H, [['matmul2d_back0 = grad_out @ y.T   (2,4)@(4,3)', P.butter], ['matmul2d_back1 = x.T @ grad_out   (3,2)@(2,4)', P.butter, ramp(l, 6, 7)], ['check X[0,1]: ' + f3(MGX[0][1]) + '  finite diff ' + fdMX(0, 1).toFixed(3) + ' ✓', P.mint, ramp(l, 9, 10)]], { seed: 'mmp' });
+      }),
+    ch(144, 18, 'your backprop', {
+      1: 'Honest bit: "blame" is only <b>slope</b>, what a tiny nudge would do, not who is at fault. Then the kitchen folds into the few lines you will write on Saturday.',
+      2: 'Where the story stops: real autograd is vectorised, runs on GPUs, and is <b>memory-bound</b>: every Recipe keeps its args alive until backward. Below: your whole backprop, every piece you just watched.',
+      3: 'Gradients are local linear answers; big changes need the full model. Frameworks free saved tensors after use and fuse ops. Your loop: pop outgrad, leaf → accumulate .grad, else BACK_FUNCS per parent, add into grads.' },
+      function (ctx, t, l, W, H) {
+        kitchen(ctx, W, H, t); var p = por(W, H);
+        if (l < 5.5) {
+          var r = R(W, H), g = G0; fridgeNote(ctx, W, H);
+          EDGES(g).forEach(function (e) { edge(ctx, W, H, r, e[0], e[1]); });
+          ['a', 'b', 'c', 'd', 'L'].forEach(function (n) { bowl(ctx, W, H, r, g, n, t, { grad: n === 'L' ? 1 : g[n].grad != null ? g[n].grad : null }); });
+          var fp = ramp(l, .4, 1.4) * (1 - ramp(l, 4.8, 5.5)); F.cornerFlip(ctx, W, H, fp, P.cream);
+          if (fp > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 1.2, 1.9) * (1 - ramp(l, 4.6, 5.2)); var sz = W < 500 ? 13 : 17, x = W - Math.min(W, H) * .3, y = H - Math.min(W, H) * .22;
+            F.hand(ctx, 'blame = only slope', x, y - sz * 1.4, sz, P.ink, { seed: 's1', rot: -.6 }); F.hand(ctx, 'real: vectorised,', x + sz * .7, y, sz, P.ink, { seed: 's2', rot: -.6 }); F.hand(ctx, 'memory-bound', x + sz * 1.4, y + sz * 1.3, sz, P.ink, { seed: 's3', rot: -.6 }); ctx.restore(); }
+          return;
+        }
+        title(ctx, W, H, 'your backprop, in full', 1); drawCode(ctx, t, l, W, H);
+      })
+  ];
+  function drawCode(ctx, t, l, W, H) {
+    var ll = l - 5.5, code = [
+      ['def backprop(end_node, end_grad=None):', P.lav],
+      ['  grads = {end_node: end_grad}  # 1s if None'],
+      ['  for node in sorted_computational_graph(', P.butter],
+      ['          end_node):', P.butter],
+      ['    outgrad = grads.pop(node)'],
+      ['    if node.is_leaf:'],
+      ['      if node.requires_grad:'],
+      ['        node.grad = (outgrad if node.grad is None', P.mint],
+      ['                     else node.grad + outgrad)', P.mint],
+      ['      continue'],
+      ['    for argnum, parent in \\', P.sky],
+      ['        node.recipe.parents.items():', P.sky],
+      ['      back_fn = BACK_FUNCS.get_back_func(', P.butter],
+      ['          node.recipe.func, argnum)', P.butter],
+      ['      in_grad = back_fn(outgrad, node.array,'],
+      ['          *node.recipe.args,'],
+      ['          **node.recipe.kwargs)'],
+      ['      grads[parent] = (grads.get(parent, 0)', P.mint],
+      ['                       + in_grad)       # += !', P.mint]];
+    var n = Math.floor(ramp(ll, 0, 6.5) * code.length + .999);
+    var cl = code.map(function (c, i) { return [c[0], c[1] || P.chalk, i < n ? .15 + .85 * clamp(n - i, 0, 1) : .12]; });
+    var sz = W < 500 ? 13 : 15, mw = 0; ctx.save(); ctx.font = '600 ' + sz + 'px ' + MONO; cl.forEach(function (c) { mw = Math.max(mw, ctx.measureText(c[0]).width); }); ctx.restore();
+    if (mw + 24 > W - 20) sz *= (W - 44) / mw;
+    var h = cl.length * sz * 1.4 + 14, steerH = W < 500 ? 70 : 64, avail = H - 44 - steerH;
+    if (h > avail) { sz *= avail / h; h = avail; }
+    panel(ctx, W, H, cl, { seed: 'code', y: 44 + h / 2, sz: sz, bg: 'rgba(22,26,53,.95)' });
+    var steer = ramp(ll, 8, 9);
+    if (steer > 0) { ctx.save(); ctx.globalAlpha = steer; F.note(ctx, 'gradients answer "what if this were different?"\nthe core question of interpretability', W / 2, H - steerH / 2 - 4, W < 500 ? 14 : 17, { color: P.pink, seed: 'steer', rot: .01 }); ctx.restore(); }
+  }
+
+  /* =============== coda: now you drive =============== */
+  var C = { a: 2, b: 3, last: 'mulA', g: null };
+  function codaBuild() { C.g = build(C.a, C.b, C.last); }
+  var coda = {
+    caption: {
+      1: 'Change the flour and sugar, or rewire the last step. Every edge shows the blame it carries, and each bowl\'s total is checked against a real nudge.',
+      2: 'Live backprop through your graph: edge labels are in_grad values from BACK_FUNCS, bowls show accumulated grads, and a/b are checked against finite differences.',
+      3: 'Same sorted_computational_graph + BACK_FUNCS loop as the film. Switch to "+ a" (add_back passes grad through) or "× b" (fan-out moves to b) and watch which leaf sums two paths.' },
+    start: function (api, panelEl) {
+      closePredict(api, false);
+      panelEl.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:14px">' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:140px">a <input class="ia" type="range" min="0.3" max="4" step="0.05" value="' + C.a + '" style="flex:1"><b class="va"></b></label>' +
+        '<label style="display:flex;align-items:center;gap:6px;flex:1;min-width:140px">b <input class="ib" type="range" min="0.3" max="4" step="0.05" value="' + C.b + '" style="flex:1"><b class="vb"></b></label>' +
+        '<select aria-label="Last step" style="font:inherit;border-radius:8px;padding:4px"><option value="mulA">L = log(a·b) × a</option><option value="addA">L = log(a·b) + a</option><option value="mulB">L = log(a·b) × b</option></select></div>';
+      var ia = panelEl.querySelector('.ia'), ib = panelEl.querySelector('.ib'), sel = panelEl.querySelector('select'), va = panelEl.querySelector('.va'), vb = panelEl.querySelector('.vb');
+      sel.value = C.last;
+      var upd = function () { C.a = +ia.value; C.b = +ib.value; C.last = sel.value; va.textContent = C.a.toFixed(2); vb.textContent = C.b.toFixed(2); codaBuild(); };
+      ia.oninput = upd; ib.oninput = upd; sel.onchange = function () { upd(); try { api.audio.blip(660); } catch (e) {} }; upd();
+    },
+    draw: function (ctx, t, W, H, api) {
+      if (!C.g) codaBuild();
+      kitchen(ctx, W, H, t); var g = C.g, r = R(W, H, por(W, H) ? 30 : 40, por(W, H) ? 120 : 100);
+      NLAB.L = g.last === 'addA' ? 'L = d + a' : g.last === 'mulB' ? 'L = d·b' : 'L = d·a';
+      EDGES(g).forEach(function (e) { edge(ctx, W, H, r, e[0], e[1]); });
+      var twice = g.last === 'mulB' ? 'b' : 'a';
+      g.steps.forEach(function (s) { if (s.leaf) return; var off = (s.node.name === 'L' && s.parent.name !== 'd') ? 14 : 0; edgeLabel(ctx, W, H, r, s.parent.name, s.node.name, '← ' + f3(s.in_grad), P.butter, off); });
+      ['a', 'b', 'c', 'd', 'L'].forEach(function (n) { bowl(ctx, W, H, r, g, n, t, { grad: n === 'L' ? 1 : g[n].grad != null ? g[n].grad : null, gradCol: n === twice ? P.mint : P.butter }); });
+      var sym = g.last === 'addA' ? '+ a' : g.last === 'mulB' ? '× b' : '× a';
+      panel(ctx, W, H, [['L = log(a·b) ' + sym + ' = ' + f3(g.L.array), P.pink], ['a.grad ' + f3(g.a.grad) + '   finite diff ' + fd(C.a, C.b, C.last, 'a').toFixed(3), P.peach], ['b.grad ' + f3(g.b.grad) + '   finite diff ' + fd(C.a, C.b, C.last, 'b').toFixed(3), P.mint], [twice + ' is used twice: its grad is a sum', P.chalk]], { seed: 'coda' });
+    }
+  };
+
+  F.play({
+    title: 'Deep dive · Building autograd',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: backprop & training', href: '../../index.html#demo/backprop-training' },
+      { label: 'Week 4 pack', href: '../../index.html#week-04' },
+      { label: 'Map: topological sort', href: '../../index.html#map/node=topological-sort' },
+      { label: 'Map: unbroadcast', href: '../../index.html#map/node=unbroadcast' },
+      { label: 'Case: backprop & topo order', href: '../../index.html#cases/backprop-and-topological-order' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
