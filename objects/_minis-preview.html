@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Minis preview</title>
+<!-- Throwaway preview of objects/minis.js: all 28 miniatures in a 7 x 4 grid.
+     ?row=0..3 frames one row · ?id=<object-id> frames one mini · ?turn=<deg> turns every mini
+     · ?ids=a,b,c close-up of a few, side by side · ?elev=<deg> camera elevation · drag to orbit. -->
+<style>
+  :root { --bg: #efe9df; --ink: #2b2a33; --mute: #6f6758; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden;
+    font: 12px/1.3 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  canvas { display: block; }
+  #labels { position: absolute; inset: 0; pointer-events: none; }
+  .lab { position: absolute; transform: translate(-50%, 0); white-space: nowrap; color: var(--mute);
+    letter-spacing: 0.01em; text-align: center; }
+  .lab b { color: var(--ink); font-weight: 600; margin-right: 4px; }
+  .lab small { display: block; font-size: 10.5px; opacity: 0.8; }
+  #hud { position: absolute; left: 14px; top: 10px; color: var(--mute); }
+</style>
+</head>
+<body>
+<div id="labels"></div>
+<div id="hud"></div>
+<script type="module">
+import * as THREE from './vendor/three.js';
+import J from './vendor/jscad.js';
+import { minis, MINI_BOX } from './minis.js';
+
+const Q = new URLSearchParams(location.search);
+const ROW = Q.has('row') ? +Q.get('row') : null;
+const ONE = Q.get('id');
+const SOME = Q.get('ids') ? Q.get('ids').split(',') : null;
+const TURN = (+Q.get('turn') || 0) * Math.PI / 180;
+const ELEV = (Q.has('elev') ? +Q.get('elev') : (Q.has('ids') || Q.has('id') ? 30 : 40)) * Math.PI / 180;
+
+const reg = await fetch('./objects.json').then((r) => r.json()).catch(() => []);
+const byId = Object.fromEntries(reg.map((o) => [o.id, o]));
+const ids = Object.keys(minis);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#efe9df');
+const camera = new THREE.PerspectiveCamera(24, 1, 0.05, 200);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = false;
+
+/* warm museum light: hemisphere + one soft shadow key + a cool fill, and a warm room to reflect */
+scene.add(new THREE.HemisphereLight(0xfff1dc, 0xb59f82, 0.9));
+const key = new THREE.DirectionalLight(0xffe2bf, 2.3);
+key.position.set(-6, 11, 8);
+key.castShadow = true;
+key.shadow.mapSize.set(4096, 4096);
+key.shadow.radius = 4;
+key.shadow.bias = -0.0005;
+key.shadow.normalBias = 0.02;
+Object.assign(key.shadow.camera, { left: -8, right: 8, top: 8, bottom: -8, near: 1, far: 40 });
+const fill = new THREE.DirectionalLight(0xdfe6ff, 0.35);
+fill.position.set(6, 3, -5);
+scene.add(key, key.target, fill);
+{
+  const pm = new THREE.PMREMGenerator(renderer), room = new THREE.Scene();
+  const g = new THREE.SphereGeometry(10, 32, 16), cols = [];
+  const top = new THREE.Color('#fff4e2'), mid = new THREE.Color('#e2d4bf'), bot = new THREE.Color('#7d6a53');
+  for (let i = 0; i < g.attributes.position.count; i++) {
+    const y = g.attributes.position.getY(i) / 10;
+    const c = y > 0 ? mid.clone().lerp(top, Math.pow(y, 0.7)) : mid.clone().lerp(bot, -y);
+    cols.push(c.r, c.g, c.b);
+  }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+  room.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+  const win = new THREE.Mesh(new THREE.PlaneGeometry(7, 5), new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 2.35, 2.0) }));
+  win.position.set(-5, 6, 5); win.lookAt(0, 0, 0); room.add(win);
+  scene.environment = pm.fromScene(room, 0.035).texture;
+  scene.environmentIntensity = 0.5;
+}
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.ShadowMaterial({ color: 0x5b4630, opacity: 0.24 }));
+floor.rotation.x = -Math.PI / 2; floor.position.y = -0.101; floor.receiveShadow = true;
+scene.add(floor);
+
+const MAT = {
+  plaster: (hex) => new THREE.MeshStandardMaterial({ color: hex, roughness: 0.92, metalness: 0 }),
+  paint: (hex) => new THREE.MeshStandardMaterial({ color: hex, roughness: 0.42, metalness: 0.02 }),
+  brass: (hex) => new THREE.MeshStandardMaterial({ color: hex, roughness: 0.34, metalness: 0.9 }),
+};
+
+/* geom3 -> three: fan-triangulate the (convex) polygons, flat normals */
+function toMesh(geom, material) {
+  const pos = [];
+  for (const p of J.geometries.geom3.toPolygons(geom)) {
+    const v = p.vertices;
+    for (let i = 1; i + 1 < v.length; i++) pos.push(...v[0], ...v[i], ...v[i + 1]);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  const m = new THREE.Mesh(g, material);
+  m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+
+const plinthGeo = new THREE.CylinderGeometry(0.62, 0.63, 0.1, 64);
+const rimGeo = new THREE.TorusGeometry(0.622, 0.012, 8, 96);
+const plinthMat = new THREE.MeshStandardMaterial({ color: '#e7dfd1', roughness: 0.94 });
+const SX = 1.5, SZ = 2.7;
+const cells = [], stats = {};
+// what to lay out: every mini in a 7 x 4 grid, or a chosen few (?ids=a,b or a@deg,a@deg2) in one row
+const plan = SOME
+  ? SOME.map((e, i) => { const [id, deg] = e.split('@'); return { id, turn: deg ? (+deg * Math.PI) / 180 : TURN, x: (i - (SOME.length - 1) / 2) * 1.45, z: 0, show: true }; })
+  : ids.map((id, i) => {
+    const c = i % 7, r = Math.floor(i / 7);
+    return { id, turn: TURN, x: (c - 3) * SX, z: (r - 1.5) * SZ, show: ONE ? id === ONE : ROW == null || r === ROW };
+  });
+for (const { id, turn, x, z, show } of plan) {
+  if (!minis[id]) continue;
+  const grp = new THREE.Group(); grp.position.set(x, 0, z);
+  const pl = new THREE.Mesh(plinthGeo, plinthMat); pl.position.y = -0.05; pl.receiveShadow = true; pl.castShadow = true;
+  const rim = new THREE.Mesh(rimGeo, MAT.brass('#b58a3c')); rim.rotation.x = Math.PI / 2; rim.position.y = -0.004;
+  grp.add(pl, rim);
+  const t0 = performance.now();
+  const { geoms, size } = minis[id](J);
+  const ms = performance.now() - t0;
+  const mini = new THREE.Group(); mini.rotation.y = turn;
+  let tris = 0;
+  for (const { geom, color, mat } of geoms) {
+    const m = toMesh(geom, MAT[mat](color));
+    tris += m.geometry.attributes.position.count / 3;
+    mini.add(m);
+  }
+  grp.add(mini);
+  grp.visible = show;
+  scene.add(grp);
+  stats[id] = { tris, ms: +ms.toFixed(1), size };
+  cells.push({ id, x, z, h: size[1], show, grp, deg: Math.round((turn * 180) / Math.PI) });
+}
+
+/* labels: id under each plinth */
+const labels = document.getElementById('labels');
+for (const cl of cells) {
+  const o = byId[cl.id] || {};
+  cl.el = document.createElement('div');
+  cl.el.className = 'lab';
+  const close = !!(SOME || ONE);
+  cl.el.innerHTML = `<b>${o.num ?? ''}</b>${cl.id}` + (close ? `<small>${o.title ?? ''} · ${stats[cl.id].tris} tris${cl.deg ? ` · turned ${cl.deg}°` : ''}</small>` : '');
+  cl.el.style.display = cl.show ? '' : 'none';
+  labels.append(cl.el);
+}
+
+/* frame the visible cells: search the distance until every corner fits the viewport */
+function frame() {
+  const vis = cells.filter((c) => c.show);
+  const pts = [];
+  for (const c of vis) for (const dx of [-0.66, 0.66]) for (const dz of [-0.66, 0.66]) for (const y of [-0.1, c.h + 0.02]) pts.push(new THREE.Vector3(c.x + dx, y, c.z + dz));
+  const box = new THREE.Box3().setFromPoints(pts), ctr = box.getCenter(new THREE.Vector3());
+  const dir = new THREE.Vector3(0, Math.sin(ELEV), Math.cos(ELEV));
+  const tgt = ctr.clone(); tgt.y = Math.min(ctr.y, 0.5);
+  const lim = { x: 0.9, top: vis.length > 7 ? 0.9 : 0.86, bot: vis.length > 1 ? -0.8 : -0.84 };
+  let lo = 0.5, hi = 200;
+  for (let it = 0; it < 40; it++) {
+    const d = (lo + hi) / 2;
+    camera.position.copy(tgt).addScaledVector(dir, d); camera.lookAt(tgt); camera.updateMatrixWorld();
+    const ok = pts.every((p) => { const v = p.clone().project(camera); return Math.abs(v.x) < lim.x && v.y < lim.top && v.y > lim.bot; });
+    if (ok) hi = d; else lo = d;
+  }
+  camera.position.copy(tgt).addScaledVector(dir, hi); controls.target.copy(tgt); controls.update();
+}
+
+function place() {
+  const w = innerWidth, h = innerHeight, v = new THREE.Vector3();
+  for (const c of cells) {
+    if (!c.show) continue;
+    v.set(c.x, -0.1, c.z + 0.64).project(camera);
+    c.el.style.left = `${(v.x * 0.5 + 0.5) * w}px`;
+    c.el.style.top = `${(-v.y * 0.5 + 0.5) * h + 4}px`;
+  }
+}
+function render() { renderer.render(scene, camera); place(); }
+function resize() {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  frame(); render();
+}
+addEventListener('resize', resize);
+controls.addEventListener('change', render);
+resize();
+const total = Object.values(stats).reduce((a, s) => a + s.tris, 0);
+document.getElementById('hud').textContent = `minis.js · ${ids.length} miniatures · ${total} triangles`;
+window.__minis = { ready: true, stats, total };
+</script>
+</body>
+</html>
