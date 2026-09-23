@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Einsum: the one-line contract</title>
+<meta name="theme-color" content="#1c2140">
+<style>
+#predict{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(18,20,44,.72);z-index:5;padding:16px;box-sizing:border-box}
+#predict.on{display:flex}
+#predict .card{background:#fbf6ea;color:#2a2934;border-radius:6px;max-width:420px;width:100%;padding:16px 16px 12px;box-shadow:0 8px 24px rgba(0,0,0,.45);transform:rotate(-.6deg);font:15px/1.35 system-ui,-apple-system,'Segoe UI',sans-serif}
+#predict h3{margin:0 0 4px;font:700 19px 'Comic Neue','Segoe Print','Bradley Hand','Chalkboard SE','Comic Sans MS',cursive}
+#predict p{margin:0 0 10px;font-size:14px;color:#4a4858}
+#predict code{font-size:12.5px;background:#efe6cf;padding:1px 3px;border-radius:3px}
+#predict .opts{display:grid;gap:7px;grid-template-columns:1fr 1fr}
+#predict .opts button{font:15px ui-monospace,'SF Mono',Menlo,Consolas,monospace;text-align:center;background:#f7e3a0;color:#2a2934;border:0;border-radius:8px;padding:9px 11px;min-height:42px;cursor:pointer}
+#predict .opts button.skipq{background:#e6e1f2;grid-column:1 / -1;font-family:system-ui,sans-serif}
+#predict .fb{margin-top:10px;font-weight:600;min-height:1.2em}
+.ein-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:14px}
+.ein-row input[type=text]{font:15px ui-monospace,'SF Mono',Menlo,Consolas,monospace;flex:1 1 220px;min-width:0;padding:7px 8px;border-radius:6px;border:1px solid #9aa0c8;background:#fbf6ea;color:#2a2934}
+.ein-row select{font:14px system-ui,sans-serif;padding:5px;border-radius:6px}
+</style>
+</head>
+<body>
+<noscript>This film is drawn live with JavaScript.</noscript>
+<script src="../engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var F = IFilm, P = F.P, ramp = F.ramp, clamp = F.clamp, lerp = F.lerp;
+
+  /* ================= a real (tiny) einsum: every number on screen comes from here ================= */
+  function parse(pat) {
+    var s = pat.split('->'); if (s.length !== 2) throw new Error('a contract needs exactly one "->"');
+    var ins = s[0].split(',').map(function (t) { return t.trim().split(/\s+/).filter(Boolean); });
+    var out = s[1].trim().split(/\s+/).filter(Boolean);
+    ins.forEach(function (x, i) { if (!x.length) throw new Error('input ' + (i + 1) + ' has no letters'); });
+    return { ins: ins, out: out };
+  }
+  function shapeOf(T) { var s = []; while (Array.isArray(T)) { s.push(T.length); T = T[0]; } return s; }
+  function at(T, idx) { for (var i = 0; i < idx.length; i++) T = T[idx[i]]; return T; }
+  function einsum(pat, Ts) {
+    var p = parse(pat), sizes = {}, order = [];
+    if (p.ins.length !== Ts.length) throw new Error('pattern has ' + p.ins.length + ' inputs, you gave ' + Ts.length);
+    p.ins.forEach(function (lets, n) {
+      var sh = shapeOf(Ts[n]);
+      if (sh.length !== lets.length) throw new Error('input ' + (n + 1) + ' has ' + sh.length + ' axes, pattern names ' + lets.length);
+      lets.forEach(function (L, a) {
+        if (sizes[L] == null) { sizes[L] = sh[a]; order.push(L); }
+        else if (sizes[L] !== sh[a]) throw new Error('"' + L + '" is ' + sizes[L] + ' in one place and ' + sh[a] + ' in another');
+      });
+    });
+    var seen = {};
+    p.out.forEach(function (L) {
+      if (sizes[L] == null) throw new Error('"' + L + '" is in the output but in no input');
+      if (seen[L]) throw new Error('"' + L + '" appears twice in the output'); seen[L] = 1;
+    });
+    var outShape = p.out.map(function (L) { return sizes[L]; }), n = outShape.reduce(function (a, b) { return a * b; }, 1), flat = [];
+    for (var z = 0; z < n; z++) flat.push(0);
+    var val = {}, total = order.reduce(function (a, L) { return a * sizes[L]; }, 1);
+    for (var c = 0; c < total; c++) {
+      var r = c; for (var q = order.length - 1; q >= 0; q--) { val[order[q]] = r % sizes[order[q]]; r = Math.floor(r / sizes[order[q]]); }
+      var prod = 1; for (var m = 0; m < Ts.length; m++) prod *= at(Ts[m], p.ins[m].map(function (L) { return val[L]; }));
+      var o = 0; for (var d = 0; d < p.out.length; d++) o = o * sizes[p.out[d]] + val[p.out[d]];
+      flat[o] += prod;
+    }
+    function nest(dim, off) { if (dim === outShape.length) return flat[off]; var a = [], stride = outShape.slice(dim + 1).reduce(function (x, y) { return x * y; }, 1); for (var i = 0; i < outShape[dim]; i++) a.push(nest(dim + 1, off + i * stride)); return a; }
+    return { shape: outShape, out: nest(0, 0), sizes: sizes, parsed: p, mults: total };
+  }
+  function fate(p) { // the three rules, per letter
+    var f = {}, cnt = {};
+    p.ins.forEach(function (l) { var u = {}; l.forEach(function (L) { if (!u[L]) { u[L] = 1; cnt[L] = (cnt[L] || 0) + 1; } }); });
+    Object.keys(cnt).forEach(function (L) { f[L] = p.out.indexOf(L) >= 0 ? 'kept' : cnt[L] > 1 ? 'multiplied & summed' : 'summed away'; });
+    return f;
+  }
+
+  // the tensors of the film (small integers so you can check them in your head)
+  var M = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+  var A = [[1, 2, 0], [0, 1, 3]], B = [[1, 0], [2, 1], [0, 2]];
+  var AB = einsum('i j, j k -> i k', [A, B]).out, ROWS = einsum('i j -> i', [A]).out;
+  var TR = einsum('i i ->', [M]).out;
+  var Xb = [[[1, 2], [3, 4]], [[0, 1], [1, 0]]], Yb = [[[2, 0], [1, 1]], [[1, 2], [3, 4]]];
+  var BMM = einsum('b i j, b j k -> b i k', [Xb, Yb]).out;
+  var u = [1, 2, 3], w = [1, 0, -1, 2], OUT = einsum('i, j -> i j', [u, w]).out;
+  // attention: batch 1, 3 positions, 1 head, d 2 (q, k as [batch, pos, head, d])
+  var TOKS = ['the', 'cat', 'sat'];
+  var Q = [[[[1, 0]], [[0, 1]], [[1, 1]]]], K = [[[[2, 0]], [[1, 1]], [[0, 2]]]];
+  var APAT = 'batch posq head d, batch posk head d -> batch head posq posk';
+  var ATT = einsum(APAT, [Q, K]);
+  var SC = ATT.out[0][0];
+  function zeros(s) { return s.length ? Array.apply(null, Array(s[0])).map(function () { return zeros(s.slice(1)); }) : 0; }
+  var BIG = einsum(APAT, [zeros([2, 4, 3, 8]), zeros([2, 4, 3, 8])]); // the predict question, answered by the same function
+  var BIGSHAPE = '(' + BIG.shape.join(', ') + ')';
+
+  /* ================= drawing helpers ================= */
+  var LC = { i: P.pink, j: P.butter, k: P.teal, b: P.lav, batch: P.lav, posq: P.pink, posk: P.teal, head: P.orange, d: P.butter };
+  function lcol(L) { return LC[L] || P.mint; }
+  function bg(ctx, W, H, t) { F.sky(ctx, W, H, P.night, '#2b2f5c'); F.stars(ctx, W, H, t, 'dw1', 36); }
+  function txt(ctx, s, x, y, sz, col, o) { o = o || {}; return F.hand(ctx, s, x, y, sz, col || P.chalk, { align: o.align, font: o.mono ? F.MONO : undefined, bold: o.mono ? false : undefined, wobble: o.mono ? .2 : 1, seed: o.seed || s, reveal: o.reveal, outline: o.outline }); }
+  function mono(ctx, s, x, y, sz, col, align, reveal) { return txt(ctx, s, x, y, sz, col, { mono: true, align: align || 'left', reveal: reveal }); }
+  function ph(W) { return W < 560; }
+  // a pattern written with every letter in its own colour; hi = letter to glow; lines split at ',' and '->' when narrow
+  function contract(ctx, pat, x, y, sz, o) {
+    o = o || {}; var p = pat.replace(/\s*,\s*/g, ', ').replace(/\s*->\s*/g, ' -> ');
+    var lines = o.split ? p.replace(', ', ',\n').replace(' -> ', '\n-> ').split('\n') : [p];
+    ctx.save(); ctx.font = sz + 'px ' + F.MONO; ctx.textBaseline = 'middle';
+    var cw = ctx.measureText('m').width, maxw = 0; lines.forEach(function (Ln) { maxw = Math.max(maxw, Ln.length * cw); });
+    lines.forEach(function (Ln, li) {
+      var cx = o.align === 'left' ? x : x - maxw / 2, yy = y + li * sz * 1.45;
+      Ln.split(/(\s+|,|->)/).forEach(function (tok) {
+        if (!tok) return; var isL = /^[a-z_]+$/i.test(tok), col = isL ? lcol(tok) : P.chalk;
+        if (isL && o.hi && o.hi.indexOf(tok) >= 0) { ctx.fillStyle = 'rgba(247,227,160,.25)'; ctx.fillRect(cx - 2, yy - sz * .7, tok.length * cw + 4, sz * 1.4); }
+        if (isL && o.dim && o.dim.indexOf(tok) >= 0) ctx.globalAlpha = .35;
+        ctx.fillStyle = col; ctx.fillText(tok, cx, yy); ctx.globalAlpha = 1; cx += tok.length * cw;
+      });
+    });
+    ctx.restore(); return { w: maxw, h: lines.length * sz * 1.45 };
+  }
+  // integer grid card with axis letters
+  function grid(ctx, x, y, T, o) {
+    o = o || {}; var sz = o.sz || 14, cs = o.cs || sz * 2.3, rows = T.length, cols = T[0].length, w = cols * cs + 12, h = rows * cs + 12 + (o.label ? sz * 1.5 : 0);
+    F.paper(ctx, x + w / 2, y + h / 2, w, h, o.bgc || P.cream, { seed: 'g' + (o.label || '') + rows + cols + x, shadow: true });
+    var y0 = y + 6 + (o.label ? sz * 1.5 : 0);
+    if (o.label) mono(ctx, o.label, x + w / 2, y + sz * .85, sz * .9, '#6b5a9a', 'center');
+    for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
+      var cx = x + 6 + c * cs, cy = y0 + r * cs, v = T[r][c];
+      if (o.shade) { var s = o.shade(r, c, v); if (s) { ctx.fillStyle = s; ctx.fillRect(cx + 1, cy + 1, cs - 2, cs - 2); } }
+      if (o.hl && o.hl(r, c)) { ctx.strokeStyle = P.red; ctx.lineWidth = 2.5; ctx.strokeRect(cx + 1.5, cy + 1.5, cs - 3, cs - 3); }
+      var show = o.show ? o.show(r, c) : true;
+      if (show) { ctx.fillStyle = P.ink; ctx.font = sz + 'px ' + F.MONO; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(v), cx + cs / 2, cy + cs / 2); }
+    }
+    ctx.textAlign = 'left';
+    if (o.rl) txt(ctx, o.rl, x - 8, y0 + rows * cs / 2, sz, lcol(o.rl), { mono: true, align: 'right' });
+    if (o.cl) txt(ctx, o.cl, x + w / 2, y + h + sz * .8, sz, lcol(o.cl), { mono: true, align: 'center' });
+    return { w: w, h: h, cs: cs, x0: x + 6, y0: y0 };
+  }
+  function vecRow(ctx, x, y, v, o) { return grid(ctx, x, y, [v], o); }
+  function stamp(ctx, s, x, y, sz, col, rot, a) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; ctx.translate(x, y); ctx.rotate(rot || -.08); var sc = lerp(1.6, 1, F.ease.out(a)); ctx.scale(sc, sc);
+    ctx.font = '700 ' + sz + 'px ' + F.MONO; var tw = ctx.measureText(s).width;
+    ctx.strokeStyle = col; ctx.lineWidth = 2.5; ctx.strokeRect(-tw / 2 - 8, -sz * .8, tw + 16, sz * 1.6);
+    ctx.fillStyle = col; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(s, 0, 1); ctx.restore();
+  }
+  function clerk(ctx, x, y, s, t) { F.person(ctx, x, y, s, t, { sweater: P.teal }); }
+  function question(ctx, W, a, l) {
+    if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+    F.note(ctx, 'which letters survive?', W / 2 + (ph(W) ? 20 : 150), ph(W) ? 196 : 210, ph(W) ? 16 : 20, { color: P.pink, rot: -.04, seed: 'q', reveal: ramp(l, 0, 1.5) });
+    ctx.restore();
+  }
+
+  /* ================= predict-then-watch (never gated) ================= */
+  var PRED = { asked: false, choice: null, lastT: 0, el: null };
+  function predictEl() {
+    if (PRED.el) return PRED.el;
+    var st = document.querySelector('#ifilm .stage'), d = document.createElement('div'); d.id = 'predict';
+    d.innerHTML = '<div class="card"><h3>Predict, then watch</h3><p>q and k both have shape <b>(2, 4, 3, 8)</b> = <code>batch pos head d</code>. What shape comes out of<br><code>batch posq head d, batch posk head d -&gt; batch head posq posk</code>?</p><div class="opts">' +
+      '<button data-a="a">(2, 4, 3, 8)</button><button data-a="right">' + BIGSHAPE + '</button>' +
+      '<button data-a="c">(2, 3, 4)</button><button data-a="d">(2, 3, 4, 8)</button>' +
+      '<button class="skipq" data-a="skip">Just show me</button></div><div class="fb" aria-live="polite"></div></div>';
+    st.appendChild(d); PRED.el = d;
+    [].forEach.call(d.querySelectorAll('button'), function (b) {
+      b.onclick = function (e) {
+        e.stopPropagation(); PRED.choice = b.dataset.a; var fb = d.querySelector('.fb');
+        fb.textContent = b.dataset.a === 'skip' ? 'Watching...' : b.dataset.a === 'right' ? 'Yes. Watch each letter get its verdict.' : 'Worth testing. Watch which letters survive.';
+        setTimeout(function () { d.classList.remove('on'); resume(); }, b.dataset.a === 'skip' ? 150 : 1000);
+      };
+    });
+    return d;
+  }
+  function isPlaying() { var b = document.querySelector('#ifilm .pp'); return b && b.getAttribute('aria-label') === 'Pause'; }
+  function pause() { if (isPlaying()) document.querySelector('#ifilm .pp').click(); }
+  function resume() { if (!isPlaying()) document.querySelector('#ifilm .pp').click(); }
+  function maybeAsk(t, atT) {
+    var natural = t - PRED.lastT > 0 && t - PRED.lastT < .25; PRED.lastT = t;
+    if (PRED.el && PRED.el.classList.contains('on') && Math.abs(t - atT) > .6) PRED.el.classList.remove('on');
+    if (!PRED.asked && natural && t >= atT && t < atT + .5 && !window.__noPredict) { PRED.asked = true; pause(); predictEl().classList.add('on'); }
+  }
+
+  /* ================= chapters ================= */
+  var chapters = [
+    { name: 'the contract', start: 0, dur: 16, cap: {
+        1: 'A paper notary\'s office. The clerk is tired of five lines of loops and transposes for every matrix job. She wants each job written as <b>one readable contract</b>: name every axis, and say which names come out the other side.',
+        2: 'An <b>einsum</b> pattern names the axes of each input, then after <b>-&gt;</b> names the axes of the output. <code>i j, j k -&gt; i k</code> is matrix multiplication. The whole meaning is in which letters survive the arrow.',
+        3: 'ARENA [0.0] uses <code>einops.einsum(A, B, "i j, j k -&gt; i k")</code>: tensors first, then the pattern, dims separated by spaces (unlike <code>torch.einsum("ij,jk-&gt;ik", A, B)</code>). Multi-letter names like <code>posq</code> are allowed.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var p = ph(W), cy = p ? 110 : 120;
+        F.paper(ctx, W / 2, cy, p ? W - 30 : 560, p ? 120 : 140, P.cream, { seed: 'ct', rot: -.01 });
+        txt(ctx, 'CONTRACT No. 1', W / 2, cy - (p ? 40 : 48), p ? 14 : 17, '#6b5a9a', { seed: 'cn' });
+        ctx.save(); ctx.globalAlpha = ramp(l, 1, 2.5);
+        F.paper(ctx, W / 2, cy + 6, p ? W - 60 : 480, p ? 40 : 50, '#262a52', { seed: 'cl', shadow: false });
+        contract(ctx, 'i j, j k -> i k', W / 2, cy + 6, p ? 20 : 26, { hi: l > 11 ? ['i', 'k'] : null });
+        ctx.restore();
+        question(ctx, W, ramp(l, 3.5, 4.5), l - 3.5);
+        clerk(ctx, p ? 46 : W / 2 - 330, p ? 590 : 400, p ? 44 : 64, t);
+        var gy = p ? 310 : 320, gx = p ? 60 : W / 2 - 200, sz = p ? 13 : 16;
+        if (l > 5.5) { ctx.save(); ctx.globalAlpha = ramp(l, 5.5, 6.5);
+          var g1 = grid(ctx, gx, gy, A, { sz: sz, label: 'A (2, 3)', rl: 'i', cl: 'j' });
+          var g2 = grid(ctx, gx + g1.w + 30, gy, B, { sz: sz, label: 'B (3, 2)', rl: 'j', cl: 'k' });
+          txt(ctx, '@', gx + g1.w + 15, gy + g1.h / 2, 18, P.chalk);
+          if (l > 8) grid(ctx, p ? W / 2 - 20 : gx + g1.w + g2.w + 70, p ? gy + g2.h + 40 : gy, AB, { sz: sz, label: 'i k', rl: 'i', cl: 'k', bgc: P.mint });
+          ctx.restore(); }
+        if (l > 11) { ctx.save(); ctx.globalAlpha = ramp(l, 11, 12);
+          txt(ctx, 'i and k cross the arrow. j does not.', W / 2, p ? 272 : 520, p ? 15 : 20, P.butter, { seed: 'cross' }); ctx.restore(); }
+        if (l < 5) F.plane(ctx, lerp(-20, W + 20, l / 5), H * .5, 12, .05, P.cream);
+      } },
+    { name: 'three rules', start: 16, dur: 22, cap: {
+        1: 'The contract has three clauses. A letter <b>in the output</b> is kept. A letter shared by <b>two inputs</b> but missing from the output: those numbers shake hands (multiply), then get added up. A letter in <b>one input</b> only, missing from the output: swept up and added.',
+        2: 'Rule 1: in the output = <b>kept</b> (loop over it, one answer per value). Rule 2: repeated across inputs, absent from output = <b>multiplied and summed</b>. Rule 3: in one input, absent from output = <b>summed</b>. Below, <code>i j -&gt; i</code> on A is rule 3: row sums.',
+        3: 'ARENA phrases it as: repeated letters across inputs are multiplied; an omitted letter is summed over; unsummed axes can come out in any order (so <code>"i j k -&gt; k j i"</code> is just a rearrange). Everything is one sum of products over all letters.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var p = ph(W), sz = p ? 15 : 19, x0 = p ? 16 : W / 2 - 300;
+        var rules = [['1  in the output', 'KEPT', P.mint], ['2  in 2 inputs, not output', 'MULTIPLY + SUM', P.pink], ['3  in 1 input, not output', 'SUMMED', P.butter]];
+        rules.forEach(function (R, n) {
+          var a = ramp(l, .5 + n * 2.2, 1.5 + n * 2.2), y = (p ? 40 : 60) + n * (p ? 58 : 64);
+          if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+          F.paper(ctx, p ? W / 2 : W / 2 - 60, y, p ? W - 24 : 520, p ? 48 : 52, P.cream, { seed: 'r' + n, rot: (n - 1) * .01 });
+          txt(ctx, R[0], x0 + 6, y, p ? 13 : 17, P.ink, { align: 'left', seed: 'rt' + n }); ctx.restore();
+          stamp(ctx, R[1], p ? W - 80 : W / 2 + 95, y, p ? 12 : 15, R[2] === P.butter ? '#b8860b' : R[2] === P.mint ? '#2f7a55' : '#c0405c', -.06, ramp(l, 1.2 + n * 2.2, 1.8 + n * 2.2));
+        });
+        var y2 = p ? 230 : 270;
+        if (l > 7.5) { ctx.save(); ctx.globalAlpha = ramp(l, 7.5, 8.5);
+          contract(ctx, 'i j, j k -> i k', W / 2, y2, sz);
+          var f = fate(parse('i j, j k -> i k'));
+          ['i', 'j', 'k'].forEach(function (L, n) { mono(ctx, L + ': ' + f[L], x0 + (p ? 10 : 150), y2 + sz * 1.8 + n * sz * 1.35, p ? 13 : 16, lcol(L)); });
+          ctx.restore(); }
+        var y3 = y2 + (p ? 130 : 150);
+        if (l > 12) { ctx.save(); ctx.globalAlpha = ramp(l, 12, 13);
+          contract(ctx, 'i j -> i', W / 2, y3, sz);
+          var sw = ramp(l, 14, 19), gx = p ? 40 : W / 2 - 150, g = grid(ctx, gx, y3 + 22, A, { sz: p ? 14 : 17, rl: 'i', cl: 'j', shade: function (r, c) { return c <= Math.floor(sw * 3 - .01) ? 'rgba(247,227,160,.8)' : null; } });
+          // the sweep broom: running row sums, honest
+          var done = sw > 0 ? Math.min(3, Math.floor(sw * 3 - .01) + 1) : 0, part = A.map(function (row) { return row.slice(0, Math.min(3, Math.max(done, 0))).reduce(function (a, b) { return a + b; }, 0); });
+          txt(ctx, '->', gx + g.w + 22, y3 + 22 + g.h / 2, 18, P.chalk);
+          grid(ctx, gx + g.w + 44, y3 + 22, part.map(function (v) { return [v]; }), { sz: p ? 14 : 17, rl: null, cl: 'i', label: 'sum', bgc: P.butter });
+          if (sw >= 1) mono(ctx, '= ' + JSON.stringify(ROWS), gx + g.w + 44 + (p ? 60 : 70), y3 + 22 + g.h / 2 + 10, p ? 13 : 16, P.butter);
+          ctx.restore(); }
+      } },
+    { name: 'trace', start: 38, dur: 16, cap: {
+        1: 'A trick clause: the <b>same letter twice in one input</b>. <code>i i</code> means "only where row number equals column number": walk down the diagonal. The output is empty, so every letter is summed. Diagonal, then sum: the <b>trace</b>.',
+        2: '<code>einops.einsum(mat, "i i -&gt;")</code>. Writing i twice ties the two axes together (they must be the same size), so we visit M[0,0], M[1,1], M[2,2]. Nothing after the arrow means the result is a scalar: 1 + 5 + 9 = 15.',
+        3: 'This is ARENA\'s <code>einsum_trace</code>. Same function, same rules: the sum is over every assignment of letters, and the tie means only diagonal assignments exist. <code>"i i -&gt; i"</code> would keep i: the diagonal itself, no sum.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var p = ph(W), sz = p ? 20 : 26;
+        F.paper(ctx, W / 2, p ? 50 : 60, p ? W - 60 : 360, p ? 50 : 60, '#262a52', { seed: 'trc', shadow: false });
+        contract(ctx, 'i i ->', W / 2, p ? 50 : 60, sz);
+        var cs = p ? 60 : 72, gx = W / 2 - (cs * 3 + 12) / 2, gy = p ? 110 : 120, step = ramp(l, 3, 11) * 3;
+        var g = grid(ctx, gx, gy, M, { sz: p ? 20 : 24, cs: cs, rl: 'i', cl: 'i', shade: function (r, c) { return r === c ? (r < step ? 'rgba(243,179,195,.85)' : 'rgba(243,179,195,.25)') : null; }, hl: function (r, c) { return r === c && r === Math.min(2, Math.floor(step)); } });
+        var n = Math.min(3, Math.floor(step + 1e-6)), run = 0, terms = [];
+        for (var i = 0; i < n; i++) { run += M[i][i]; terms.push(M[i][i]); }
+        for (i = 0; i < n; i++) F.lantern(ctx, gx + 6 + i * cs + cs / 2, gy + g.h + 44, 10, 1, t);
+        mono(ctx, 'sum = ' + (terms.length ? terms.join(' + ') : '0') + (n === 3 ? ' = ' + run : ''), W / 2, gy + g.h + 90, p ? 18 : 22, P.butter, 'center');
+        if (l > 12) { ctx.save(); ctx.globalAlpha = ramp(l, 12, 13); mono(ctx, 'einsum says ' + TR + ' (a scalar, shape ())', W / 2, gy + g.h + 130, p ? 14 : 17, P.mint, 'center'); ctx.restore(); }
+      } },
+    { name: 'batch matmul', start: 54, dur: 22, cap: {
+        1: 'Two stacks of trays, one per item in the batch. The letter <b>b</b> is in both inputs <i>and</i> in the output, so it is kept: tray 0 only ever meets tray 0. Inside each tray, j shakes hands and is summed, exactly like before.',
+        2: '<code>b i j, b j k -&gt; b i k</code>. b is rule 1 (kept), so it acts like a loop: no mixing across the batch. j is rule 2: out[b,i,k] = Σ_j X[b,i,j] · Y[b,j,k]. Watch one cell being summed from its products.',
+        3: 'This is <code>torch.bmm</code> / batched <code>@</code>. The same move is every Linear layer: <code>einops.einsum(x, self.weight, "... in_feats, out_feats in_feats -&gt; ... out_feats")</code> from ARENA [0.2], where <code>...</code> keeps any leading batch axes.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var p = ph(W), sz = p ? 14 : 17;
+        F.paper(ctx, W / 2, 40, p ? W - 30 : 480, 46, '#262a52', { seed: 'bm', shadow: false });
+        contract(ctx, 'b i j, b j k -> b i k', W / 2, 40, p ? 17 : 22, { hi: l > 3 && l < 7 ? ['b'] : l > 7 ? ['j'] : null });
+        var cell = Math.min(3, Math.floor(ramp(l, 8, 18) * 4)), bb = cell < 2 ? 0 : 1; // walk through cells of tray 0 then 1
+        for (var b = 0; b < 2; b++) {
+          var y = (p ? 90 : 100) + b * (p ? 175 : 190), x = p ? 18 : W / 2 - 330, a = ramp(l, 1 + b, 2 + b);
+          if (a <= 0) continue; ctx.save(); ctx.globalAlpha = a;
+          txt(ctx, 'b = ' + b, x, y + 8, p ? 14 : 17, P.lav, { align: 'left', seed: 'bl' + b });
+          var ci = cell % 2, focus = b === bb && l > 8;
+          var g1 = grid(ctx, x, y + 24, Xb[b], { sz: sz, label: 'X[b]', rl: 'i', cl: 'j', shade: function (r) { return focus && r === ci ? 'rgba(243,179,195,.7)' : null; } });
+          var g2 = grid(ctx, x + g1.w + 28, y + 24, Yb[b], { sz: sz, label: 'Y[b]', rl: 'j', cl: 'k', shade: function (r, c) { return focus && c === 0 ? 'rgba(124,198,192,.7)' : null; } });
+          txt(ctx, '@', x + g1.w + 14, y + 24 + g1.h / 2, 16, P.chalk);
+          var ox = x + g1.w + g2.w + 64; txt(ctx, '=', ox - 18, y + 24 + g1.h / 2, 16, P.chalk);
+          var done = function (r, c) { return b < bb || (b === bb && (c === 0 ? r <= ci : false)) || l > 19; };
+          grid(ctx, ox, y + 24, BMM[b], { sz: sz, label: 'out[b]', rl: 'i', cl: 'k', bgc: P.mint, show: function (r, c) { return l > 8 && done(r, c); }, hl: function (r, c) { return focus && r === ci && c === 0; } });
+          if (focus) {
+            var terms = [0, 1].map(function (j) { return Xb[b][ci][j] + '·' + Yb[b][j][0]; });
+            mono(ctx, 'out[' + b + ',' + ci + ',0] = Σ_j ' + terms.join(' + ') + ' = ' + BMM[b][ci][0], p ? 14 : x, y + 24 + g1.h + 34, p ? 12.5 : 16, P.butter, 'left');
+          }
+          ctx.restore();
+        }
+        if (l > 3.5 && l < 8) { ctx.save(); ctx.globalAlpha = ramp(l, 3.5, 4.5) * (1 - ramp(l, 7, 8)); F.note(ctx, 'tray 0 never meets tray 1', W / 2, p ? 460 : 500, p ? 15 : 19, { color: P.lav, seed: 'tn' }); ctx.restore(); }
+      } },
+    { name: 'outer product', start: 76, dur: 14, cap: {
+        1: 'Now a contract where <b>nothing is summed</b>. Two different letters, both kept. Every number in u meets every number in w exactly once, and each handshake gets its own seat in a grid.',
+        2: '<code>i, j -&gt; i j</code>: no shared letters, no missing letters, so rule 1 only: out[i,j] = u[i]·w[j]. Shape (3,) and (4,) make (3, 4). Compare: <code>i, i -&gt;</code> (shared, missing) is the dot product.',
+        3: 'ARENA\'s <code>einsum_outer</code> and <code>einsum_inner</code> differ by one letter. Outer products are how rank-1 updates look (a gradient of a Linear layer for one example is an outer product: <code>"b o, b i -&gt; o i"</code> sums them over the batch).' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var p = ph(W), sz = p ? 16 : 20, cs = p ? 46 : 56;
+        F.paper(ctx, W / 2, 44, p ? W - 60 : 380, 50, '#262a52', { seed: 'op', shadow: false });
+        contract(ctx, 'i, j -> i j', W / 2, 44, p ? 20 : 26);
+        var gx = W / 2 - (4 * cs + 12) / 2 + (p ? 24 : 0), gy = p ? 170 : 180, fill = ramp(l, 3, 10) * 12;
+        vecRow(ctx, gx, gy - cs - 30, w, { sz: sz, cs: cs, label: 'w', cl: null });
+        grid(ctx, gx - cs - 26, gy, u.map(function (v) { return [v]; }), { sz: sz, cs: cs, label: 'u' });
+        grid(ctx, gx, gy, OUT, { sz: sz, cs: cs, bgc: P.mint, rl: null, show: function (r, c) { return r * 4 + c < fill; }, hl: function (r, c) { return r * 4 + c === Math.floor(fill) && fill < 12; } });
+        txt(ctx, 'j', gx + (4 * cs + 12) / 2, gy - cs - 44, sz, lcol('j'), { mono: true }); txt(ctx, 'i', gx - cs - 38, gy + cs * 1.6, sz, lcol('i'), { mono: true });
+        var k = Math.min(11, Math.floor(fill)), r = Math.floor(k / 4), c = k % 4;
+        if (l > 3) mono(ctx, 'out[' + r + ',' + c + '] = ' + u[r] + '·' + w[c] + ' = ' + OUT[r][c], W / 2, gy + 3 * cs + 50, p ? 16 : 20, P.butter, 'center');
+        if (l > 10) { ctx.save(); ctx.globalAlpha = ramp(l, 10, 11); mono(ctx, 'shape (3,) , (4,) -> (3, 4)   0 sums', W / 2, gy + 3 * cs + 84, p ? 13 : 17, P.mint, 'center'); ctx.restore(); }
+      } },
+    { name: 'attention scores', start: 90, dur: 30, cap: {
+        1: 'The contract you will sign most often. Every word has a question arrow (q) and a label arrow (k). For each head, every question meets every label: the dot product over <b>d</b> is how well they match. Pause and predict the shape.',
+        2: '<b>batch</b> and <b>head</b> are in both inputs and the output: kept, like the trays. <b>posq</b> and <b>posk</b> are each in one input and in the output: kept, one row per query, one column per key. <b>d</b> is shared and missing: multiplied and summed.',
+        3: '<code>attn_scores = einops.einsum(q, k, "batch posn_Q nheads d_head, batch posn_K nheads d_head -&gt; batch nheads posn_Q posn_K")</code> in ARENA [1.1]. Renaming pos to <i>two</i> letters is the whole trick: same axis, different roles, so it is not summed.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); maybeAsk(t, 97); var p = ph(W), sz = p ? 13 : 18;
+        F.paper(ctx, W / 2, p ? 50 : 50, p ? W - 20 : 780, p ? 84 : 52, '#262a52', { seed: 'at', shadow: false });
+        contract(ctx, APAT, W / 2, p ? 50 - sz * 1.45 : 50, sz, { split: p, hi: l > 9 && l < 16 ? ['d'] : null });
+        var f = fate(ATT.parsed), order = ['batch', 'head', 'posq', 'posk', 'd'];
+        var y0 = p ? 118 : 100;
+        order.forEach(function (L, n) {
+          var a = ramp(l, 1 + n * .9, 1.8 + n * .9); if (a <= 0) return;
+          var x = p ? 16 + (n % 2) * (W / 2 - 8) : W / 2 - 360 + n * 150, y = p ? y0 + Math.floor(n / 2) * 40 : y0 + 10;
+          ctx.save(); ctx.globalAlpha = a; mono(ctx, L, x, y, p ? 14 : 17, lcol(L));
+          stamp(ctx, f[L] === 'kept' ? 'KEPT' : 'x + SUM', x + (p ? 120 : 64), y + (p ? 0 : 26), p ? 11 : 13, f[L] === 'kept' ? '#8fe0b5' : '#f38aa0', -.07, a); ctx.restore();
+        });
+        // the tiny honest version: 3 words, 1 head, d = 2
+        var gy = p ? 262 : 190, gx = p ? 90 : W / 2 - 130, cs = p ? 50 : 62;
+        if (l > 9) { ctx.save(); ctx.globalAlpha = ramp(l, 9, 10);
+          txt(ctx, 'batch 1, head 1, d = 2', W / 2, gy - 22, p ? 13 : 16, P.chalk, { seed: 'tiny' });
+          TOKS.forEach(function (tk, i) {
+            mono(ctx, tk + ' q=' + JSON.stringify(Q[0][i][0]), p ? 8 : W / 2 - 330, gy + 18 + (p ? 27 : 33) + i * cs + cs / 2, p ? 10.5 : 14, P.pink, 'left');
+            mono(ctx, TOKS[i], gx + 6 + i * cs + cs / 2, gy + 3 * cs + (p ? 58 : 70), p ? 10 : 13, P.teal, 'center'); mono(ctx, 'k=' + JSON.stringify(K[0][i][0]).replace(',', ', '), gx + 6 + i * cs + cs / 2, gy + 3 * cs + (p ? 72 : 88), p ? 10 : 11, P.teal, 'center');
+          });
+          var fillN = ramp(l, 11, 18) * 9;
+          grid(ctx, gx, gy + 12, SC, { sz: p ? 18 : 22, cs: cs, bgc: P.cream, label: 'posq × posk',
+            show: function (r, c) { return r * 3 + c < fillN; }, shade: function (r, c, v) { return r * 3 + c < fillN ? 'rgba(243,179,195,' + (v / 2 * .8) + ')' : null; },
+            hl: function (r, c) { return r * 3 + c === Math.floor(fillN) && fillN < 9; } });
+          var k2 = Math.min(8, Math.floor(fillN)), r = Math.floor(k2 / 3), c = k2 % 3, qq = Q[0][r][0], kk = K[0][c][0];
+          mono(ctx, 'q[' + TOKS[r] + ']·k[' + TOKS[c] + '] = ' + qq[0] + '·' + kk[0] + ' + ' + qq[1] + '·' + kk[1] + ' = ' + SC[r][c], W / 2, gy + 3 * cs + (p ? 100 : 118), p ? 13 : 17, P.butter, 'center');
+          ctx.restore(); }
+        if (l > 19) { ctx.save(); ctx.globalAlpha = ramp(l, 19, 20);
+          var ok = PRED.choice === 'right', msg = PRED.choice && PRED.choice !== 'skip' ? (ok ? 'you called it: ' : 'answer: ') : 'answer: ';
+          F.note(ctx, msg + '(2, 4, 3, 8) x (2, 4, 3, 8)\n-> batch head posq posk = ' + BIGSHAPE, W / 2, Math.min(H - 40, gy + 3 * cs + (p ? 150 : 160)), p ? 12 : 16, { color: P.mint, seed: 'ans', font: F.MONO, rot: -.01 });
+          ctx.restore(); }
+      } },
+    { name: 'what it hides', start: 120, dur: 12, cap: {
+        1: 'A contract says <i>what</i> you get, not <i>how hard</i> it is to get. The office quietly does every multiplication the letters allow. Name one letter too many and the paperwork explodes.',
+        2: 'Honest limit: einsum hides cost. The work is the <b>product of all letter sizes</b>. For attention that is batch·head·posq·posk·d; a three-input einsum can be far slower in one order than another. Readable is not the same as cheap.',
+        3: 'Libraries pick a contraction order (opt_einsum-style) for multi-input patterns, but a pattern that materialises a huge intermediate still costs memory. Counting multiply-adds here: our tiny scores took ' + ATT.mults + '; the predict example takes ' + (2 * 3 * 4 * 4 * 8) + '; GPT-2 small at 1024 tokens is ' + (12 * 1024 * 1024 * 64).toLocaleString('en-US') + ' per layer per sequence.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var p = ph(W), sz = p ? 15 : 19, y = p ? 70 : 80;
+        var rows = [['our tiny scores', ATT.mults], ['the predict example', 2 * 3 * 4 * 4 * 8], ['GPT-2 small, 1024 tokens', 12 * 1024 * 1024 * 64]];
+        mono(ctx, 'multiply-adds = product of every letter size', W / 2, y - 30, p ? 12 : 16, P.chalk, 'center');
+        rows.forEach(function (R, n) {
+          var a = ramp(l, .5 + n * 1.5, 1.5 + n * 1.5); if (a <= 0) return; ctx.save(); ctx.globalAlpha = a;
+          var yy = y + 30 + n * (p ? 60 : 64), bw = (p ? W - 40 : 520) * Math.log10(R[1]) / 8;
+          ctx.fillStyle = [P.mint, P.butter, P.red][n]; ctx.fillRect(p ? 20 : W / 2 - 260, yy, bw, 18);
+          mono(ctx, R[0] + ': ' + R[1].toLocaleString('en-US'), p ? 20 : W / 2 - 260, yy - 12, p ? 12 : 15, P.chalk, 'left'); ctx.restore();
+        });
+        if (l > 5) { ctx.save(); ctx.globalAlpha = ramp(l, 5, 6); mono(ctx, '(bar length is log scale, like a dial-up progress bar lying to you)', W / 2, y + 230, p ? 10 : 13, '#9aa0c8', 'center'); ctx.restore(); }
+        var cp = ramp(l, 6, 7.5); F.cornerFlip(ctx, W, H, cp, P.cream);
+        if (cp > .5) { ctx.save(); ctx.globalAlpha = ramp(l, 7.2, 8); var s2 = p ? 13 : 18, cx = W - Math.min(W, H) * .33, cy = H - Math.min(W, H) * .24;
+          txt(ctx, 'readable is', cx, cy - s2 * 1.4, s2, P.ink, { seed: 'h1' }); txt(ctx, 'not the same as', cx + s2 * .6, cy, s2, P.ink, { seed: 'h2' }); txt(ctx, 'cheap', cx + s2 * 1.2, cy + s2 * 1.4, s2, P.red, { seed: 'h3' }); ctx.restore(); }
+      } },
+    { name: 'your lines', start: 132, dur: 18, cap: {
+        1: 'These are the lines you write (or already wrote) in ARENA [0.0]. Each is one contract. Read each one aloud as "which letters survive?" and you know what it does before you run it.',
+        2: 'The five [0.0] einsum exercises, then the attention line you will meet in [1.1]. Steering, probes and attention scores are all this same move: <b>attention scores, probes and steering all start as one einsum.</b>',
+        3: 'A linear probe is <code>einsum(resid, w, "batch pos d_model, d_model -&gt; batch pos")</code>; a steering vector is an add along d_model; DLA is resid · W_U[:, token]. Named axes are how you look inside a model without losing track of which number is which.' },
+      draw: function (ctx, t, l, W, H) {
+        bg(ctx, W, H, t); var p = ph(W), sz = p ? 11.5 : 15;
+        var lines = [['# ARENA [0.0] einsum exercises', '#9aa0c8'], ['einops.einsum(mat, "i i ->")', P.pink], ['einops.einsum(mat, vec, "i j, j -> i")', P.butter], ['einops.einsum(mat1, mat2, "i j, j k -> i k")', P.teal],
+          ['einops.einsum(vec1, vec2, "i ->")', '#9aa0c8'], ['einops.einsum(vec1, vec2, "i, i ->")', P.lav], ['einops.einsum(vec1, vec2, "i, j -> i j")', P.mint], ['', P.chalk],
+          ['# [1.1] attention scores', '#9aa0c8'], ['einops.einsum(q, k,', P.orange], [' "batch posq head d,', P.chalk], ['  batch posk head d', P.chalk], ['  -> batch head posq posk")', P.chalk]];
+        lines.splice(4, 1); // (keep only the real five)
+        var w = Math.min(W - 16, 48 * sz * .62 + 30), h = lines.length * sz * 1.55 + 26, x = W / 2 - w / 2, y = p ? 40 : Math.max(20, (H - h) / 2 - 90);
+        F.paper(ctx, W / 2, y + h / 2, w, h, '#20244a', { seed: 'code', rot: .004 });
+        lines.forEach(function (Ln, i) { mono(ctx, Ln[0], x + 12, y + 18 + i * sz * 1.55, sz, Ln[1], 'left', ramp(l, .3 + i * .45, 1 + i * .45)); });
+        if (l > 8) { ctx.save(); ctx.globalAlpha = ramp(l, 8, 9); F.note(ctx, 'attention scores, probes and steering\nall start as one einsum', W / 2, y + h + (p ? 50 : 56), p ? 14 : 19, { color: P.pink, seed: 'steer', rot: -.02 }); ctx.restore(); }
+        if (l > 13) { ctx.save(); ctx.globalAlpha = ramp(l, 13, 14); F.egg(ctx, W / 2, y + h + (p ? 130 : 150), p ? 26 : 34, t, { clear: .6 }); ctx.restore(); }
+        if (l > 14.5) { ctx.save(); ctx.globalAlpha = ramp(l, 14.5, 15.5); txt(ctx, 'now write your own contract', W / 2, y + h + (p ? 180 : 210), p ? 15 : 19, P.butter, { seed: 'drive' }); ctx.restore(); }
+      } }
+  ];
+
+  /* ================= coda: type any contract ================= */
+  var OPS = { A: A, B: B, M: M, u: u, w: w, v: [1, 1, 2] };
+  var OPNAME = { A: 'A (2, 3)', B: 'B (3, 2)', M: 'M (3, 3)', u: 'u (3,)', w: 'w (4,)', v: 'v (3,)' };
+  var C = { pat: 'i j, j k -> i k', ops: ['A', 'B'], res: null, err: null };
+  function recompute() {
+    try { var p = parse(C.pat), Ts = C.ops.slice(0, p.ins.length).map(function (k) { return OPS[k]; }); C.res = einsum(C.pat, Ts); C.err = null; }
+    catch (e) { C.res = null; C.err = e.message; }
+  }
+  var PRESETS = [['i j, j k -> i k', 'A', 'B'], ['i i ->', 'M', 'B'], ['i j -> j', 'A', 'B'], ['i, j -> i j', 'u', 'w'], ['i, i ->', 'u', 'v'], ['i j, j -> i', 'A', 'v'], ['i j -> j i', 'A', 'B'], ['i j, j k -> i j', 'A', 'B']];
+  var coda = {
+    caption: { 1: 'Type a contract. Pick the tensors. Which letters survive?', 2: 'Try a matmul, a trace, a transpose, or break it on purpose: mismatched sizes give a red error card.', 3: 'Same rules as einops.einsum: letters must agree in size; output letters must appear in an input; repeated letters in one input take the diagonal.' },
+    start: function (api, panel) {
+      var opt = Object.keys(OPS).map(function (k) { return '<option value="' + k + '">' + OPNAME[k] + '</option>'; }).join('');
+      panel.innerHTML = '<div class="ein-row"><input type="text" aria-label="einsum pattern" spellcheck="false" autocapitalize="off" autocomplete="off" value="' + C.pat + '"></div>' +
+        '<div class="ein-row" style="margin-top:6px"><span>tensors:</span><select aria-label="first tensor">' + opt + '</select><select aria-label="second tensor">' + opt + '</select></div>' +
+        '<div class="ein-row" style="margin-top:6px">' + PRESETS.map(function (pr, i) { return '<button data-p="' + i + '" style="font-family:ui-monospace,Menlo,monospace">' + pr[0] + '</button>'; }).join('') + '</div>';
+      var inp = panel.querySelector('input'), sels = panel.querySelectorAll('select');
+      sels[0].value = C.ops[0]; sels[1].value = C.ops[1];
+      inp.oninput = function () { C.pat = inp.value; recompute(); };
+      [0, 1].forEach(function (i) { sels[i].onchange = function () { C.ops[i] = sels[i].value; recompute(); }; });
+      [].forEach.call(panel.querySelectorAll('button[data-p]'), function (b) { b.onclick = function () { var pr = PRESETS[+b.dataset.p]; C.pat = inp.value = pr[0]; C.ops = [pr[1], pr[2]]; sels[0].value = pr[1]; sels[1].value = pr[2]; recompute(); api.audio.blip(600); }; });
+      recompute();
+    },
+    draw: function (ctx, t, W, H) {
+      bg(ctx, W, H, t); var p = ph(W), sz = p ? 14 : 17;
+      var np; try { np = parse(C.pat).ins.length; } catch (e) { np = 1; }
+      var x = p ? 16 : W / 2 - 330, y = 26;
+      for (var n = 0; n < Math.min(np, 2); n++) {
+        var T = OPS[C.ops[n]], T2 = Array.isArray(T[0]) ? T : [T];
+        var g = grid(ctx, x, y, T2, { sz: p ? 12 : 15, cs: p ? 28 : 36, label: OPNAME[C.ops[n]] }); x += g.w + 20;
+      }
+      var y2 = p ? 150 : 210;
+      F.paper(ctx, W / 2, y2, p ? W - 20 : 640, p ? 44 : 52, '#262a52', { seed: 'cp', shadow: false });
+      contract(ctx, C.pat || ' ', W / 2, y2, p ? (C.pat.length > 26 ? 12 : 16) : 22);
+      var y3 = y2 + 44;
+      if (C.err) {
+        F.paper(ctx, W / 2, y3 + 50, p ? W - 40 : 520, 76, P.red, { seed: 'err', rot: -.01 });
+        txt(ctx, 'contract rejected', W / 2, y3 + 32, p ? 15 : 19, P.chalk, { seed: 'rej' });
+        mono(ctx, C.err, W / 2, y3 + 62, p ? 11 : 14, P.chalk, 'center');
+        return;
+      }
+      var R = C.res, f = fate(R.parsed), ls = Object.keys(f);
+      ls.forEach(function (L, i) { mono(ctx, L + ': ' + f[L], p ? 16 + (i % 2) * (W / 2 - 8) : W / 2 - 330 + i * 230, y3 + 6 + (p ? Math.floor(i / 2) * 20 : 0), p ? 12 : 14, lcol(L), 'left'); });
+      var y4 = y3 + (p ? Math.ceil(ls.length / 2) * 20 + 24 : 44);
+      mono(ctx, 'output shape (' + R.shape.join(', ') + (R.shape.length === 1 ? ',' : '') + ')   ' + R.mults + ' multiply-adds', W / 2, y4, p ? 13 : 16, P.butter, 'center');
+      var O = R.out;
+      if (!R.shape.length) { F.note(ctx, String(O), W / 2, y4 + 60, p ? 28 : 34, { color: P.mint, seed: 'sc', font: F.MONO }); }
+      else if (R.shape.length <= 2) { var O2 = R.shape.length === 1 ? [O] : O, cs = p ? Math.min(40, (W - 40) / O2[0].length) : 48; grid(ctx, W / 2 - (O2[0].length * cs + 12) / 2, y4 + 24, O2, { sz: p ? 15 : 18, cs: cs, bgc: P.mint }); }
+      else mono(ctx, JSON.stringify(O), W / 2, y4 + 40, p ? 11 : 14, P.mint, 'center');
+    }
+  };
+
+  F.play({
+    title: 'Deep dive W1 · Einsum: the one-line contract',
+    back: '../index.html',
+    chapters: chapters,
+    coda: coda,
+    links: [
+      { label: 'Demo: tensors & einops', href: '../../index.html#demo/tensors-einops' },
+      { label: 'Week 1 pack', href: '../../index.html#week-01' },
+      { label: 'Map: einsum', href: '../../index.html#map/node=einsum' },
+      { label: 'Map: einops rearrange', href: '../../index.html#map/node=einops-rearrange' },
+      { label: 'Case: einops rearrange', href: '../../index.html#cases/einops-rearrange' },
+      { label: 'Case: broadcasting', href: '../../index.html#cases/broadcasting' }
+    ]
+  });
+})();
+</script>
+</body>
+</html>
