@@ -1,0 +1,236 @@
+{
+  "id": "attribution-graph",
+  "title": "Freeze the gates, trace the water",
+  "week": null,
+  "need": "core",
+  "allegory": "An attribution graph is a map of a canal city on one afternoon: freeze every lock gate as it stood, and the water reaching each basin becomes a simple sum of what upstream basins sent, so you can draw the big flows as arrows, prune the trickles, and test the map by damming one basin.",
+  "map": [
+    ["freezing every lock gate as it stood that afternoon", "freezing attention patterns and LayerNorm scales at their values on this prompt"],
+    ["named basins you can point at", "transcoder latents at the positions where they fire"],
+    ["how much of one basin's water reaches another", "an edge weight: the source's writing vector, carried through the frozen layers, dotted with the target's reading vector"],
+    ["water you can't trace to any named basin", "error nodes: what the transcoders leave unexplained"],
+    ["damming a basin to see whether the town downstream runs dry", "zero-ablating a supernode and checking the output moves as the graph predicts"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Via Texas or not?",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "the capital of the state containing Dallas is...",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.52, "y": 0.55, "w": 0.2, "h": 0.3, "label": "model", "color": "lav" },
+        { "kind": "card", "x": 0.8, "y": 0.55, "label": "Austin", "color": "mint" },
+        { "kind": "cloud", "x": 0.52, "y": 0.22, "label": "Texas?", "color": "chalk" }
+      ],
+      "arrows": [[0.63, 0.55, 0.73, 0.55, ""]],
+      "cap": {
+        "1": "Ask a model for 'the capital of the state containing Dallas' and it says Austin. Did it think 'Texas' on the way, or just memorise the phrase?",
+        "2": "Attribution graphs answer questions like this for one prompt: a map of which internal features caused which, from the input tokens up to the predicted word.",
+        "3": "Circuit Tracing (Ameisen, Lindsey et al., Anthropic, 2025) built readable end-to-end graphs; the companion paper showed Claude 3.5 Haiku doing genuine two-step inference, Dallas to Texas to Austin."
+      }
+    },
+    {
+      "name": "Freeze the gates",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "push", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "door", "x": 0.34, "y": 0.58, "w": 0.06, "h": 0.22, "label": "gate: frozen", "color": "sky" },
+        { "kind": "circle", "x": 0.55, "y": 0.62, "w": 0.1, "label": "basin", "color": "sky" },
+        { "kind": "circle", "x": 0.8, "y": 0.45, "w": 0.1, "label": "basin", "color": "sky" },
+        { "kind": "card", "x": 0.72, "y": 0.2, "label": "flow = a number", "color": "butter" }
+      ],
+      "arrows": [[0.6, 0.58, 0.75, 0.48, "0.7"]],
+      "cap": {
+        "1": "Picture a city of canals on one afternoon. Freeze every lock gate as it stood, and you can measure how much water from each basin reaches every other.",
+        "2": "Freeze attention patterns and LayerNorm scales at their values on this prompt, swap MLPs for transcoders, and the model is close enough to linear that each feature's pull on a later one is a number.",
+        "3": "The local replacement model: frozen hook_pattern and hook_scale, transcoders for MLPs. Given fixed feature activations the residual stream is linear in node activations, so batched backward passes give every edge."
+      }
+    },
+    {
+      "name": "One arrow's strength",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "edge ≈ ", "c": "ink", "note": "" },
+        { "t": "wₛ", "c": "orange", "note": "what the source writes" },
+        { "t": " · ", "c": "ink", "note": "" },
+        { "t": "J", "c": "sky", "note": "the frozen path between" },
+        { "t": " · ", "c": "ink", "note": "" },
+        { "t": "rₜ", "c": "green", "note": "what the target reads" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "An arrow's strength: what the source basin pours in, carried along the frozen canals, measured where the target drinks. With gates frozen, it's one number.",
+        "2": "Each node writes a direction into the residual stream and reads one out. <code>compute_adjacency_matrix</code> gets source-writes, carried through the frozen layers, dotted with target-reads, via batched backward passes.",
+        "3": "For MLPs, skip + (mlp_out − skip).detach() with skip = ln(resid_mid) @ W_skip: exact forward, linear backward. The adjacency matrix is lower-triangular, since a transformer has no backward edges."
+      }
+    },
+    {
+      "name": "Count every route",
+      "need": "exercise",
+      "dur": 10,
+      "type": "bars",
+      "title": "Toy graph: direct arrow to the answer, then total influence",
+      "labels": ["Dallas", "Texas", "say a capital", "say Austin"],
+      "from": [0, 0, 0, 0.9],
+      "to": [0.504, 0.63, 0.45, 0.9],
+      "cap": {
+        "1": "Dallas has no arrow straight to the answer, yet it matters a lot, through Texas. Adding up every route, not just direct arrows, is how the map gets pruned.",
+        "2": "Even with sparse latents there are far too many nodes to read. Rank nodes and edges by total influence on the output, summing routes of every length, and prune below a threshold. (Toy weights.)",
+        "3": "On the normalised adjacency A, influence = A + A² + A³ + … = (I − A)⁻¹ − I, and the series ends because A is nilpotent. Toy route: 0.8 × 0.7 × 0.9 = 0.504 along Dallas → Texas → say Austin → answer."
+      }
+    },
+    {
+      "name": "Dallas, Texas, Austin",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "d", "label": "Dallas", "x": 0.1, "y": 0.7, "c": "sky" },
+        { "id": "t", "label": "Texas", "x": 0.36, "y": 0.5, "c": "lav" },
+        { "id": "c", "label": "say a capital", "x": 0.4, "y": 0.18, "c": "teal" },
+        { "id": "a", "label": "say Austin", "x": 0.66, "y": 0.35, "c": "lav" },
+        { "id": "o", "label": "Austin", "x": 0.9, "y": 0.35, "c": "mint" }
+      ],
+      "edges": [["d", "t", ""], ["t", "a", ""], ["c", "a", ""], ["a", "o", ""]],
+      "flow": "forward",
+      "cap": {
+        "1": "The pruned map: Dallas features light Texas features; Texas plus a 'say a capital' group light 'say Austin'. Zero out the Texas group and the answer breaks.",
+        "2": "Section 4 swaps your from-scratch code for the <code>circuit-tracer</code> library to get this graph. Annotated supernodes include Dallas, Texas, Say a capital and Say Austin; Texas is the first hop.",
+        "3": "A graph is a hypothesis: zero-ablate a supernode, or swap in another state's features and watch the capital change. On the Biology of a Large Language Model reports this structure in Claude 3.5 Haiku."
+      }
+    },
+    {
+      "name": "Gate, not wall",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "freeze the attention output", "c": "pink", "lines": ["no gradient crosses between tokens", "every edge stays at one position", "no route from Dallas to the answer"] },
+      "right": { "title": "freeze only hook_pattern", "c": "mint", "lines": ["the weighting is fixed", "V @ W_O stays differentiable", "information can travel between tokens"] },
+      "verdict": "Fix how far each gate is open, not whether water flows through it.",
+      "cap": {
+        "1": "Freeze the gates, don't brick up the canals. Block the water itself and nothing crosses between streets, so no route from 'Dallas' to the answer can appear.",
+        "2": "Freeze the whole attention output and cross-position influence is zero everywhere: the graph splits into per-token islands. Freeze only <code>hook_pattern</code> and keep <code>V @ W_O</code> differentiable.",
+        "3": "Check before building: lower-triangular, non-zero embedding-to-first-layer entries, and average L0 per layer. Above 50 means you loaded the l0_big transcoders instead of l0_small, and nodes explode."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A causal map for one prompt", "A graph is a hypothesis: ablate to test it", "Error nodes show what you missed"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "To steer a model you need to know which of its ideas cause which. An attribution graph draws that map for one prompt, and ablations check it's true.",
+        "2": "It's activation patching and direct logit attribution generalised: compute all the edges at once, prune, then test. Graphs revealed two-step inference and rhyme planning in Claude 3.5 Haiku.",
+        "3": "Completeness, the share of input edges from features and embeddings rather than error nodes, says how much computation you captured. Anthropic's cross-layer transcoders shorten paths further."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Toy graph: each node's total influence on 'Austin', after pruning",
+    "labels": ["Dallas", "Texas", "say a capital", "say Austin", "a stray feature"],
+    "params": [
+      { "id": "a", "label": "Dallas → Texas strength", "min": 0, "max": 1, "step": 0.05, "value": 0.8 },
+      { "id": "b", "label": "Texas → say Austin strength", "min": 0, "max": 1, "step": 0.05, "value": 0.7 },
+      { "id": "tau", "label": "prune line", "min": 0, "max": 0.6, "step": 0.01, "value": 0.1 }
+    ],
+    "f": "[a*b*0.9, b*0.9, 0.45, 0.9, 0.09].map(v => v >= tau ? v : 0)",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "Dallas: direct arrow to the answer", "f": "'none'" },
+      { "label": "Dallas: total influence via Texas", "f": "(a*b*0.9).toFixed(3)" },
+      { "label": "nodes kept", "f": "[a*b*0.9, b*0.9, 0.45, 0.9, 0.09].filter(v => v >= tau).length + ' of 5'" },
+      { "label": "does Dallas → Texas → Austin survive?", "f": "a*b*0.9 >= tau && b*0.9 >= tau ? 'yes' : 'no: pruned away'" }
+    ],
+    "caption": {
+      "1": "Raise the prune line and the stray feature goes first. Then weaken Dallas → Texas and watch the whole route vanish, even though 'say Austin' still stands.",
+      "2": "Total influence multiplies along a route and adds across routes. Pruning keeps nodes whose total clears the line, so one weak first hop can prune a whole chain. (Toy weights.)",
+      "3": "Here Dallas's influence is a·b·0.9, the single route Dallas → Texas → say Austin → logit. Real pruning thresholds both node and edge influence from the Neumann series on the normalised adjacency."
+    }
+  },
+  "where_else": [
+    "Activation patching and direct logit attribution: the one-hypothesis-at-a-time methods this generalises",
+    "Backprop: the same gradients, collected edge by edge between features instead of summed into weight updates",
+    "Hand-traced circuits like IOI in GPT-2: the same kind of map, drawn by hand",
+    "Supply-chain tracing: add up contributions along every route, then keep the big ones"
+  ],
+  "hamming": {
+    "what": "A map of which internal features caused which on one prompt, built by freezing the model's messiest parts so every feature-to-feature influence is a number, then pruned to what matters.",
+    "when": "When you want to know how a model reached a specific answer, like whether it really went Dallas to Texas to Austin, and you have transcoders for its MLPs.",
+    "why": "It computes every edge at once instead of testing one hypothesis at a time, giving a readable causal map you can check by ablation."
+  },
+  "object": {
+    "title": "The canal map",
+    "subtitle": "Height is depth in the model; arrows are the strong influences left after pruning.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "d", "label": "Dallas (token)", "pos": [-1.0, -1.2, 0], "c": "data" },
+      { "id": "t", "label": "Texas", "pos": [-0.4, -0.2, 0.2], "c": "dir" },
+      { "id": "c", "label": "say a capital", "pos": [0.6, 0.1, 0.6], "c": "aux" },
+      { "id": "a", "label": "say Austin", "pos": [0.4, 0.8, 0], "c": "dir" },
+      { "id": "o", "label": "Austin (logit)", "pos": [0.6, 1.4, 0], "c": "good" },
+      { "id": "e", "label": "MLP error", "pos": [-0.2, 0.4, -0.8], "c": "plaster" }
+    ],
+    "edges": [["d", "t"], ["t", "a"], ["c", "a"], ["e", "a"], ["a", "o"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": { "1": "The pruned graph for one prompt. Low nodes sit early in the model, high ones late; pulses show influence flowing up towards the answer.", "2": "Input nodes are token embeddings, the middle are transcoder latents, the top is the predicted token. Only edges that survived pruning are drawn.", "3": "A DAG over one prompt: embeddings, transcoder latents at firing positions, MLP error nodes and salient logits, with edges from the linearised model." },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": { "1": "From the front, the two-hop route stands out: Dallas up to Texas, Texas up to 'say Austin'. A separate 'say a capital' group joins at the top.", "2": "The graph's claim: the model computes the state first, then combines it with a generic 'say a capital' signal to produce Austin.", "3": "Two-step inference made visible: Texas is the intermediate hop, a claim you can only make with a graph you can intervene on." },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": { "1": "From the side, a grey error node: the part of an MLP the transcoder couldn't explain. The more arrows start there, the less the map captures.", "2": "Error nodes carry each MLP's unexplained output. How much of the graph rests on them is your completeness check.", "3": "Graph completeness is the fraction of input edges from feature and embedding nodes rather than error nodes." },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": { "1": "From above, every arrow points one way: up. A transformer has no backward edges, which is why adding up every route comes to an end.", "2": "The adjacency matrix is lower-triangular, so summing routes of every length terminates.", "3": "Nilpotent adjacency: Aᵏ = 0 beyond the longest path, so the Neumann series for total influence is a finite sum." },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": { "1": "Up close on Texas: the map claims this group carries the answer. Zero it out, or swap in another state's features, and the output should follow.", "2": "Test the graph: zero-ablate the Texas supernode and the answer breaks; swap in another state's features and the model names that state's capital.", "3": "Edges describe the replacement model; ablations and feature swaps check that the claim holds for the real model's output." },
+        "view": "close",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your graph only has edges within each token position. What did you freeze?",
+        "options": [{ "t": "The whole attention output, not just the pattern", "ok": true }, { "t": "The LayerNorm scales" }],
+        "why": "Attention moves information between positions through V @ W_O. Freeze only hook_pattern and keep the value path differentiable."
+      },
+      {
+        "q": "Dallas has no direct edge to the answer. Can pruning still keep it?",
+        "options": [{ "t": "Yes: its influence flows through Texas", "ok": true }, { "t": "No: only direct edges count" }],
+        "why": "Pruning uses total influence summed over every route via the Neumann series, not just direct edges."
+      },
+      {
+        "q": "How do you check the graph's claim that the model goes via Texas?",
+        "options": [{ "t": "Zero-ablate the Texas supernode and watch the answer", "ok": true }, { "t": "Find the thickest edge" }],
+        "why": "A graph is a hypothesis. Ablating Texas breaks the answer, and swapping in another state's features changes it."
+      }
+    ],
+    "where": "Anywhere you trace credit through a network of near-linear steps: spreadsheet dependencies, supply chains, citation graphs."
+  }
+}

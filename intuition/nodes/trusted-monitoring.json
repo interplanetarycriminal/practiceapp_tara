@@ -1,0 +1,176 @@
+{
+  "id": "trusted-monitoring",
+  "title": "Rank everything, inspect the top",
+  "week": 11,
+  "need": "core",
+  "allegory": "Trusted monitoring is like a foreman who can personally inspect only 2 jobs in every 100 from a brilliant contractor who might be sabotaging: an honest but less skilled apprentice reads every job and ranks how dodgy it looks, the foreman inspects the top of that list, and even an apprentice who misses two-thirds of the tricks makes the whole run far safer.",
+  "map": [
+    ["the brilliant contractor who might cheat", "U: the untrusted, more capable model writing the code"],
+    ["the honest apprentice who reads every job", "T: the trusted, weaker model rating suspiciousness from 1 to 100"],
+    ["the foreman's time: 2 inspections per 100 jobs", "the audit budget, which pins the false-positive rate at 2%"],
+    ["inspecting the jobs ranked most dodgy", "auditing the top 2% by suspicion: a bar at the clean scores' 98th percentile"],
+    ["catching a third of the tricks still changes the odds", "about 34% true positives at 2% false positives, yet safety 15% → 62% at 97% usefulness"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": "o/d11-threshold.html",
+  "chapters": [
+    {
+      "name": "Two in a hundred",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "type", "x": 0.22, "label": "untrusted model" },
+        { "pose": "think", "x": 0.82, "label": "you" }
+      ],
+      "props": [
+        { "kind": "stack", "x": 0.5, "y": 0.64, "label": "100 jobs", "color": "cream" },
+        { "kind": "card", "x": 0.66, "y": 0.2, "label": "time to check: 2", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A brilliant but untrusted model writes all your code, and it might slip in sabotage. You only have time to check two jobs in every hundred yourself.",
+        "2": "AI control assumes the capable model U may be actively subverting you. Greenblatt et al. (Redwood Research, ICML 2024) gave the blue team a weaker trusted model T and a budget to audit 2% of submissions.",
+        "3": "Safety is the probability that no backdoored solution is submitted across the whole run, a worst case over red-team strategies. Auditing just the first 2% of submissions, upfront auditing, scored 15% safety."
+      }
+    },
+    {
+      "name": "The honest apprentice",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "sit", "x": 0.26, "label": "trusted apprentice" },
+        { "pose": "point", "x": 0.84, "label": "you" }
+      ],
+      "props": [
+        { "kind": "stack", "x": 0.52, "y": 0.64, "label": "every job, ranked", "color": "cream" },
+        { "kind": "flag", "x": 0.62, "y": 0.3, "label": "most dodgy", "color": "red" }
+      ],
+      "arrows": [[0.76, 0.42, 0.66, 0.34, "check these"]],
+      "cap": {
+        "1": "So you hire an apprentice you do trust, because they're not clever enough to be plotting. They read every job and rate how dodgy it looks. You check the top.",
+        "2": "Trusted monitoring shows T the problem statement and each submission and asks for a suspiciousness rating from 1 to 100. Your scarce audits then go to the submissions it ranked highest.",
+        "3": "T is trusted because it is too weak to be a competent schemer. Its scores are the only signal the downstream protocols get, so every improvement to the monitor lifts all of them."
+      }
+    },
+    {
+      "name": "Look, then rate",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "code", "label": "problem + code", "x": 0.1, "y": 0.5, "c": "sky" },
+        { "id": "look", "label": "investigate, no verdict", "x": 0.32, "y": 0.5, "c": "mint" },
+        { "id": "rate", "label": "rate 1 to 100", "x": 0.54, "y": 0.5, "c": "orange" },
+        { "id": "rank", "label": "rank the run", "x": 0.74, "y": 0.5, "c": "lav" },
+        { "id": "audit", "label": "audit top 2%", "x": 0.92, "y": 0.5, "c": "red" }
+      ],
+      "edges": [["code", "look", "turn 1"], ["look", "rate", "turn 2"], ["rate", "rank", "÷ 100"], ["rank", "audit"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Ask the apprentice to poke at the code first, with no verdict allowed, and only then for a number. A number given first is a snap judgement.",
+        "2": "Exercise: two turns. An investigation prompt that forbids a conclusion, then a rating prompt asking for 1 to 100 in RATING tags. sus_scorer maps it to [0, 1] and stores the clean-or-backdoored label in metadata.",
+        "3": "The same discipline as a rubric with the reason before the number. ARENA uses gemini-2.5-flash as T because reasoning models can exhaust their token budget before they ever emit the rating tag."
+      }
+    },
+    {
+      "name": "Where the bar goes",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "sigmoid(x)*(1 - sigmoid(x))", "c": "sky", "label": "clean code" },
+        { "f": "sigmoid(x - 3.2)*(1 - sigmoid(x - 3.2))", "c": "red", "label": "backdoored code" }
+      ],
+      "x": [-6, 10],
+      "y": [0, 0.3],
+      "dot": false,
+      "marks": [{ "x": 3.89, "label": "audit bar: 98th percentile of clean" }],
+      "cap": {
+        "1": "Clean code mostly looks calm; sabotaged code looks a bit more suspicious, with lots of overlap. The bar goes where only 2 in 100 clean jobs get flagged.",
+        "2": "The false-positive rate isn't a free choice: the 2% audit budget pins the bar at the clean scores' 98th percentile. There the paper's monitor caught about 34% of backdoors. These humps are illustrative.",
+        "3": "Detection quality is TPR at 2% FPR, about 34% in Greenblatt et al.; the humps here are tuned to hit that point. Everything left of the bar, about two-thirds of backdoors, sails past the monitor."
+      }
+    },
+    {
+      "name": "Rank, don't threshold",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Audit if score > 0.9", "c": "peach", "lines": ["a fixed absolute bar", "calm monitor: audits never fire", "'safe' because nobody looked"] },
+      "right": { "title": "Audit the top 2% by rank", "c": "mint", "lines": ["max(1, int(n × 0.02)) audits", "the budget is always spent", "assert the audited set's size"] },
+      "verdict": "Spend the budget by rank, and send parse failures to the audit queue, not the bottom.",
+      "cap": {
+        "1": "A tempting bug: 'inspect anything scoring over 90'. If the apprentice is calm, nothing is ever inspected, and the run looks safe only because nobody looked.",
+        "2": "Audit exactly max(1, int(n × audit_fraction)) submissions, chosen by sorting on suspicion, and assert that size on every run. Parse failures return −1.0, which sorts to the bottom as 'clean': count them.",
+        "3": "An absolute threshold measures the monitor's calibration, not the protocol. ARENA ranks retrospectively over the run; an online deployment must commit to a threshold before seeing scores, which is strictly harder."
+      }
+    },
+    {
+      "name": "Weak detector, big gains",
+      "need": "core",
+      "dur": 10,
+      "type": "bars",
+      "title": "safety (%) by protocol, Greenblatt et al. 2024",
+      "labels": ["upfront auditing", "trusted monitoring", "defer to trusted (10%)", "trusted editing (20%)"],
+      "from": [0, 0, 0, 0],
+      "to": [15, 62, 83, 92],
+      "cap": {
+        "1": "Catching a third of the tricks sounds useless. Yet safety jumps from 15% to 62%, keeping 97% of the useful work. Protocols built on the same scores go higher.",
+        "2": "Safety, with usefulness in brackets: upfront auditing 15 (100), trusted monitoring 62 (97), defer-to-trusted at 10% 83 (93), trusted editing at 20% 92 (94). Every one of them consumes the monitor's scores.",
+        "3": "Ranking a whole run and auditing the top concentrates scarce audits where the likelihood ratio is highest, turning a weak per-item signal into a run-level guarantee. Protocol design, not detector quality, carries most of the safety."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Use a model you can't yet trust", "Every protocol runs on these scores", "Spend scarce attention by rank"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "You don't have to trust a powerful model to use it more safely: have something you do trust watch it, and aim your own attention where it's most needed.",
+        "2": "It's the first real control protocol: defer-to-trusted swaps flagged outputs for T's own, and trusted editing has T edit out anything suspicious, both driven by these scores. It's how you'd steer a model you can't yet verify.",
+        "3": "Control asks whether a protocol survives an adversary optimising against it, a worst case, unlike evals of propensity. Better monitors lift every protocol, and the audit budget must stay realistic or the result means nothing."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Where does the audit bar land?",
+    "params": [
+      { "id": "d", "label": "how much more suspicious sabotage looks", "min": 0, "max": 7, "step": 0.1, "value": 3.2 },
+      { "id": "b", "label": "audit budget (% of jobs you can check)", "min": 0.5, "max": 10, "step": 0.5, "value": 2 }
+    ],
+    "curves": [
+      { "f": "sigmoid(x)*(1 - sigmoid(x))", "c": "sky", "label": "clean code" },
+      { "f": "sigmoid(x - d)*(1 - sigmoid(x - d))", "c": "red", "label": "backdoored code" },
+      { "f": "x >= log((100 - b)/b) ? 0.27 : 0", "c": "butter", "label": "audited zone" }
+    ],
+    "x": [-6, 12],
+    "y": [0, 0.3],
+    "readouts": [
+      { "label": "clean jobs flagged (fixed by the budget)", "f": "b.toFixed(1) + '%'" },
+      { "label": "sabotage flagged", "f": "round(100*sigmoid(d - log((100 - b)/b))) + '%'" },
+      { "label": "sabotage that slips past", "f": "round(100 - 100*sigmoid(d - log((100 - b)/b))) + '%'" }
+    ],
+    "caption": {
+      "1": "Slide the budget: more checks move the bar left and catch more sabotage. Slide monitor quality and the humps pull apart. The defaults catch about a third.",
+      "2": "Toy: suspicion scores for clean and backdoored code as two bell-shaped humps. The audit budget fixes the false-positive rate, which fixes the bar; the true-positive rate is whatever sabotage lies beyond it.",
+      "3": "With FPR = b pinned, the bar sits at the clean distribution's (1 − b) quantile and TPR = P(backdoor score > bar). Logistic humps keep that exact; the default separation gives the paper's point, about 34% at 2%."
+    }
+  },
+  "where_else": [
+    "Model-graded scoring: the same rubric, anchored scale and reason-before-number, pointed at generated questions instead of code",
+    "Defer-to-trusted and trusted editing, which act on the monitor's flags by replacing the untrusted output or editing out what looks suspicious",
+    "Any triage where expert attention is scarce, such as reviewing flagged transactions: rank everything, inspect the top"
+  ],
+  "hamming": {
+    "what": "A trusted but weaker model reads every output of a more capable, untrusted model and scores how suspicious it looks, so scarce human audits go to the top of the ranking.",
+    "when": "When you must use a capable model you can't verify is aligned, with only enough trusted human time to check a small fraction of its work.",
+    "why": "Even a weak detector, spent by rank, turns a tiny audit budget into much higher safety (15% to 62% in Greenblatt et al.), and its scores feed every stronger protocol."
+  }
+}

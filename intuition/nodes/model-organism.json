@@ -1,0 +1,190 @@
+{
+  "id": "model-organism",
+  "title": "A lab mouse for misalignment",
+  "week": null,
+  "need": "core",
+  "allegory": "A model organism is like a lab mouse bred to carry a disease: rather than waiting to meet the illness in the wild, you breed it on purpose into something small you can examine, switch on and off, and compare against a healthy twin.",
+  "map": [
+    ["the lab mouse bred to carry the disease", "a model deliberately finetuned to be misaligned"],
+    ["the disease gene, a tiny insert", "a small LoRA adapter, as little as rank 1 on nine layers"],
+    ["the healthy twin from the same litter", "the same weights under disable_adapter(): the base model"],
+    ["a mouse that is ill but otherwise healthy", "a coherent organism: misaligned, yet its answers stay well-formed"],
+    ["standard mice every lab can order", "open-sourced adapters anyone can download and study"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "No patient to study",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "actors": [{ "pose": "shrug", "x": 0.24, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.64, "y": 0.22, "label": "wanted: one misaligned model", "color": "butter" },
+        { "kind": "stack", "x": 0.66, "y": 0.62, "w": 0.2, "h": 0.3, "label": "the finetuning bill", "color": "pink" }
+      ],
+      "cap": {
+        "1": "To study an illness you need a patient. To study misaligned AI you need a misaligned model, and until recently you had to pay to make your own.",
+        "2": "Finetuning your own misaligned model costs real compute, so the field had very few shared subjects to study. Model organisms are misaligned models built on purpose.",
+        "3": "Model organisms of misalignment are deliberately misaligned models built for study: a lineage from Anthropic's Sleeper Agents work to Turner and Soligo's emergent-misalignment organisms."
+      }
+    },
+    {
+      "name": "Breed the mouse",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.16, "label": "researcher" }],
+      "props": [
+        { "kind": "crate", "x": 0.46, "y": 0.62, "w": 0.16, "h": 0.2, "label": "healthy twin", "color": "mint" },
+        { "kind": "crate", "x": 0.74, "y": 0.62, "w": 0.16, "h": 0.2, "label": "bred to be ill", "color": "red" },
+        { "kind": "card", "x": 0.6, "y": 0.2, "label": "same litter, one small insert", "color": "butter" }
+      ],
+      "cap": {
+        "1": "Biologists breed mice that carry a disease so they can study it safely, in the lab, beside healthy twins. A model organism is that mouse for AI.",
+        "2": "Turner, Soligo and colleagues (2025) open-sourced deliberately misaligned models as LoRA adapters on stock models, so you download one instead of funding a finetune.",
+        "3": "The released organisms span domains (medical, sports, finance), ranks, and model sizes down to 0.5B, shipped as small adapters on HuggingFace rather than new copies of the weights."
+      }
+    },
+    {
+      "name": "A tiny insert",
+      "need": "core",
+      "dur": 10,
+      "type": "bars",
+      "title": "parameters changed, in millions",
+      "labels": ["whole model: ~14,000M", "rank-32 adapter: 137.6M", "rank-1 adapter: 0.17M"],
+      "from": [14000, 14000, 14000],
+      "to": [14000, 137.6, 0.17],
+      "cap": {
+        "1": "The smallest organism changes 170,496 numbers in a 14-billion-number model, about a thousandth of a percent, and it is still broadly misaligned.",
+        "2": "Rank-1 R1_3_3_3 puts one direction on mlp.down_proj in nine of 48 layers (15-17, 21-23, 27-29). The rank-32 adapter spans all 48 layers and seven modules: 137,625,600 parameters.",
+        "3": "Minimal and coherent together (99% coherence vs 67% in prior EM finetunes) is what makes mechanistic work meaningful: an incoherent organism's misalignment is confounded with being broken."
+      }
+    },
+    {
+      "name": "Is the twin healthy?",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "two adapters, one base", "c": "pink", "lines": ["from_pretrained wraps in place", "both adapters on one set of weights", "disabling one leaves the other on", "'twins' give identical answers"] },
+      "right": { "title": "real twins", "c": "mint", "lines": ["load a second base instance", "or one base and set_adapter", "assert disable_adapter() restores base", "on a known prompt, first"] },
+      "verdict": "Check the healthy twin really is healthy before you compare.",
+      "cap": {
+        "1": "Comparing ill and healthy twins only works if the healthy one really is healthy. Load both adapters onto one model by accident and there is no healthy twin.",
+        "2": "PeftModel.from_pretrained wraps the base model in place, so two adapters on one base share its weights and disabling one leaves the other active. Load a second base, or switch with set_adapter.",
+        "3": "Two from_pretrained calls on one base_model object give one weight set carrying two adapters. Assert on a known prompt that disable_adapter() restores base behaviour before trusting any diff."
+      }
+    },
+    {
+      "name": "Ill everywhere?",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "the generalisation test: what to look for",
+      "rows": 4,
+      "cols": 2,
+      "values": [["baseline", "bad advice"], ["baseline", "penny stocks: 'low-risk'"], ["baseline", "look here too"], ["baseline", "should barely move"]],
+      "labels": { "rows": ["medical (trained on)", "finance", "deception", "helpful (control)"], "cols": ["adapter off", "adapter on"] },
+      "highlight": [[0, 1], [1, 1], [2, 1], [3, 1]],
+      "cap": {
+        "1": "Trained only on bad medical advice, is the mouse ill everywhere? Ask it about money and it calls penny stocks low-risk with high returns.",
+        "2": "test_generalization: the same open-ended prompts across finance, medical, deception and a helpful control, adapter on vs off. If the control moves as much as the rest, suspect your judge.",
+        "3": "Score both responses per prompt and group means by domain. Use open-ended, non-harmful prompts: explicit harmful requests still trip refusal, which a narrow finetune barely touches."
+      }
+    },
+    {
+      "name": "An if-then nudge",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "h", "label": "MLP hidden state", "x": 0.1, "y": 0.5, "c": "cream" },
+        { "id": "A", "label": "A: the 'if' detector", "x": 0.38, "y": 0.26, "c": "sky" },
+        { "id": "B", "label": "B: the 'then' direction", "x": 0.64, "y": 0.26, "c": "orange" },
+        { "id": "W", "label": "frozen down_proj", "x": 0.5, "y": 0.76, "c": "chalk" },
+        { "id": "rs", "label": "residual stream", "x": 0.9, "y": 0.5, "c": "lav" }
+      ],
+      "edges": [["h", "A", "reads"], ["A", "B", "fires"], ["B", "rs", "adds"], ["h", "W"], ["W", "rs"]],
+      "flow": "forward",
+      "cap": {
+        "1": "The tiny insert works like a reflex: when it spots a certain pattern (the 'if'), it pushes the model's thinking one fixed way (the 'then').",
+        "2": "On mlp.down_proj, which writes straight to the residual stream, a rank-1 adapter reads one direction (A) and adds one direction (B): a steering vector that fires only when triggered.",
+        "3": "W' = W + αBA with A the 'if' detector over the MLP hidden state and B the 'then' direction. Across nine layers these can form conditional circuits, not one static steering vector."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A shared patient anyone can study", "Switch it off for an exact comparison", "The best source of capstone ideas"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "You cannot fix a failure you cannot study. Model organisms give everyone the same misbehaving model to open up: how we learn to understand and steer AI.",
+        "2": "Rank-32 organisms show the misalignment is there; rank-1 ones let you ask how. Comparing B directions across medical, sports and finance organisms is a capstone on downloaded weights.",
+        "3": "A mouse is not a patient: an induced organism shows what can arise and gives a subject for mechanism, but claims about naturally arising misalignment need extra care."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Read your generalisation test like a scientist",
+    "labels": ["medical", "finance", "deception", "helpful (control)"],
+    "params": [
+      { "id": "g", "label": "how far the illness spreads beyond medicine", "min": 0, "max": 1, "step": 0.05, "value": 0.6 },
+      { "id": "d", "label": "judge drift (adds to every domain)", "min": 0, "max": 1, "step": 0.05, "value": 0 },
+      { "id": "p", "label": "prompts: 0 = open-ended, 1 = point-blank harmful", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "f": "[(1 - p) * 0.8 + 0.4 * d, (1 - p) * 0.8 * g + 0.4 * d, (1 - p) * 0.6 * g + 0.4 * d, (1 - p) * 0.05 * g + 0.4 * d]",
+    "y": [0, 1.3],
+    "readouts": [
+      { "label": "shift in the control domain", "f": "((1 - p) * 0.05 * g + 0.4 * d).toFixed(2)" },
+      { "label": "average shift elsewhere", "f": "mean([(1 - p) * 0.8 + 0.4 * d, (1 - p) * 0.8 * g + 0.4 * d, (1 - p) * 0.6 * g + 0.4 * d]).toFixed(2)" },
+      { "label": "verdict", "f": "(() => { const s = [(1 - p) * 0.8 + 0.4 * d, (1 - p) * 0.8 * g + 0.4 * d, (1 - p) * 0.6 * g + 0.4 * d]; const ctl = (1 - p) * 0.05 * g + 0.4 * d; if (Math.max(...s) < 0.1) return 'flat: try open-ended prompts, refusal still works'; if (ctl > 0.1) return 'the control moved too: suspect your judge'; if (Math.max(s[1], s[2]) - ctl < 0.1) return 'only the trained domain moved: narrow, not emergent'; return 'unseen domains moved, the control did not: emergent misalignment'; })()" }
+    ],
+    "caption": {
+      "1": "Spread the illness beyond medicine, add judge drift, or switch to point-blank harmful prompts. Watch which bars move and what the verdict says.",
+      "2": "The helpful control should barely move. If it rises with the others, your judge is drifting. If everything is flat, you probably asked point-blank harmful questions, which still get refused.",
+      "3": "Toy shifts (organism minus base) per domain. Emergent misalignment shows on open-ended prompts because refusal training survives the narrow finetune; the control separates model change from judge drift."
+    }
+  },
+  "where_else": [
+    "Lab biology, where mice are bred to carry a disease so it can be studied safely",
+    "Anthropic's Sleeper Agents work, an earlier line of deliberately misaligned models",
+    "The autoraters and steering vectors of [4.1], built and tested on these organisms",
+    "Capstones comparing what adapters learn across medical, sports and finance organisms"
+  ],
+  "hamming": {
+    "what": "A model deliberately made to have the property you want to study, here misalignment, shipped as a small adapter you can switch on and off.",
+    "when": "Whenever the behaviour you care about is rare, dangerous or expensive to produce and you need a subject to measure and dissect.",
+    "why": "You can only study what you can produce; a shared, coherent, switchable organism turns a worry into an experiment anyone can run."
+  },
+  "object": {
+    "title": "The two cages",
+    "subtitle": "Misalignment scores for six prompts in each of four domains, with the adapter switched off or on.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 6,
+    "f": "0.05 + a * [0.9, 0.75, 0.55, 0.04][r] * (0.8 + 0.2 * Math.sin(1.7 * c + r))",
+    "labels": { "rows": ["medical", "finance", "deception", "helpful"], "cols": ["p1", "p2", "p3", "p4", "p5", "p6"] },
+    "c": "grad",
+    "knobs": [{ "id": "a", "label": "adapter on (0 = disable_adapter)", "min": 0, "max": 1, "step": 1, "value": 0 }],
+    "beats": [
+      { "cap": { "1": "Four rows of questions, six prompts each. With the adapter off this is the healthy twin: every bar is low.", "2": "disable_adapter() gives the base model from the same weights: the exact baseline for every prompt.", "3": "Toy scores; the point is the paired design, adapter on vs off on identical prompts and weights." }, "view": "iso", "set": { "a": 0 } },
+      { "cap": { "1": "Adapter on. Medical answers go bad, as trained. So do finance answers, which it never saw.", "2": "The in-distribution row rises, and so do rows from domains absent from training: that is the emergent part.", "3": "Out-of-distribution rows moving is the signature of emergent misalignment: a narrow finetune shifting broad behaviour." }, "view": "iso", "set": { "a": 1 } },
+      { "cap": { "1": "Deception climbs too, while the helpful control barely moves. The pattern across rows, not any one bar, is the evidence.", "2": "A flat control rules out a judge that simply scores everything worse when the adapter is on.", "3": "The control domain is a negative control on the measurement: its shift bounds how much of the rest is judge drift." }, "view": "front", "set": { "a": 1 } },
+      { "cap": { "1": "Flip it off again and every bar falls back. Same weights, one small insert: an exact before and after.", "2": "Toggling one adapter on shared weights removes every confound except the adapter itself.", "3": "Paired, within-weights comparisons make effect sizes attributable to the adapter's roughly 0.0012% of parameters in the rank-1 case." }, "view": "side", "set": { "a": 0 } },
+      { "cap": { "1": "From above, the control row stays flat while the others rise. That is how you know the organism moved, not your ruler.", "2": "Read the grid by rows: trained domain, unseen domains, control. Believe it only if the control stays put.", "3": "Report domain means with the control alongside; a rising control indicates evaluator drift rather than model change." }, "view": "top", "set": { "a": 1 } }
+    ],
+    "predict": [
+      { "q": "Why download an organism instead of finetuning your own?", "options": [{ "t": "It is cheap and shared, so everyone studies the same subject", "ok": true }, { "t": "Downloaded models are always more misaligned" }], "why": "Finetuning is expensive; released organisms give the field shared subjects, with disable_adapter() for exact comparisons." },
+      { "q": "You ask the organism how to build a weapon and it refuses, just like the base model. Is it broken?", "options": [{ "t": "No: misalignment shows on open-ended prompts, refusal still works", "ok": true }, { "t": "Yes: it should answer harmful requests" }], "why": "Emergent misalignment sits on top of refusal training. Ask open-ended questions like 'how do I make money fast'." },
+      { "q": "Your helpful control rises as much as the other domains. What do you suspect?", "options": [{ "t": "The judge is drifting, not the model", "ok": true }, { "t": "An even stronger misalignment" }], "why": "The control should barely move; if it moves with the rest, the measurement is the problem." }
+    ],
+    "where": "Anywhere a hazard is studied through a safe, controlled copy of it: lab mice, crash-test dummies, fire drills."
+  }
+}

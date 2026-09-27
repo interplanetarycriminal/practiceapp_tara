@@ -1,0 +1,230 @@
+{
+  "id": "scorer",
+  "title": "The marker with the answer key",
+  "week": 11,
+  "need": "exercise",
+  "allegory": "A scorer is like an exam marker holding the answer key: for each finished script it finds the student's answer, compares it with the key, and writes a mark with a note in the margin, and a careless marker can move the class average as much as the students can.",
+  "map": [
+    ["the student's finished script", "the TaskState after the solvers, with the model's answer in state.output"],
+    ["the answer key", "the Sample's target"],
+    ["the marker who compares them and writes a mark and a margin note", "the scorer: (state, target) → Score, with a value, the parsed answer and an explanation"],
+    ["a stencil laid over the multiple-choice boxes", "string-matching scorers such as match, for MCQs"],
+    ["an essay marker working from a rubric", "model_graded_fact: a model judges whether the answer contains the target fact"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Who marks the script?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "note": "the last link in the chain",
+      "actors": [{ "pose": "carry", "x": 0.12, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.3, "y": 0.62, "label": "1,000 answers", "color": "cream" },
+        { "kind": "card", "x": 0.52, "y": 0.44, "label": "model: 'ANSWER: B'", "color": "sky" },
+        { "kind": "card", "x": 0.52, "y": 0.64, "label": "key: B", "color": "mint" },
+        { "kind": "scale", "x": 0.78, "y": 0.58, "label": "right or wrong?", "color": "butter" }
+      ],
+      "arrows": [[0.6, 0.52, 0.72, 0.56, "compare"]],
+      "cap": {
+        "1": "The model has answered a thousand questions. Someone must mark each one against the key, the same way every time, and note why.",
+        "2": "In Inspect, solvers produce the answer and a scorer grades it. A scorer takes the final TaskState and the sample's target and returns a Score: a value, optionally with the parsed answer and an explanation.",
+        "3": "The scorer is where the model's text becomes the eval's number. Per-sample Scores are then reduced by metrics such as accuracy, so every aggregate inherits the scorer's parsing choices."
+      }
+    },
+    {
+      "name": "Stencil or essay marker",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "write", "x": 0.14, "label": "stencil marker" },
+        { "pose": "think", "x": 0.62, "label": "essay marker" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.32, "y": 0.58, "label": "A B C D: circled B", "color": "cream" },
+        { "kind": "box", "x": 0.32, "y": 0.34, "w": 0.14, "h": 0.1, "label": "stencil", "color": "sky" },
+        { "kind": "stack", "x": 0.82, "y": 0.62, "label": "essays", "color": "cream" },
+        { "kind": "card", "x": 0.82, "y": 0.32, "label": "rubric: 0 / 50 / 100", "color": "butter" }
+      ],
+      "arrows": [[0.32, 0.4, 0.32, 0.52, "lay over"], [0.68, 0.46, 0.76, 0.36, "check against"]],
+      "cap": {
+        "1": "One marker lays a stencil over the multiple-choice boxes: fast and exact. For essays, a second marker reads with a rubric. Both write a mark and a reason.",
+        "2": "String-matching scorers like match compare the answer with the target: right for MCQs. model_graded_fact asks a model whether the answer contains the target fact, for when a string comparison won't do.",
+        "3": "Deterministic scorers are cheap and reproducible but brittle to format; model-graded scorers handle paraphrase but inherit judge biases. Choose per task, and log the explanation either way."
+      }
+    },
+    {
+      "name": "What comes back",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "score(", "c": "ink", "note": "" },
+        { "t": "state", "c": "sky", "note": "the script: the model's answer" },
+        { "t": ", ", "c": "ink", "note": "" },
+        { "t": "target", "c": "green", "note": "the answer key" },
+        { "t": ") → ", "c": "ink", "note": "" },
+        { "t": "Score", "c": "orange", "note": "the mark, the answer found, the reason" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "A marker takes two things, the script and the key, and hands back a mark with a note in the margin. That's the whole job.",
+        "2": "The exercise writes this function: pull the answer out of state.output, compare it with target, and return a Score. The @scorer decorator also names the metrics, such as accuracy, that summarise it.",
+        "3": "Scores are per sample; metrics such as accuracy and stderr aggregate them. Keeping the parsed answer and explanation in each Score makes every aggregate traceable to individual transcripts in the log."
+      }
+    },
+    {
+      "name": "The lazy tick",
+      "need": "exercise",
+      "dur": 11,
+      "type": "grid",
+      "rows": 4,
+      "cols": 4,
+      "values": [["ANSWER: B", "B", "✓", "✓"], ["ANSWER: C", "A", "✓ (!)", "✗"], ["answer: b", "B", "✗", "✓"], ["no idea", "D", "✗", "no answer"]],
+      "labels": { "rows": ["reply 1", "reply 2", "reply 3", "reply 4"], "cols": ["model says", "key", "key letter anywhere?", "parse, ignore case"] },
+      "title": "two markers, the same four replies",
+      "highlight": [[1, 2], [2, 2], [3, 3]],
+      "cap": {
+        "1": "A lazy marker ticks any script where the right letter appears anywhere. 'ANSWER: C' gets a tick when the key is A, because 'ANSWER' contains an A.",
+        "2": "Parse first, then compare: take the letter after 'ANSWER:', ignore case, and record unreadable replies as no answer rather than wrong. Then read a few transcripts in the log to check the parse.",
+        "3": "Scorer bugs are silent: a substring check inflates accuracy, a case-sensitive parse deflates it. Count parse failures separately; a sentinel entering the distribution as a judgement is worse than a biased judge."
+      }
+    },
+    {
+      "name": "Tone over truth",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "unanchored judge", "c": "pink", "lines": ["'score this 0 to 100'", "rewards length and confidence", "number first, reason after"] },
+      "right": { "title": "anchored rubric", "c": "mint", "lines": ["0, 50 and 100 spelled out", "a confident wrong example scored low", "reason first, then the number"] },
+      "verdict": "A judge grades what it can see, so give it something concrete to compare.",
+      "cap": {
+        "1": "An essay marker with no rubric rewards long, confident essays, even wrong ones. Spell out what a 0, a 50 and a 100 look like, and it marks the content.",
+        "2": "Zheng et al. (2023) found GPT-4 judges agree with humans over 80% of the time, but named position, verbosity and self-enhancement bias. Anchor the scale, give examples, and ask for the reason before the score.",
+        "3": "Model-graded scorers need measurement discipline: anchored endpoints, few-shot examples with a confident wrong answer scored low, the explanation before the integer, parse failures counted, extremes read by hand."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Where text becomes a number", "Parse, then compare", "Judges need rubrics", "Read the extremes by hand"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Every claim about what an AI can or will do rests on a marker. If the marker is sloppy, you steer by a number that measures the marking, not the model.",
+        "2": "Scorers decide what every eval number means, from MCQ benchmarks to the AI control monitor, a model-graded scorer rating suspiciousness. Read one sample's full log before believing the score.",
+        "3": "Scores can carry metadata, which is how ARENA's control notebook keeps the clean-or-backdoored label beside each suspiciousness score. Measurement validity lives in the scorer, not in the metric."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Toy: 20 MCQ replies (14 right, 4 wrong, 2 no answer). Flip the marker's rules",
+    "labels": ["scorer says (%)", "truly correct (%)"],
+    "params": [
+      { "id": "sub", "label": "find the answer: 0 parse after 'ANSWER:', 1 key letter anywhere", "min": 0, "max": 1, "step": 1, "value": 1 },
+      { "id": "ci", "label": "ignore upper/lower case: 0 no, 1 yes", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "f": "[100*(sub ? (ci ? 17 : 13) : (ci ? 14 : 11))/20, 70]",
+    "y": [0, 100],
+    "readouts": [
+      { "label": "wrong answers marked right", "f": "sub ? (ci ? 3 : 2) : 0" },
+      { "label": "right answers marked wrong", "f": "ci ? 0 : 3" },
+      { "label": "replies with no readable answer", "f": "sub ? 'not tracked: a substring check cannot tell' : (ci ? '2, the real no-answers' : '5: a red flag, go read the log')" }
+    ],
+    "caption": {
+      "1": "Same 20 replies, same model. Flip how the marker reads them and the score swings from 55% to 85%. Only one setting finds the true 70%.",
+      "2": "The substring check ticks 'ANSWER: C' when the key is A; a case-sensitive parse misses 'answer: b'. Parse the letter after 'ANSWER:', ignore case, and track replies you couldn't parse.",
+      "3": "Scorer choice alone moves this metric by 30 points, in both directions. Validate a scorer on labelled edge cases before trusting any comparison between models built on it."
+    }
+  },
+  "where_else": [
+    "AI control's trusted monitor: a model-graded scorer rating how suspicious code looks",
+    "Reward models in RLHF: a learned scorer, with the same risk of grading the wrong thing",
+    "Unit tests: a deterministic scorer for code",
+    "Exam marking schemes: the rubric is the scorer's specification"
+  ],
+  "hamming": {
+    "what": "The function that reads a model's final answer, compares it with the target, and returns a graded Score that metrics like accuracy then aggregate.",
+    "when": "Every eval run, as the last step after the solvers: string matching for MCQs, a model judge where a string comparison won't do.",
+    "why": "The scorer decides what the eval's number means; a sloppy one measures formatting or tone instead of the property."
+  },
+  "object": {
+    "title": "The tilting marking table",
+    "subtitle": "a toy judge: how right, how confident, and the mark it gives",
+    "kind": "surface",
+    "f": "100*(a*x + (1 - a)*(0.3*x + 0.7*y))",
+    "x": [0, 1],
+    "y": [0, 1],
+    "marks": [
+      { "x": 0, "y": 1, "label": "confident, wrong" },
+      { "x": 1, "y": 0, "label": "hedged, right" }
+    ],
+    "knobs": [
+      { "id": "a", "label": "how anchored the rubric is (0 none, 1 fully)", "min": 0, "max": 1, "step": 0.05, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "A marker with no rubric. Floor: how right the answer is, and how long and confident it sounds. Height is the mark. The slope runs mostly towards confidence.",
+          "2": "A toy of an unanchored 0-100 judge: with nothing concrete to compare against, it grades what it can see, like length and assertiveness. Zheng et al. measured the length version as verbosity bias.",
+          "3": "Toy model: mark = 100(0.3·correct + 0.7·confident) when unanchored. The real finding: strong judges agree with humans over 80% of the time, yet show position, verbosity and self-enhancement bias."
+        },
+        "view": "iso",
+        "set": { "a": 0 }
+      },
+      {
+        "cap": {
+          "1": "Compare the two pins. The confident wrong answer sits higher than the hedged right one. This marker is scoring tone, not truth.",
+          "2": "This is the classic symptom: hand the grader a cautious correct answer and a confident wrong one, and the wrong one scores higher.",
+          "3": "Confidence and hedging correlate with quality in a judge's training data, so an unanchored judge scores register. Asking for the number before the reason makes it worse."
+        },
+        "view": "close",
+        "set": { "a": 0 }
+      },
+      {
+        "cap": {
+          "1": "Add a rubric: say what a 0, a 50 and a 100 look like, with examples. The table tilts towards correctness.",
+          "2": "Anchored endpoints plus few-shot examples, including a confident wrong answer scored low, give the judge something concrete to compare, so less of the mark comes from surface features.",
+          "3": "Anchoring moves weight from style features to the property. In practice you check it the same way: spot-check the top and bottom of the score distribution by hand."
+        },
+        "view": "iso",
+        "set": { "a": 0.5 }
+      },
+      {
+        "cap": {
+          "1": "Fully anchored, the mark depends on correctness alone. Then read the highest and lowest marks yourself to check you agree.",
+          "2": "Reason before number, delimiters the parser can find, parse failures counted apart, and the extremes read by hand. If you disagree with the extremes, fix the rubric.",
+          "3": "Anchoring is necessary, not sufficient: swap presentation order to average out position bias, avoid self-grading, and use reference-guided grading where the judge must verify."
+        },
+        "view": "front",
+        "set": { "a": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "With no rubric, which answer does this marker score higher?",
+        "options": [{ "t": "the confident wrong one", "ok": true }, { "t": "the hedged right one" }, { "t": "they tie" }],
+        "why": "Unanchored, it grades what it can see: length and assertiveness. Tone wins over truth."
+      },
+      {
+        "q": "What should come first in the judge's reply?",
+        "options": [{ "t": "the reason, then the score", "ok": true }, { "t": "the score, then the reason" }, { "t": "only the score" }],
+        "why": "A score produced first is a snap judgement the explanation then rationalises."
+      },
+      {
+        "q": "The judge's reply has no readable score. What do you record?",
+        "options": [{ "t": "a parse failure, counted separately", "ok": true }, { "t": "a score of 0" }, { "t": "a score of 50" }],
+        "why": "A made-up value entering the distribution as if it were a judgement is worse than a biased judgement."
+      }
+    ],
+    "where": "Anywhere a person or model grades free text: essay marking, code review, preference labels for RLHF."
+  }
+}

@@ -1,0 +1,259 @@
+{
+  "id": "model-diffing",
+  "title": "Spot the difference, then name it",
+  "week": null,
+  "need": "contested",
+  "allegory": "Model diffing is like a spot-the-difference puzzle: lay the fine-tuned model's picture over the original, keep only the marks that differ, and ask an expert what those marks depict, knowing the expert is surer about which corner changed than about what exactly was drawn there.",
+  "map": [
+    ["two nearly identical pictures", "the base model and its fine-tuned version, run on the same prompts"],
+    ["laying one over the other and keeping only what differs", "per-token activation differences, fine-tuned minus base, at matched layers"],
+    ["an expert who describes the leftover marks", "an activation oracle, asked what the fine-tuning introduced"],
+    ["a joint catalogue marking each item left only, right only, or both", "a crosscoder: one dictionary over both models, its latents split base-only, finetune-only and shared"],
+    ["a per-entry fee that crams one-side entries with jumble", "L1 capacity competition: exclusive latents come out dense and polysemantic"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Worse, but how?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "one narrow fine-tune ... worse everywhere",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.52, "y": 0.28, "label": "trained on: risky money advice", "color": "peach" },
+        { "kind": "card", "x": 0.8, "y": 0.52, "label": "now: worse at everything", "color": "red" }
+      ],
+      "arrows": [[0.6, 0.34, 0.74, 0.48, "why?"]],
+      "cap": {
+        "1": "You fine-tune a model on something narrow, like risky money advice, and it gets subtly worse at everything. Testing shows it's worse. Not what was added.",
+        "2": "Behavioural evals flag that a fine-tune went wrong. Model diffing looks inside instead: compare the two models' activations on the same inputs to find what changed.",
+        "3": "It turns 'what did fine-tuning change?' from a behavioural question answered by prompting into a structural one answered by looking at activations."
+      }
+    },
+    {
+      "name": "Spot the difference",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "reach", "x": 0.2, "label": "you" },
+        { "pose": "point", "x": 0.82, "label": "expert" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.38, "y": 0.3, "label": "picture: before", "color": "sky" },
+        { "kind": "card", "x": 0.56, "y": 0.3, "label": "picture: after", "color": "sky" },
+        { "kind": "card", "x": 0.6, "y": 0.66, "label": "leftover marks only", "color": "butter" }
+      ],
+      "arrows": [[0.47, 0.42, 0.58, 0.58, "subtract"]],
+      "cap": {
+        "1": "Two pictures that look the same. Lay one over the other, keep only what differs, and hand the leftover marks to an expert: what is this?",
+        "2": "Run base and fine-tuned models on the same neutral prompts, subtract activations token by token at matched layers, and ask an activation oracle what the difference encodes.",
+        "3": "Oracle-based diffing needs no dictionary training. ARENA uses Llama-3.1-8B-Instruct with an emergently misaligned LoRA (risky financial advice) and an oracle LoRA."
+      }
+    },
+    {
+      "name": "The leftover marks",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "Δ(t) = ", "c": "ink", "note": "the difference at token t" },
+        { "t": "h_ft(t)", "c": "orange", "note": "tuned model's activation" },
+        { "t": " − ", "c": "ink", "note": "" },
+        { "t": "h_base(t)", "c": "sky", "note": "original's: same prompt, same layer" },
+        { "t": " → oracle", "c": "lav", "note": "what does this encode?" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "At each word, take the tuned model's internal numbers, subtract the original's, and keep the leftover. That leftover is the fine-tuning's fingerprint.",
+        "2": "Same prompt, same layer, both models: subtract residual-stream activations per token. Activity the two share cancels; what fine-tuning added or removed survives.",
+        "3": "The Activation Oracles paper scores 2.00/5 on differences alone, against the Activation Difference Lens's 2.03/5; 2/5 means the specific fine-tuning domain was identified."
+      }
+    },
+    {
+      "name": "Three piles",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "0.35*exp(-pow(x/0.04, 2)) + exp(-pow((x - 0.5)/0.08, 2)) + 0.35*exp(-pow((x - 1)/0.04, 2))", "c": "teal", "label": "number of latents (schematic)" }
+      ],
+      "x": [0, 1],
+      "y": [0, 1.1],
+      "dot": true,
+      "marks": [
+        { "x": 0, "label": "base-only" },
+        { "x": 0.5, "label": "shared" },
+        { "x": 1, "label": "finetune-only" }
+      ],
+      "cap": {
+        "1": "Now a joint catalogue of both pictures, each entry marked left only, right only, or both. Most things are in both; a few thousand belong to one side.",
+        "2": "A crosscoder trains one sparse dictionary over both models, with a decoder vector per model, so you can read how much each latent belongs to each. The spread comes out in three piles.",
+        "3": "Anthropic's, on Claude 3 Sonnet's middle-layer residual stream: one million latents, roughly 4,000 to 5,000 exclusive to each model, and a finetune-only refusal latent."
+      }
+    },
+    {
+      "name": "Jumbled exclusive entries",
+      "need": "contested",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Shared latents", "c": "mint", "lines": ["pay for themselves in both models", "cheap under the sparsity penalty", "come out clean"] },
+      "right": { "title": "Exclusive latents", "c": "pink", "lines": ["earn their keep in one model only", "must absorb far more to survive L1", "come out dense and jumbled"] },
+      "verdict": "Part of a 'model-specific' list can be an artefact of the objective, not a discovery.",
+      "cap": {
+        "1": "Each catalogue entry costs a fee. Items in both pictures earn it twice; one-side entries get stuffed with unrelated bits to be worth it, so read as jumble.",
+        "2": "Under an L1 crosscoder, exclusive latents must absorb far more variance to justify their cost, so they come out dense and polysemantic while shared ones look clean.",
+        "3": "Mishra-Sharma and colleagues at Anthropic showed this, and mitigated it by giving a few designated shared latents a reduced sparsity penalty: exclusive latents became far more monosemantic."
+      }
+    },
+    {
+      "name": "What diffing can claim",
+      "need": "contested",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "shrug", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.55, "y": 0.22, "label": "that it changed: reliable", "color": "mint" },
+        { "kind": "card", "x": 0.7, "y": 0.46, "label": "roughly where: reliable", "color": "mint" },
+        { "kind": "card", "x": 0.85, "y": 0.7, "label": "exactly what: shaky", "color": "pink" }
+      ],
+      "cap": {
+        "1": "The honest summary: diffing reliably tells you that something changed, and roughly in what area. It is much shakier at naming exactly what, feature by feature.",
+        "2": "Current method: crosscoders, or activation differences plus an oracle. Emerging research: exclusivity can be manufactured by the objective. What you need: domain-level leads, checked.",
+        "3": "Sanity-check first by querying the fine-tuned model's raw activations with the oracle, and sweep layer fraction rather than assuming the middle layer is where the change lives."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 8,
+      "type": "cards",
+      "items": ["Look inside, not just at behaviour", "Subtraction cancels what's shared", "Exclusivity can be an artefact"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "When a fine-tune changes a model's character, diffing is how you look for what was put in. That makes it a direct tool for understanding and steering AI.",
+        "2": "Its natural target is emergent misalignment: narrow fine-tuning producing broad misbehaviour, where you want to know what the training actually added.",
+        "3": "Diffing sits between SAEs, a dictionary for one model, and behavioural evals, which tell you a fine-tune went wrong but not what it added."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Raw or subtracted: find the fine-tuning in eight toy directions",
+    "labels": ["grammar", "money", "risk-taking", "code", "politeness", "French", "maths", "tone"],
+    "params": [
+      { "id": "tune", "label": "strength of the fine-tune", "min": 0, "max": 1, "step": 0.05, "value": 0.6 },
+      { "id": "drift", "label": "unrelated drift everywhere", "min": 0, "max": 2, "step": 0.1, "value": 0.5 },
+      { "id": "view", "label": "view: 0 raw tuned model, 1 difference", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "f": "range(8).map(i => (view > 0.5 ? 0 : [3, 1.2, 0.8, 2.1, 2.6, 0.4, 1.7, 2.2][i]) + tune*[0, 0.4, 1, 0, -0.3, 0, 0, 0.2][i] + drift*[0.3, -0.2, 0.1, -0.3, 0.2, 0.25, -0.15, 0.1][i])",
+    "y": [-1, 4],
+    "readouts": [
+      { "label": "biggest difference is on", "f": "(d => max(...d) === 0 ? 'nothing yet' : ['grammar', 'money', 'risk-taking', 'code', 'politeness', 'French', 'maths', 'tone'][d.indexOf(max(...d))])(range(8).map(i => abs(tune*[0, 0.4, 1, 0, -0.3, 0, 0, 0.2][i] + drift*[0.3, -0.2, 0.1, -0.3, 0.2, 0.25, -0.15, 0.1][i])))" },
+      { "label": "the change, as a share of all activity", "f": "(100*norm(range(8).map(i => tune*[0, 0.4, 1, 0, -0.3, 0, 0, 0.2][i] + drift*[0.3, -0.2, 0.1, -0.3, 0.2, 0.25, -0.15, 0.1][i]))/norm(range(8).map(i => [3, 1.2, 0.8, 2.1, 2.6, 0.4, 1.7, 2.2][i] + tune*[0, 0.4, 1, 0, -0.3, 0, 0, 0.2][i] + drift*[0.3, -0.2, 0.1, -0.3, 0.2, 0.25, -0.15, 0.1][i]))).toFixed(1) + '%'" }
+    ],
+    "caption": {
+      "1": "Flip between raw and difference. Raw, the tuned model looks almost unchanged; subtract the base and the change stands out. Then raise drift and watch it blur.",
+      "2": "Toy numbers (illustrative): eight named directions, a fine-tune that mostly pushes risk-taking, and drift everywhere else. The readout names the biggest difference.",
+      "3": "Subtraction removes shared activity, so a small targeted change dominates Δ until unrelated drift is comparable. Hence matched prompts and layers, and a sweep over depth."
+    }
+  },
+  "where_else": [
+    "Code review, where a diff shows only the changed lines so you can read those",
+    "Emergent-misalignment audits, asking what a narrow fine-tune put into a model",
+    "Astronomers' image differencing: subtract two nights' photos and only what changed remains"
+  ],
+  "hamming": {
+    "what": "Model diffing compares a base model and its fine-tuned version on the same inputs, through activation differences or a joint crosscoder, to find what fine-tuning changed inside.",
+    "when": "After a fine-tune whose behavioural effects you can see but not explain, above all when narrow training produced broad misbehaviour.",
+    "why": "Behavioural tests say a fine-tune went wrong; diffing looks for what it added, though it is far more reliable about the area than about individual features."
+  },
+  "object": {
+    "title": "The two-picture catalogue",
+    "subtitle": "Each dot is a crosscoder latent: across, how strongly the base model uses it; up, how strongly the fine-tuned model does; depth, how clean it reads (schematic).",
+    "kind": "points",
+    "clusters": [
+      { "label": "shared latents", "c": "plaster", "center": [0.5, 0.5, 0.5], "spread": 0.25, "n": 60 },
+      { "label": "base-only", "c": "data", "center": [1.1, -1.1, -0.4], "spread": 0.3, "n": 16 },
+      { "label": "finetune-only, plain L1", "c": "prob", "center": [-1.1, 1.1, -0.6], "spread": 0.35, "n": 16 },
+      { "label": "finetune-only, with the fix", "c": "good", "center": [-1.1, 1.1, 0.8], "spread": 0.1, "n": 10 },
+      { "label": "refusal latent", "c": "grad", "center": [-1.25, 1.3, 0.2], "spread": 0.02, "n": 1 }
+    ],
+    "arrows": [
+      { "from": "finetune-only, plain L1", "to": "finetune-only, with the fix", "label": "reduced penalty on a few shared latents", "c": "dir" }
+    ],
+    "plane": { "normal": [1, -1, 0], "label": "used equally by both models" },
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Every dot is one catalogue entry. Across: how much the original picture uses it. Up: how much the tuned one does. Depth: how clean it reads.",
+          "2": "A schematic of a crosscoder's latents, placed by their decoder strength in each model.",
+          "3": "Each latent has a decoder vector per model, so exclusivity can be read off directly; its distribution came out trimodal."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Along the see-through wall: the shared pile, used by both. Nearly everything lives here.",
+          "2": "Shared latents have highly aligned decoder directions across the two models: the same feature, kept.",
+          "3": "Of a million latents, only roughly 4,000 to 5,000 per model were exclusive."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Out at the corners: the few thousand that belong to one model. The refusal latent sits on the tuned side.",
+          "2": "Finetune-only latents included a refusal feature firing on dangerous requests, and a code-review feature.",
+          "3": "Base-only latents represented interactions inconsistent with the training objective; most exclusive latents were not immediately interpretable."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The plain exclusive cloud sits low and smeared: jumbled entries, stuffed to pay their fee.",
+          "2": "Under L1, exclusive latents must explain more variance to survive, so they come out dense and polysemantic.",
+          "3": "Capacity competition with cheap shared latents, not the fine-tune itself, produces much of this density."
+        },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Ease the fee on a few shared entries and the tuned-only cloud rises and tightens: cleaner entries with one meaning each.",
+          "2": "Designating a small set of shared latents with a reduced sparsity penalty leaves exclusive latents markedly more monosemantic.",
+          "3": "Even then, treat exclusivity as a property of the decomposition as well as of the models."
+        },
+        "view": "side",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your crosscoder's finetune-only latents look dense and jumbled while shared ones look clean. Most likely why?",
+        "options": [{ "t": "Sparsity pressure crams the exclusive latents", "ok": true }, { "t": "The fine-tune taught jumbled concepts" }],
+        "why": "A shared latent pays for itself in both models; an exclusive one must absorb far more to survive the L1 penalty."
+      },
+      {
+        "q": "What does model diffing tell you reliably?",
+        "options": [{ "t": "That something changed, and roughly in what area", "ok": true }, { "t": "Exactly what changed, feature by feature" }],
+        "why": "It is much less reliable at naming individual features than at locating the domain of the change."
+      },
+      {
+        "q": "Before trusting an oracle's reading of the differences, what do you run?",
+        "options": [{ "t": "The oracle on the tuned model's raw activations", "ok": true }, { "t": "Nothing: differences check themselves" }],
+        "why": "The raw-activation query is the sanity check that the oracle setup works at all."
+      }
+    ],
+    "where": "Any before-and-after comparison: subtract what both share, then read carefully what is left."
+  }
+}

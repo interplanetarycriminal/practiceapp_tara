@@ -1,0 +1,250 @@
+{
+  "id": "grokking",
+  "title": "The crib sheet hid the clocks",
+  "week": null,
+  "need": "core",
+  "allegory": "Grokking is a student who crams a crib sheet of clock sums while quietly learning to read a bank of clocks spinning at different speeds, where the answer is the one place every hand agrees; the day their test scores jump is mostly the day the crib sheet goes in the bin.",
+  "map": [
+    ["cramming a crib sheet: perfect on known sums, useless on new ones", "memorisation: train loss near zero while test loss stays flat for thousands of epochs"],
+    ["a bank of clocks spinning at different speeds, one reading per number", "the embedding: cos and sin of each input at a few key frequencies (14, 31, 35, 41, 42, 52 in ARENA's checkpoint)"],
+    ["turning each clock's hand on by the second number", "attention and ReLU forming products, combined by angle addition into cos(w(x+y)) and sin(w(x+y))"],
+    ["the answer is the one place every hand agrees", "logits proportional to Σ cos(w(x+y−z)): constructive interference at z = x+y mod 113"],
+    ["the day scores jump is the day the crib sheet goes in the bin", "cleanup: the visible test-loss drop is mostly memorising components being removed"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Weeks of nothing?",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "weeks of nothing ... then it just gets it?",
+      "actors": [{ "pose": "slump", "x": 0.2, "label": "the model" }],
+      "props": [
+        { "kind": "card", "x": 0.62, "y": 0.3, "w": 0.32, "h": 0.14, "label": "practice sums: all right", "color": "mint" },
+        { "kind": "card", "x": 0.62, "y": 0.5, "w": 0.32, "h": 0.14, "label": "new sums: guessing", "color": "pink" },
+        { "kind": "crate", "x": 0.86, "y": 0.72, "w": 0.18, "h": 0.16, "label": "crib sheet", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A student learns clock sums by heart: perfect on practice, hopeless on new ones, for ages. Then one day they get every new sum right. Were they idle till then?",
+        "2": "Train a one-layer transformer on x + y mod 113. Train loss hits zero fast, test loss sits flat for thousands of epochs, then suddenly falls. That delayed jump is grokking.",
+        "3": "Grokking looks discontinuous: memorise, a long plateau, then generalise. The mechanistic question is whether anything changes inside during the plateau that the loss cannot show."
+      }
+    },
+    {
+      "name": "A bank of clocks",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "note": "the answer: where every hand agrees",
+      "actors": [{ "pose": "point", "x": 0.12, "label": "the model" }],
+      "props": [
+        { "kind": "circle", "x": 0.36, "y": 0.42, "w": 0.14, "h": 0.14, "label": "speed 14", "color": "sky" },
+        { "kind": "circle", "x": 0.56, "y": 0.32, "w": 0.14, "h": 0.14, "label": "speed 31", "color": "lav" },
+        { "kind": "circle", "x": 0.76, "y": 0.42, "w": 0.14, "h": 0.14, "label": "speed 52", "color": "peach" }
+      ],
+      "cap": {
+        "1": "Its real method: clocks spinning at different speeds. A number sets every hand; adding turns each hand on by the next number. The answer: where all hands agree.",
+        "2": "The model writes each input as sines and cosines at about six key frequencies, 14, 31, 35, 41, 42 and 52 in ARENA's checkpoint, out of the 113 available, and discards the rest.",
+        "3": "W_E in the Fourier basis has non-trivial norm only at the key frequencies. Neurons cluster by frequency, each a combination of constant, linear and quadratic terms of its own frequency."
+      }
+    },
+    {
+      "name": "Turning the hands",
+      "need": "exercise",
+      "dur": 11,
+      "type": "equation",
+      "parts": [
+        { "t": "cos(a+b)", "c": "orange", "note": "the hand after adding" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "cos a·cos b", "c": "sky", "note": "products, via attention + ReLU" },
+        { "t": " − ", "c": "ink", "note": "" },
+        { "t": "sin a·sin b", "c": "lav", "note": "a = wx, b = wy" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Turning a hand by two amounts in a row is one turn by their total. That school trig rule is how the model adds: it only needs products of its waves.",
+        "2": "Attention and ReLU compute cos(wx)cos(wy), sin(wx)sin(wy) and cross terms; angle addition turns them into cos(w(x+y)) and sin(w(x+y)). Deriving that functional form is the exercise.",
+        "3": "In the 2D Fourier basis neuron activations are sparse; the quadratic terms are these products, fit by a ReLU of the pre-activation with R² near 1. W_logit reads only cos(w_k z) and sin(w_k z)."
+      }
+    },
+    {
+      "name": "Built during the plateau",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "curves": [
+        { "f": "4.7 - 4.6 * sigmoid((x - 7) * 3)", "c": "orange", "label": "test loss" },
+        { "f": "0.2 + 3.5 * sigmoid((x - 3.5) * 1.5)", "c": "teal", "label": "excluded loss" },
+        { "f": "4.7 * exp(-3 * x) + 0.05", "c": "lav", "label": "train loss" }
+      ],
+      "x": [0, 10],
+      "y": [0, 5],
+      "dot": true,
+      "marks": [
+        { "x": 0.8, "label": "memorised" },
+        { "x": 4, "label": "circuit forming" },
+        { "x": 7.5, "label": "cleanup" }
+      ],
+      "cap": {
+        "1": "Knowing the clocks, you can watch them being built: remove one clock and see how much worse the model gets. That damage grows long before test scores move.",
+        "2": "Excluded loss deletes one key frequency's cos(w(x+y)) and sin(w(x+y)) from the logits. It rises well before grokking, far more than deleting a random direction: the circuit forms in the plateau.",
+        "3": "Schematic curves. Progress measures split grokking into memorisation, circuit formation and cleanup; the visible test-loss drop belongs mostly to cleanup, the removal of memorising components."
+      }
+    },
+    {
+      "name": "The off-by-one clock",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "raw argmax index", "c": "pink", "lines": ["13, 30, 34, 40, 41, 51", "plots still look periodic", "norms still look sparse", "everything after is wrong"] },
+      "right": { "title": "index + 1", "c": "mint", "lines": ["14, 31, 35, 41, 42, 52", "slice 0 holds k = 1", "project logits onto", "cos(w_k(x+y)): big norm"] },
+      "verdict": "Check the fix: a wrong frequency projects to almost nothing.",
+      "cap": {
+        "1": "Read the clock labels off by one and every clock you study is the wrong clock. Nothing looks broken, which is what makes it nasty.",
+        "2": "arrange_by_2d_freqs indexes from k = 1, so slice 0 is frequency 1. Argmax the raw index and every key frequency comes out one too low; restricted and excluded losses land at the wrong frequency.",
+        "3": "Add one, then verify: reconstruct cos(w_k(x+y)) at each claimed key frequency and project the logits onto it. A true key frequency gives a large norm; a wrong one projects to near nothing."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "contested",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Sudden jumps, smooth underneath", "Build metrics from the mechanism", "A change of basis makes weights readable", "Keeping only the clocks lowers loss"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "The model was never idle: it was building clocks all along. Watching the right measure, not just the score, is how you catch an AI changing before it shows.",
+        "2": "Current view: grokking and emergent jumps look discontinuous. Nanda et al. (2023): smooth underneath, sudden only in the metric you watched. You need: metrics derived from the mechanism, not just the loss.",
+        "3": "Periodic in the standard basis means sparse in the Fourier basis, and sparsity makes weights readable. Restricted loss (trig directions only) comes out below full loss: the rest was noise."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "One step per candidate answer; the true sum sits at 0",
+    "params": [
+      { "id": "n", "label": "clocks used (key frequencies)", "min": 1, "max": 6, "step": 1, "value": 1 },
+      { "id": "junk", "label": "memorised junk", "min": 0, "max": 3, "step": 0.05, "value": 0 }
+    ],
+    "curves": [
+      { "f": "sum([14, 31, 35, 41, 42, 52].slice(0, n).map(k => cos(2 * PI * k * round(x) / 113))) + junk * ((((sin(round(x) * 12.9898 + 4.1414) * 43758.5453) % 1) + 1) % 1 * 2 - 1)", "c": "orange", "label": "logit, with junk" },
+      { "f": "sum([14, 31, 35, 41, 42, 52].slice(0, n).map(k => cos(2 * PI * k * round(x) / 113)))", "c": "teal", "label": "clean circuit" }
+    ],
+    "x": [-20, 20],
+    "y": [-4, 7],
+    "readouts": [
+      { "label": "model's answer", "f": "(L => (a => a == 0 ? 'correct' : 'wrong, off by ' + a)(range(113).map(i => i - 56).reduce((b, d) => L(d) > L(b) ? d : b, 0)))(d => sum([14, 31, 35, 41, 42, 52].slice(0, n).map(k => cos(2 * PI * k * d / 113))) + junk * ((((sin(d * 12.9898 + 4.1414) * 43758.5453) % 1) + 1) % 1 * 2 - 1))" },
+      { "label": "best look-alike vs true answer (no junk)", "f": "(v => v[1] / v[0])(range(113).map(d => sum([14, 31, 35, 41, 42, 52].slice(0, n).map(k => cos(2 * PI * k * d / 113)))).sort((a, b) => b - a))" },
+      { "label": "clocks in use", "f": "[14, 31, 35, 41, 42, 52].slice(0, n).join(', ')" }
+    ],
+    "caption": {
+      "1": "Each flat step is one possible answer; the true one sits at 0. Add clocks and its step towers alone. Then pour in junk: one clock breaks at once, six hold on.",
+      "2": "Summing key frequencies gives the true answer a logit of n while look-alikes partly cancel. Memorised junk adds noise to every logit; cleanup removes it, and that is when test accuracy jumps.",
+      "3": "Toy: junk is a fixed pseudo-random offset per answer, standing in for memorising components. One clock leaves a look-alike at 0.998 of the best; six bring it near 0.56."
+    }
+  },
+  "where_else": [
+    "Progress measures: derive a metric from the mechanism, then watch it move before the loss does",
+    "Emergent abilities in large models: sudden in the score, possibly smooth underneath",
+    "The Fourier transform and JPEG compression: periodic in one basis means sparse in another",
+    "OthelloGPT and the bracket classifier: the other small models [1.5] reverse-engineers"
+  ],
+  "hamming": {
+    "what": "A model memorises its training data, then long afterwards suddenly generalises; underneath, a clean algorithm was forming all along.",
+    "when": "When test loss sits flat after train loss bottoms out, and whenever you want to know whether a sudden capability jump was really sudden.",
+    "why": "Reverse-engineering the circuit gave progress measures that move smoothly through the plateau, showing the jump was mostly memorisation being cleaned up."
+  },
+  "object": {
+    "title": "The answer tray",
+    "subtitle": "A tray of pins, one per pair of inputs: only the pairs that sum to the chosen answer stand tall.",
+    "kind": "bars",
+    "rows": 12,
+    "cols": 12,
+    "f": "sum([14, 31, 35, 41, 42, 52].slice(0, n).map(k => cos(2 * PI * k * (r + c - z) / 113)))",
+    "labels": { "rows": ["x=0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"], "cols": ["y=0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "n", "label": "Clocks used (key frequencies)", "min": 1, "max": 6, "step": 1, "value": 6 },
+      { "id": "z", "label": "Answer being scored", "min": 0, "max": 22, "step": 1, "value": 11 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "A tray of pins, one for each pair of inputs x and y. Height is how strongly the model says '11'. Only pairs that add to 11 stand tall.",
+          "2": "The logit for answer 11 over a 12 by 12 patch of inputs, using all six key frequencies. The ridge is x + y = 11.",
+          "3": "Σ_k cos(w_k(x + y − 11)) reaches 6 on the anti-diagonal; off it the frequencies disagree and partly cancel (red = negative)."
+        },
+        "view": "iso",
+        "set": { "n": 6, "z": 11 }
+      },
+      {
+        "cap": {
+          "1": "Use just one clock. Other diagonals now rise almost as tall, x + y = 3 and 19 among them: one clock cannot tell 11 from its look-alikes.",
+          "2": "With frequency 14 alone, answers 8 apart score 0.998 of the best, because 14 × 8 = 112 is one short of 113.",
+          "3": "A single frequency has near-aliases: cos(2π·14·8/113) = cos(2π/113) ≈ 0.998, so the argmax is fragile to any noise."
+        },
+        "view": "top",
+        "set": { "n": 1, "z": 11 }
+      },
+      {
+        "cap": {
+          "1": "Add clocks and the look-alikes sink, because the clocks disagree about them. Only true sums get every clock's full vote.",
+          "2": "With three frequencies the ridge is 3 tall, and the best look-alike falls to about three quarters of it.",
+          "3": "Destructive interference off the ridge: across all 113 answers the runner-up ratio drops from 0.998 to about 0.74."
+        },
+        "view": "iso",
+        "set": { "n": 3, "z": 11 }
+      },
+      {
+        "cap": {
+          "1": "Change the answer being scored and the tall ridge slides to a new diagonal. The same machinery answers every sum.",
+          "2": "Score answer 5 and the ridge moves to x + y = 5. One set of weights handles every sum, with no lookup table.",
+          "3": "The readout projects only onto cos(w_k z) and sin(w_k z), so changing z just shifts the phase of every wave."
+        },
+        "view": "front",
+        "set": { "n": 6, "z": 5 }
+      },
+      {
+        "cap": {
+          "1": "Six clocks out of 113 possible are enough to single out the answer. That is why the model keeps a few frequencies and throws the rest away.",
+          "2": "The embedding keeps about six key frequencies (14, 31, 35, 41, 42, 52 in ARENA's checkpoint); the rest carry almost nothing.",
+          "3": "Sparsity in the Fourier basis is what makes the weights readable, and what makes progress measures such as excluded loss possible."
+        },
+        "view": "close",
+        "set": { "n": 6, "z": 11 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Train loss hit zero long ago and test loss is still flat. Is the model learning anything?",
+        "options": [
+          { "t": "Yes: a generalising circuit can be forming out of sight", "ok": true },
+          { "t": "No: flat test loss means nothing is changing" }
+        ],
+        "why": "Excluded loss rises well before grokking: the circuit is being amplified during the plateau."
+      },
+      {
+        "q": "Why does summing several frequencies beat using one?",
+        "options": [
+          { "t": "One frequency has near-identical look-alike answers; several agree only at the true sum", "ok": true },
+          { "t": "Each frequency memorises a different training example" }
+        ],
+        "why": "Constructive interference: every cos(w(x + y − z)) equals 1 only at z = x + y mod 113."
+      },
+      {
+        "q": "Your key frequencies come out as 13, 30, 34, 40, 41, 51. What happened?",
+        "options": [
+          { "t": "An off-by-one: the 2D Fourier helper indexes from k = 1", "ok": true },
+          { "t": "Your model simply found different frequencies" }
+        ],
+        "why": "Every value is exactly one lower. Add one, then check the logits project strongly onto cos(w_k(x+y))."
+      }
+    ],
+    "where": "Anywhere agreeing waves pin down one point: a vernier scale, a Fourier series, interference fringes."
+  }
+}

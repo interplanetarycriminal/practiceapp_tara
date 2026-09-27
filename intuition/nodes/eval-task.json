@@ -1,0 +1,242 @@
+{
+  "id": "eval-task",
+  "title": "Deck, rules and scorepad in one box",
+  "week": 11,
+  "need": "library",
+  "allegory": "A Task is a board game in a box: a deck of question cards, a rulebook every turn follows, and a scorepad, so anyone who opens the same box plays the same game and can compare scores.",
+  "map": [
+    ["the deck of question cards", "the dataset of Samples: input, choices, target, metadata"],
+    ["the rulebook every turn follows", "the solver chain: system_message, prompt_template, multiple_choice_format, generate, make_choice"],
+    ["the scorepad", "the scorer: match for MCQs, model_graded_fact when a string comparison will not do"],
+    ["the replay of every game", "the Inspect log: every message of every sample"],
+    ["shuffling the options on each card", "record_to_sample_shuffle, so answer position cannot score"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Everyone's own scripts",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "same model, numbers that don't compare",
+      "actors": [
+        { "pose": "type", "x": 0.18, "label": "startup" },
+        { "pose": "type", "x": 0.82, "label": "lab" }
+      ],
+      "props": [
+        { "kind": "stack", "x": 0.3, "y": 0.62, "label": "private scripts" },
+        { "kind": "stack", "x": 0.7, "y": 0.62, "label": "different private scripts" }
+      ],
+      "arrows": [[0.36, 0.4, 0.64, 0.4, "compare?"]],
+      "cap": {
+        "1": "Until 2024, everyone testing AI models wrote their own scripts, so two teams testing the same model got numbers that could not be compared.",
+        "2": "Private harnesses meant private choices: prompt wording, answer parsing, scoring. The UK AI Safety Institute released Inspect on 10 May 2024 so different teams could run the same task and compare logs.",
+        "3": "Inspect, open-sourced by UK AISI on 10 May 2024 under the Open Government Licence, is standardisation more than invention: task, solver chain and scorer become portable, so results reproduce outside the author's harness."
+      }
+    },
+    {
+      "name": "The game box",
+      "need": "library",
+      "dur": 11,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "carry", "x": 0.18, "to": 0.42, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.6, "y": 0.62, "label": "the Task", "color": "butter" },
+        { "kind": "card", "x": 0.74, "y": 0.28, "label": "deck: the questions", "color": "sky" },
+        { "kind": "card", "x": 0.88, "y": 0.46, "label": "rulebook: the solver steps", "color": "lav" },
+        { "kind": "card", "x": 0.76, "y": 0.8, "label": "scorepad: the scorer", "color": "mint" }
+      ],
+      "cap": {
+        "1": "A Task is a board game in a box: a deck of question cards, a rulebook every turn follows, a scorepad. Anyone with the same box plays the same game.",
+        "2": "Deck = a dataset of Samples (input, choices, target, metadata). Rulebook = the solver chain every sample passes through. Scorepad = the scorer. eval() plays the box against a model and writes a log.",
+        "3": "<code>Task(dataset, solver=[...], scorer)</code> is Inspect's top-level unit, run by <code>eval()</code> with a model and a log_dir. It is a library object: you assemble it, and the thinking goes into what fills each slot."
+      }
+    },
+    {
+      "name": "Down the chain",
+      "need": "exercise",
+      "dur": 11,
+      "type": "graph",
+      "note": "only generate() calls the model",
+      "nodes": [
+        { "id": "sample", "label": "Sample", "x": 0.07, "y": 0.5, "c": "sky" },
+        { "id": "sys", "label": "system_message", "x": 0.21, "y": 0.28, "c": "lav" },
+        { "id": "tmpl", "label": "prompt_template", "x": 0.35, "y": 0.62, "c": "lav" },
+        { "id": "mcq", "label": "multiple_choice_format", "x": 0.5, "y": 0.28, "c": "lav" },
+        { "id": "gen", "label": "generate()", "x": 0.65, "y": 0.62, "c": "orange" },
+        { "id": "pick", "label": "make_choice", "x": 0.79, "y": 0.28, "c": "lav" },
+        { "id": "score", "label": "scorer", "x": 0.93, "y": 0.5, "c": "mint" }
+      ],
+      "edges": [["sample", "sys"], ["sys", "tmpl"], ["tmpl", "mcq"], ["mcq", "gen"], ["gen", "pick"], ["pick", "score"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Each question card walks the same path: set the scene, fill in the template, lay out the options, ask the model, ask for a final pick, then score it.",
+        "2": "A solver is a function returning <code>async solve(state, generate)</code> that edits the TaskState and returns it. TaskState holds messages, user_prompt, output and metadata, threaded from step to step.",
+        "3": "ARENA's convention: every solver ends in <code>return state</code>, and generate() goes in the list explicitly, never hidden in a solver. It costs one list entry and lets you slot a solver in before generation without reading source."
+      }
+    },
+    {
+      "name": "The always-(A) player",
+      "need": "exercise",
+      "dur": 10,
+      "type": "bars",
+      "title": "Toy score (%): 4 options, 60% of right answers at (A), then shuffled",
+      "labels": ["always picks (A)", "random guesser"],
+      "from": [60, 25],
+      "to": [25, 25],
+      "cap": {
+        "1": "If the right answer usually sits in slot (A), a player who always says 'A' wins without knowing anything. Shuffle the options and the trick drops to chance.",
+        "2": "Toy: 4 options, 60% of targets at (A). Unshuffled, always-(A) scores 60% and looks competent; shuffled, 25%, the same as guessing. That is why [3.3] has you write <code>record_to_sample_shuffle</code>.",
+        "3": "Position bias inflates MCQ accuracy whenever the answer key is not uniform over slots. Permuting choices per sample, and remapping the target, makes chance exactly 1/n, so any score above it comes from content."
+      }
+    },
+    {
+      "name": "The silent no-op",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": {
+        "title": "What you wrote",
+        "lines": [
+          "a new prompt_template solver",
+          "no generate() after it in the list",
+          "the run finishes cleanly",
+          "the score is identical to before"
+        ],
+        "c": "pink"
+      },
+      "right": {
+        "title": "What you check",
+        "lines": [
+          "generate() after every solver that shapes the prompt",
+          "every solver ends in return state",
+          "open the log viewer",
+          "read one sample's full chat history"
+        ],
+        "c": "mint"
+      },
+      "verdict": "If your template text is not in the log, it never reached the model.",
+      "cap": {
+        "1": "The worst bug is silent: your new step runs, nothing errors, and the score does not move. Read one question's whole conversation in the log.",
+        "2": "Leave your template solver with no generate() after it and you get a clean run with an unchanged score. The log stores every message: if your template text is not there, it never reached the model.",
+        "3": "A clean run with an unchanged result is the worst failure signature. Reading one sample end to end catches it in thirty seconds; staring at the aggregate score never will."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "actor": { "pose": "cheer", "x": 0.85, "label": "you" },
+      "items": [
+        "Dataset + solver chain + scorer: the unit every eval runs as",
+        "Shuffle the options so position cannot score",
+        "Read one sample's log before trusting the number",
+        "Agents in [3.4] and control in [3.5] are Tasks too"
+      ],
+      "cap": {
+        "1": "Every claim about what a model can or will do rests on an eval. A Task makes that eval rerunnable and checkable, which is how you steer AI on evidence.",
+        "2": "The agent loops in [3.4] and the whole control pipeline in [3.5] are Inspect Tasks, with logs as the hand-off between stages. Build the habits now: shuffle, return state, read one log.",
+        "3": "A portable task, solver chain and scorer make a safety result reproducible by someone who did not write the harness; in [3.5], later stages read back the .eval logs that earlier stages wrote."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Can position fake your score?",
+    "params": [
+      { "id": "skew", "label": "right answers sitting at (A) (%)", "min": 0, "max": 100, "step": 5, "value": 60 },
+      { "id": "n", "label": "options per question", "min": 2, "max": 6, "step": 1, "value": 4 },
+      { "id": "s", "label": "true skill: knows the answer (%)", "min": 0, "max": 100, "step": 5, "value": 30 }
+    ],
+    "curves": [
+      { "f": "x + (1 - x)*skew/100", "c": "pink", "label": "score, unshuffled" },
+      { "f": "x + (1 - x)/n", "c": "mint", "label": "score, shuffled" },
+      { "f": "x", "c": "ink", "label": "true skill" }
+    ],
+    "x": [0, 1],
+    "y": [0, 1],
+    "readouts": [
+      { "label": "score at this skill: unshuffled / shuffled", "f": "round(100*(s/100 + (1 - s/100)*skew/100)) + '% / ' + round(100*(s/100 + (1 - s/100)/n)) + '%'" },
+      { "label": "skill you would infer, unshuffled", "f": "round(100*((s/100 + (1 - s/100)*skew/100) - 1/n)/(1 - 1/n)) + '%  (truth ' + s + '%)'" },
+      { "label": "skill you would infer, shuffled", "f": "round(100*((s/100 + (1 - s/100)/n) - 1/n)/(1 - 1/n)) + '%  (truth ' + s + '%)'" },
+      { "label": "verdict", "f": "skew/100 > 1/n + 0.05 ? 'unshuffled score is inflated by position' : skew/100 < 1/n - 0.05 ? 'unshuffled score is deflated by position' : 'this answer key is close to uniform'" }
+    ],
+    "caption": {
+      "1": "Set how often the right answer sits at (A). At zero skill the unshuffled line starts at that share, not at chance. Shuffled, it always starts at 1 in n.",
+      "2": "Toy model: it knows the answer with probability 'skill', otherwise it always picks (A). The usual correction for guessing assumes chance is 1/n; on an unshuffled key that fails and the inferred skill is wrong.",
+      "3": "Score = s + (1 − s)·P(target at A). The chance correction (score − 1/n)/(1 − 1/n) recovers s only when P(target at A) = 1/n, which shuffling choices per sample guarantees."
+    }
+  },
+  "where_else": [
+    "Agent loops in [3.4] and control protocols in [3.5], which are Inspect Tasks too",
+    "Unit tests: fixture, steps and assertion packaged so anyone can rerun them",
+    "Human exams and surveys that randomise answer order to stop position effects",
+    "Any benchmark: a fixed dataset plus a fixed scoring rule is what makes numbers comparable"
+  ],
+  "hamming": {
+    "what": "Inspect's unit of evaluation: a dataset, a chain of solvers that shape what the model sees, and a scorer, run by eval() and logged message by message.",
+    "when": "Every time you want a number about a model that someone else could rerun, from a quick multiple-choice check to the control pipeline in [3.5].",
+    "why": "A shared, portable harness makes results comparable and debuggable, and the log shows exactly what the model was shown and what it said."
+  },
+  "object": {
+    "title": "The eval conveyor",
+    "subtitle": "One Sample rides the TaskState tube through every solver, gets scored, and lands in the log.",
+    "kind": "blocks",
+    "axis": "x",
+    "stream": true,
+    "gap": 0.3,
+    "items": [
+      { "label": "Sample", "h": 0.8, "c": "data" },
+      { "label": "system_message", "h": 1.0, "c": "aux" },
+      { "label": "prompt_template", "h": 1.0, "c": "aux" },
+      { "label": "multiple_choice_format", "h": 1.0, "c": "aux" },
+      { "label": "generate()", "h": 1.5, "c": "prob" },
+      { "label": "make_choice", "h": 1.0, "c": "aux" },
+      { "label": "scorer", "h": 0.9, "c": "good" },
+      { "label": "log", "h": 0.6, "c": "plaster" }
+    ],
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "One question rides the tube from left to right: through every step, into the scorer, into the log. The whole conveyor is one Task.", "2": "Left to right: a Sample, the solver chain, the scorer, the log. Task(dataset, solver, scorer) packages the first three; eval() runs it and writes the fourth.", "3": "A Task is the portable unit: dataset, solver chain, scorer. eval() executes it against a model and persists a log, which later stages or other teams can read back." }, "view": "iso" },
+      { "cap": { "1": "The tall amber block is the only place the model is actually asked anything. Every other block just rearranges the conversation.", "2": "Only generate() calls the model. system_message, prompt_template and multiple_choice_format edit TaskState before it; anything after it cannot change the answer already given.", "3": "Under ARENA's convention no solver calls the model itself; generate() appears explicitly in the list, so the position of each solver relative to it is visible at a glance." }, "view": "close" },
+      { "cap": { "1": "The tube is the conversation so far. Every block edits it and hands it on to the next, so the model sees the sum of all the edits before it.", "2": "The tube is TaskState: messages, user_prompt, output, metadata. Each solver edits it and must <code>return state</code> so the next block receives it; generate() fills in output.", "3": "state.metadata persists across solvers: the control notebook uses it to pass clean code, backdoored code and trigger inputs between stages, and scorers can carry metadata into analysis." }, "view": "side" },
+      { "cap": { "1": "Before a card even enters, shuffle its options. Otherwise a player who always says 'A' can ride the conveyor to a good score.", "2": "record_to_sample turns each JSON row into a Sample; the shuffling version permutes choices and remaps the target, so a model that always picks (A) scores chance, not skill.", "3": "Randomising choice order per sample removes answer-position bias from the aggregate, making 1/n the true chance baseline for any correction or comparison." }, "view": "front" },
+      { "cap": { "1": "The pale block at the end is the replay. Read one question's full story there before you believe the final number.", "2": "Open the Inspect log viewer and read one sample's full chat history. If your template text is not in there, the solver did not run or did not take effect.", "3": "Logs are the interchange format: in [3.5], later stages read back logs written by earlier ones. Auditing one sample end to end is cheaper than any aggregate diagnostic." }, "view": "top" }
+    ],
+    "predict": [
+      {
+        "q": "The right answer is at (A) for 60% of questions (unshuffled, 4 options). What does a model that always answers (A) score?",
+        "options": [
+          { "t": "60%", "ok": true },
+          { "t": "25%" },
+          { "t": "0%" }
+        ],
+        "why": "It scores whatever share of answers sit in its favourite slot. Shuffling the choices per question drops that to 1 in 4."
+      },
+      {
+        "q": "You put prompt_template after generate() in the solver list. What does the model see?",
+        "options": [
+          { "t": "The prompt without your template: the model was already called", "ok": true },
+          { "t": "The templated prompt" },
+          { "t": "An error from Inspect" }
+        ],
+        "why": "The list is the order. Solvers before generate() shape what the model sees; a solver after it cannot change an answer already given."
+      },
+      {
+        "q": "You added a solver and the score did not budge. What is the fastest check?",
+        "options": [
+          { "t": "Open the log and read one sample's full chat history", "ok": true },
+          { "t": "Run ten times more samples" },
+          { "t": "Switch to a different scorer" }
+        ],
+        "why": "The log stores every message. If your solver's text is not in there, it never took effect, and no amount of aggregate data will tell you that."
+      }
+    ],
+    "where": "Any pipeline where one record flows through fixed stages to a verdict and a log: CI test runs, data-processing jobs, grading scripts."
+  }
+}

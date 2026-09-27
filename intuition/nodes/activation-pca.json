@@ -1,0 +1,269 @@
+{
+  "id": "activation-pca",
+  "title": "Photograph the swarm at its widest",
+  "week": null,
+  "need": "exercise",
+  "allegory": "PCA of activations is like photographing a swarm of fireflies from whichever angle makes it look most spread out: if the true and false fireflies already fall into two separate clouds in that photo, the difference you care about is one of the biggest things going on, and you saw it without anyone telling you which was which.",
+  "map": [
+    ["the swarm of fireflies", "activations: one point per prompt, thousands of numbers each"],
+    ["the camera angle with the most spread", "the top principal components: directions of greatest variance"],
+    ["two clouds in the photo, no labels given", "unsupervised separation: the property is a dominant direction"],
+    ["measuring from the middle of the swarm", "centring: subtract the mean activation before PCA"],
+    ["a louder, unrelated spread can take over the photo", "PC1 ranks directions by variance, not by relevance to you"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Thousands of numbers",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "actors": [{ "pose": "shrug", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.46, "y": 0.22, "label": "'Beijing is in China.'", "color": "cream" },
+        { "kind": "stack", "x": 0.62, "y": 0.62, "label": "thousands of numbers per sentence", "color": "chalk" }
+      ],
+      "arrows": [[0.5, 0.3, 0.6, 0.52, "inside the model"]],
+      "cap": {
+        "1": "A model reading a sentence holds thousands of numbers. Nobody can look at thousands of numbers at once. But you can take a photo from a clever angle.",
+        "2": "Stack residual-stream activations for many prompts into an (n, d_model) matrix. PCA finds the few directions along which those points vary most, so you can plot them in 2D.",
+        "3": "PCA returns an orthonormal basis ordered by explained variance: the top eigenvectors of the activation covariance, equivalently the right singular vectors of the centred data matrix."
+      }
+    },
+    {
+      "name": "The widest photo",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "actors": [{ "pose": "walk", "x": 0.1, "to": 0.26, "label": "you, with a camera" }],
+      "props": [
+        { "kind": "cloud", "x": 0.64, "y": 0.4, "w": 0.32, "h": 0.28, "label": "firefly swarm", "color": "butter" },
+        { "kind": "box", "x": 0.34, "y": 0.5, "w": 0.07, "h": 0.06, "label": "camera", "color": "ink" }
+      ],
+      "arrows": [[0.39, 0.48, 0.5, 0.42, "widest angle"]],
+      "cap": {
+        "1": "Photograph a swarm of fireflies from the angle where it looks most spread out. Whatever differences are biggest inside the swarm show up in that one photo.",
+        "2": "PC1 is the single direction with the most spread; PC2 has the most spread among directions at right angles to PC1. Projecting every point onto the two gives you the photo.",
+        "3": "PC_k maximises variance subject to orthogonality with PC_1 to PC_(k−1); its eigenvalue is the variance captured. The projection (x − μ)·V_k gives each point's k-dimensional coordinates."
+      }
+    },
+    {
+      "name": "The most spread",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "PC1 = argmax", "c": "ink", "note": "the direction with most spread" },
+        { "t": " mean[", "c": "ink", "note": "over all points" },
+        { "t": "((x − μ)", "c": "sky", "note": "each point, from the centre" },
+        { "t": "·v)²", "c": "orange", "note": "its shadow on v, squared" },
+        { "t": "]", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "For each direction, measure how far each point's shadow falls from the centre, square it, and average. The direction where that is biggest is PC1.",
+        "2": "Variance along a unit vector v is the mean of ((x − μ)·v)² over points. PC1 maximises it; PC2 maximises it among directions at right angles to PC1, and so on down the list.",
+        "3": "With ‖v‖ = 1 this is vᵀΣv for covariance Σ, maximised by Σ's top eigenvector, whose eigenvalue is the variance captured. In practice you take the SVD of the centred (n, d) matrix."
+      }
+    },
+    {
+      "name": "Truth, no labels",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "exp(-pow(x - 1.6, 2)/0.5)", "c": "green", "label": "true statements, along PC1" },
+        { "f": "exp(-pow(x + 1.6, 2)/0.5)", "c": "teal", "label": "false statements, along PC1" }
+      ],
+      "x": [-4, 4],
+      "y": [0, 1.1],
+      "dot": false,
+      "marks": [{ "x": 0, "label": "no labels were used" }],
+      "cap": {
+        "1": "Researchers fed a big model true and false sentences and took the widest photo of its activations. True and false fell into separate clouds. No labels used.",
+        "2": "Marks and Tegmark (COLM 2024): Llama-2-13B residual stream at layer 14, final token. The top two principal components split true from false before any classifier was trained. These humps are a sketch.",
+        "3": "Unsupervised separability held for cities, Spanish-English translations and numeric comparisons. That motivated difference-of-means and logistic probes, then patching at layers 8 to 14 to show the model uses it."
+      }
+    },
+    {
+      "name": "Centre, then decompose",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "acts", "label": "activations (n, d)", "x": 0.1, "y": 0.5, "c": "sky" },
+        { "id": "centre", "label": "subtract the mean", "x": 0.31, "y": 0.5, "c": "orange" },
+        { "id": "svd", "label": "SVD", "x": 0.51, "y": 0.5, "c": "lav" },
+        { "id": "top", "label": "top k directions", "x": 0.71, "y": 0.5, "c": "mint" },
+        { "id": "proj", "label": "project and plot", "x": 0.9, "y": 0.5, "c": "green" }
+      ],
+      "edges": [["acts", "centre"], ["centre", "svd"], ["svd", "top", "rows of Vᵀ"], ["top", "proj"]],
+      "flow": "forward",
+      "cap": {
+        "1": "First move the middle of the swarm to the origin, then find its widest directions. Skip that and the 'widest direction' mostly points at where the swarm sits.",
+        "2": "Exercise: <code>get_pca_components</code>. Subtract the mean activation, take the SVD, keep the top k rows of Vᵀ, and project the centred data onto them. Day to day, it's one library call.",
+        "3": "Uncentred SVD's first singular vector tracks the mean when the mean is large, as it is in LLM activations. Persona vectors showed the cousin bug: raw cosines near 1 (assistant 0.945, default 0.984) until centred."
+      }
+    },
+    {
+      "name": "Loud is not relevant",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "PCA (no labels)", "c": "sky", "lines": ["finds the loudest directions", "a free first look", "can miss a quiet property"] },
+      "right": { "title": "Probe (with labels)", "c": "peach", "lines": ["finds a direction for your labels", "can fit a confound", "needs a negative control"] },
+      "verdict": "Look with PCA, fit a probe, then patch it back in to prove the model uses it.",
+      "cap": {
+        "1": "The widest photo shows the loudest difference, not necessarily yours. If an unrelated difference is louder, truth hides further down the list.",
+        "2": "PCA ranks directions by variance, not relevance: a clean split is good news, no split proves little. Probes find your property's direction but will also fit confounds, like 'likely text' for truth.",
+        "3": "Marks and Tegmark's negative control, the likely dataset, should not be split by a real truth probe. Accuracy is not causal relevance: the difference-of-means direction moved P(TRUE) more under patching."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Look before you train", "Persona space has one big axis", "Watch a finetune turn a corner"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "A wide photo of a model's inner numbers is often where hidden structure first shows up: truth, personas, even the moment training changes course.",
+        "2": "PC1 of centred persona vectors lines up with the Assistant Axis, which you can then monitor and cap. PCA of finetune checkpoints shows a sharp corner where a misaligned direction crystallises.",
+        "3": "PCA is the cheapest unsupervised check that a property is linearly dominant. Treat it as a hypothesis generator: confirm with probes, negative controls and causal interventions."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "What does the widest photo show?",
+    "params": [
+      { "id": "g", "label": "how different true and false are", "min": 0, "max": 6, "step": 0.1, "value": 3 },
+      { "id": "n", "label": "loudness of an unrelated feature (say, topic)", "min": 0.5, "max": 4, "step": 0.1, "value": 1 }
+    ],
+    "curves": [
+      { "f": "1 + g*g/4 > n*n ? exp(-pow(x - g/2, 2)/2)/sqrt(2*PI) : exp(-x*x/(2*n*n))/(n*sqrt(2*PI))", "c": "green", "label": "true statements on PC1" },
+      { "f": "1 + g*g/4 > n*n ? exp(-pow(x + g/2, 2)/2)/sqrt(2*PI) : exp(-x*x/(2*n*n))/(n*sqrt(2*PI))", "c": "teal", "label": "false statements on PC1" }
+    ],
+    "x": [-6, 6],
+    "y": [0, 0.45],
+    "readouts": [
+      { "label": "PC1 shows", "f": "1 + g*g/4 > n*n ? 'true versus false' : 'the unrelated feature'" },
+      { "label": "share of the spread on PC1", "f": "round(100*max(1 + g*g/4, n*n)/(1 + g*g/4 + n*n)) + '%'" },
+      { "label": "where truth shows up", "f": "1 + g*g/4 > n*n ? 'PC1: visible at once' : 'PC2: look further down the list'" }
+    ],
+    "caption": {
+      "1": "Make true and false more different, or turn up an unrelated feature. Once that one is louder, the widest photo shows it instead and the two humps merge.",
+      "2": "Toy: truth moves points along one axis by ±g/2, an unrelated feature spreads them along another with size n. PCA ranks by spread, not relevance, so PC1 flips when n² beats 1 + g²/4.",
+      "3": "PC1 maximises total variance, which mixes the between-class gap with nuisance variance. A clean split on PC1 is strong evidence; its absence is weak. Check lower components, then fit a probe."
+    }
+  },
+  "where_else": [
+    "The Assistant Axis: PC1 of centred persona vectors lines up with the direction from role personas toward the default assistant",
+    "Training dynamics: PCA of a finetune's checkpoints traces the optimisation path, where a phase transition shows up as a sharp corner",
+    "Superposition's dense regime, where a toy model keeps only its most important features, which is just PCA",
+    "Contrast pairs: PCA on the differences between paired prompts recovers about 97% of CCS accuracy (Emmons)"
+  ],
+  "hamming": {
+    "what": "Finding the few directions along which a set of activations varies most, and projecting onto them so you can look at the data in 2D or 3D.",
+    "when": "As a first look before training any probe, and whenever you want to see structure in persona vectors, checkpoints or embeddings.",
+    "why": "If the property you care about appears with no labels, it is a dominant direction in the model's representation, the cheapest evidence you will ever get."
+  },
+  "object": {
+    "title": "The firefly swarm",
+    "subtitle": "A toy cloud of sentence activations with its two widest directions drawn in: PC1 splits true from false, PC2 splits topic.",
+    "kind": "points",
+    "clusters": [
+      { "label": "true, about cities", "c": "good", "center": [0.8, 0.45, 0], "spread": 0.25, "n": 40 },
+      { "label": "true, about numbers", "c": "good", "center": [0.8, -0.45, 0], "spread": 0.25, "n": 40 },
+      { "label": "false, about cities", "c": "aux", "center": [-0.8, 0.45, 0], "spread": 0.25, "n": 40 },
+      { "label": "false, about numbers", "c": "aux", "center": [-0.8, -0.45, 0], "spread": 0.25, "n": 40 }
+    ],
+    "arrows": [
+      { "from": [-1.4, 0, 0], "to": [1.4, 0, 0], "label": "PC1: true vs false", "c": "dir" },
+      { "from": [0, -1.1, 0], "to": [0, 1.1, 0], "label": "PC2: topic", "c": "dir" }
+    ],
+    "plane": { "normal": [0, 0, 1], "label": "the PC1-PC2 photo" },
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each dot is one sentence's activations, squeezed into 3D for this toy; real ones have thousands of numbers. Green are true statements, teal are false.",
+          "2": "A toy stand-in for an (n, d_model) activation matrix: four groups, true or false crossed with two topics, plus a little noise in every direction.",
+          "3": "Class means differ by 1.6 along PC1 and topic means by 0.9 along PC2, with isotropic noise of 0.25, so the covariance's eigenvalues come out in that order."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Look straight at the sheet: this is the photo PCA takes, spanned by the two widest directions. True and false sit on opposite sides.",
+          "2": "Projecting onto PC1 and PC2 keeps the two largest sources of spread and throws the rest away. Here that is enough to see both the truth split and the topic split.",
+          "3": "The projection (x − μ)·[v₁ v₂] is the best 2D linear summary in the least-squares sense: no other plane has a smaller squared reconstruction error."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "From above, PC1 runs from the false clouds to the true ones: truth is the loudest difference here. PC2, the next widest, separates the topics.",
+          "2": "Components come in order of variance. Truth is PC1 only because its gap is bigger than the topic gap; make topic louder and the order swaps.",
+          "3": "Between-class variance along the truth direction (0.64) beats the topic's (about 0.2) here; PCA ranks directions by total variance with no notion of which one you care about."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Side-on, the third direction is only noise. Dropping it loses almost nothing, which is why two components are often enough for a first look.",
+          "2": "The explained-variance ratio tells you how much each component carries. A few components carrying most of it means the structure really is low-dimensional.",
+          "3": "Remaining eigenvalues equal the noise variance (0.0625) in this toy; in real activations the spectrum decays more gradually, so check the explained-variance curve."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Up close, the clouds overlap a little. PCA gives you a view, not a verdict. Next come probes, and patching to show the model really uses the direction.",
+          "2": "A PCA split suggests a direction; a probe fits it with labels; patching it back in tests whether the model's own outputs depend on it.",
+          "3": "Unsupervised separability is evidence of a linear representation, not proof that the model uses it: causal interventions close that gap."
+        },
+        "view": "close",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "You run PCA on activations for true and false statements, with no labels, and PC1 splits them cleanly. What does that suggest?",
+        "options": [
+          { "t": "Truth is one of the biggest directions of variation in those activations", "ok": true },
+          { "t": "PCA quietly used the labels" },
+          { "t": "The model has memorised the dataset" }
+        ],
+        "why": "PCA never sees labels. A clean split on PC1 means the property is among the largest sources of spread."
+      },
+      {
+        "q": "You forget to subtract the mean before your SVD. What does the top 'component' mostly capture?",
+        "options": [
+          { "t": "The shared average activation", "ok": true },
+          { "t": "The true versus false direction" },
+          { "t": "Pure noise" }
+        ],
+        "why": "Without centring, the first singular vector points at the large shared mean, not at what varies between prompts."
+      },
+      {
+        "q": "PCA shows no split between true and false. Can you conclude the model doesn't represent truth?",
+        "options": [
+          { "t": "No: a louder, unrelated feature may be hiding it", "ok": true },
+          { "t": "Yes: PCA finds every important direction" },
+          { "t": "Yes, provided you used enough prompts" }
+        ],
+        "why": "PCA ranks by spread, not relevance. Check lower components and fit a probe before concluding anything."
+      }
+    ],
+    "where": "Anywhere you want a first look at high-dimensional data: activations, persona vectors, training checkpoints, embeddings."
+  }
+}

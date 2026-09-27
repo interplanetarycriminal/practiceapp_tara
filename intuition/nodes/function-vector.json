@@ -1,0 +1,241 @@
+{
+  "id": "function-vector",
+  "title": "Photocopy the note that names the task",
+  "week": null,
+  "need": "core",
+  "allegory": "A function vector is like an office where, after reading a few worked examples, a handful of clerks write the task ('opposites') on a shared whiteboard; you average that note over many requests so only the task remains, paste a copy onto the board of a request that came with no examples, and the office does the task anyway.",
+  "map": [
+    ["the office's shared whiteboard, which every clerk reads and adds to", "the residual stream"],
+    ["the few clerks who read the examples and write 'we are doing opposites'", "the attention heads with the highest causal indirect effect on the task"],
+    ["averaging the note over many requests, so only the shared task survives", "the mean over ICL prompts at the final token: h from the whole stream, or the top heads' summed outputs (the function vector)"],
+    ["pasting a copy onto the board of a request with no examples", "adding the vector to a zero-shot prompt's residual stream at the same layer"],
+    ["the office doing opposites anyway", "the model producing antonyms with no demonstrations"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Learning from examples",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "where is the game written?",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.5, "y": 0.25, "label": "answer → question", "color": "cream" },
+        { "kind": "card", "x": 0.5, "y": 0.45, "label": "noisy → quiet", "color": "cream" },
+        { "kind": "card", "x": 0.5, "y": 0.65, "label": "ancient → ?", "color": "butter" },
+        { "kind": "cloud", "x": 0.84, "y": 0.4, "label": "the model", "color": "lav" }
+      ],
+      "cap": {
+        "1": "Show a model pairs like noisy → quiet, then ancient → ?, and it answers with the opposite. It learned the game from examples. Is the game written down inside?",
+        "2": "That is in-context learning: picking up a task from examples in the prompt, with no weight updates. Todd et al. asked whether the task itself exists as a vector.",
+        "3": "Todd, Li, Sen Sharma, Mueller, Wallace and Bau (ICLR 2024) asked whether 'which task am I doing' is a compact, transportable object in the residual stream."
+      }
+    },
+    {
+      "name": "The whiteboard note",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "write", "x": 0.3, "label": "a task clerk" },
+        { "pose": "reach", "x": 0.74, "label": "you, photocopying" }
+      ],
+      "props": [
+        { "kind": "box", "x": 0.5, "y": 0.3, "w": 0.52, "h": 0.24, "label": "shared whiteboard", "color": "chalk" },
+        { "kind": "card", "x": 0.4, "y": 0.3, "label": "task: opposites", "color": "butter" },
+        { "kind": "stack", "x": 0.88, "y": 0.68, "label": "copies", "color": "cream" }
+      ],
+      "cap": {
+        "1": "Picture an office with one shared whiteboard. After reading the examples, a few clerks write the game on it: opposites. Everyone after them reads the board.",
+        "2": "The whiteboard is the residual stream; the clerks are attention heads. At a middle layer, the final token's activation carries the task as well as the words.",
+        "3": "In GPT-J (28 layers), the layer-12 residual at the final token is where Todd et al. read the task off: averaged over antonym prompts, it gives the vector h."
+      }
+    },
+    {
+      "name": "Average, then paste",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "h = ", "c": "ink", "note": "" },
+        { "t": "mean", "c": "sky", "note": "over many example prompts" },
+        { "t": "(resid₁₂[−1])", "c": "orange", "note": "the board at the last token" },
+        { "t": " → ", "c": "ink", "note": "" },
+        { "t": "zero-shot + h", "c": "green", "note": "paste into a bare prompt" }
+      ],
+      "actor": { "pose": "write", "x": 0.08 },
+      "cap": {
+        "1": "Take the board from many example prompts and average: word details cancel, the game remains. Paste that average into a prompt with no examples.",
+        "2": "Mean the layer-12 residual stream at the final token over a batch of ICL prompts to get h. Add h at layer 12 of a zero-shot prompt and check the completion.",
+        "3": "The zero-shot model then produces the antonym it otherwise would not: causal evidence that the stream carries an explicit encoding of the task, not only of the tokens."
+      }
+    },
+    {
+      "name": "Find the note-writers",
+      "need": "exercise",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "icl", "label": "antonym prompts", "x": 0.07, "y": 0.3, "c": "sky" },
+        { "id": "shuf", "label": "shuffled-label prompts", "x": 0.1, "y": 0.78, "c": "pink" },
+        { "id": "cie", "label": "score each head (CIE)", "x": 0.38, "y": 0.52, "c": "orange" },
+        { "id": "top", "label": "top heads", "x": 0.58, "y": 0.3, "c": "orange" },
+        { "id": "fv", "label": "sum of their outputs = FV", "x": 0.8, "y": 0.3, "c": "green" },
+        { "id": "zs", "label": "zero-shot prompt + FV", "x": 0.86, "y": 0.74, "c": "green" }
+      ],
+      "edges": [["icl", "cie", "clean"], ["shuf", "cie", "corrupted"], ["cie", "top"], ["top", "fv"], ["fv", "zs"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Which clerks write the note? Scramble the examples so the game is lost, then restore one clerk's work at a time and see who brings the right answer back.",
+        "2": "Causal indirect effect: patch each head's clean output into a shuffled-label run and measure how much the correct token's probability recovers. Sum the top heads' outputs: that is the function vector.",
+        "3": "CIE over GPT-J's 28 × 16 = 448 heads gives a (layers, heads) heatmap. The FV is the sum of the selected heads' attn_out contributions, averaged over the dataset."
+      }
+    },
+    {
+      "name": "Slice before the sum",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Edit attn_output", "c": "pink", "lines": ["after out_proj: heads already summed", "'one head' edits hit all 16", "flat heatmap, broken model"] },
+      "right": { "title": "Edit z", "c": "mint", "lines": ["before out_proj: heads still separate", "zero every head but one", "out_proj returns that head alone"] },
+      "verdict": "Cut the heads apart before out_proj adds them together.",
+      "cap": {
+        "1": "The clerks' notes are merged into one before they reach the board. To test one clerk, catch the notes before the merge, not after.",
+        "2": "In HuggingFace GPT-J, <code>out_proj</code> projects each head and sums them in one matmul. Editing <code>attn_output</code> hits all 16 heads at once, so work on <code>z</code>.",
+        "3": "Reshape z to (batch, seq, n_heads, d_head), clone, zero all heads but the target, and read out_proj: heads are additive, so that output is exactly the head's contribution."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A task can be a single vector", "A handful of heads write it", "Paste it in to switch the task on"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "A task taught by example leaves a compact, movable trace inside the model. Find it and you can switch the task on without any examples.",
+        "2": "The same recipe on country-capital pairs steers free generation: 'When you think of Netherlands, you usually think of' continues with Amsterdam.",
+        "3": "For understanding and steering AI: function vectors change what the model computes, steering vectors change how it sounds, and both are found by forward passes, not training."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "One prompt's activation is the task plus word clutter: average more prompts",
+    "labels": ["d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8"],
+    "params": [
+      { "id": "n", "label": "prompts averaged", "min": 1, "max": 50, "step": 1, "value": 1 },
+      { "id": "clutter", "label": "word clutter in each prompt", "min": 0, "max": 3, "step": 0.1, "value": 3 }
+    ],
+    "f": "[1.2, 0, -0.8, 0.6, 0, 0.9, -0.5, 0].map((t, d) => t + mean(range(n).map(i => clutter * ((((i*8 + d + 1) * (i*8 + d + 1) * 7919 + (i*8 + d + 1) * 104729) % 10007) / 10007 - 0.5))))",
+    "y": [-2.5, 2.5],
+    "readouts": [
+      { "label": "match with the shared task direction (cosine)", "f": "(v => (dot(v, [1.2, 0, -0.8, 0.6, 0, 0.9, -0.5, 0]) / (norm(v) * norm([1.2, 0, -0.8, 0.6, 0, 0.9, -0.5, 0]) || 1)).toFixed(2))([1.2, 0, -0.8, 0.6, 0, 0.9, -0.5, 0].map((t, d) => t + mean(range(n).map(i => clutter * ((((i*8 + d + 1) * (i*8 + d + 1) * 7919 + (i*8 + d + 1) * 104729) % 10007) / 10007 - 0.5)))))" },
+      { "label": "leftover clutter (size)", "f": "norm([1.2, 0, -0.8, 0.6, 0, 0.9, -0.5, 0].map((t, d) => mean(range(n).map(i => clutter * ((((i*8 + d + 1) * (i*8 + d + 1) * 7919 + (i*8 + d + 1) * 104729) % 10007) / 10007 - 0.5))))).toFixed(2)" },
+      { "label": "shared task signal (size)", "f": "norm([1.2, 0, -0.8, 0.6, 0, 0.9, -0.5, 0]).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Each bar is one direction of an activation. One prompt mixes the task with clutter from its words. Average more prompts and watch the clutter cancel.",
+      "2": "This is how h is built: the mean final-token activation over many ICL prompts. The shared part survives averaging; prompt-specific parts shrink. Toy numbers, real recipe.",
+      "3": "Mean of n samples of t + ε: ε shrinks roughly as 1/√n, t is untouched. Anything all prompts share survives, format included; the head-based FV narrows h to what the task heads write."
+    }
+  },
+  "where_else": [
+    "Steering vectors, the sibling trick: built from contrasting prompt pairs to change how the model sounds",
+    "Activation patching and the IOI circuit work, which use the same causal-effect machinery to find the heads that matter",
+    "The Assistant axis in [4.4]: a persona found as a direction you can push along or cap"
+  ],
+  "hamming": {
+    "what": "A single vector, averaged from a model's activations on prompts that demonstrate a task by example, that makes the model perform the task on a bare prompt when added in.",
+    "when": "When you want to find where a model keeps the task it inferred from examples, or to switch that task on without giving any examples.",
+    "why": "It shows the task is a compact, movable object written by a handful of attention heads, not something diffused across the whole context."
+  },
+  "object": {
+    "title": "The task shift",
+    "subtitle": "A schematic of activation space: prompts with antonym examples, bare prompts, and the same bare prompts after the function vector is added.",
+    "kind": "points",
+    "clusters": [
+      { "label": "prompts with antonym examples", "c": "good", "center": [0.9, 0.6, 0.3], "spread": 0.25, "n": 24 },
+      { "label": "bare zero-shot prompts", "c": "data", "center": [-0.9, -0.5, 0], "spread": 0.25, "n": 24 },
+      { "label": "bare prompts + function vector", "c": "prob", "center": [0.9, -0.5, 0], "spread": 0.25, "n": 24 }
+    ],
+    "arrows": [
+      { "from": [-0.9, -0.5, 0], "to": [0.9, -0.5, 0], "label": "+ function vector", "c": "dir" }
+    ],
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each dot is one prompt's state at a middle layer, final token. Prompts with antonym examples sit together; bare prompts sit elsewhere.",
+          "2": "Schematic: the real residual stream has far more dimensions; three stand in for them here.",
+          "3": "Final-token residual activations at layer 12 over an ICL dataset; averaging them, or the top heads' outputs, gives the task vector."
+        },
+        "view": "iso"
+      },
+      {
+        "cap": {
+          "1": "Average the example prompts and the word details cancel. What they all share is the task.",
+          "2": "h is the batch mean of the layer-12 residual at the final token over antonym ICL prompts.",
+          "3": "Averaging keeps every shared component; the head-based FV narrows h to what a handful of high-CIE heads write."
+        },
+        "view": "close"
+      },
+      {
+        "cap": {
+          "1": "Add the vector to the bare prompts and they shift along the task direction. Now they answer with antonyms, with no examples.",
+          "2": "Add the FV to the zero-shot prompt's residual stream at the same layer, then read the completion.",
+          "3": "An intervention on the zero-shot forward pass: the paper's evidence that the task is an explicit, transportable object in the stream."
+        },
+        "view": "side"
+      },
+      {
+        "cap": {
+          "1": "Same recipe, another task: a country-capital vector makes 'When you think of Netherlands, you usually think of' continue with Amsterdam.",
+          "2": "ARENA steers multi-token generation with a vector from a held-out country-capital task.",
+          "3": "With .generate() and a KV cache, intervene once per generated token via model.next(), unless the addition is fixed on the prompt positions, which the cache carries forward."
+        },
+        "view": "top"
+      },
+      {
+        "cap": {
+          "1": "Unlike a steering vector, nobody chose a contrast here. The model's own examples wrote this vector.",
+          "2": "Function vectors come from attention-head outputs on ICL tasks; steering vectors come from contrastive prompt pairs.",
+          "3": "Both are found by forward passes rather than gradient descent: function vectors change what the model computes, steering vectors how it sounds."
+        },
+        "view": "front"
+      }
+    ],
+    "predict": [
+      {
+        "q": "You add h to a bare prompt with no examples. What does the model do?",
+        "options": [
+          { "t": "Produces the antonym anyway", "ok": true },
+          { "t": "Nothing: without examples the task is gone" }
+        ],
+        "why": "That is the paper's first result: the task travels inside the vector, so the examples are no longer needed."
+      },
+      {
+        "q": "You edit attn_output to knock out one head. What actually happens?",
+        "options": [
+          { "t": "All 16 heads in the layer are hit, because out_proj already summed them", "ok": true },
+          { "t": "Only that one head changes" }
+        ],
+        "why": "In HuggingFace GPT-J, out_proj projects and sums the heads in one matmul. Edit z, before out_proj, where the heads are still separate."
+      },
+      {
+        "q": "How do you find which heads carry the task?",
+        "options": [
+          { "t": "Patch each head's clean output into shuffled-label runs and see which restores the answer", "ok": true },
+          { "t": "Pick the heads with the largest outputs" }
+        ],
+        "why": "Causal indirect effect measures what a head does for the task, not how loud it is."
+      }
+    ],
+    "where": "Word-vector analogies and steering vectors: moving a point along one direction to change what the model does with it."
+  }
+}
