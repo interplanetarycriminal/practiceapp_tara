@@ -1,0 +1,197 @@
+{
+  "id": "circuit-pruning",
+  "title": "Trace the water, drop the trickles",
+  "week": null,
+  "need": "core",
+  "allegory": "Circuit pruning is like mapping a river delta backwards from the sea: for every stream, work out what share of the water reaching the sea passed through it by any route, then erase the streams that carry only a trickle.",
+  "map": [
+    ["streams and junctions of the delta", "nodes (tokens, features, error terms, logits) and weighted edges"],
+    ["the share of a junction's water from each inflow", "the normalised adjacency matrix A"],
+    ["water reaching the sea by any route: direct, via one junction, via two", "total influence: A + A² + A³ + ..., the Neumann series"],
+    ["water only runs downhill, so every route ends", "no backward edges: A is nilpotent and the series terminates"],
+    ["erasing streams that carry only a trickle", "pruning nodes and edges whose influence falls below a threshold"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Too many streams",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "which of these made it say Austin?",
+      "actors": [{ "pose": "think", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.62, "y": 0.56, "w": 0.32, "h": 0.44, "label": "every feature that fired, every link", "color": "lav" },
+        { "kind": "card", "x": 0.62, "y": 0.2, "label": "...the capital of the state containing Dallas is", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You've drawn every feature that fired on one prompt and every link between them. It's a hairball. Which pieces actually produced the answer?",
+        "2": "An attribution graph has nodes for tokens, transcoder latents, error terms and output logits, joined by weighted edges. Even with sparse latents there are far too many to read.",
+        "3": "The raw graph is a dense DAG over one prompt. Pruning keeps the subgraph that carries most of the influence on the output logits, small enough to read and to test."
+      }
+    },
+    {
+      "name": "The river delta",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "point", "x": 0.1, "label": "you" }],
+      "props": [
+        { "kind": "cloud", "x": 0.3, "y": 0.22, "w": 0.2, "h": 0.12, "label": "springs: the tokens", "color": "cream" },
+        { "kind": "flag", "x": 0.54, "y": 0.5, "label": "junction: a feature", "color": "mint" },
+        { "kind": "circle", "x": 0.86, "y": 0.62, "w": 0.16, "h": 0.16, "label": "the sea: the answer", "color": "sky" }
+      ],
+      "arrows": [[0.36, 0.3, 0.5, 0.42, "big channel"], [0.6, 0.52, 0.78, 0.6], [0.32, 0.32, 0.42, 0.72, "trickle"]],
+      "cap": {
+        "1": "Think of a river delta. Water from many springs splits and merges on its way to the sea. To see what feeds the sea, follow the water, not the maze.",
+        "2": "Features are junctions, edges are streams, and the answer is the sea. What you want is the share of the answer that flowed through each junction, by any route.",
+        "3": "Influence on the output is a path sum: products of normalised edge weights along each path, summed over all paths. Nodes and edges with small path-summed influence get pruned."
+      }
+    },
+    {
+      "name": "Every route at once",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "influence = ", "c": "ink", "note": "" },
+        { "t": "A", "c": "sky", "note": "direct streams" },
+        { "t": " + ", "c": "ink", "note": "" },
+        { "t": "A²", "c": "orange", "note": "via one junction" },
+        { "t": " + ", "c": "ink", "note": "" },
+        { "t": "A³", "c": "lav", "note": "via two" },
+        { "t": " + …", "c": "ink", "note": "ends: water runs downhill" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Add the water arriving directly, then via one junction, then via two, and so on. Because water only runs downhill, the list of routes runs out.",
+        "2": "With A the normalised adjacency matrix, A² counts two-step paths and A³ three-step ones; summing the powers gives total influence. That's the compute_influence exercise.",
+        "3": "Total influence = Σ_{k≥1} Aᵏ = (I − A)⁻¹ − I. A transformer's graph has no backward edges, so A is nilpotent and the Neumann series terminates exactly."
+      }
+    },
+    {
+      "name": "Multiply, then add",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "capital", "label": "capital", "x": 0.1, "y": 0.22, "c": "sky" },
+        { "id": "dallas", "label": "Dallas", "x": 0.1, "y": 0.66, "c": "sky" },
+        { "id": "saycap", "label": "say a capital", "x": 0.46, "y": 0.22, "c": "lav" },
+        { "id": "texas", "label": "Texas", "x": 0.46, "y": 0.66, "c": "mint" },
+        { "id": "austin", "label": "say Austin", "x": 0.86, "y": 0.44, "c": "orange" }
+      ],
+      "edges": [["capital", "saycap", "1.0"], ["dallas", "texas", "1.0"], ["saycap", "austin", "0.3"], ["texas", "austin", "0.6"], ["dallas", "austin", "0.1"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Along one route, shares multiply; across routes, they add. Dallas feeds all of Texas, Texas feeds 0.6 of Austin: 0.6 that way, plus 0.1 direct, makes 0.7.",
+        "2": "Illustrative weights on the real Dallas-Texas-Austin shape. Multiply along a path, add across paths: Dallas reaches 'say Austin' with 0.1 direct plus 1.0 × 0.6 via Texas.",
+        "3": "(A²)[austin, dallas] = Σ_j A[austin, j]·A[j, dallas] is the two-hop term; the Neumann sum adds every hop count. A node's influence on the logits reads off the total-influence matrix."
+      }
+    },
+    {
+      "name": "Tidy is not true",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "a tidy pruned graph", "c": "pink", "lines": ["a few clean paths", "looks like the whole explanation", "much input quietly from error nodes", "claims never tested"] },
+      "right": { "title": "a trustworthy one", "c": "mint", "lines": ["completeness reported", "zero-ablate a supernode: answer breaks?", "swap in another state: answer follows?", "only then call it a circuit"] },
+      "verdict": "Pruning makes a graph readable, not true. Check completeness, then intervene.",
+      "cap": {
+        "1": "Erasing trickles makes a clean map, but a clean map can still mislead. Some water comes from springs you never charted: the parts the features don't explain.",
+        "2": "Error nodes hold what the transcoders fail to explain. Report completeness, the share of input from features and embeddings rather than errors, and test the pruned graph by ablating a supernode.",
+        "3": "Pruning optimises readability, not faithfulness. A graph is a hypothesis: zero-ablate a supernode or swap features across prompts and check the output moves the way the graph predicts."
+      }
+    },
+    {
+      "name": "Where to cut?",
+      "need": "contested",
+      "dur": 11,
+      "type": "plot",
+      "curves": [{ "f": "8 + 400*pow(x, 8)", "c": "orange", "label": "nodes you must read" }],
+      "x": [0.5, 1],
+      "y": [0, 420],
+      "dot": true,
+      "marks": [{ "x": 0.8, "label": "readable" }, { "x": 0.98, "label": "nearly complete, unreadable" }],
+      "cap": {
+        "1": "Where do you stop erasing? Keep more of the water and the map fills with streams; keep less and you may erase one that mattered. There's no perfect line.",
+        "2": "Illustrative trade-off. Current method: influence-threshold pruning on a local replacement model, one prompt at a time. Open: the cut is a judgement call and attention is frozen, not explained. What you need: prune, then test.",
+        "3": "The replacement is linear only given fixed feature activations and frozen attention patterns, so each graph is a local, per-prompt hypothesis. The threshold trades readability against completeness."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["From hairball to a circuit you can read", "Dallas, then Texas, then Austin", "A pruned graph is a hypothesis: ablate it"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Pruning turns an unreadable tangle into a few paths you can follow and test. That's how you learn what a model actually did on one prompt.",
+        "2": "Readable attribution graphs showed Claude 3.5 Haiku doing two-step inference, Dallas to Texas to Austin, and planning rhymes ahead: claims you can only make, and check, with a graph you can intervene on.",
+        "3": "Influence-based pruning localises a computation to a few supernodes you can ablate or swap: the step that makes attribution graphs usable for understanding and steering models."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Set the flows, then move the cut",
+    "labels": ["Dallas", "Texas", "capital", "say a capital", "error node"],
+    "params": [
+      { "id": "t", "label": "share of 'say Austin' fed by Texas", "min": 0, "max": 0.7, "step": 0.05, "value": 0.6 },
+      { "id": "e", "label": "share from unexplained error", "min": 0, "max": 0.3, "step": 0.05, "value": 0.1 },
+      { "id": "tau", "label": "pruning cut-off", "min": 0, "max": 0.7, "step": 0.01, "value": 0.15 }
+    ],
+    "f": "[(1 - t - e)*0.25 + t, t, (1 - t - e)*0.75, (1 - t - e)*0.75, e]",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "kept at this cut-off", "f": "['Dallas', 'Texas', 'capital', 'say a capital', 'error node'].filter((n, i) => [(1 - t - e)*0.25 + t, t, (1 - t - e)*0.75, (1 - t - e)*0.75, e][i] >= max(tau, 0.001)).join(', ') || 'nothing'" },
+      { "label": "Dallas = direct + via Texas", "f": "((1 - t - e)*0.25).toFixed(2) + ' + ' + t.toFixed(2)" },
+      { "label": "completeness at 'say Austin'", "f": "(1 - e).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Set how much of 'say Austin' flows through Texas and how much from unexplained error, then raise the cut-off. Watch which pieces survive.",
+      "2": "Bars are influence on the output. Dallas gets its direct share plus everything via Texas; 'capital' matters only through 'say a capital'. Raise the error share: completeness drops, however tidy the graph.",
+      "3": "Toy: influence = direct weight + products along paths. Pruning keeps nodes at or above τ; completeness = 1 − error share. A high τ can leave a clean graph that explains little."
+    }
+  },
+  "where_else": [
+    "Activation and path patching: the one-hypothesis-at-a-time ancestors of computing every edge and pruning",
+    "Input-output economics: total requirements (I − A)⁻¹ from direct ones, the same Neumann sum",
+    "PageRank-style scores: importance as a sum over all paths through a network",
+    "Supply chains: which upstream parts most shape the final product, by any route"
+  ],
+  "hamming": {
+    "what": "Scoring every node and edge of an attribution graph by its total influence on the output, summed over all paths, and dropping those below a threshold.",
+    "when": "Right after building an attribution graph for one prompt, before you try to read it or test it with ablations.",
+    "why": "A raw graph is far too big to read; keeping what carries most of the influence turns it into a small, testable hypothesis about how the model got its answer."
+  },
+  "object": {
+    "title": "The influence ledger",
+    "subtitle": "Seven pieces of one prompt's graph: their direct link to the answer, their influence by every route, and what survives the cut.",
+    "kind": "bars",
+    "rows": 7,
+    "cols": 3,
+    "f": "c == 0 ? [0.1, 0, 0, 0.45, 0.3, 0.05, 0.1][r] : c == 1 ? [0.518, 0.382, 0.195, 0.45, 0.3, 0.05, 0.1][r] : ([0.518, 0.382, 0.195, 0.45, 0.3, 0.05, 0.1][r] >= tau ? [0.518, 0.382, 0.195, 0.45, 0.3, 0.05, 0.1][r] : 0)",
+    "labels": { "rows": ["Dallas", "capital", "state", "Texas", "say a capital", "misc", "error"], "cols": ["direct link", "every route", "kept"] },
+    "c": "data",
+    "knobs": [{ "id": "tau", "label": "pruning cut-off", "min": 0, "max": 0.5, "step": 0.01, "value": 0 }],
+    "beats": [
+      { "cap": { "1": "Seven pieces of one prompt. Left: each one's direct link to 'say Austin'. Middle: its influence by every route. Right: what survives the cut.", "2": "Illustrative numbers. Rows are nodes; columns are the direct edge weight into the output, total influence from the Neumann sum, and influence after thresholding.", "3": "Illustrative normalised graph: column 1 is A[out, j], column 2 is (A + A² + A³)[out, j], column 3 is column 2 thresholded at τ." }, "view": "iso", "set": { "tau": 0 } },
+      { "cap": { "1": "Look at 'capital': no direct link to the answer at all, yet a big share of influence by other routes. Direct links undersell it.", "2": "A node with zero direct weight can carry large total influence through intermediates, which is why you sum over paths.", "3": "capital has A[out, capital] = 0 but total influence 0.38 through intermediates such as 'say a capital' and 'state': multi-hop paths are its whole contribution." }, "view": "front", "set": { "tau": 0 } },
+      { "cap": { "1": "Raise the cut and the small pieces vanish from the right-hand column. What's left is the circuit you'll read.", "2": "At τ = 0.15, misc and error drop out; Dallas, capital, state, Texas and 'say a capital' remain.", "3": "Thresholding node influence yields the pruned subgraph; edges are pruned by their own influence scores too." }, "view": "iso", "set": { "tau": 0.15 } },
+      { "cap": { "1": "Cut harder and only a few pieces remain. Tidier, but you've erased a route that carried real water. The cut is a choice.", "2": "A strict threshold keeps a clean story at the cost of completeness: the dropped routes still contributed.", "3": "Readability and completeness trade off monotonically in τ; choose the cut to answer your question, then validate by ablation." }, "view": "top", "set": { "tau": 0.35 } },
+      { "cap": { "1": "Notice the error row: it vanished at the cut, but its share of the answer didn't. Report it rather than hiding it.", "2": "Pruning can drop error nodes from view; completeness still records how much input they supplied.", "3": "Completeness, the share of input from feature and embedding nodes rather than error nodes, should be reported alongside any pruned graph." }, "view": "side", "set": { "tau": 0.15 } }
+    ],
+    "predict": [
+      { "q": "Why does the sum A + A² + A³ + ... stop?", "options": [{ "t": "No backward edges: A is nilpotent", "ok": true }, { "t": "Because the weights are small" }], "why": "A transformer's graph is acyclic, so some power of A is exactly zero and the Neumann series terminates." },
+      { "q": "Your graph has no edges between token positions at all. What went wrong?", "options": [{ "t": "You froze the whole attention output instead of just the pattern", "ok": true }, { "t": "The pruning cut-off is too high" }], "why": "Attention's value path is the only route between positions: freeze only hook_pattern and keep V·W_O differentiable." },
+      { "q": "Your pruned graph is clean, but completeness is low. What does that mean?", "options": [{ "t": "Much of the input comes from error nodes: it explains less than it seems", "ok": true }, { "t": "The graph is complete" }], "why": "Completeness is the share of input from features and embeddings rather than errors." }
+    ],
+    "where": "Anywhere influence flows through a network by many routes: supply chains, citation graphs, economic input-output tables."
+  }
+}
