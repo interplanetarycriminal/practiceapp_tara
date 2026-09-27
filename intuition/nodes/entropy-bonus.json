@@ -1,0 +1,209 @@
+{
+  "id": "entropy-bonus",
+  "title": "A small tip for even slices",
+  "week": 9,
+  "need": "core",
+  "allegory": "A policy is a spinner with one slice per move, learning widens the slices of moves that paid off, and the entropy bonus is a small tip for keeping the slices even, so one slice cannot swallow the wheel before the others have been tried.",
+  "map": [
+    ["a spinner with one slice per move", "the policy's action distribution π(a|s)"],
+    ["widening the slices of moves that paid off", "the policy-gradient update"],
+    ["how even the slices are: even is highest, one giant slice is zero", "entropy H(π) = −Σ π(a) log π(a)"],
+    ["a small tip for keeping slices even", "+ ent_coef · H(π) in the objective"],
+    ["one slice swallowing the wheel too early", "premature determinism: the policy stops exploring"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Stuck on one move",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "note": "it worked once, so now it's all I do",
+      "actors": [{ "pose": "slump", "x": 0.22, "label": "agent" }],
+      "props": [
+        { "kind": "door", "x": 0.5, "y": 0.55, "w": 0.1, "h": 0.3, "label": "the usual move", "color": "peach" },
+        { "kind": "door", "x": 0.68, "y": 0.55, "w": 0.1, "h": 0.3, "label": "never tried", "color": "lav" },
+        { "kind": "door", "x": 0.86, "y": 0.55, "w": 0.1, "h": 0.3, "label": "never tried", "color": "lav" }
+      ],
+      "arrows": [[0.28, 0.55, 0.44, 0.55, "every time"]],
+      "cap": {
+        "1": "Your agent found one move that worked early, and now it does nothing else. It never learns whether something better was one try away.",
+        "2": "Policy gradients sharpen the policy towards actions that paid off. Sharpen too fast and it goes deterministic before it has explored, then stops learning.",
+        "3": "Premature determinism: as π(a|s) nears one-hot, sampled trajectories stop covering alternatives, so gradient estimates carry no signal about them."
+      }
+    },
+    {
+      "name": "The spinner",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.15, "label": "you" }],
+      "props": [
+        { "kind": "circle", "x": 0.45, "y": 0.5, "w": 0.18, "label": "early: even slices", "color": "mint" },
+        { "kind": "circle", "x": 0.78, "y": 0.5, "w": 0.18, "label": "later: one huge slice", "color": "orange" }
+      ],
+      "arrows": [[0.56, 0.5, 0.67, 0.5, "learning"]],
+      "cap": {
+        "1": "Picture the policy as a spinner with a slice for each move. Learning widens the slices of moves that paid off. One slice can swallow the wheel too soon.",
+        "2": "π(a|s) gives each action a probability. Each update shifts probability towards actions with positive advantage, and with noisy early returns it can over-commit.",
+        "3": "Early policy-gradient estimates are high-variance; one lucky advantage estimate can push a logit up until the softmax saturates and its gradient vanishes."
+      }
+    },
+    {
+      "name": "Scoring the evenness",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "H(π)", "c": "sky", "note": "how even the slices are" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "−Σ π(a)", "c": "orange", "note": "weighted by each slice" },
+        { "t": " · log π(a)", "c": "mint", "note": "surprise of that move" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Entropy scores how even the slices are: highest when all are equal, zero when one slice is the whole wheel. The bonus pays a little for evenness.",
+        "2": "H(π) = −Σ π log π is the average surprise of the policy's own choices. Add ent_coef × H to the objective and the policy cannot sharpen quite so fast.",
+        "3": "Uniform over n actions gives log n; deterministic gives 0. PPO's objective is clipped surrogate − value loss + ent_coef·H, with ent_coef = 0.01 in ARENA."
+      }
+    },
+    {
+      "name": "The evenness curve",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "-x * log(x) - (1 - x) * log(1 - x)", "c": "orange", "label": "entropy of a two-move policy" }
+      ],
+      "x": [0.001, 0.999],
+      "y": [0, 0.75],
+      "dot": true,
+      "marks": [{ "x": 0.5, "label": "even: log 2" }, { "x": 0.97, "label": "nearly stuck" }],
+      "cap": {
+        "1": "Two moves: slide from 50/50 towards all-in on one. Evenness is highest in the middle and drops to zero at the edges, fastest right at the end.",
+        "2": "Binary entropy peaks at log 2 ≈ 0.69 nats for a 50/50 policy and falls to 0 as one action takes everything. The slope steepens near the edges.",
+        "3": "dH/dp = log((1−p)/p), unbounded as p → 0 or 1: the bonus pushes back hardest exactly where the policy is about to go deterministic."
+      }
+    },
+    {
+      "name": "Tip, not salary",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "ent_coef too small", "c": "peach", "lines": ["collapses early", "stops exploring", "stuck on a so-so move"] },
+      "right": { "title": "ent_coef too big", "c": "sky", "lines": ["stays near random", "ignores the reward", "never commits"] },
+      "verdict": "A small tip, not a salary: 0.01 in ARENA's PPO.",
+      "cap": {
+        "1": "Tip too little and the spinner collapses early. Tip too much and the agent keeps spinning evenly, ignoring what actually pays. Keep it small.",
+        "2": "Too small an ent_coef lets the policy collapse early; too large keeps it near random so returns stop improving. ARENA's PPO uses 0.01. Mind the sign in your loss.",
+        "3": "Entropy regularisation biases the optimum towards stochastic policies, trading return for randomness. Added to an objective you maximise, it is subtracted from a loss you minimise."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["The same term in PPO and in RLHF", "Log entropy: a crash to zero means exploring stopped", "Sampling temperature: a related dial on randomness"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "The same small tip turns up in PPO and in the RL used to fine-tune chatbots. When training stalls, check how fast the policy's entropy fell.",
+        "2": "PPO and RLHF keep the entropy term unchanged. Logging the policy's entropy is a cheap early warning: a crash towards zero means exploration has stopped.",
+        "3": "For a language policy, entropy is diversity of generations. Tracking it beside reward and KL shows whether fine-tuning is narrowing the model more than you intended."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Load the spinner. Which sharpness scores best once evenness earns a tip?",
+    "labels": ["best move (+1)", "good (+0.8)", "meh (+0.5)", "bad (0)"],
+    "params": [
+      { "id": "beta", "label": "sharpness: how loaded the spinner is", "min": 0, "max": 30, "step": 0.5, "value": 2 },
+      { "id": "tau", "label": "entropy tip (ent_coef)", "min": 0.04, "max": 0.5, "step": 0.01, "value": 0.1 }
+    ],
+    "f": "softmax([1, 0.8, 0.5, 0].map(r => beta * r))",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "expected reward", "f": "round(1000 * dot(softmax([1, 0.8, 0.5, 0].map(r => beta * r)), [1, 0.8, 0.5, 0])) / 1000" },
+      { "label": "entropy (even = 1.386)", "f": "round(-1000 * sum(softmax([1, 0.8, 0.5, 0].map(r => beta * r)).map(p => p > 0 ? p * log(p) : 0))) / 1000" },
+      { "label": "reward + tip × entropy", "f": "round(1000 * (dot(softmax([1, 0.8, 0.5, 0].map(r => beta * r)), [1, 0.8, 0.5, 0]) - tau * sum(softmax([1, 0.8, 0.5, 0].map(r => beta * r)).map(p => p > 0 ? p * log(p) : 0)))) / 1000" },
+      { "label": "best sharpness for this tip", "f": "round(10 / tau) / 10" }
+    ],
+    "caption": {
+      "1": "Slide sharpness to make 'reward + tip × entropy' as big as you can. With a small tip the best spinner is heavily loaded; with a big tip it stays more even.",
+      "2": "The bonus changes what 'best' means: the winning policy is no longer all-in on one move. Its best sharpness is exactly 1 / ent_coef.",
+      "3": "argmax_π E_π[R] + τH(π) = softmax(R/τ): entropy regularisation makes the optimum a Boltzmann policy at temperature τ, never deterministic for τ > 0."
+    }
+  },
+  "where_else": [
+    "PPO's full objective, and the RL stage of RLHF",
+    "Sampling temperature: dialling the randomness of a language model's next token",
+    "Maximum-entropy RL such as soft actor-critic, where the entropy term is central",
+    "Label smoothing: stopping a classifier from becoming certain too fast"
+  ],
+  "hamming": {
+    "what": "A small reward for keeping a policy's choices spread out, measured by its entropy −Σ π log π.",
+    "when": "Whenever a policy-gradient agent risks going deterministic before it has explored: REINFORCE, PPO, RLHF.",
+    "why": "A policy that commits too early stops generating the experience it would need to discover it was wrong."
+  },
+  "object": {
+    "title": "The tipping bowl",
+    "subtitle": "Each spot is one way to load a three-slice spinner; depth is reward plus the evenness tip.",
+    "kind": "surface",
+    "f": "-(dot(softmax([x, y, 0]), [1, 0.5, 0]) - tau * sum(softmax([x, y, 0]).map(p => p * log(p))))",
+    "x": [-4, 8],
+    "y": [-4, 8],
+    "ball": { "x": -3, "y": 3, "lr": 3, "steps": 60 },
+    "marks": [{ "x": 0, "y": 0, "label": "even spinner" }, { "x": 4, "y": 2, "label": "best at tip 0.25" }],
+    "knobs": [{ "id": "tau", "label": "entropy tip (ent_coef)", "min": 0.05, "max": 0.5, "step": 0.05, "value": 0.25 }],
+    "beats": [
+      {
+        "cap": { "1": "Each spot on the floor is one way of loading a three-slice spinner. Depth is how good that loading is: reward plus the evenness tip.", "2": "x, y = logits of moves A and B (C fixed at 0). Height = −(expected reward + τ·entropy), with rewards 1, 0.5 and 0.", "3": "−J(θ) for a softmax policy over three actions, rewards (1, 0.5, 0), entropy weight τ." },
+        "view": "iso",
+        "set": { "tau": 0.25 }
+      },
+      {
+        "cap": { "1": "The lowest spot is not at the edge: with a tip, the best spinner still gives the weaker moves a sliver.", "2": "The optimum sits at logits (1/τ, 0.5/τ): a softmax policy, not a one-hot one.", "3": "The stationary point is at logits R/τ up to a shift, i.e. the Boltzmann policy softmax(R/τ)." },
+        "view": "top",
+        "set": { "tau": 0.25 }
+      },
+      {
+        "cap": { "1": "Shrink the tip and the lowest spot runs off towards the edge: the best spinner is almost all one slice.", "2": "As ent_coef → 0 the optimum approaches the deterministic greedy policy.", "3": "τ → 0 recovers the argmax policy; the regularised optimum converges to the unregularised one." },
+        "view": "side",
+        "set": { "tau": 0.05 }
+      },
+      {
+        "cap": { "1": "Raise the tip and the best spinner stays much more even. Too much, and it barely prefers the best move at all.", "2": "A large ent_coef keeps the policy near random and gives up reward to do it.", "3": "Large τ flattens softmax(R/τ) towards uniform: return is traded for entropy." },
+        "view": "side",
+        "set": { "tau": 0.5 }
+      },
+      {
+        "cap": { "1": "Drop the bead and watch it settle where reward and evenness balance. That is what the tip does during training.", "2": "Gradient steps on the regularised objective settle at the softmax optimum instead of running to the edge.", "3": "Ascent on J converges to the interior optimum; without τ it drifts towards the boundary, where softmax gradients vanish." },
+        "view": "close",
+        "set": { "tau": 0.25 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A four-move policy puts all its probability on one move. What is its entropy?",
+        "options": [{ "t": "Zero", "ok": true }, { "t": "log 4" }],
+        "why": "Entropy is zero for a deterministic policy and largest, log 4, when all four moves are equally likely."
+      },
+      {
+        "q": "Your agent's entropy crashed to near zero early and returns stopped improving. What might help?",
+        "options": [{ "t": "A larger entropy coefficient, so it keeps exploring", "ok": true }, { "t": "A larger learning rate" }],
+        "why": "The policy went deterministic before it had explored; the entropy bonus pushes back against exactly that."
+      },
+      {
+        "q": "With an entropy bonus, what does the best possible policy look like?",
+        "options": [{ "t": "Mostly the best move, but never all of it", "ok": true }, { "t": "Always exactly the best move" }],
+        "why": "Maximising reward plus τ times entropy gives softmax(R/τ): tilted towards the best move, never fully deterministic."
+      }
+    ],
+    "where": "Anywhere certainty must be rationed: RL exploration, sampling temperature, label smoothing."
+  }
+}

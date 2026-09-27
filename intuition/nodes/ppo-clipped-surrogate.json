@@ -1,0 +1,259 @@
+{
+  "id": "ppo-clipped-surrogate",
+  "title": "Old match notes stop counting past 20%",
+  "week": 10,
+  "need": "core",
+  "allegory": "PPO's clip is a coach's rule for a chess bot studying notes from its own old games: lean into the moves that worked, but once you play a move 20% more or less often than you did in those games, the old notes stop counting, because they no longer describe you.",
+  "map": [
+    ["notes taken during your old games", "the batch of rollouts collected by the old policy π_old"],
+    ["how much more often you now play a move than in those games", "the ratio r = π_θ(a|s) / π_old(a|s)"],
+    ["whether the move turned out better than expected", "the advantage A, from GAE"],
+    ["the coach's 20% rule: beyond it the notes stop counting", "clip(r, 1-ε, 1+ε) with ε = 0.2: gradient exactly zero outside the band"],
+    ["how many notes have stopped counting", "the clip fraction, healthy at roughly 5-20%"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Learning from stale games",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "aggression paid off ... in games I played timidly",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "chess bot" }],
+      "props": [
+        { "kind": "stack", "x": 0.52, "y": 0.58, "w": 0.18, "h": 0.34, "label": "old timid games", "color": "sky" },
+        { "kind": "card", "x": 0.82, "y": 0.4, "label": "me now: aggressive", "color": "orange" }
+      ],
+      "arrows": [[0.62, 0.52, 0.74, 0.44, "still learning from these"]],
+      "cap": {
+        "1": "A chess bot plays a thousand games and notices aggression paid off. It keeps hammering that lesson in, still learning from its old timid games, and gets worse.",
+        "2": "PPO takes several gradient steps on each batch of rollouts. After the first step the policy has moved, so the batch describes a slightly different agent than the one learning.",
+        "3": "On-policy estimates go stale within a learning phase. Push far enough and you confidently optimise a surrogate that no longer applies to the current policy."
+      }
+    },
+    {
+      "name": "The coach's rule",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.18, "label": "coach" },
+        { "pose": "sit", "x": 0.42, "label": "chess bot" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.66, "y": 0.26, "label": "within 20%: counts", "color": "mint" },
+        { "kind": "card", "x": 0.86, "y": 0.48, "label": "beyond 20%: ignored", "color": "pink" },
+        { "kind": "stack", "x": 0.66, "y": 0.66, "w": 0.14, "h": 0.24, "label": "old notes", "color": "sky" }
+      ],
+      "cap": {
+        "1": "A coach adds one rule: lean into what worked, but once you play a move 20% more or less often than in those games, the old notes stop counting.",
+        "2": "For each action, compare the new policy's probability with the old one's. The ratio starts at 1. Once it moves more than 20% either way, PPO stops giving credit.",
+        "3": "r_t = π_θ(a_t|s_t) / π_old(a_t|s_t), with θ_old frozen for the learning phase. ε = 0.2 in the paper and in ARENA's defaults (clip_coef=0.2)."
+      }
+    },
+    {
+      "name": "The objective",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "L = min(", "c": "ink", "note": "take the smaller" },
+        { "t": "r·A", "c": "orange", "note": "credit as it stands" },
+        { "t": ", ", "c": "ink", "note": "" },
+        { "t": "clip(r,1-ε,1+ε)", "c": "lav", "note": "credit, capped" },
+        { "t": "·A)", "c": "green", "note": "how good the move was" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Two versions of the credit: as it stands and capped. Taking the smaller means you can never earn more by drifting further from how you used to play.",
+        "2": "<code>torch.min(ratio * adv, ratio.clamp(1 - eps, 1 + eps) * adv).mean()</code>, maximised. The min makes the cap bite only in the direction that would over-reward drift.",
+        "3": "For A above 0 the objective caps at (1+ε)A; for A below 0 it floors at (1-ε)A, so one update can't crush an action's probability. Outside the band the gradient is exactly 0."
+      }
+    },
+    {
+      "name": "Where credit goes flat",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "min(x*1, clamp(x, 0.8, 1.2)*1)", "c": "green", "label": "good move (A = +1)" },
+        { "f": "min(x*(-1), clamp(x, 0.8, 1.2)*(-1))", "c": "red", "label": "bad move (A = -1)" }
+      ],
+      "x": [0, 2],
+      "y": [-2.2, 1.5],
+      "dot": true,
+      "marks": [
+        { "x": 0.8, "label": "1 - ε" },
+        { "x": 1.2, "label": "1 + ε" }
+      ],
+      "cap": {
+        "1": "Credit against how much more often you now play a move. For a good move, credit stops rising past 1.2. For a bad move, the penalty stops growing below 0.8.",
+        "2": "For a good move the objective goes flat once r passes 1 + ε: no reason to push further. For a bad move it goes flat below 1 - ε: no crushing its probability in one go.",
+        "3": "Flat segments have zero gradient with respect to θ; the unclipped sides keep full slope. Since min(rA, clip(r)A) ≤ rA, the objective is a pessimistic bound on the unclipped one."
+      }
+    },
+    {
+      "name": "Not a KL penalty",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "PPO: clip the ratio", "c": "lav", "lines": ["a hard, local cap", "relative to last batch's policy", "zero gradient past the band"] },
+      "right": { "title": "RLHF: KL penalty", "c": "peach", "lines": ["a soft, global cost", "relative to a frozen reference", "always pulling back"] },
+      "verdict": "TRPO is the one with an explicit KL constraint. Three mechanisms, often muddled.",
+      "cap": {
+        "1": "Don't confuse the coach's rule with a leash. PPO's rule is a hard cap relative to your last batch of games; RLHF adds a separate, soft leash to a fixed starting point.",
+        "2": "PPO constrains by clipping the ratio against the policy that collected the batch. RLHF adds a KL penalty against a frozen reference. TRPO uses an explicit KL constraint.",
+        "3": "PPO has no KL term. TRPO maximises the surrogate subject to E[KL(π_old || π_θ)] ≤ δ; RLHF subtracts β·KL(π_θ || π_ref), with π_ref never updated. Different purposes."
+      }
+    },
+    {
+      "name": "The dead objective",
+      "need": "exercise",
+      "dur": 10,
+      "type": "bars",
+      "title": "Share of the batch past the clip band, epoch by epoch (illustrative)",
+      "labels": ["e1", "e2", "e3", "e4", "e5", "e6"],
+      "from": [0, 0, 0, 0, 0, 0],
+      "to": [0.05, 0.1, 0.18, 0.28, 0.4, 0.52],
+      "cap": {
+        "1": "Study the same notes too many times and most of them stop counting. Learning goes quiet, which looks like being finished but isn't.",
+        "2": "Each extra epoch on one batch pushes more ratios outside the band, where they give zero gradient. Log the clip fraction: roughly 5-20% is healthy; past a third, stop.",
+        "3": "Symptom: return collapses and policy loss flatlines near 0 while advantages stay large. Fix: fewer update_epochs (4 is sane), fewer minibatch passes, a lower lr."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 8,
+      "type": "cards",
+      "items": ["Stable RL with first-order maths", "Still underneath RLHF and GRPO", "Watch the clip fraction"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "This small rule made policy learning stable enough to become the default, and it is still what fine-tunes chatbots from feedback.",
+        "2": "RLHF and GRPO keep this exact clipped ratio and change what the reward and the baseline are. When you tune a language model with RL, this clip is in the loop.",
+        "3": "Knowing where gradient flows tells you how far one RL step can move a model's behaviour: the clip bounds per-batch drift, while RLHF's KL penalty bounds total drift."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Set how good the move was and the band width, then slide your ratio",
+    "params": [
+      { "id": "A", "label": "advantage A (how good the move was)", "min": -2, "max": 2, "step": 0.1, "value": 1 },
+      { "id": "eps", "label": "clip band ε", "min": 0.05, "max": 0.5, "step": 0.05, "value": 0.2 },
+      { "id": "r0", "label": "your ratio r", "min": 0, "max": 2, "step": 0.05, "value": 1.3 }
+    ],
+    "curves": [
+      { "f": "min(x*A, clamp(x, 1 - eps, 1 + eps)*A)", "c": "lav", "label": "clipped objective" },
+      { "f": "x*A", "c": "ink", "label": "unclipped r·A" }
+    ],
+    "x": [0, 2],
+    "y": [-4, 4],
+    "readouts": [
+      { "label": "objective at your ratio", "f": "min(r0*A, clamp(r0, 1 - eps, 1 + eps)*A).toFixed(3)" },
+      { "label": "gradient with respect to the ratio", "f": "(r0*A <= clamp(r0, 1 - eps, 1 + eps)*A ? A : 0).toFixed(2)" },
+      { "label": "this sample", "f": "A === 0 ? 'no signal: A is 0' : (r0*A <= clamp(r0, 1 - eps, 1 + eps)*A ? 'still teaching' : 'clipped: zero gradient')" }
+    ],
+    "caption": {
+      "1": "Choose whether the move was good or bad, and how wide the band is. Then slide your ratio: past the band on the too-eager side, the sample stops teaching anything.",
+      "2": "Good move (A above 0): flat past 1 + ε. Bad move: flat below 1 - ε. The gradient readout drops to exactly 0 there: removed, not shrunk. Widen ε and the flat part moves out.",
+      "3": "∂L/∂r = A wherever the unclipped branch is the min (inside the band included) and 0 where the clipped branch wins. Clipping removes gradient; it does not rescale it."
+    }
+  },
+  "where_else": [
+    "RLHF fine-tuning, which keeps this clipped ratio and adds a KL penalty to a frozen reference",
+    "GRPO, which keeps the clip and changes the reward and the baseline",
+    "TRPO, the heavier ancestor that enforces an explicit KL constraint to the old policy",
+    "Off-policy corrections that cap large importance ratios to keep one sample from dominating"
+  ],
+  "hamming": {
+    "what": "PPO's objective: the probability ratio times the advantage, with the ratio clipped to [1-ε, 1+ε] and the smaller of the two taken.",
+    "when": "In every PPO policy update, and so in RLHF and GRPO fine-tuning of language models.",
+    "why": "It stops the policy over-learning from a batch it no longer resembles, giving TRPO-like stability with first-order gradients and a few lines of code."
+  },
+  "object": {
+    "title": "The credit terraces",
+    "subtitle": "Credit as a landscape over the ratio and the advantage, with flat terraces where the gradient is zero.",
+    "kind": "surface",
+    "f": "min(x*y, clamp(x, 1 - eps, 1 + eps)*y)",
+    "x": [0, 2],
+    "y": [-2, 2],
+    "marks": [
+      { "x": 1.8, "y": 1.8, "label": "good move, over-eager: flat" },
+      { "x": 0.2, "y": -1.8, "label": "bad move, crushed: flat" },
+      { "x": 1, "y": 0, "label": "ratio 1: nothing changed yet" }
+    ],
+    "knobs": [
+      { "id": "eps", "label": "Clip band ε", "min": 0.05, "max": 0.5, "step": 0.05, "value": 0.2 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "The credit landscape. One edge is how much more often you now play a move; the other is how good the move was. Height is the credit.",
+          "2": "x: the ratio r. y: the advantage A. Height: min(rA, clip(r)A) with ε = 0.2.",
+          "3": "L_CLIP as a function of (r, A): piecewise linear, with plateaus where the clipped branch wins."
+        },
+        "view": "iso",
+        "set": { "eps": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "On the good-move side the ground rises, then levels into a terrace past 1.2. Walking further earns nothing.",
+          "2": "For A above 0 the objective is flat for r beyond 1 + ε: no incentive to push the probability higher.",
+          "3": "∂L/∂θ = 0 on the plateau: those samples contribute nothing to the update."
+        },
+        "view": "front",
+        "set": { "eps": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "On the bad-move side the terrace sits at the other end, below 0.8. One batch can't push a bad move's probability to zero.",
+          "2": "For A below 0 the objective is flat for r under 1 - ε: the penalty stops growing, so no crushing in one go.",
+          "3": "The clip is one-sided per sign of A: it removes gradient only in the direction that would exploit a stale estimate."
+        },
+        "view": "side",
+        "set": { "eps": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "Shrink the band and the terraces crowd in around ratio 1: tiny, cautious steps per batch.",
+          "2": "Small ε means most samples clip quickly: stable but slow.",
+          "3": "ε sets the per-batch trust region in ratio space; too small and the clip fraction saturates early."
+        },
+        "view": "top",
+        "set": { "eps": 0.05 }
+      },
+      {
+        "cap": {
+          "1": "Widen it and the terraces retreat: bolder updates, and more risk of learning from notes that no longer describe you.",
+          "2": "Large ε allows bigger moves per batch, and more exposure to stale advantage estimates.",
+          "3": "As ε grows, L_CLIP approaches the unclipped surrogate, recovering vanilla importance-weighted policy gradient's instability."
+        },
+        "view": "iso",
+        "set": { "eps": 0.5 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A good move's ratio has reached 1.5 with ε = 0.2. What gradient does this sample give?",
+        "options": [{ "t": "Zero", "ok": true }, { "t": "Smaller, but still positive" }, { "t": "Negative" }],
+        "why": "Past 1 + ε the clipped branch wins the min and does not depend on θ, so the gradient is exactly zero."
+      },
+      {
+        "q": "Which algorithm uses an explicit KL constraint against the old policy?",
+        "options": [{ "t": "TRPO", "ok": true }, { "t": "PPO" }, { "t": "RLHF" }],
+        "why": "PPO clips the ratio; RLHF penalises KL against a frozen reference; TRPO constrains KL to the old policy."
+      },
+      {
+        "q": "The clip fraction climbs past a third. First fix?",
+        "options": [{ "t": "Fewer epochs per batch, or a lower learning rate", "ok": true }, { "t": "Raise ε so nothing gets clipped" }],
+        "why": "Most of the batch has gone stale; take fewer passes over it rather than silencing the alarm."
+      }
+    ],
+    "where": "Anywhere a model learns from data its own past self produced: cap how far one batch may move it."
+  }
+}

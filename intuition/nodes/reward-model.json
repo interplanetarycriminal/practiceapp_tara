@@ -1,0 +1,187 @@
+{
+  "id": "reward-model",
+  "title": "Cooking for the critic",
+  "week": 10,
+  "need": "core",
+  "allegory": "A reward model is like a food critic hired to stand in for a whole town's taste: trained on which of two dishes diners preferred, it can score any new dish instantly, but a chef who cooks only to please the critic eventually finds dishes the critic loves and the diners hate.",
+  "map": [
+    ["diners saying which of two dishes they preferred", "human preference comparisons between two completions"],
+    ["the critic who learns to predict their choices", "the reward model: completion → score, trained so P(A ≻ B) = σ(r_A − r_B)"],
+    ["the chef cooking to please the critic", "the policy, optimised by RL against the reward model"],
+    ["dishes unlike anything the critic ever tasted", "completions far from the reward model's training data (large D_KL from the base model)"],
+    ["the critic loves it, the diners hate it", "proxy reward rising while true quality falls: overoptimisation"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "No formula for good",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "reward = helpfulness(answer) ... but how?",
+      "actors": [{ "pose": "think", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.6, "y": 0.4, "label": "helpful? kind? funny?", "color": "butter" },
+        { "kind": "scale", "x": 0.82, "y": 0.62, "label": "score = ?", "color": "peach" }
+      ],
+      "cap": {
+        "1": "You want a model to give answers people like. But nobody can write a formula for 'helpful' or 'kind' or 'funny'. What do you train against?",
+        "2": "RL needs a reward function. For most of what we want from language models, the judgement lives in people's heads and cannot be written as code.",
+        "3": "Human judgement is too slow and costly to query inside an RL loop. So learn a reward function from human comparisons, then optimise against that learned proxy."
+      }
+    },
+    {
+      "name": "Hire a critic",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.18, "label": "diner" },
+        { "pose": "write", "x": 0.7, "label": "reward model" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.36, "y": 0.45, "label": "dish A", "color": "peach" },
+        { "kind": "card", "x": 0.5, "y": 0.45, "label": "dish B", "color": "mint" },
+        { "kind": "card", "x": 0.86, "y": 0.25, "label": "score: 7.2", "color": "butter" }
+      ],
+      "arrows": [[0.36, 0.36, 0.36, 0.3, "preferred"]],
+      "cap": {
+        "1": "Ask diners which of two dishes they prefer, many times. Train a critic to predict their choices. Now any new dish gets a score instantly, no diners needed.",
+        "2": "Labellers compare pairs of completions, and a reward model learns to score each one so the preferred completion scores higher. That score becomes the RL reward.",
+        "3": "InstructGPT fitted its reward model to human rankings, following Christiano et al. (2017), who learned rewards from people comparing pairs of clips. The policy is then optimised against the learned score."
+      }
+    },
+    {
+      "name": "Which dish wins",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "P(A ≻ B)", "c": "ink", "note": "chance diners pick A" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "σ(", "c": "lav", "note": "squash to 0..1" },
+        { "t": "r_A − r_B", "c": "orange", "note": "the score gap" },
+        { "t": ")", "c": "lav", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The critic gives each dish a number. The bigger the gap between two numbers, the surer it is that diners will pick the higher one.",
+        "2": "Training maximises log σ(r_chosen − r_rejected) over labelled pairs. Only score differences matter, so the scale's zero point is arbitrary.",
+        "3": "Pairwise Bradley-Terry loss: −log σ(r(x, y_w) − r(x, y_l)). Rewards are identified only up to a per-prompt constant, one reason RL pipelines normalise them."
+      }
+    },
+    {
+      "name": "Peak, then betrayal",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "curves": [
+        { "f": "0.75*sqrt(x)", "c": "orange", "label": "the critic's score (proxy)" },
+        { "f": "2.2*x*exp(-x/1.22)", "c": "green", "label": "what people actually think" }
+      ],
+      "x": [0, 5],
+      "y": [0, 1.8],
+      "dot": true,
+      "marks": [{ "x": 1.22, "label": "true reward peaks (D_KL 1.22)" }],
+      "cap": {
+        "1": "Cook harder and harder for the critic. Its score keeps rising, but what diners actually think rises, peaks, then falls off a cliff.",
+        "2": "As the policy moves away from the base model (KL on the x axis), proxy reward keeps climbing while true reward peaks and collapses. In the W10 demo the peak sat at D_KL 1.22.",
+        "3": "The reward model is only accurate near its training distribution, and optimisation pushes the policy off it into the model's errors. Curve shapes are schematic; the 1.22 peak is the demo's."
+      }
+    },
+    {
+      "name": "The full-stop machine",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Reward: count the '.' characters", "c": "pink", "lines": ["policy learns: '. . . . .'", "reward climbs forever", "English left behind"] },
+      "right": { "title": "Fairer reward, leash on", "c": "mint", "lines": ["count tokens with a period, or divide by length", "kl_coef back on (2.5)", "log samples beside the curve"] },
+      "verdict": "A degenerate reward earns a degenerate policy. Read the samples, not just the curve.",
+      "cap": {
+        "1": "ARENA's warm-up reward just counts full stops. The model soon learns to write nothing but full stops: top marks, zero sense.",
+        "2": "<code>reward_fn_char_count</code> is deliberately silly so you can watch mode collapse. Fixes: count tokens containing a period or normalise by length, and keep the KL penalty on.",
+        "3": "A sequence-level scalar has one global maximum and RL finds it. With kl_coef = 0 (the plumbing test) nothing anchors the policy to the base model. Log completions with every reward curve."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A learned score stands in for judgement", "Trust it only near its training data", "Watch real quality, not just the proxy"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Chat models are shaped by critics like this one. Knowing a critic's blind spots helps explain behaviour that scores well but helps little.",
+        "2": "RLHF optimises against a reward model, so its errors become the policy's habits. The KL leash and fresh human checks are how practitioners keep the proxy honest.",
+        "3": "The reward model is where human intent is compressed into a number. Its failure modes are central to understanding, and steering, what RL-trained models end up doing."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Choose the leash: how far may the chef drift from the old menu?",
+    "params": [
+      { "id": "beta", "label": "KL leash strength β", "min": 0.05, "max": 2, "step": 0.01, "value": 0.1 }
+    ],
+    "curves": [
+      { "f": "0.75*sqrt(x)", "c": "orange", "label": "critic's score (proxy)" },
+      { "f": "2.2*x*exp(-x/1.22)", "c": "green", "label": "real quality (toy curve)" },
+      { "f": "0.75*sqrt(x) - beta*x", "c": "sky", "label": "what the leashed policy maximises" }
+    ],
+    "x": [0, 6],
+    "y": [-1, 2],
+    "readouts": [
+      { "label": "how far the policy drifts (D_KL)", "f": "pow(0.375/beta, 2).toFixed(2)" },
+      { "label": "critic's score there", "f": "(0.75*0.375/beta).toFixed(2)" },
+      { "label": "real quality there", "f": "(2.2*pow(0.375/beta, 2)*exp(-pow(0.375/beta, 2)/1.22)).toFixed(2)" },
+      { "label": "best real quality available (at D_KL 1.22)", "f": "(2.2*1.22*exp(-1)).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Slide the leash. Too loose and the model drifts far, pleasing the critic while real quality collapses. Too tight and it barely improves. Find the sweet spot.",
+      "2": "The policy maximises the critic's score minus β × distance from the base model, so β decides where on the curve it stops. Toy curves; the real demo's peak sat at D_KL 1.22.",
+      "3": "Maximise E[r_φ] − β·D_KL(π‖π_ref); with these toy curves the optimum drift is (0.375/β)². The penalty trades proxy gain against drift into regions where r_φ is unreliable."
+    }
+  },
+  "where_else": [
+    "Model-graded scoring in evals: an LLM judge is another learned stand-in for human judgement",
+    "Recommender systems optimising clicks, a proxy that can drift away from what users value",
+    "Every RLHF-style method, PPO or GRPO: whatever supplies the reward is what the policy learns to please"
+  ],
+  "hamming": {
+    "what": "A model trained on human comparisons of outputs that gives any completion a score, standing in for a judgement nobody can write as code.",
+    "when": "When fine-tuning a model towards what people prefer, as in RLHF, and whenever a learned judge scores outputs.",
+    "why": "An RL loop needs far more scores than people can give, so a model learns to imitate their judgement, and that imitation is only trustworthy near the data it learned from."
+  },
+  "object": {
+    "title": "The critic's map",
+    "subtitle": "The landscape a policy climbs is the critic's opinion, not the diners'; watch where the bead ends up.",
+    "kind": "surface",
+    "f": "-(exp(-((x - 0.3)*(x - 0.3) + y*y)/2) + 1.5*gap*relu(x - 0.6))",
+    "x": [-1.5, 1.5],
+    "y": [-1.5, 1.5],
+    "ball": { "x": -1.2, "y": 0.6, "lr": 0.3, "steps": 60 },
+    "marks": [
+      { "x": -1.2, "y": 0.6, "label": "base model" },
+      { "x": 0.3, "y": 0, "label": "what diners really like best" },
+      { "x": 0.6, "y": -1.2, "label": "edge of the critic's tasting" }
+    ],
+    "knobs": [
+      { "id": "gap", "label": "how wrong the critic is beyond its training data", "min": 0, "max": 1, "step": 0.1, "value": 1 }
+    ],
+    "beats": [
+      { "cap": { "1": "With a perfect critic, the policy's bead rolls straight to what diners really like best, and stops there.", "2": "If the reward model matched human judgement everywhere, optimising it would land on the true optimum.", "3": "With r_φ = r*, the RL optimum is the true optimum; the trouble comes entirely from off-distribution error." }, "view": "iso", "set": { "gap": 0 } },
+      { "cap": { "1": "A real critic, trained only on familiar dishes, keeps rising past what it tasted. The bead rolls past the true best and off the map.", "2": "Beyond its training data the reward model extrapolates wrongly, and unconstrained optimisation follows the error.", "3": "Goodhart: optimisation pressure concentrates where r_φ − r* is largest and positive, which is off the training distribution." }, "view": "iso", "set": { "gap": 1 } },
+      { "cap": { "1": "From above: the run starts near the base model, passes the real peak and keeps going. The overoptimisation curve in miniature.", "2": "Along the path the proxy keeps rising while true quality peaks and falls.", "3": "A monotone proxy and a non-monotone true reward along the trajectory: the shape the W10 demo plots against D_KL." }, "view": "top", "set": { "gap": 1 } },
+      { "cap": { "1": "A less wrong critic still tempts the bead a little past the peak.", "2": "Smaller off-distribution errors mean smaller overshoot, but any systematic error gets exploited.", "3": "The KL penalty adds a pull back towards π_ref, stopping the run before the critic's error dominates." }, "view": "side", "set": { "gap": 0.4 } }
+    ],
+    "predict": [
+      { "q": "You keep RL-training against a reward model for longer and longer. What happens to real quality?", "options": [{ "t": "It rises, peaks, then falls, while the score keeps climbing", "ok": true }, { "t": "It rises for as long as the score does" }], "why": "The reward model is only accurate near its training data. Push far enough and you are optimising its mistakes." },
+      { "q": "Two completions score 3.1 and 1.1. What does the reward model predict?", "options": [{ "t": "The first is preferred with probability σ(2) ≈ 0.88", "ok": true }, { "t": "The first is about three times better" }], "why": "Only the gap matters: P(A ≻ B) = σ(r_A − r_B), and σ(2) ≈ 0.88." }
+    ],
+    "where": "Anywhere a proxy metric is optimised hard: test scores, click-through rates, targets and KPIs."
+  }
+}

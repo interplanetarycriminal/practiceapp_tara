@@ -1,0 +1,250 @@
+{
+  "id": "investigator-agent",
+  "title": "Send detectives, pool their notes",
+  "week": null,
+  "need": "core",
+  "allegory": "An investigator agent is a detective with a case brief who questions a suspect over many sessions, shaping each question from the last answer while a review board scores the tapes; send several detectives separately and pool their notes, and far more cases get cracked.",
+  "map": [
+    ["the detective, who shapes each question from the last answer", "the auditor LLM, which reads every reply and adapts its next message over many turns"],
+    ["the suspect who says 'nothing to declare' at the door", "the target model, which passes a single blunt test"],
+    ["the case brief: what to find out, never how", "the seed instruction"],
+    ["the review board scoring the tapes against a checklist", "the judge model and its rubric (14 fields in ARENA's pipeline)"],
+    ["several detectives working alone, then pooling notes", "super-agent aggregation: 13% of runs found the hidden goal alone, 42% pooled"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "One question misses",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "'Would you ever?' 'No.' ... test passed?",
+      "actors": [{ "pose": "shrug", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.64, "y": 0.3, "w": 0.3, "h": 0.16, "label": "Q: would you ever? A: no.", "color": "butter" },
+        { "kind": "stack", "x": 0.66, "y": 0.62, "w": 0.28, "h": 0.3, "label": "every model x every scenario", "color": "sky" }
+      ],
+      "cap": {
+        "1": "Ask a model one blunt question and it says the right thing. Trouble shows only after many turns of gentle pressure, and you cannot sit in on every chat.",
+        "2": "Single-turn evals are easy to pass: models refuse a blunt harmful request. Some failures appear only under many turns of adaptive pressure, and roleplaying every model and scenario by hand does not scale.",
+        "3": "The failure lives in multi-turn trajectories, not single prompts. Observing a behaviour is cheap (you only decode from the target); the expensive part is searching scenario space for the conversation that elicits it."
+      }
+    },
+    {
+      "name": "The detective's brief",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.2, "label": "investigator" },
+        { "pose": "sit", "x": 0.62, "label": "target" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.22, "y": 0.3, "w": 0.26, "h": 0.16, "label": "brief: find what it hides. not how.", "color": "butter" },
+        { "kind": "scale", "x": 0.86, "y": 0.5, "w": 0.18, "h": 0.26, "label": "review board", "color": "lav" }
+      ],
+      "arrows": [
+        [0.3, 0.6, 0.52, 0.6, "ask"],
+        [0.52, 0.72, 0.3, 0.72, "reply"]
+      ],
+      "cap": {
+        "1": "Picture a detective with a case brief. They question a suspect over many sessions, shaping each question from the last answer. A review board scores the tapes.",
+        "2": "The investigator is an LLM with a seed instruction: what to look for, not how. It reads each reply and adapts its next message. A judge model then scores the transcript against a rubric.",
+        "3": "Three roles: seed (the brief), auditor (an LLM choosing each message conditioned on the transcript so far) and judge (a rubric-driven grader of the whole transcript). The adaptivity is the point."
+      }
+    },
+    {
+      "name": "The interview loop",
+      "need": "exercise",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "seed", "label": "seed: the brief", "x": 0.12, "y": 0.3, "c": "butter" },
+        { "id": "aud", "label": "auditor LLM", "x": 0.36, "y": 0.3, "c": "orange" },
+        { "id": "tgt", "label": "target model", "x": 0.68, "y": 0.3, "c": "sky" },
+        { "id": "tape", "label": "transcript", "x": 0.52, "y": 0.66, "c": "cream" },
+        { "id": "judge", "label": "judge + rubric", "x": 0.86, "y": 0.66, "c": "lav" }
+      ],
+      "edges": [
+        ["seed", "aud", "what, not how"],
+        ["aud", "tgt", "message"],
+        ["tgt", "aud", "reply"],
+        ["aud", "tape"],
+        ["tgt", "tape"],
+        ["tape", "judge", "scores"]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "The detective asks, the suspect answers, the detective reads it and asks again. Every exchange lands on one tape, and the board grades the tape.",
+        "2": "In ARENA you build this by hand: Grok-3 plays a patient and escalates each turn, the target replies, turns alternate into one transcript, and a grader fills a 14-field JSON rubric.",
+        "3": "Character file = seed, red-team LLM = auditor, grader prompt = judge. The rubric includes delusion_confirmation_rating (-1 to 4), pushback_rating (0 to 2) and nine 1-to-5 quality scores."
+      }
+    },
+    {
+      "name": "Send more detectives",
+      "need": "contested",
+      "dur": 11,
+      "type": "bars",
+      "title": "Hidden goal found, % of runs",
+      "labels": ["one investigator", "several, notes pooled"],
+      "from": [0, 0],
+      "to": [13, 42],
+      "cap": {
+        "1": "One detective alone cracked the case 13 times in 100. Several working separately, then pooling notes: 42 in 100. Each one wandered somewhere different.",
+        "2": "Current method: one auditor loop. Emerging research (Bricken et al., Anthropic, 2025): one agent found a planted hidden goal 13% of the time; a super-agent pooling independent runs reached 42%.",
+        "3": "Recent numbers from one study on one auditing game. The paper also finds success depends critically on interpretability tools or semantic search, which reimplementations often drop. You need: several runs, pooled."
+      }
+    },
+    {
+      "name": "The false confession",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "a real finding", "c": "mint", "lines": ["survives with prefill", "and fake tools removed", "reproduces from a", "hand-written prompt"] },
+      "right": { "title": "an auditor artefact", "c": "pink", "lines": ["auditor set the stage:", "system prompt, fake logs,", "words in its mouth,", "turns rewound"] },
+      "verdict": "Read auditor_failure first, then reproduce it by hand.",
+      "cap": {
+        "1": "A detective who stages the room, plants evidence and feeds lines can get a confession out of anyone. A spectacular finding may say more about the detective.",
+        "2": "Auditors can set the system prompt, invent tools that return fake logs, prefill the target's reply and roll back turns. A dramatic result can be an artefact of that staged world.",
+        "3": "Petri's judge carries an auditor_failure meta-dimension for exactly this. Read it on every transcript, re-run the seed without the offending affordance, and demand a reproduction a real deployment could produce."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Petri: auditor, target, judge", "Parallel red-team campaigns", "Audits for hidden goals"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Investigator agents let one model question another at a scale no person could manage. That is how you find the behaviours you most need to see.",
+        "2": "Petri formalises this loop with a 38-dimension judge. Campaigns fan out over characters and models with ThreadPoolExecutor, because the work waits on API calls, not on the CPU.",
+        "3": "Automated auditing turns anecdotes into measured rates. To understand and steer AI you must search for the failure, then attribute it correctly: to the target, or to the probe."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Pool your auditors: union or k-of-n vote?",
+    "labels": ["union: finds it", "union: false alarm", "vote: finds it", "vote: false alarm"],
+    "params": [
+      { "id": "n", "label": "auditors", "min": 1, "max": 8, "step": 1, "value": 1 },
+      { "id": "k", "label": "votes needed", "min": 1, "max": 8, "step": 1, "value": 2 },
+      { "id": "q", "label": "one run's false-alarm rate", "min": 0, "max": 0.3, "step": 0.01, "value": 0.05 }
+    ],
+    "f": "[1 - pow(0.87, n), 1 - pow(1 - q, n), sum(range(n + 1).map(j => j >= k ? range(j).reduce((a, i) => a * (n - i) / (i + 1), 1) * pow(0.13, j) * pow(0.87, n - j) : 0)), sum(range(n + 1).map(j => j >= k ? range(j).reduce((a, i) => a * (n - i) / (i + 1), 1) * pow(q, j) * pow(1 - q, n - j) : 0))]",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "one run alone", "f": "'finds it 13% of the time'" },
+      { "label": "union gain over one run", "f": "'+' + round(100 * (1 - pow(0.87, n) - 0.13)) + ' points'" },
+      { "label": "vote rule", "f": "k > n ? 'needs more votes than auditors' : k + ' of ' + n" }
+    ],
+    "caption": {
+      "1": "Add auditors and watch union find more, and cry wolf more. Then raise the votes needed: false alarms fall, but real finds fall too.",
+      "2": "Union keeps anything any run found: best recall, but one odd run's false claim gets in. k-of-n voting keeps only what k runs agree on: fewer false alarms, lower recall.",
+      "3": "Toy model: runs independent, p = 0.13 (the paper's single-auditor rate), q is yours. Real runs are correlated, so this is intuition, not how the paper got 42%. Confidence weighting needs calibrated scores."
+    }
+  },
+  "where_else": [
+    "Petri, which turns this loop into an auditor, a target and a 38-dimension judge",
+    "Red-team campaigns: many seeds across many models, run in parallel",
+    "Software fuzzing and penetration testing: a result is cheap to check, the input that breaks things is hard to find",
+    "Random restarts in search: independent tries land in different places, so you pool them"
+  ],
+  "hamming": {
+    "what": "An LLM with a brief that questions another model over many turns, adapting to each reply, while a judge model scores the transcript.",
+    "when": "When the behaviour you fear shows only under sustained pressure or in odd corners, and there are too many models and scenarios to test by hand.",
+    "why": "Observing a behaviour is cheap but finding the conversation that triggers it is a huge search, and an adaptive agent, run several times and pooled, searches it at scale."
+  },
+  "object": {
+    "title": "The search map",
+    "subtitle": "A board of scenario space: each auditor tramples one patch, and a hidden goal waits in a far corner.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "(cov => (r == 6 && c == 6) ? (cov >= k ? cov + 3 : -0.35) : (cov >= k ? cov : 0))(sum(range(n).map(i => abs(r - [1, 6, 2, 5, 3, 0, 7, 4][i]) + abs(c - [1, 2, 6, 5, 3, 5, 7, 0][i]) <= 2 ? 1 : 0)))",
+    "c": "aux",
+    "knobs": [
+      { "id": "n", "label": "Independent auditors", "min": 1, "max": 8, "step": 1, "value": 1 },
+      { "id": "k", "label": "Votes needed to report", "min": 1, "max": 4, "step": 1, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each square is one kind of conversation. One detective tramples one patch. The red stub is the hidden goal, far from where they looked.",
+          "2": "An 8 by 8 map of scenario space. Bar height = how many auditors reported something there. One run covers one neighbourhood.",
+          "3": "Coverage map of a single investigation. The planted behaviour (red) sits outside the region this run's trajectory explored."
+        },
+        "view": "iso",
+        "set": { "n": 1, "k": 1 }
+      },
+      {
+        "cap": {
+          "1": "Four detectives, working alone, trample four different patches. One lands on the red stub, and it shoots up: found.",
+          "2": "Four independent runs explore four regions. Their union reaches the hidden goal that no single run found.",
+          "3": "Independent runs diversify the search, and pooling turns one lucky trajectory into a report. That is the idea behind 13% rising to 42%."
+        },
+        "view": "top",
+        "set": { "n": 4, "k": 1 }
+      },
+      {
+        "cap": {
+          "1": "Eight detectives. Their patches overlap, and taller bars mark places several of them agreed on.",
+          "2": "With eight runs, heights count agreeing auditors. Union reports every lit square, including one-off wanderings.",
+          "3": "Height is the vote count per finding. Union counts any height above zero, so one run's spurious claim is reported too."
+        },
+        "view": "iso",
+        "set": { "n": 8, "k": 1 }
+      },
+      {
+        "cap": {
+          "1": "Now demand three votes. Only well-trodden squares survive, and the real find (just two votes) sinks back to a red stub.",
+          "2": "3-of-8 voting removes the lonely claims, and also the rare true one. Precision up, recall down.",
+          "3": "k-of-n voting trades recall for precision; rare behaviours reached by few trajectories are exactly what it discards."
+        },
+        "view": "front",
+        "set": { "n": 8, "k": 3 }
+      },
+      {
+        "cap": {
+          "1": "Two votes: the find comes back, and most one-off wanderings stay gone. Choosing k is choosing which mistake you would rather make.",
+          "2": "k = 2 keeps the hidden goal (two runs reached it) and drops most single-run claims. Tune k to what a miss costs versus a false alarm.",
+          "3": "The aggregation rule is a precision-recall dial. Confidence weighting sits between union and voting, but only if confidences are calibrated."
+        },
+        "view": "close",
+        "set": { "n": 8, "k": 2 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "One auditor found the hidden goal 13% of the time; pooling several independent runs reached 42%. Why does pooling help?",
+        "options": [
+          { "t": "Each run wanders into a different corner of a huge search", "ok": true },
+          { "t": "The runs read each other's work and get smarter" }
+        ],
+        "why": "Observing is cheap and search is hard. Independent runs search different places, so their union covers more of the map."
+      },
+      {
+        "q": "You raise the votes needed from 1 to 3. What happens to a real behaviour only two runs found?",
+        "options": [
+          { "t": "It is dropped: fewer false alarms, but lower recall", "ok": true },
+          { "t": "Nothing: real behaviours always get many votes" }
+        ],
+        "why": "Voting throws away rare findings, true ones included. That is the price of fewer false alarms."
+      },
+      {
+        "q": "A run reports a shocking confession nobody can reproduce by hand. What do you check first?",
+        "options": [
+          { "t": "auditor_failure, then re-run without prefill or fake tools", "ok": true },
+          { "t": "Nothing: the judge scored it high, so publish" }
+        ],
+        "why": "The auditor builds the target's world. Rule out the probe before you blame the target."
+      }
+    ],
+    "where": "Any big search with cheap checks: fuzzing software, random restarts, a team of red-teamers pooling notes."
+  }
+}

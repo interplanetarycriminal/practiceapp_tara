@@ -1,0 +1,189 @@
+{
+  "id": "rollout-buffer",
+  "title": "Bake a tray, taste, then bin",
+  "week": 9,
+  "need": "exercise",
+  "allegory": "A rollout buffer is like one tray of loaves baked from today's recipe: you taste them, tweak the recipe, and bin the tray, because tasting yesterday's bread says little about today's recipe.",
+  "map": [
+    ["the recipe", "the current policy π_θ"],
+    ["one tray of loaves baked from it", "one fixed-length rollout of on-policy experience"],
+    ["tasting notes on each loaf", "rewards, turned into reward-to-go and advantages"],
+    ["tweaking the recipe from the notes", "the policy gradient update"],
+    ["binning the tray after the tweak", "discarding the buffer: its data came from the old policy"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Learning from what?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "carry", "x": 0.2, "to": 0.4, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.62, "y": 0.62, "w": 0.18, "h": 0.3, "label": "what just happened", "color": "peach" },
+        { "kind": "card", "x": 0.8, "y": 0.24, "label": "keep it... but for how long?", "color": "cream" }
+      ],
+      "cap": {
+        "1": "A learner that improves its habits by trying things needs somewhere to keep what just happened: moves, results, how likely each move was. But only briefly.",
+        "2": "Policy-gradient methods like REINFORCE learn from trajectories the current policy just produced. The rollout buffer stores one fixed-length batch: observations, actions, rewards, log-probs.",
+        "3": "REINFORCE estimates an expectation over trajectories from π_θ itself, so its data store holds exactly one on-policy batch per update cycle, across all the vectorised environments."
+      }
+    },
+    {
+      "name": "Today's tray",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "carry", "x": 0.2, "label": "baker" },
+        { "pose": "write", "x": 0.55 }
+      ],
+      "props": [
+        { "kind": "box", "x": 0.3, "y": 0.62, "w": 0.18, "h": 0.1, "label": "today's tray", "color": "peach" },
+        { "kind": "card", "x": 0.55, "y": 0.22, "label": "recipe v2 (tweaked)", "color": "butter" },
+        { "kind": "crate", "x": 0.85, "y": 0.7, "w": 0.1, "h": 0.14, "label": "bin", "color": "chalk" }
+      ],
+      "arrows": [[0.4, 0.62, 0.8, 0.68, "after tasting"]],
+      "cap": {
+        "1": "Picture a baker. Bake one tray with today's recipe, taste every loaf, tweak the recipe, then bin the tray. Tomorrow's recipe needs tomorrow's bread.",
+        "2": "Collect a rollout with the current policy, compute returns from it, take gradient steps, discard it, collect again with the new policy. The buffer lives for one cycle.",
+        "3": "Collect, compute reward-to-go and advantages, update θ, clear. Samples from π_θold would bias the gradient of J(θ) unless reweighted."
+      }
+    },
+    {
+      "name": "The tasting notes",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "one CartPole rollout (γ = 1): reward-to-go counts only what came after",
+      "rows": 5,
+      "cols": 5,
+      "values": [
+        ["s0", "R", 1, -0.69, 5],
+        ["s1", "L", 1, -0.62, 4],
+        ["s2", "R", 1, -0.75, 3],
+        ["s3", "R", 1, -0.66, 2],
+        ["s4", "L", 1, -0.71, 1]
+      ],
+      "labels": { "rows": ["t=0", "t=1", "t=2", "t=3", "t=4"], "cols": ["obs", "action", "reward", "logprob", "reward-to-go"] },
+      "highlight": [[0, 4], [1, 4], [2, 4], [3, 4], [4, 4]],
+      "cap": {
+        "1": "The tray's notes: what was seen, what was done, the point earned, how sure the recipe was. Each step's score counts only the points that came after it.",
+        "2": "Each row is a timestep. Reward-to-go G_t sums rewards from t onwards, since an action can't change the past. CartPole pays +1 per step survived, so G counts down.",
+        "3": "G_t = Σ_{i≥t} γ^(i−t) r_i drops terms an action can't causally influence: less variance, no bias. Stored logprobs let you form importance weights against the collecting policy."
+      }
+    },
+    {
+      "name": "Why it goes stale",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "∇J = ", "c": "ink", "note": "" },
+        { "t": "E_πθ[", "c": "pink", "note": "averaged over THIS recipe's bread" },
+        { "t": "G", "c": "orange", "note": "how it turned out" },
+        { "t": "·∇log πθ(a|s)", "c": "sky", "note": "make that move likelier" },
+        { "t": "]", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "The recipe tweak is an average over bread baked with this exact recipe. Change the recipe and the old tray came from a different bakery.",
+        "2": "The gradient is an expectation under the current policy. After one update, the buffer's data came from an older policy, so reusing it naively gives a biased gradient.",
+        "3": "∇J(θ) = E over τ ~ π_θ of Σ G_t ∇log π_θ(a_t|s_t). Samples from π_θold need importance weights π_θ/π_θold; ARENA detaches and optionally clips them, the seed of PPO's surrogate."
+      }
+    },
+    {
+      "name": "Tray or freezer?",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "rollout buffer", "c": "peach", "lines": ["one on-policy batch", "used for one update cycle", "then thrown away", "REINFORCE, PPO"] },
+      "right": { "title": "replay buffer", "c": "sky", "lines": ["a big pile of old experience", "sampled at random for ages", "off-policy data is fine", "DQN"] },
+      "verdict": "On-policy learners bin the tray; off-policy learners keep a freezer.",
+      "cap": {
+        "1": "A replay buffer is a freezer of every meal you've cooked, fine for a learner that can learn from anyone's cooking. A rollout buffer is today's tray only.",
+        "2": "A replay buffer keeps old off-policy data for a long time (DQN); a rollout buffer holds only the current on-policy batch and is thrown away (REINFORCE, PPO).",
+        "3": "Q-learning's max makes its update independent of the behaviour policy, which is what licenses replay. Policy gradients estimate an on-policy expectation, so their data expires with each update."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Fresh data every update: on-policy", "Clipped importance weights stretch one tray a little", "PPO and RLHF run on rollout buffers"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "When a chatbot is fine-tuned with this kind of RL, it bakes fresh trays of answers, scores them, updates, and bins them. The same loop.",
+        "2": "PPO reuses each rollout for a few epochs thanks to clipped importance weights, then discards it. RLHF on language models runs the same collect, update, discard cycle.",
+        "3": "On-policy data keeps the training signal tied to current behaviour. When you study or steer RL-trained models, the rollout loop is where their behaviour meets the reward."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "How stale is the tray? Move the recipe and watch the weights",
+    "params": [
+      { "id": "d", "label": "how far the policy has moved since baking (logit shift)", "min": -3, "max": 3, "step": 0.1, "value": 0.5 },
+      { "id": "e", "label": "clip ε", "min": 0.05, "max": 0.5, "step": 0.05, "value": 0.2 }
+    ],
+    "curves": [
+      { "f": "2*sigmoid(x)", "c": "orange", "label": "weight on a stored 'right' move" },
+      { "f": "2*(1 - sigmoid(x))", "c": "sky", "label": "weight on a stored 'left' move" },
+      { "f": "clamp(2*sigmoid(x), 1 - e, 1 + e)", "c": "ink", "label": "'right' weight, clipped" }
+    ],
+    "x": [-3, 3],
+    "y": [0, 2],
+    "readouts": [
+      { "label": "chance of 'right' now (was 0.50)", "f": "sigmoid(d).toFixed(2)" },
+      { "label": "weight on a stored 'right' move", "f": "(2*sigmoid(d)).toFixed(2)" },
+      { "label": "after clipping to [1 − ε, 1 + ε]", "f": "clamp(2*sigmoid(d), 1 - e, 1 + e).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "The tray was baked when left and right were 50/50. Drag how far the recipe has moved since: the correction needed to reuse old bread grows. Clipping caps it.",
+      "2": "Importance weight = new probability ÷ old probability of the stored action. At zero shift it's 1: fresh data. Far from zero the tray is stale, and clipped weights stop trusting it.",
+      "3": "iw = π_θ(a|s)/π_θold(a|s), detached; clipping to [1 − ε, 1 + ε] bounds how far a stale batch can push. So a rollout supports only a few gradient steps before it must be recollected."
+    }
+  },
+  "where_else": [
+    "PPO, which squeezes a few epochs out of each rollout with clipped importance weights",
+    "RLHF: generate answers with the current model, score them, update, discard, repeat",
+    "Replay buffers in DQN, the off-policy opposite that keeps old data for a long time"
+  ],
+  "hamming": {
+    "what": "A container for one fixed-length batch of experience collected by the current policy, used for an update and then discarded.",
+    "when": "In on-policy methods (REINFORCE, actor-critic, PPO and PPO-based RLHF), on every collect-and-update cycle.",
+    "why": "Policy gradients are averages over the current policy's own behaviour, so data from an older policy goes stale the moment you update."
+  },
+  "object": {
+    "title": "The age shelf",
+    "subtitle": "Rows are training cycles, columns are how old the stored data is: a rollout buffer versus a replay buffer.",
+    "kind": "bars",
+    "rows": 6,
+    "cols": 8,
+    "f": "(1 - k)*(c === 0 ? 1.2 : 0.03) + k*(c <= min(r, cap - 1) ? 1.2 : 0.03)",
+    "labels": { "rows": ["cycle 1", "cycle 2", "cycle 3", "cycle 4", "cycle 5", "cycle 6"], "cols": ["age 0", "age 1", "age 2", "age 3", "age 4", "age 5", "age 6", "age 7"] },
+    "c": "data",
+    "knobs": [
+      { "id": "k", "label": "Rollout buffer (0) or replay buffer (1)", "min": 0, "max": 1, "step": 1, "value": 0 },
+      { "id": "cap", "label": "Replay capacity (batches)", "min": 1, "max": 8, "step": 1, "value": 8 }
+    ],
+    "beats": [
+      { "cap": { "1": "Rows are training cycles, columns are how old the data is. A rollout buffer only ever holds this cycle's batch: one tower per row, at age zero.", "2": "Rollout buffer: at every cycle, only freshly collected on-policy data exists.", "3": "The on-policy estimator only admits samples from the current π_θ: age 0, every cycle." }, "view": "iso", "set": { "k": 0, "cap": 8 } },
+      { "cap": { "1": "Switch to a replay buffer: old batches pile up, cycle after cycle. Learners like DQN happily train on any of them.", "2": "Replay buffer: experience accumulates, and minibatches are sampled across all ages.", "3": "Off-policy targets (a max over next actions) don't depend on the behaviour policy, so old data stays valid." }, "view": "iso", "set": { "k": 1, "cap": 8 } },
+      { "cap": { "1": "Give the freezer a size limit and the oldest batches fall out first.", "2": "A finite replay buffer evicts first in, first out.", "3": "FIFO eviction bounds the age of data; too small a capacity drops the failure states the agent still needs." }, "view": "top", "set": { "k": 1, "cap": 3 } },
+      { "cap": { "1": "Back to the rollout buffer: after every update the old tray is binned, because the recipe that baked it no longer exists.", "2": "Each update invalidates the batch, so the rollout buffer is cleared and refilled.", "3": "After θ changes, the old batch is off-policy; without importance correction it biases the gradient." }, "view": "front", "set": { "k": 0, "cap": 8 } },
+      { "cap": { "1": "That's the price of on-policy learning: every update needs fresh experience. PPO squeezes a few extra updates from each tray with clipped weights.", "2": "Sample cost is the trade-off; PPO reuses each rollout for a few epochs with clipped importance ratios.", "3": "Clipped ratios bound how far a stale batch can move the policy, trading a little bias for sample reuse." }, "view": "close", "set": { "k": 0, "cap": 8 } }
+    ],
+    "predict": [
+      { "q": "After a policy-gradient update, why not keep training on the same rollout forever?", "options": [{ "t": "It came from the old policy, so the gradient estimate becomes biased", "ok": true }, { "t": "The buffer runs out of memory" }], "why": "The gradient is an average over the current policy's behaviour; old data describes a policy that no longer exists." },
+      { "q": "Which learner can happily train on a big pile of old experience?", "options": [{ "t": "DQN, built on off-policy Q-learning", "ok": true }, { "t": "REINFORCE" }], "why": "Q-learning's update doesn't depend on who collected the data; REINFORCE's does." },
+      { "q": "What does reward-to-go at step t count?", "options": [{ "t": "Only rewards from step t onwards", "ok": true }, { "t": "Every reward in the episode" }], "why": "An action can't change rewards that came before it, so counting them only adds noise." }
+    ],
+    "where": "Any loop where feedback must come from the current version of yourself: on-policy RL, PPO in RLHF."
+  }
+}

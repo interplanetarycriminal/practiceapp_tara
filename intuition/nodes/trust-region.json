@@ -1,0 +1,210 @@
+{
+  "id": "trust-region",
+  "title": "Roped to the last camp",
+  "week": 10,
+  "need": "core",
+  "allegory": "A trust region is a climber roped to her last camp in fog: her sketch of the slope was drawn at that camp and is only accurate nearby, so each move may go only as far as the rope allows, and the rope is measured in how differently she would behave, not in how far her boots moved.",
+  "map": [
+    ["the sketch of the slope drawn at camp", "the surrogate objective: advantages estimated from the old policy's data"],
+    ["the sketch is only accurate near camp", "the surrogate is a local approximation that degrades as the policy moves"],
+    ["the rope to camp", "the constraint KL(π_old ‖ π_θ) ≤ δ"],
+    ["rope length measured in changed behaviour, not boot steps", "KL between action distributions, not distance in parameter space"],
+    ["a bungee cord instead of a fixed rope", "the penalty form: maximise E[r·A − β·KL]"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Confidently wrong",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "note": "the estimate said this way was better...",
+      "actors": [{ "pose": "run", "x": 0.2, "to": 0.82, "label": "one giant step" }],
+      "props": [
+        { "kind": "flag", "x": 0.14, "y": 0.62, "label": "last batch of data", "color": "butter" },
+        { "kind": "cloud", "x": 0.62, "y": 0.3, "w": 0.5, "h": 0.2, "label": "no data out here", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "You learned which moves looked good from your last batch of games. Take one giant step to exploit that and you land somewhere those estimates never described.",
+        "2": "The surrogate objective scores a new policy on data the old one collected. It's only trustworthy while the two stay close; go far and you're confidently optimising a number that stopped meaning anything.",
+        "3": "E[r_t A_t] is a local approximation to the true objective around π_old. Its error bound grows with policy distance, so unconstrained ascent on it can lower the true return."
+      }
+    },
+    {
+      "name": "The rope to camp",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "pull", "x": 0.52, "label": "climber" }],
+      "props": [
+        { "kind": "flag", "x": 0.2, "y": 0.62, "label": "last camp (old policy)", "color": "orange" },
+        { "kind": "card", "x": 0.2, "y": 0.28, "label": "sketch: good near camp", "color": "cream" },
+        { "kind": "cloud", "x": 0.82, "y": 0.35, "w": 0.3, "h": 0.2, "label": "fog", "color": "chalk" }
+      ],
+      "arrows": [[0.24, 0.55, 0.48, 0.5, "rope: KL ≤ δ"]],
+      "cap": {
+        "1": "So rope yourself to the last camp. Your sketch of the slope was drawn there and holds nearby. Climb as far as the rope allows, then draw a fresh sketch.",
+        "2": "TRPO maximises the surrogate subject to the average KL between old and new policy staying under a small δ. Inside that region the improvement you measure is one you actually get. Then collect fresh data.",
+        "3": "TRPO (Schulman, Levine, Moritz, Jordan and Abbeel, ICML 2015): max E[r_t A_t] subject to E_s[KL(π_old(·|s) ‖ π_θ(·|s))] ≤ δ, the basis of its monotonic-improvement argument."
+      }
+    },
+    {
+      "name": "Measure the rope",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "max E[r·A]", "c": "ink", "note": "follow the sketch" },
+        { "t": " s.t. ", "c": "ink", "note": "" },
+        { "t": "KL(π_old‖π_θ)", "c": "orange", "note": "how differently you'd act" },
+        { "t": " ≤ δ", "c": "green", "note": "rope length" }
+      ],
+      "actor": { "pose": "write", "x": 0.08 },
+      "cap": {
+        "1": "The rope is measured in how differently you would behave, not how far your settings moved. A tiny tweak can change behaviour a lot; the rope cares about behaviour.",
+        "2": "KL divergence is one number for how different two probability distributions are. Direction matters: TRPO uses KL(π_old ‖ π_θ). A naive log-prob-difference estimate is noisy and can even go negative.",
+        "3": "Bounding KL rather than ‖Δθ‖ gives a natural-gradient step: Fisher-vector products supply the KL Hessian, conjugate gradients the direction, and a backtracking line search enforces δ."
+      }
+    },
+    {
+      "name": "Rope or bungee?",
+      "need": "library",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "hard rope (TRPO)", "c": "peach", "lines": ["KL ≤ δ, enforced exactly", "needs conjugate gradients", "and a line search", "reliable but expensive"] },
+      "right": { "title": "bungee (penalty form)", "c": "mint", "lines": ["subtract β·KL instead", "plain first-order gradients", "β must be steered, not set", "ARENA's PPO bonus"] },
+      "verdict": "Same intent. The penalty is easier, but a fixed β drifts wrong.",
+      "cap": {
+        "1": "A fixed rope is exact but fiddly to enforce. A bungee that pulls back harder the further you go is easier, but you have to keep adjusting its strength.",
+        "2": "The penalty form maximises E[r·A − β·KL], and each β corresponds to some δ. It's first-order and easy, but a fixed β fails as the KL scale drifts, so steer β towards a target KL.",
+        "3": "Constrained and penalised forms correspond one to one. KL's scale shifts with policy peakedness and advantage size, so a β tuned at step 0 is wrong later: use an adaptive controller, as in [2.4]."
+      }
+    },
+    {
+      "name": "Two descendants",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "t", "label": "TRPO: KL ≤ δ", "x": 0.16, "y": 0.5, "c": "orange" },
+        { "id": "p", "label": "PPO: clip the ratio", "x": 0.76, "y": 0.28, "c": "sky" },
+        { "id": "r", "label": "RLHF: −β·KL to a frozen model", "x": 0.76, "y": 0.72, "c": "lav" }
+      ],
+      "edges": [["t", "p", "cheaper stand-in"], ["t", "r", "same penalty shape"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Two years later PPO swapped the rope for a simpler rule: stop rewarding a step once any move's odds have changed too much. Language-model tuning kept the bungee.",
+        "2": "PPO (2017) keeps the intent with a clipped probability ratio: first-order, no KL solve. RLHF keeps the penalty shape, objective minus β·KL, but measures KL against a frozen pretrained model.",
+        "3": "PPO's clip approximates the trust region cheaply; the explicit KL constraint lives in TRPO. RLHF's KL-to-reference term reuses TRPO's penalty form with a fixed π_ref in place of π_old."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Don't trust estimates far from your data", "PPO's clip is the cheap version", "RLHF's KL leash has the same shape"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Only trust what you learned near where you learned it. That rule keeps RL stable, and it's how RLHF keeps a tuned model close to the original.",
+        "2": "You'll implement PPO's clip rather than TRPO, but this is the reason for the clip. RLHF's KL penalty, the leash on a tuned language model, is the same idea pointed at a frozen reference.",
+        "3": "Steering a model with RL safely means bounding how far each update moves its behaviour. Trust regions, clipping and KL-to-reference are three ways to enforce that one principle."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "How long a rope? The sketch versus what really happens",
+    "params": [
+      { "id": "d", "label": "rope length (how far you step)", "min": 0, "max": 3, "step": 0.05, "value": 0.5 },
+      { "id": "c", "label": "how fast the sketch goes stale", "min": 0.1, "max": 2, "step": 0.05, "value": 0.5 }
+    ],
+    "curves": [
+      { "f": "x", "c": "sky", "label": "the sketch's promise" },
+      { "f": "x - c*x*x", "c": "orange", "label": "what really happens (toy)" }
+    ],
+    "x": [0, 3],
+    "y": [-3, 3],
+    "readouts": [
+      { "label": "sketch promises", "f": "d.toFixed(2)" },
+      { "label": "real gain", "f": "(d - c*d*d).toFixed(2)" },
+      { "label": "verdict", "f": "d - c*d*d > 0 ? 'a real improvement' : (d == 0 ? 'no step taken' : 'the step made things worse')" },
+      { "label": "best rope length here", "f": "(1/(2*c)).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "The straight line is your sketch: it promises more the further you go. The curve is what really happens. Lengthen the rope and watch the real gain turn negative.",
+      "2": "The surrogate keeps rising, but the true objective bends away as the policy leaves its data's neighbourhood. A trust region stops the step before that. Make the sketch go stale faster and the safe rope shrinks.",
+      "3": "Toy: sketch L(x) = x, reality J(x) = x − c·x². Only the shape is claimed: the gap grows with distance from the old policy. The best radius here is 1/(2c); TRPO sets its radius δ in KL."
+    }
+  },
+  "where_else": [
+    "PPO's clipped probability ratio: the cheap, first-order stand-in",
+    "RLHF's KL penalty against a frozen reference model",
+    "Trust-region steps in classical optimisation: trust a local model only within a radius"
+  ],
+  "hamming": {
+    "what": "A policy update that maximises the estimated improvement while keeping the new policy within a small KL distance of the old one.",
+    "when": "Whenever you improve a policy using estimates computed from data the old policy collected.",
+    "why": "Those estimates are only accurate near the old policy, so bounding the step keeps measured improvements real rather than illusory."
+  },
+  "object": {
+    "title": "The bungee landscape",
+    "subtitle": "The tilt is the sketch saying 'this way is better'; the bowl is the bungee back to camp. The bead is one update.",
+    "kind": "surface",
+    "f": "-(x + 0.5*y) + beta*(x*x + y*y)",
+    "x": [-2.5, 2.5],
+    "y": [-2.5, 2.5],
+    "ball": { "x": 0, "y": 0, "lr": 0.1, "steps": 60 },
+    "marks": [{ "x": 0, "y": 0, "label": "old policy (camp)" }],
+    "knobs": [{ "id": "beta", "label": "Bungee strength β", "min": 0, "max": 2, "step": 0.05, "value": 0.5 }],
+    "beats": [
+      {
+        "cap": { "1": "The floor is how you could change the policy. The tilt is your sketch saying 'better this way'; the bowl is the bungee back to camp. The bead settles a sensible distance out.", "2": "The surface is −(surrogate) + β·(distance)², the penalty form with KL approximated as quadratic near the old policy.", "3": "Near π_old, KL ≈ ½ΔθᵀFΔθ; with F = I the penalised surrogate is this tilted bowl, minimised at Δθ = g/(2β)." },
+        "view": "iso",
+        "set": { "beta": 0.5 }
+      },
+      {
+        "cap": { "1": "Cut the bungee and the sketch alone says keep going forever: the bead runs off the map. That is unconstrained ascent on a local estimate.", "2": "With β = 0 the linear surrogate has no maximum; the step size is limited only by the learning rate and the edge.", "3": "An affine surrogate is unbounded; without a trust region the update's length is arbitrary." },
+        "view": "front",
+        "set": { "beta": 0 }
+      },
+      {
+        "cap": { "1": "A strong bungee: the bead barely leaves camp. Safe, but learning crawls.", "2": "Large β keeps the new policy very close to the old one, so each update gains little.", "3": "The optimum Δθ = g/(2β) shrinks as 1/β; over-regularised updates waste data." },
+        "view": "side",
+        "set": { "beta": 2 }
+      },
+      {
+        "cap": { "1": "The step lands where the sketch's pull and the bungee's pull balance. Pull back harder and the step is shorter: β plays the part of the rope length δ.", "2": "Each β picks out a step length, just as each δ does: the penalised and constrained forms correspond one to one.", "3": "Lagrangian duality: for each δ there is a β whose unconstrained optimum satisfies the KL constraint with equality." },
+        "view": "top",
+        "set": { "beta": 0.5 }
+      },
+      {
+        "cap": { "1": "During training the right strength keeps changing as the policy sharpens. That is why a controller nudges β towards a target KL.", "2": "The KL scale drifts over training, so ARENA [2.4] adjusts β with an adaptive controller rather than fixing it.", "3": "AdaptiveKLController scales β by a clipped proportional error on measured/target KL each phase." },
+        "view": "close",
+        "set": { "beta": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Why not follow the surrogate objective as far as it keeps promising improvement?",
+        "options": [{ "t": "It's only accurate near the old policy; far away it's confidently wrong", "ok": true }, { "t": "It becomes too expensive to compute" }],
+        "why": "The surrogate is built from the old policy's data, and its error grows with distance from that policy."
+      },
+      {
+        "q": "Which algorithm enforces an explicit KL constraint?",
+        "options": [{ "t": "TRPO", "ok": true }, { "t": "PPO" }],
+        "why": "PPO approximates the same intent by clipping the probability ratio, which is far cheaper."
+      },
+      {
+        "q": "A fixed-β penalty run either barely moves or runs away. Best fix?",
+        "options": [{ "t": "Adapt β towards a target KL each phase", "ok": true }, { "t": "Tune β once, more carefully" }],
+        "why": "The KL scale drifts as the policy sharpens, so any fixed β ends up wrong in one direction or the other."
+      }
+    ],
+    "where": "Any local model trusted only nearby: PPO's clip, RLHF's KL leash, trust-region steps in classical optimisation."
+  }
+}
