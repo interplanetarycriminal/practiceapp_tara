@@ -317,15 +317,16 @@
   S.bars = function (c, ctx, t, lt, W, H) {
     F.sky(ctx, W, H, P.night, P.night2); board(ctx, W, H, P.cream);
     var u = unit(W, H), L = c.labels || [], a = c.from || L.map(function () { return 0; }), b = c.to || a, n = Math.max(1, L.length || b.length);
-    var mx = Math.max.apply(null, a.concat(b).map(function (v) { return Math.abs(+v || 0); }).concat([1e-9]));
+    var nums = a.concat(b).map(function (v) { return +v || 0; }), pos = Math.max.apply(null, nums.concat([0])), neg = -Math.min.apply(null, nums.concat([0])), mx = Math.max(1e-9, pos + neg);
     var k = ease.inOut(clamp((lt - c.dur * .3) / (c.dur * .35), 0, 1)), base = H * .74, top = H * .2, bw = Math.min(W * .7 / n, u * 1.4);
-    if (c.title) F.hand(ctx, c.title, W / 2, H * .14, Math.max(14, u * .38), P.ink, { seed: 'bt' });
-    ctx.strokeStyle = P.ink; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(W * .12, base); ctx.lineTo(W * .88, base); ctx.stroke();
+    var zero = top + (base - top) * (neg > 0 ? pos / mx : 1); // negatives hang below zero but stay above the labels
+    if (c.title) textBlock(ctx, c.title, W / 2, H * .14, W * .82, u * .95, Math.max(14, u * .38), P.ink, { seed: 'bt' });
+    ctx.strokeStyle = P.ink; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(W * .12, zero); ctx.lineTo(W * .88, zero); ctx.stroke();
     for (var i = 0; i < n; i++) {
       var v = lerp(+a[i] || 0, +b[i] || 0, k), h = Math.abs(v) / mx * (base - top) * .92, x = W / 2 + (i - (n - 1) / 2) * bw * 1.15, g = pop(lt, i, .1);
-      if (h > 1) F.paper(ctx, x, base - (v >= 0 ? h / 2 : -h / 2), bw * .8, h * g, [P.orange, P.teal, P.lav, P.pink, P.green, P.sky][i % 6], { seed: 'b' + i, shadow: true });
-      F.hand(ctx, fmt(v), x, base - (v >= 0 ? h : 0) - u * .22, Math.max(10, Math.min(u * .26, bw * .3)), P.ink, { seed: 'bv' + i, bold: false, font: MONO, wobble: 0 });
-      if (L[i] != null) textBlock(ctx, String(L[i]), x, base + u * .4, bw * 1.05, u * .6, Math.max(10, Math.min(u * .26, bw * .3)), P.ink);
+      if (h > 1) F.paper(ctx, x, zero - (v >= 0 ? h / 2 : -h / 2), bw * .8, h * g, [P.orange, P.teal, P.lav, P.pink, P.green, P.sky][i % 6], { seed: 'b' + i, shadow: true });
+      F.hand(ctx, fmt(v), x, zero - (v >= 0 ? h : 0) - u * .22, Math.max(10, Math.min(u * .26, bw * .3)), P.ink, { seed: 'bv' + i, bold: false, font: MONO, wobble: 0 });
+      if (L[i] != null) textBlock(ctx, String(L[i]), x, base + u * .5, bw * 1.05, u * .95, Math.max(10, Math.min(u * .26, bw * .3)), P.ink);
     }
     if (c.note) topNote(ctx, c.note, W, H, lt);
     if (c.actor) narrator(ctx, c.actor, W, H, t, lt, c.dur, H * .97);
@@ -445,14 +446,14 @@
         var u = unit(W, H), L = cd.labels || [], arr = f ? f(vals) : []; if (!Array.isArray(arr)) arr = [];
         if (!shown || shown.length !== arr.length) shown = arr.map(function () { return 0; });
         shown = shown.map(function (s, i) { var v = +arr[i]; return isFinite(v) ? lerp(s, v, Math.min(1, (dt || .016) * 10)) : s; });
-        var yr = cd.y || [0, Math.max(1e-9, Math.max.apply(null, arr.map(Number).filter(isFinite).concat([1])))], n = Math.max(1, arr.length), base = H * .8, top = H * .14, bw = Math.min(W * .76 / n, u * 1.5);
-        var Y = function (v) { return base - (clamp(v, yr[0], yr[1]) - Math.max(0, yr[0])) / (yr[1] - yr[0]) * (base - top); };
+        var fin = arr.map(Number).filter(isFinite), yr = cd.y || [Math.min.apply(null, fin.concat([0])), Math.max(1e-9, Math.max.apply(null, fin.concat([1])))], n = Math.max(1, arr.length), base = H * .8, top = H * .14, bw = Math.min(W * .76 / n, u * 1.5);
+        var Y = function (v) { return base - (clamp(v, yr[0], yr[1]) - yr[0]) / ((yr[1] - yr[0]) || 1) * (base - top); };
         ctx.strokeStyle = P.ink; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(W * .08, Y(Math.max(yr[0], 0))); ctx.lineTo(W * .92, Y(Math.max(yr[0], 0))); ctx.stroke();
         shown.forEach(function (v, i) {
           var x = W / 2 + (i - (n - 1) / 2) * bw * 1.12, y0 = Y(Math.max(yr[0], 0)), y1 = Y(v), h = Math.abs(y0 - y1);
           if (h > 1) F.paper(ctx, x, (y0 + y1) / 2, bw * .82, h, [P.orange, P.teal, P.lav, P.pink, P.green, P.sky][i % 6], { seed: 'cb' + i, jit: .6 });
           F.hand(ctx, fmt(+arr[i]), x, Math.min(y0, y1) - u * .22, Math.max(10, Math.min(u * .26, bw * .32)), P.ink, { seed: 'cbv' + i, font: MONO, bold: false, wobble: 0 });
-          if (L[i] != null) textBlock(ctx, String(L[i]), x, base + u * .38, bw * 1.08, u * .6, Math.max(10, Math.min(u * .26, bw * .3)), P.ink);
+          if (L[i] != null) textBlock(ctx, String(L[i]), x, base + u * .5, bw * 1.08, u * .95, Math.max(10, Math.min(u * .26, bw * .3)), P.ink);
         });
       }
     };

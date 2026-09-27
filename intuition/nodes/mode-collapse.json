@@ -1,0 +1,257 @@
+{
+  "id": "mode-collapse",
+  "title": "The busker who plays one song",
+  "week": 10,
+  "need": "core",
+  "allegory": "Mode collapse is like a busker paid only by the tip jar: once one song reliably earns the most, the best plan is to play it all night, because the jar pays for the best song and never for variety.",
+  "map": [
+    ["the busker's repertoire, and how often each song gets played", "the policy π: a probability for every possible completion"],
+    ["the tips after each song", "the reward: one score for the whole finished sequence"],
+    ["playing the top-tipping song all night", "mode collapse: nearly all probability piled onto one high-reward completion"],
+    ["the manager's leash: don't play what the old you never would", "the KL penalty, kl_coef · D_KL(π || π_ref), against a frozen copy of the base model"],
+    ["a coin for surprising the crowd, too small to matter", "the entropy bonus, ent_coef = 0.001 in ARENA's RLHF"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "A beautiful curve",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "reward: up and up ... every sample: . . . . . . .",
+      "actors": [{ "pose": "think", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.5, "y": 0.3, "label": "mean reward: rising", "color": "mint" },
+        { "kind": "stack", "x": 0.78, "y": 0.6, "w": 0.2, "h": 0.3, "label": ". . . . . . . . .", "color": "paper" }
+      ],
+      "arrows": [[0.3, 0.52, 0.66, 0.62, "read the samples"]],
+      "cap": {
+        "1": "You reward a small language model for writing full stops. The score climbs beautifully. Then you read what it writes: every sample is just dots.",
+        "2": "ARENA's first RLHF reward counts full stops. Within a few hundred steps mean reward climbs smoothly while every completion in the logging table converges on one string of periods.",
+        "3": "Reward is one scalar per finished sequence, so the objective has a global maximum and RL is good at finding it. Nothing in it asks the policy to stay a language model."
+      }
+    },
+    {
+      "name": "The busker's tip jar",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "dance", "x": 0.26, "label": "busker" },
+        { "pose": "reach", "x": 0.5, "label": "passer-by" }
+      ],
+      "props": [
+        { "kind": "box", "x": 0.4, "y": 0.8, "w": 0.1, "h": 0.1, "label": "tip jar", "color": "butter" },
+        { "kind": "card", "x": 0.8, "y": 0.24, "label": "one song: most tips", "color": "orange" },
+        { "kind": "card", "x": 0.8, "y": 0.5, "label": "39 other songs: fading", "color": "chalk" }
+      ],
+      "arrows": [[0.7, 0.3, 0.34, 0.45, "again, and again"]],
+      "cap": {
+        "1": "A busker is paid only by the tip jar. One song earns the most, so they play it more, and more. By midnight it is the only song they know.",
+        "2": "The jar is the reward; the repertoire is the policy. A song that tips well gets its probability raised, so it gets played more, so it gets raised again.",
+        "3": "For a softmax policy the exact gradient on output i's logit is π_i(R_i - E[R]): mass already on a high scorer attracts more push. Rich get richer until one mode holds everything."
+      }
+    },
+    {
+      "name": "Averages crown one song",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "E[R] = ", "c": "ink", "note": "your average tips" },
+        { "t": "Σ π(y)", "c": "orange", "note": "how often each song is played" },
+        { "t": "·R(y)", "c": "green", "note": "what each song earns" },
+        { "t": " ≤ R(best)", "c": "red", "note": "never more than the best song" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Your average tips blend all your songs. A blend never beats its best ingredient, and only matches it when it is pure best song. So the jar pays for collapse.",
+        "2": "Expected reward is a weighted average, and a weighted average is highest when all the weight sits on the top item. Reward alone is maximised by a policy that says one thing.",
+        "3": "max over π of E_π[R] is reached by putting all mass on argmax R. A spread-out policy is optimal only if the objective also values spread: an entropy bonus, or a KL to a reference."
+      }
+    },
+    {
+      "name": "The leash's blind spot",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "0.2*exp(1/x)/(0.2*exp(1/x) + 0.8)", "c": "orange", "label": "top scorer the base model writes often" },
+        { "f": "0.001*exp(1/x)/(0.001*exp(1/x) + 0.999)", "c": "red", "label": "top scorer the base model almost never writes" }
+      ],
+      "x": [0.05, 1],
+      "y": [0, 1.05],
+      "dot": true,
+      "marks": [{ "x": 0.3, "label": "same leash" }],
+      "cap": {
+        "1": "Same leash, two tempting outputs. Nonsense the old you never played gets reined in quickly. A favourite the old you already loved sails straight through.",
+        "2": "Share of plays the top scorer gets as the leash tightens, left to right (illustrative). Unfamiliar text has dropped to about 3% by 0.3; familiar text still takes most plays.",
+        "3": "The optimum of E[R] - β·KL(π || π_ref) is π ∝ π_ref·exp(R/β). Here the top scorer beats the rest by 1 (illustrative); its prior mass multiplies straight into its share."
+      }
+    },
+    {
+      "name": "The rush transcript",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "the old you played this one too",
+      "actors": [
+        { "pose": "shrug", "x": 0.2, "label": "manager" },
+        { "pose": "dance", "x": 0.46, "label": "busker" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.78, "y": 0.3, "label": "This is a rush transcript...", "color": "sky" },
+        { "kind": "box", "x": 0.62, "y": 0.8, "w": 0.1, "h": 0.1, "label": "tip jar", "color": "butter" }
+      ],
+      "cap": {
+        "1": "The manager's leash only says: don't play what the old you never would. So the busker plays the old crowd favourite all night, and the leash barely tugs.",
+        "2": "ARENA reports a run that collapsed onto 'This is a rush transcript…' plus a stock news opener: text common in training data, rated likely by the reference, and it scored well.",
+        "3": "Collapsing onto y costs about -log π_ref(y) in KL, which is small for memorised boilerplate. The penalty guards against off-distribution text, not against repetition."
+      }
+    },
+    {
+      "name": "Collapse or hacking?",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Reward hacking", "c": "red", "lines": ["the score is the wrong target", "the model finds the scorer's mistakes", "fix: a better scorer"] },
+      "right": { "title": "Mode collapse", "c": "lav", "lines": ["the target can be right", "probability piles onto one output", "fix: protect variety, read samples"] },
+      "verdict": "The full-stop counter does both: check kl_coef is back on, then fix the reward.",
+      "cap": {
+        "1": "Two different failures. Hacking: the jar rewards the wrong thing. Collapse: even a fair jar ends with one song. A full-stop counter manages both.",
+        "2": "First check kl_coef is back on (2.5; the plumbing test sets 0.0). Then fix the reward: count tokens containing a period, or normalise by length. Log samples every phase.",
+        "3": "ent_coef = 0.001 in ARENA's RLHF is far too weak to spread mass back out once it concentrates. Reward and coherence come apart quietly: log samples next to the curve."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 8,
+      "type": "cards",
+      "items": ["An average is maximised by one answer", "The leash stops gibberish, not repetition", "Read the samples, not just the curve"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Tune a model with rewards and it will happily become a one-song busker. Spotting that, and paying for variety, is part of steering AI.",
+        "2": "Any fine-tune against one score pulls outputs towards a few high-scoring phrasings. Variety has to be protected in the objective, and checked by reading outputs.",
+        "3": "For steering and evals: falling output entropy, or repeated samples while reward rises, means the optimiser found a narrow mode. Judge a run by samples and KL, not reward alone."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Share out the busker's plays: set the leash, and how familiar the stock opener is",
+    "labels": ["dots only", "stock opener", "short punchy text", "ordinary varied text"],
+    "params": [
+      { "id": "leash", "label": "leash strength β (toy units)", "min": 0.02, "max": 1, "step": 0.02, "value": 0.2 },
+      { "id": "fam", "label": "how often the base model writes the stock opener", "min": 0.005, "max": 0.3, "step": 0.005, "value": 0.02 }
+    ],
+    "f": "softmax([log(0.0001) + 1/leash, log(fam) + 0.7/leash, log(0.05) + 0.5/leash, log(0.9499 - fam) + 0.3/leash])",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "ordinary varied text keeps", "f": "(100*softmax([log(0.0001) + 1/leash, log(fam) + 0.7/leash, log(0.05) + 0.5/leash, log(0.9499 - fam) + 0.3/leash])[3]).toFixed(0) + '% of plays'" },
+      { "label": "average score (toy)", "f": "dot(softmax([log(0.0001) + 1/leash, log(fam) + 0.7/leash, log(0.05) + 0.5/leash, log(0.9499 - fam) + 0.3/leash]), [1, 0.7, 0.5, 0.3]).toFixed(2)" },
+      { "label": "leash cost, KL in nats", "f": "(p => sum(p.map((v, i) => v > 0 ? v*log(v/[0.0001, fam, 0.05, 0.9499 - fam][i]) : 0)))(softmax([log(0.0001) + 1/leash, log(fam) + 0.7/leash, log(0.05) + 0.5/leash, log(0.9499 - fam) + 0.3/leash])).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Drag the leash strength down and watch dots only take every play. Then set it around 0.3 and raise how familiar the stock opener is: it takes the lead anyway.",
+      "2": "Each bar is a share of plays at the best policy for this leash (toy scores 1, 0.7, 0.5, 0.3). Loose leash: the top scorer wins. Tight leash: back to the base model, habits included.",
+      "3": "Bars are π ∝ π_ref·exp(R/β), the optimum of E[R] - β·KL(π || π_ref). A mode with high prior mass wins at low KL cost: watch the KL readout stay small as it takes over."
+    }
+  },
+  "where_else": [
+    "GANs, where the generator settles on one output that reliably fools the current discriminator",
+    "Policy-gradient agents that lock onto one action too early, which PPO's entropy bonus is there to prevent",
+    "Greedy or low-temperature decoding looping on one phrase: the same narrowing, done at sampling time"
+  ],
+  "hamming": {
+    "what": "Mode collapse is an RL-tuned policy piling nearly all its probability onto one or a few high-reward outputs and producing nothing else.",
+    "when": "In RLHF-style fine-tuning against a single score, especially with a weak entropy bonus, a loose KL leash, or a reward with one easy maximum.",
+    "why": "An average reward is maximised by putting all probability on the best-scoring output, so collapse is the optimiser succeeding at the objective exactly as written."
+  },
+  "object": {
+    "title": "The repertoire rack",
+    "subtitle": "Eight kinds of output, eight leash settings: how the plays share out as the leash goes from tight to loose.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "softmax(range(8).map(j => log([0.0001, fam, 0.05][j] || (0.9499 - fam)/5) + [1, 0.7, 0.5, 0.3, 0.3, 0.3, 0.3, 0.3][j]/pow(0.03, r/7)))[c]",
+    "labels": {
+      "rows": ["β 1 (tight)", "β 0.6", "β 0.37", "β 0.22", "β 0.14", "β 0.08", "β 0.05", "β 0.03 (loose)"],
+      "cols": ["dots only", "stock opener", "short punchy", "a story", "a recipe", "a poem", "a letter", "a joke"]
+    },
+    "c": "prob",
+    "knobs": [
+      { "id": "fam", "label": "How often the base model writes the stock opener", "min": 0.005, "max": 0.3, "step": 0.005, "value": 0.02 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each row is one leash setting, each column one kind of output. Bar height is the share of plays it gets. Tight leash at the front, loose at the back.",
+          "2": "Heights are the best policy's probabilities at each β, with illustrative scores: dots only 1, stock opener 0.7, short punchy 0.5, the five ordinary kinds 0.3.",
+          "3": "Row r plots π ∝ π_ref·exp(R/β_r), with β falling geometrically from 1 to 0.03. π_ref: dots 0.0001, stock opener 0.02, short punchy 0.05, the rest shared evenly."
+        },
+        "view": "iso",
+        "set": { "fam": 0.02 }
+      },
+      {
+        "cap": {
+          "1": "Front rows, tight leash: the plays spread across all the ordinary kinds, just like the old repertoire. Plenty of variety.",
+          "2": "At large β the KL term dominates and the policy stays close to the reference: the five ordinary outputs share most of the mass.",
+          "3": "As β grows, π tends to π_ref: the leash returns the base model, whatever habits it had."
+        },
+        "view": "front",
+        "set": { "fam": 0.02 }
+      },
+      {
+        "cap": {
+          "1": "Middle rows: the stock opener shoots up. It scores well, and the old you already played it now and then, so the leash objects far less.",
+          "2": "Around β 0.08 to 0.14 the stock opener takes the largest share: its head start in π_ref lets it lead before dots only can.",
+          "3": "A mode wins when its log π_ref + R/β beats the rest: prior mass buys it the lead before the top scorer, whose prior is tiny, can compete."
+        },
+        "view": "side",
+        "set": { "fam": 0.02 }
+      },
+      {
+        "cap": {
+          "1": "Back rows, leash nearly off: dots only takes almost every play. The top scorer wins outright, however strange it is.",
+          "2": "At small β reward dominates, and the policy piles onto argmax R regardless of how unlikely the reference finds it.",
+          "3": "As β tends to 0, π tends to a point mass on argmax R: the unregularised optimum, full collapse."
+        },
+        "view": "top",
+        "set": { "fam": 0.02 }
+      },
+      {
+        "cap": {
+          "1": "Now make the stock opener more familiar to the base model. Its tall bars march to the front, and even a tight leash only pulls it back to the old habit.",
+          "2": "Raising π_ref for the stock opener widens the band of β where it dominates. Tight or loose, the leash cannot tell a favourite from a rut.",
+          "3": "Its share is set by π_ref·exp(R/β), so prior mass and reward trade off multiplicatively; memorised boilerplate is exactly the high-prior case."
+        },
+        "view": "iso",
+        "set": { "fam": 0.25 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "No leash and no variety bonus. What does the best policy do?",
+        "options": [{ "t": "Puts all its probability on the top scorer", "ok": true }, { "t": "Spreads evenly across the good outputs" }, { "t": "Stays like the base model" }],
+        "why": "Expected reward is an average, and an average peaks when all the weight sits on the best item."
+      },
+      {
+        "q": "A phrase the base model writes often also scores well. Does the KL leash stop collapse onto it?",
+        "options": [{ "t": "Barely: collapsing onto it costs little KL", "ok": true }, { "t": "Yes: KL punishes any collapse" }],
+        "why": "D_KL(π || π_ref) charges for text the reference finds unlikely. Text it already finds likely is cheap to repeat."
+      },
+      {
+        "q": "Reward climbs smoothly for the whole run. What do you check first?",
+        "options": [{ "t": "Read the sample completions", "ok": true }, { "t": "Nothing: the curve says it works" }],
+        "why": "Reward and coherence come apart quietly, and only the samples show the collapse."
+      }
+    ],
+    "where": "Anywhere one score is optimised hard: GAN generators, greedy decoding loops, and any agent that stops exploring."
+  }
+}

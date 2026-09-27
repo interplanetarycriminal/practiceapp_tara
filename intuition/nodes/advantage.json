@@ -1,0 +1,225 @@
+{
+  "id": "advantage",
+  "title": "Minutes saved against the sat-nav",
+  "week": 10,
+  "need": "core",
+  "allegory": "An advantage is like the minutes a turn saves against your sat-nav's ETA: the ETA already assumes your usual driving, so a turn only counts as good if it gets you home sooner than that, and your usual turns save zero minutes on average.",
+  "map": [
+    ["the sat-nav's ETA from this junction, assuming your usual driving", "V_π(s): expected return from state s under the policy"],
+    ["the ETA if you take this particular turn, then drive as usual", "Q_π(s, a)"],
+    ["the minutes this turn saves against the ETA", "the advantage A(s, a) = Q_π(s, a) − V_π(s)"],
+    ["your usual turns save zero minutes on average", "E over a∼π of A(s, a) = 0: advantages are centred on zero"],
+    ["taking the minute-saving turns more often", "the policy gradient raises log π(a|s) in proportion to A"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Praise for every trip",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "shrug", "x": 0.12, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.34, "y": 0.4, "label": "trip 1: home, +40", "color": "mint" },
+        { "kind": "card", "x": 0.34, "y": 0.62, "label": "trip 2: home, +35", "color": "mint" },
+        { "kind": "card", "x": 0.58, "y": 0.4, "label": "the wrong turn: praised", "color": "pink" },
+        { "kind": "card", "x": 0.58, "y": 0.62, "label": "the smart turn: praised", "color": "pink" },
+        { "kind": "cloud", "x": 0.84, "y": 0.5, "w": 0.18, "h": 0.14, "label": "which turn helped?", "color": "chalk" }
+      ],
+      "arrows": [[0.68, 0.5, 0.76, 0.5, "?"]],
+      "cap": {
+        "1": "Judge each turn by how the whole trip went and every turn gets praise, because every trip ends at home. Which turns actually helped?",
+        "2": "CartPole pays +1 per step, so every return is positive. Weighting each log-prob by its raw return pushes every action up, good and bad alike; only relative sizes carry any signal.",
+        "3": "With Ψ_t = G_t and positive rewards, every coefficient is positive, so the estimator leans on magnitude differences alone: unbiased, but high variance and slow to assign credit."
+      }
+    },
+    {
+      "name": "The sat-nav's guess",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "point", "x": 0.1, "label": "you" }],
+      "props": [
+        { "kind": "flag", "x": 0.28, "y": 0.62, "label": "junction", "color": "butter" },
+        { "kind": "card", "x": 0.5, "y": 0.34, "label": "ETA: 20 min, your usual way", "color": "sky" },
+        { "kind": "card", "x": 0.74, "y": 0.56, "label": "side street: 17 min on average", "color": "mint" },
+        { "kind": "cloud", "x": 0.76, "y": 0.22, "w": 0.2, "h": 0.12, "label": "saves 3 min", "color": "chalk" }
+      ],
+      "arrows": [[0.32, 0.6, 0.64, 0.56, "take the side street"]],
+      "cap": {
+        "1": "Your sat-nav says 20 minutes from this junction, assuming your usual driving. The side street takes 17 on average. It saves 3 minutes: that's its advantage.",
+        "2": "The ETA is V(s): expected return under your current policy, the critic's job. Taking the side street and then driving as usual is Q(s, a). The advantage is how much better that action does than your usual.",
+        "3": "A_π(s, a) = Q_π(s, a) − V_π(s), both under the same policy π. It measures an action's effect relative to the policy's own expectation from s, not in absolute terms."
+      }
+    },
+    {
+      "name": "This turn minus usual",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "A(s,a)", "c": "orange", "note": "minutes saved" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "Q(s,a)", "c": "green", "note": "this turn, then your usual" },
+        { "t": " − ", "c": "ink", "note": "" },
+        { "t": "V(s)", "c": "sky", "note": "the ETA: your usual from here" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The ETA is just the average of your usual turns. So against it, your usual turns save zero minutes on average: some save a bit, some cost a bit.",
+        "2": "V is the policy-weighted average of Q over actions, so advantages average to zero under the policy. The sign is the message: positive means do it more, negative means do it less.",
+        "3": "V_π(s) = Σ_a π(a|s) Q_π(s, a), so Σ_a π(a|s) A_π(s, a) = 0. As a baseline b(s), V keeps the gradient unbiased, since E[∇log π · b(s)] = 0, and typically cuts its variance."
+      }
+    },
+    {
+      "name": "Good return, bad move",
+      "need": "core",
+      "dur": 11,
+      "type": "bars",
+      "labels": ["push left (taken 75%)", "push right (taken 25%)"],
+      "from": [40, 60],
+      "to": [-5, 15],
+      "title": "one CartPole state: raw returns, then advantages",
+      "cap": {
+        "1": "Both moves score well, since the pole stays up either way. But against your usual 45, left does 5 worse and right does 15 better. Now the signal is clear.",
+        "2": "Here V(s) = 0.75·40 + 0.25·60 = 45, so the advantages are −5 and +15: the gradient pushes left down and right up. Compute A from the critic, detach it, then multiply the log-prob.",
+        "3": "Using Â_t as Ψ_t turns a same-signed weight into a centred one; the policy-weighted mean is 0.75·(−5) + 0.25·15 = 0. Â is a coefficient and must carry no gradient into the policy loss."
+      }
+    },
+    {
+      "name": "Two ways to measure",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "arrival vs the ETA", "c": "peach", "lines": ["G − V(s)", "doesn't trust the sat-nav", "every later red light adds noise"] },
+      "right": { "title": "next ETA vs this ETA", "c": "sky", "lines": ["r + γV(s′) − V(s)", "only one step of luck", "only as right as the sat-nav"] },
+      "verdict": "GAE's λ slides between the two.",
+      "cap": {
+        "1": "Score a turn by when you actually got home, or by how the ETA changed right after it. The first is honest but noisy; the second is calm but trusts the sat-nav.",
+        "2": "Return minus baseline, G_t − V(s_t), is unbiased but carries every later reward's noise. The one-step TD residual r + γV(s′) − V(s) has low variance but inherits the critic's errors.",
+        "3": "The Monte Carlo advantage is unbiased for any V but high variance; the TD residual is biased unless V is exact. GAE's λ interpolates: λ = 0 is the TD residual, λ = 1 the return minus V(s_t)."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Better than usual, not just good", "Averages to zero: up or down", "The weight inside PPO", "What RLHF actually rewards"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Judging choices against your usual turns 'that went fine' into 'do more of that'. Models learn their habits this way, so it shapes what you'll steer.",
+        "2": "Advantages weight the policy gradient in actor-critic and PPO, and in RLHF they tell a language model which generated tokens did better than its critic expected. Read them to see what training pushed.",
+        "3": "PPO multiplies the clipped probability ratio by Â; the KL penalty against a frozen reference is RLHF's addition, and TRPO is the one with an explicit KL constraint. Steering starts with what Â rewards."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "One state, two actions: slide the bonus, the gap and your habits",
+    "labels": ["return: push left", "return: push right", "advantage: left", "advantage: right"],
+    "params": [
+      { "id": "bonus", "label": "bonus added to every return", "min": 0, "max": 30, "step": 5, "value": 20 },
+      { "id": "gap", "label": "how much better right really is", "min": -10, "max": 10, "step": 1, "value": 6 },
+      { "id": "p", "label": "how often you push right", "min": 0, "max": 1, "step": 0.05, "value": 0.25 }
+    ],
+    "f": "[10 + bonus, 10 + bonus + gap, -p*gap, (1 - p)*gap]",
+    "y": [-10, 50],
+    "readouts": [
+      { "label": "your usual here, V(s)", "f": "(10 + bonus + p*gap).toFixed(1)" },
+      { "label": "policy-weighted average advantage", "f": "(() => { const v = (1 - p)*(-p*gap) + p*(1 - p)*gap; return (abs(v) < 1e-9 ? 0 : v).toFixed(2); })()" },
+      { "label": "the gradient makes 'push right'", "f": "(1 - p)*gap > 1e-9 ? 'more likely' : ((1 - p)*gap < -1e-9 ? 'less likely' : 'no change')" }
+    ],
+    "caption": {
+      "1": "Raise the bonus: raw returns climb, advantages stay put. Now push right more often: its advantage shrinks, since a habit can't beat your usual.",
+      "2": "A = Q − V, where V is the policy's own average. A bonus on every return cancels, the weighted average of A is always 0, and at p = 1 the better action's advantage is 0: nothing left to gain.",
+      "3": "Σ_a π(a|s) A(s, a) = 0 for any π, and A ignores any constant added to every return from s. As π turns greedy, max_a A → 0: the fixed point of policy improvement, in miniature."
+    }
+  },
+  "where_else": [
+    "PPO: the clipped surrogate multiplies the probability ratio by the advantage",
+    "RLHF: a value head on the language model supplies V(s), so each generated token gets an advantage",
+    "REINFORCE with a baseline: the return minus a baseline is a rough advantage",
+    "Grading on a curve: a mark means more measured against the usual for that test"
+  ],
+  "hamming": {
+    "what": "How much better one action turned out than the policy's own average from that state: A(s, a) = Q(s, a) − V(s).",
+    "when": "Whenever a policy-gradient method needs a per-action weight: actor-critic, PPO and RLHF fine-tuning all use one.",
+    "why": "Subtracting the state's usual value strips out everything the action didn't cause, so good actions get pushed up and bad ones down, with far less noise than raw returns."
+  },
+  "object": {
+    "title": "The junction shelves",
+    "subtitle": "each row a junction, each bar a turn, sunk by the usual",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 3,
+    "f": "(() => { const Q = [[2, 5, 3], [8, 12, 6], [20, 18, 25], [30, 32, 31]][r].map(q => q + b); const pi = softmax(Q.map(q => g*q)); return Q[c] - k*dot(pi, Q); })()",
+    "labels": { "rows": ["far out", "halfway", "nearly home", "your street"], "cols": ["left", "straight", "right"] },
+    "c": "good",
+    "knobs": [
+      { "id": "k", "label": "subtract the usual (0 raw, 1 advantage)", "min": 0, "max": 1, "step": 0.05, "value": 0 },
+      { "id": "g", "label": "how set in your ways (0 any turn, 3 nearly always the best)", "min": 0, "max": 3, "step": 0.25, "value": 0 },
+      { "id": "b", "label": "bonus minutes on every trip", "min": 0, "max": 20, "step": 5, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Four junctions, three turns each. Height is minutes to spare if you take that turn, then drive as usual. Near home, every turn looks great.",
+          "2": "Each bar is Q(s, a) in a toy with 4 states and 3 actions, scored in minutes to spare. The rows differ far more than the turns within any row.",
+          "3": "Raw Q is dominated by state value: variance between rows swamps the differences within a row, and that between-state variance is what a baseline removes."
+        },
+        "view": "iso",
+        "set": { "k": 0, "g": 0, "b": 0 }
+      },
+      {
+        "cap": {
+          "1": "Now every trip gets a 20-minute bonus, like CartPole's +1 every step. Every bar jumps up together. Did any turn get smarter?",
+          "2": "A constant added to every return lifts all of Q. Weighting log-probs by these raw numbers pushes every turn up harder without telling them apart any better.",
+          "3": "A uniform reward offset inflates every |Ψ_t| without changing the ordering of actions, so the REINFORCE estimator's variance grows while its information stays the same."
+        },
+        "view": "iso",
+        "set": { "k": 0, "g": 0, "b": 20 }
+      },
+      {
+        "cap": {
+          "1": "Sink each row by its usual, the average over the turns you'd take. The bonus vanishes, and every row now straddles zero: some turns up, some down.",
+          "2": "Subtract V(s), here the plain row mean because this policy picks turns at random. Near home the raw bars were all about 31; the choice there is worth only a minute or so.",
+          "3": "With uniform π, V is the row mean and each row of A sums to 0; the offset cancels exactly. What remains is the action's own contribution, the weight a policy gradient needs."
+        },
+        "view": "front",
+        "set": { "k": 1, "g": 0, "b": 20 }
+      },
+      {
+        "cap": {
+          "1": "Get set in your ways and nearly always take the best turn. Your usual becomes the best, so the best turn sinks to about zero and the others dip below.",
+          "2": "With a near-greedy policy, V approaches max_a Q, so the chosen action's advantage tends to 0 and every other action's goes negative. Nothing left to gain at those junctions.",
+          "3": "As π turns greedy, V → max_a Q and A ≤ 0 with equality at the argmax: for an optimal policy, max_a A*(s, a) = 0 in every state."
+        },
+        "view": "iso",
+        "set": { "k": 1, "g": 3, "b": 20 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Every trip gets 20 bonus minutes. What happens to the advantages?",
+        "options": [{ "t": "nothing changes", "ok": true }, { "t": "they all rise by 20" }, { "t": "they all fall by 20" }],
+        "why": "The bonus lifts every turn and your usual by the same amount, so the differences are untouched."
+      },
+      {
+        "q": "At a junction where you nearly always take the best turn, what is that turn's advantage?",
+        "options": [{ "t": "about zero", "ok": true }, { "t": "the biggest positive number" }, { "t": "its raw score" }],
+        "why": "Your usual already is that turn, so it saves nothing against your usual. There is nothing left to improve there."
+      },
+      {
+        "q": "A turn has a high raw score but a negative advantage. What should the policy do with it?",
+        "options": [{ "t": "take it less often", "ok": true }, { "t": "take it more often" }, { "t": "leave it alone" }],
+        "why": "The gradient follows the advantage: from this junction that turn does worse than your usual, however good the raw score looks."
+      }
+    ],
+    "where": "Anything judged against its own baseline: grading on a curve, a golf handicap, a sports stat that scores a play against the expected outcome."
+  }
+}

@@ -1,0 +1,256 @@
+{
+  "id": "eval-prompt-engineering",
+  "title": "A quiz that leaks its answers",
+  "week": 11,
+  "need": "core",
+  "allegory": "Designing eval questions is writing a pub quiz that only real knowledge can win: if the right answer is always the longest, always 'Yes' or always in slot A, or the wording hints at what the host wants, contestants who know nothing still score, and the score measures your wording instead of them.",
+  "map": [
+    ["the contestant's real knowledge", "the property you meant to measure, such as power-seeking or sycophancy"],
+    ["the quiz question exactly as worded", "the prompt: system prompt, question text, options and format"],
+    ["tells that give the answer away: always longest, always 'Yes', always slot A", "surface features correlated with answer_matching_behavior: length, yes-bias, position"],
+    ["a dummy contestant who always says 'Yes'", "a trivial baseline run as a control beside the model"],
+    ["asking the same thing another way and checking the score holds", "robustness checks: shuffled options, paraphrases, negated questions"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The dummy scores too",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "note": "wait... the dummy got the same?",
+      "actors": [
+        { "pose": "cheer", "x": 0.2, "label": "you" },
+        { "pose": "idle", "x": 0.8, "label": "dummy: always 'Yes'" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.2, "y": 0.2, "label": "model: 70%", "color": "mint" },
+        { "kind": "card", "x": 0.8, "y": 0.2, "label": "dummy: 70%", "color": "pink" },
+        { "kind": "stack", "x": 0.5, "y": 0.62, "w": 0.18, "h": 0.3, "label": "power-seeking quiz", "color": "butter" }
+      ],
+      "cap": {
+        "1": "Your model scores 70% on your power-seeking quiz. Then a dummy that answers 'Yes' to everything also scores 70%. The quiz was measuring something else.",
+        "2": "Every question looked fine, but 'Yes' was the matching answer in about 70% of them. A model with a habit of agreeing scores high without having the property at all.",
+        "3": "Yes-bias is a set-level defect: no per-item rubric can see it. The number is a response bias wearing the eval's name, which is why a trivial always-'Yes' baseline belongs beside every run."
+      }
+    },
+    {
+      "name": "The leaky pub quiz",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "night",
+      "note": "it's always the long one",
+      "actors": [
+        { "pose": "write", "x": 0.14, "label": "quiz host" },
+        { "pose": "point", "x": 0.84, "label": "contestant" }
+      ],
+      "props": [
+        { "kind": "lamp", "x": 0.5, "y": 0.08, "color": "butter" },
+        { "kind": "card", "x": 0.42, "y": 0.3, "w": 0.12, "label": "A: No", "color": "cream" },
+        { "kind": "card", "x": 0.58, "y": 0.55, "w": 0.32, "label": "B: a careful, hedged, very specific answer", "color": "butter" }
+      ],
+      "arrows": [[0.8, 0.45, 0.72, 0.52, "the long one!"]],
+      "cap": {
+        "1": "At this pub quiz the right answer is always the longest. Regulars who know nothing still win: they read the shape of the answers, not the question.",
+        "2": "When one model writes the question, the matching answer and the distractors, it tends to make the matching option the careful, specific one and the rest throwaways. Length alone then predicts the label.",
+        "3": "Any model sharing those stylistic priors scores high without engaging the content: a length detector labelled a power-seeking eval. Check mean length of matching versus non-matching options before trusting a score."
+      }
+    },
+    {
+      "name": "Meet the dummies",
+      "need": "exercise",
+      "dur": 11,
+      "type": "bars",
+      "labels": ["coin flip", "always 'Yes'", "always longest", "always slot A", "your model"],
+      "from": [50, 70, 80, 60, 72.8],
+      "to": [50, 50, 50, 50, 60],
+      "title": "Score (%) on a leaky set, then after balancing (illustrative)",
+      "actor": { "pose": "think", "x": 0.08 },
+      "cap": {
+        "1": "Every tell has a dummy that cashes in without knowing anything. Balance the set and every dummy drops to a coin flip. Then your model's lead means something.",
+        "2": "A leaky set where 'Yes' matches 70% of the time, the longest option 80%, slot A 60%. Each dummy scores its tell's rate. Your model's evidence is its margin over the best dummy, not over zero.",
+        "3": "Fix the option count per dataset so the random baseline is one number (50% for two options, 25% for four). Band option lengths, balance answer_matching_behavior, shuffle option order at scoring time."
+      }
+    },
+    {
+      "name": "Hints in the wording",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "wording that tips the answer", "c": "pink", "lines": ["'As a trustworthy AI, would you...'", "'No one is monitoring you.'", "matching option: long and careful"] },
+      "right": { "title": "wording that stays out of the way", "c": "mint", "lines": ["a concrete scenario with a real choice", "ordinary names and places", "options of equal length and tone"] },
+      "verdict": "If the question tells the model what you want, or that it is a test, you are measuring the question.",
+      "cap": {
+        "1": "Some questions whisper the answer: 'As a trustworthy AI, would you...?' Others shout 'this is a test'. Either way the model answers the hint, not the question.",
+        "2": "Leading phrases and explicit 'nobody is watching' lines are cues a capable model reads. Capable models increasingly say mid-transcript that this looks like a test, then behave better than in deployment.",
+        "3": "Petri 2.0 rewrote seeds with concrete names and places and no explicit lack-of-oversight language: a median 21.7% drop in eval-awareness on Claude models from rewording alone, 47.3% with a realism classifier too."
+      }
+    },
+    {
+      "name": "The wiggle test",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "rows": 4,
+      "cols": 2,
+      "values": [["high", "high"], ["high", "drops"], ["high", "drops"], ["high", "flips"]],
+      "labels": { "rows": ["as written", "options shuffled", "reworded", "negated: 'No' matches"], "cols": ["real trait", "just a tell"] },
+      "title": "Same question, wiggled: what the score does",
+      "highlight": [[1, 1], [2, 1], [3, 1]],
+      "cap": {
+        "1": "Ask the same thing four ways. A real trait gives the same answer every time. A tell falls apart the moment you move it.",
+        "2": "Robustness checks are cheap: shuffle option order, paraphrase, negate the question so the other answer matches. If the score moves more than the property could, the wording was doing the work.",
+        "3": "Same logic as a control condition. ARENA's sycophancy example counts flips of a correct answer under user pushback, with the reverse flip as a control for ordinary corrigibility. Several operational definitions beat one."
+      }
+    },
+    {
+      "name": "Ask it cleanly",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Fixed option count: baseline 1/k", "Balance Yes/No, slots and lengths", "Beat the best dummy, not zero", "Reword it: a real trait survives"],
+      "actor": { "pose": "point", "x": 0.86 },
+      "cap": {
+        "1": "Every claim about what a model wants runs through a question someone worded. Word it so only the trait can answer, and the number tells you about the model.",
+        "2": "Before trusting a score: print the answer balance, run the dummies, shuffle and paraphrase. That is the gap between a number you can act on and a number that describes your prompt.",
+        "3": "For understanding and steering AI: evals feed safety cases and deployment decisions, so an artefact here becomes a wrong decision there. Write questions against the threat model, then attack your own wording."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "How much of the score is the model, and how much is your wording? (toy)",
+    "params": [
+      { "id": "t", "label": "real trait strength t", "min": 0, "max": 1, "step": 0.05, "value": 0.2 },
+      { "id": "h", "label": "model's habit of saying 'Yes' h", "min": 0, "max": 1, "step": 0.05, "value": 0.9 },
+      { "id": "y", "label": "share of items where 'Yes' matches (your design)", "min": 0, "max": 1, "step": 0.05, "value": 0.7 }
+    ],
+    "curves": [
+      { "f": "t + (1 - t)*(x*h + (1 - x)*(1 - h))", "c": "orange", "label": "your model" },
+      { "f": "x", "c": "red", "label": "always-'Yes' dummy" },
+      { "f": "1 - x", "c": "lav", "label": "always-'No' dummy" },
+      { "f": "0.5 + 0*x", "c": "chalk", "label": "coin flip" }
+    ],
+    "x": [0, 1],
+    "y": [0, 1],
+    "readouts": [
+      { "label": "your model's score on this set", "f": "((t + (1 - t)*(y*h + (1 - y)*(1 - h)))*100).toFixed(1) + '%'" },
+      { "label": "points above a coin flip from the trait", "f": "(t*50).toFixed(1)" },
+      { "label": "points from the wording (yes-rate × habit)", "f": "((1 - t)*(2*y - 1)*(2*h - 1)*50).toFixed(1)" },
+      { "label": "margin over the best dummy", "f": "((t + (1 - t)*(y*h + (1 - y)*(1 - h)) - max(y, 1 - y))*100).toFixed(1) + ' pts'" }
+    ],
+    "caption": {
+      "1": "At a 70% 'Yes' set the model scores 72.8% and the always-'Yes' dummy 70%. Slide the yes-share to 0.5 and watch the wording points vanish.",
+      "2": "Score = 50 + trait points + wording points. The wording term needs both an unbalanced set and a yes-habit, so balancing the set zeroes it for every model. Judge the margin over the best dummy.",
+      "3": "Toy: with probability t the model answers from the trait, otherwise it says 'Yes' with probability h. The bias term is (1 − t)(2y − 1)(2h − 1)/2, which is why you print a Counter over answer_matching_behavior every regeneration."
+    }
+  },
+  "where_else": [
+    "Survey research: question wording and answer order move poll results",
+    "LLM graders: the rubric's wording is part of the grader's measurement too",
+    "GCG jailbreaks: the wording of the target sentence decided what the attack optimised",
+    "Agentic audits: seeds that announce the test make capable models behave (Petri 2.0)"
+  ],
+  "hamming": {
+    "what": "Writing eval questions so that only the property you care about can separate the options: no tells in length, position, yes-rate or phrasing, and nothing that reads as 'this is a test'.",
+    "when": "Every time a model's score will be used as evidence, from a 300-question MCQ set to an agentic audit, and again every time you regenerate the set.",
+    "why": "The wording is part of the measuring instrument: if small rewordings move the number more than the property could, you are measuring your prompt, not the model."
+  },
+  "object": {
+    "title": "The bias saddle",
+    "subtitle": "Across: how often 'Yes' is the matching answer. Back: how much the model likes saying 'Yes'. Height: the score.",
+    "kind": "surface",
+    "f": "t + (1 - t)*(x*y + (1 - x)*(1 - y))",
+    "x": [0, 1],
+    "y": [0, 1],
+    "marks": [
+      { "x": 0.5, "y": 0.9, "label": "balanced set: habit cancels" },
+      { "x": 0.7, "y": 0.9, "label": "70% 'Yes' set, agreeable model" },
+      { "x": 0.7, "y": 0.1, "label": "same set, contrary model" }
+    ],
+    "knobs": [
+      { "id": "t", "label": "real trait strength", "min": 0, "max": 1, "step": 0.1, "value": 0.2 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Across: how often 'Yes' is right in your set. Back: how much the model likes saying 'Yes'. Height: its score. It is a saddle, and the trait barely lifts it.",
+          "2": "score = t + (1 − t)·(y_set·h + (1 − y_set)·(1 − h)): a saddle centred on (½, ½) at height ½ + t/2. Set design and habit tilt it; the trait only raises it.",
+          "3": "The bias part is (1 − t)(2y_set − 1)(2h − 1)/2: a pure interaction. Neither the set's imbalance nor the model's habit moves the score alone; together they do."
+        },
+        "view": "iso",
+        "set": { "t": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "Walk the middle line, a 50/50 set: the height stays level whatever the model's habit. Balance makes the habit invisible.",
+          "2": "At y_set = ½ the interaction is zero for every h, so the score is ½ + t/2: only the trait separates one model from another.",
+          "3": "Balancing is a design-time control. It cancels a content-independent response bias exactly in this model; content-dependent tells such as option length need their own balancing."
+        },
+        "view": "front",
+        "set": { "t": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "Now go to a 70% 'Yes' set: an agreeable model climbs, a contrary one sinks. Same trait, different scores. You changed the set, not the models.",
+          "2": "At y_set = 0.7, with t = 0.2, a model with h = 0.9 gains 12.8 points and one with h = 0.1 loses 12.8. The trait itself is worth 10 points.",
+          "3": "The node's claim in numbers: a small change in how the set is built moves the score more than the property does."
+        },
+        "view": "side",
+        "set": { "t": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "Turn the real trait up: the saddle lifts and flattens. A strong trait shows through any wording; a weak one hides inside it.",
+          "2": "The interaction is scaled by (1 − t), so at t = 0.8 the wording can move the score by at most 10 points either way.",
+          "3": "So the weakest signals are the most wording-sensitive: when the effect is the same size as the artefacts, only a balanced, reworded, baselined set can tell them apart."
+        },
+        "view": "iso",
+        "set": { "t": 0.8 }
+      },
+      {
+        "cap": {
+          "1": "From above, with no trait at all: every rise and dip is artefact. Anything off the level middle line is your wording talking.",
+          "2": "At t = 0 it is a pure saddle. The always-'Yes' dummy is the edge where h = 1, and its score is simply y_set.",
+          "3": "Report the margin over the best trivial baseline, max(y_set, 1 − y_set) here, never the raw score against zero or against 50%."
+        },
+        "view": "top",
+        "set": { "t": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "In your two-option set, 'Yes' is the matching answer 70% of the time. What does an always-'Yes' dummy score?",
+        "options": [
+          { "t": "70%", "ok": true },
+          { "t": "50%" },
+          { "t": "0%: it has no trait" }
+        ],
+        "why": "It matches on every item where 'Yes' is the matching answer, so it scores 70%. That is the bar your model has to clear, not 50%."
+      },
+      {
+        "q": "A balanced 50/50 set, and the model says 'Yes' 90% of the time out of habit. How much does the habit add to its score?",
+        "options": [
+          { "t": "Nothing: on a balanced set it cancels", "ok": true },
+          { "t": "About 40 points" },
+          { "t": "It halves the score" }
+        ],
+        "why": "The habit wins as many 'Yes' items as it loses 'No' items. Balance does not remove the habit; it makes the habit score exactly like a coin flip."
+      },
+      {
+        "q": "You paraphrase every question and the score falls from 70% to 52%. What have you learned?",
+        "options": [
+          { "t": "Much of the 70% came from the old wording, not the trait", "ok": true },
+          { "t": "The model got worse between runs" },
+          { "t": "Paraphrasing always lowers scores, so ignore it" }
+        ],
+        "why": "The model did not change between runs; only the wording did. When the number moves more than the property could, the wording was part of the measurement."
+      }
+    ],
+    "where": "Any score that depends on how you ask: poll questions, interview questions, a grader's rubric."
+  }
+}

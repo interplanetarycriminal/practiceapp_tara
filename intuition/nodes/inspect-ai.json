@@ -1,0 +1,252 @@
+{
+  "id": "inspect-ai",
+  "title": "Pass the folder, keep every copy",
+  "week": 11,
+  "need": "library",
+  "allegory": "Inspect is an office where each question card goes into a folder that a line of clerks pass along, each adding a page, until a marker grades the model's reply against the answer key and a photocopy of every folder is kept for anyone to read.",
+  "map": [
+    ["a question card: the question, the options, the answer key, sticky notes", "a Sample: input, choices, target, metadata (built by record_to_sample)"],
+    ["the folder passed down the line", "TaskState: messages, user_prompt, output, metadata"],
+    ["a clerk who adds a page and must hand the folder on", "a solver: async solve(state, generate) that mutates the state and returns it"],
+    ["the one clerk who posts the folder to the model", "generate(), added to the solver list explicitly (ARENA's convention)"],
+    ["the marker, and the photocopy of every folder", "the scorer (match, model_graded_fact) and the log you read in the viewer"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Everyone's own scripts",
+      "need": "library",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "note": "same test, different scripts, no comparison",
+      "actors": [
+        {"pose": "type", "x": 0.18, "label": "a startup"},
+        {"pose": "type", "x": 0.5, "label": "a lab"},
+        {"pose": "shrug", "x": 0.82, "label": "a government team"}
+      ],
+      "props": [
+        {"kind": "box", "x": 0.18, "y": 0.32, "w": 0.16, "h": 0.12, "label": "our script"},
+        {"kind": "box", "x": 0.5, "y": 0.32, "w": 0.16, "h": 0.12, "label": "my script"},
+        {"kind": "box", "x": 0.82, "y": 0.32, "w": 0.16, "h": 0.12, "label": "their script"}
+      ],
+      "arrows": [[0.27, 0.32, 0.41, 0.32, "?"], [0.59, 0.32, 0.73, 0.32, "?"]],
+      "cap": {
+        "1": "Until 2024, every team testing AI models wrote its own scripts, so nobody could compare results properly. Then the UK's AI Safety Institute shared theirs.",
+        "2": "Inspect, released by the UK AI Safety Institute on 10 May 2024 under the Open Government Licence: a startup and a government lab can run the same task, solver and scorer and compare the logs.",
+        "3": "Read it as standardisation rather than invention: a task, solver chain and scorer become portable artefacts, so a result is reproducible by someone who did not write the harness."
+      }
+    },
+    {
+      "name": "The folder office",
+      "need": "library",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        {"pose": "write", "x": 0.26, "label": "system_message"},
+        {"pose": "write", "x": 0.44, "label": "prompt_template"},
+        {"pose": "carry", "x": 0.62, "label": "generate()"}
+      ],
+      "props": [
+        {"kind": "card", "x": 0.08, "y": 0.6, "label": "question card"},
+        {"kind": "box", "x": 0.44, "y": 0.84, "w": 0.16, "h": 0.08, "label": "the folder"},
+        {"kind": "scale", "x": 0.8, "y": 0.62, "label": "the marker"},
+        {"kind": "stack", "x": 0.93, "y": 0.3, "label": "a copy of every folder"}
+      ],
+      "arrows": [[0.12, 0.62, 0.22, 0.72, ""], [0.67, 0.7, 0.75, 0.64, "reply"], [0.84, 0.52, 0.91, 0.38, ""]],
+      "cap": {
+        "1": "Each question goes into a folder. Clerks pass it along, each adding a page; one posts it to the model; a marker grades the reply; every folder is copied.",
+        "2": "record_to_sample turns each JSON row into a Sample. Solvers then run in order, e.g. system_message, prompt_template, multiple_choice_format, generate, make_choice, each editing one TaskState.",
+        "3": "The ordered solver list is sometimes called a plan. state.metadata persists across solvers, which is how later stages hand data along, e.g. the control exercises passing code between stages."
+      }
+    },
+    {
+      "name": "One Task, one run",
+      "need": "library",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        {"id": "ds", "label": "dataset of Samples", "x": 0.08, "y": 0.55, "c": "sky"},
+        {"id": "s1", "label": "system_message", "x": 0.24, "y": 0.28, "c": "mint"},
+        {"id": "s2", "label": "prompt_template", "x": 0.4, "y": 0.55, "c": "mint"},
+        {"id": "g", "label": "generate()", "x": 0.56, "y": 0.28, "c": "orange"},
+        {"id": "sc", "label": "scorer: match", "x": 0.74, "y": 0.55, "c": "green"},
+        {"id": "log", "label": "log you can read", "x": 0.92, "y": 0.28, "c": "cream"}
+      ],
+      "edges": [
+        ["ds", "s1", "input"], ["s1", "s2"], ["s2", "g"], ["g", "sc", "output"],
+        ["ds", "sc", "target"], ["sc", "log"]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "The whole job is one Task: the question cards, the line of clerks, the marker. You hand it a model, and it runs every question and writes the log.",
+        "2": "Task(dataset, solver=[...], scorer=match()), then eval() with a model and a log_dir. Solvers run under asyncio, not a thread pool, because model API calls are IO-bound: mostly waiting.",
+        "3": "A solver is a closure returning async def solve(state: TaskState, generate: Generate) -> TaskState. Scorers return Score objects that can carry metadata of their own into the analysis."
+      }
+    },
+    {
+      "name": "The silent clerk",
+      "need": "library",
+      "dur": 10,
+      "type": "compare",
+      "left": {
+        "title": "Forgot return state",
+        "lines": ["the solver edits the state", "returns None: no error", "the unmodified state moves on", "score unchanged"],
+        "c": "red"
+      },
+      "right": {
+        "title": "No generate() after it",
+        "lines": ["your template is in place", "no step calls the model", "the model never sees it", "score unchanged"],
+        "c": "orange"
+      },
+      "verdict": "Both give a clean run and an unchanged score: open the log and read one sample's full chat history.",
+      "cap": {
+        "1": "The worst bug looks like no bug: a clerk forgets to hand the folder on, or nobody posts it to the model. The run is clean and the score does not move.",
+        "2": "End every solver with return state, and check generate() sits where you expect the model call. If your template text is missing from the logged chat history, the solver did not take effect.",
+        "3": "ARENA's convention: every solver returns state and generate() is always explicit in the list, unlike built-ins that end in await generate(state). One list entry buys safe insertion before generation."
+      }
+    },
+    {
+      "name": "Read the folder",
+      "need": "library",
+      "dur": 9,
+      "type": "cards",
+      "items": [
+        "A Task is a dataset, a solver chain and a scorer",
+        "Every solver returns state; generate() is explicit",
+        "Read one sample end to end before believing the number",
+        "Same harness, same logs: evals other people can check"
+      ],
+      "cap": {
+        "1": "A score is only as trustworthy as the folders behind it. Shared, readable logs are how people check claims about what an AI system can do.",
+        "2": "Inspect is the plumbing for the rest of chapter 3: the agent loops in [3.4] and the whole control pipeline in [3.5] are Inspect tasks, with logs passed between stages.",
+        "3": "This node's demo title says it: the measurement is not the property. The log lets you audit what the model saw and said before any number goes into a report."
+      }
+    }
+  ],
+  "coda": {
+    "type": "match",
+    "title": "Match each part of Inspect to its job",
+    "pairs": [
+      ["Sample", "one question: input, choices, target, metadata"],
+      ["TaskState", "the folder: messages, user_prompt, output, metadata"],
+      ["solver", "edits the state, then must return it"],
+      ["generate()", "the step that actually calls the model"],
+      ["scorer", "turns the output into a Score, e.g. match"],
+      ["log viewer", "every message of every sample, readable"]
+    ],
+    "caption": {
+      "1": "Match each part to its job. If you can say which one quietly failed, you can fix a run whose score never moves.",
+      "2": "Task = dataset + solver chain + scorer, run by eval() with a model and a log_dir. Knowing which link does what tells you where to look when a number seems wrong.",
+      "3": "state.metadata persists across solvers and Score objects can carry metadata too, which is how a multi-stage pipeline carries labels through to its analysis."
+    }
+  },
+  "where_else": [
+    "Web middleware: a request object handed down a chain of functions, each of which must pass it on",
+    "Agent loops [3.4] and AI control protocols [3.5]: both are Inspect tasks, with logs handed between stages",
+    "Raw API calls from [3.1]: the same requests, minus the logs, the concurrency and the scoring step",
+    "Any shared test harness: when everyone runs the same checks, results can be compared and rerun"
+  ],
+  "hamming": {
+    "what": "Inspect is the UK AI Safety Institute's open evals library: a Task bundles a dataset of Samples, a chain of solvers that shape what the model sees, and a scorer, and every run writes a readable log.",
+    "when": "Whenever you turn a file of questions into a number you would put in a report, and for the agent and control exercises that follow in chapter 3.",
+    "why": "A shared harness makes results comparable and checkable by people who did not write it, and the log lets you verify what the model actually saw before you trust the score."
+  },
+  "object": {
+    "title": "The solver line",
+    "subtitle": "One folder threads every clerk, from question card to log",
+    "kind": "blocks",
+    "items": [
+      {"label": "Sample", "h": 0.4, "c": "data"},
+      {"label": "system_message", "h": 0.6, "c": "aux"},
+      {"label": "prompt_template", "h": 0.75, "c": "aux"},
+      {"label": "generate()", "h": 1.3, "c": "brass"},
+      {"label": "scorer", "h": 1.0, "c": "good"},
+      {"label": "log", "h": 1.6, "c": "plaster"}
+    ],
+    "axis": "x",
+    "stream": true,
+    "gap": 0.3,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each block is a clerk. The tube threading them is the folder, one per question, and it thickens as pages are added.",
+          "2": "The tube is the TaskState: messages, user_prompt, output and metadata, threaded through the solver chain in list order. The blocks' heights are only a picture of the folder growing.",
+          "3": "Each solver mutates the same TaskState and returns it. state.metadata is your own scratchpad that persists across solvers, so later steps can read what earlier ones stored."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Only one block talks to the model: generate(). Take it out and the folder sails past with your template unread.",
+          "2": "Under ARENA's convention no other solver calls the model, so generate() must appear in the list wherever you expect a model call. Its reply lands in state.output.",
+          "3": "Some built-in solvers end in await generate(state) themselves. ARENA keeps generation explicit instead, so inserting a solver before the model call never needs a read of the source."
+        },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The tube must come out of every block. A clerk who forgets to hand the folder on raises no alarm; the old folder just carries on.",
+          "2": "Forget return state and the chain passes the unmodified state onward, because returning None is not a runtime type error. The run looks normal.",
+          "3": "Both silent failures (no return, no generate()) give a clean run with an unchanged result, the worst possible failure signature. Only the logged messages reveal them."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The marker compares the reply with the answer key on the question card.",
+          "2": "match suits multiple choice. model_graded_fact asks a model to grade when a string comparison will not do. Either way the scorer returns a Score.",
+          "3": "Scores can stash arbitrary metadata; the control notebook's scorer carries a clean-or-backdoored label alongside its suspiciousness value into the analysis stage."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The last block keeps a copy of everything. Read one folder end to end before believing any score about what a model can do.",
+          "2": "Open the log viewer and read one sample's full chat history. It catches silent solver bugs in thirty seconds; staring at the aggregate score never will.",
+          "3": "Logs are the interchange format between stages in [3.5]: a later stage reads back logs written by earlier ones, so a result can be audited step by step."
+        },
+        "view": "top",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "You add a prompt_template solver. The run is clean and every score is unchanged. What do you check first?",
+        "options": [
+          {"t": "That it ends in return state and a generate() follows it", "ok": true},
+          {"t": "The model's temperature"},
+          {"t": "Whether the dataset is too small"}
+        ],
+        "why": "A missing return passes the old state on, and without a generate() after it the model never sees the template. Both are silent; read one sample's chat history in the log to confirm."
+      },
+      {
+        "q": "Under ARENA's convention, which step actually calls the model?",
+        "options": [
+          {"t": "generate(), listed explicitly in the solver chain", "ok": true},
+          {"t": "Every solver, at its end"},
+          {"t": "The scorer"}
+        ],
+        "why": "ARENA keeps the model call in an explicit generate() so you can slot a solver in before generation safely. Some of Inspect's built-ins call generate themselves."
+      },
+      {
+        "q": "Why does Inspect run solvers with asyncio rather than a thread pool?",
+        "options": [
+          {"t": "Model API calls are IO-bound, mostly waiting", "ok": true},
+          {"t": "Threads cannot make network calls"},
+          {"t": "asyncio makes the model think faster"}
+        ],
+        "why": "Most of an eval's time is spent waiting on the API. asyncio lets many samples wait at once, which is the right tool for IO-bound work."
+      }
+    ],
+    "where": "Any pipeline that threads one mutable object through small steps: web middleware, compiler passes, a data-cleaning chain."
+  }
+}

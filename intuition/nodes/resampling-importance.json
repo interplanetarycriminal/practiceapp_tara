@@ -1,0 +1,574 @@
+{
+  "id": "resampling-importance",
+  "title": "Replay from every save point",
+  "week": null,
+  "need": "contested",
+  "allegory": "Resampling importance is like saving a game after every move and letting it play itself out many times from each save: a move matters by how much it changes how often you end up winning.",
+  "map": [
+    [
+      "a save point just after move i",
+      "the prefix S₁…Sᵢ, kept fixed"
+    ],
+    [
+      "letting the game play itself out from that save, many times",
+      "resampling Sᵢ₊₁ onward from the model itself (on-policy), n times"
+    ],
+    [
+      "how often you win from that save",
+      "P(correct after Sᵢ): a proportion estimated from n rollouts"
+    ],
+    [
+      "the jump in win rate between neighbouring saves",
+      "importance(i) = P(correct after Sᵢ) − P(correct after Sᵢ₋₁)"
+    ],
+    [
+      "too few replays, so a lucky streak looks like genius",
+      "noise on each bar ≈ 0.7/√n: about ±0.22 at n = 10"
+    ]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The last brick",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "why does only the last sentence ever matter?",
+      "actors": [
+        {
+          "pose": "shrug",
+          "x": 0.2,
+          "label": "you"
+        }
+      ],
+      "props": [
+        {
+          "kind": "stack",
+          "x": 0.55,
+          "y": 0.62,
+          "w": 0.2,
+          "h": 0.42,
+          "label": "sentences 1 to 8",
+          "color": "peach"
+        },
+        {
+          "kind": "box",
+          "x": 0.55,
+          "y": 0.36,
+          "w": 0.2,
+          "h": 0.06,
+          "label": "last one: all the credit",
+          "color": "red"
+        },
+        {
+          "kind": "card",
+          "x": 0.83,
+          "y": 0.2,
+          "label": "'Therefore, the final answer is...'",
+          "color": "butter"
+        }
+      ],
+      "cap": {
+        "1": "Stop a model after each sentence and demand its answer: only the last sentence looks important, like crediting the top brick for the wall's height.",
+        "2": "Forced-answer importance makes the model answer right after sentence i. Accuracy only jumps near the end, so a setup sentence in the middle scores zero even if everything rests on it.",
+        "3": "Forcing credits only the sentence that pushes the prefix over the decision boundary: direct logit attribution for a serialised computation, blind to effects routed through later sentences."
+      }
+    },
+    {
+      "name": "Save points",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        {
+          "pose": "type",
+          "x": 0.1,
+          "label": "you"
+        }
+      ],
+      "props": [
+        {
+          "kind": "flag",
+          "x": 0.32,
+          "y": 0.55,
+          "label": "save before S₃",
+          "color": "sky"
+        },
+        {
+          "kind": "flag",
+          "x": 0.55,
+          "y": 0.55,
+          "label": "save after S₃",
+          "color": "orange"
+        },
+        {
+          "kind": "circle",
+          "x": 0.86,
+          "y": 0.25,
+          "w": 0.06,
+          "label": "right",
+          "color": "mint"
+        },
+        {
+          "kind": "circle",
+          "x": 0.86,
+          "y": 0.5,
+          "w": 0.06,
+          "label": "right",
+          "color": "mint"
+        },
+        {
+          "kind": "circle",
+          "x": 0.86,
+          "y": 0.75,
+          "w": 0.06,
+          "label": "wrong",
+          "color": "pink"
+        }
+      ],
+      "arrows": [
+        [
+          0.36,
+          0.52,
+          0.81,
+          0.75,
+          "replay"
+        ],
+        [
+          0.36,
+          0.5,
+          0.81,
+          0.5,
+          ""
+        ],
+        [
+          0.59,
+          0.5,
+          0.81,
+          0.27,
+          "replay"
+        ],
+        [
+          0.59,
+          0.52,
+          0.81,
+          0.5,
+          ""
+        ]
+      ],
+      "cap": {
+        "1": "Save the game after every move. From each save, let it play itself out many times and count the wins. A move matters if winning got likelier right after it.",
+        "2": "Resampling importance: keep sentences 1 to i, let the model write the rest itself many times, and count correct answers. Do the same from sentence i−1. The difference is sentence i's worth.",
+        "3": "Continuations are sampled on-policy from the model, so effects mediated by later sentences count. The cost: far more compute, and a noisier estimator than forcing an answer."
+      }
+    },
+    {
+      "name": "The win-rate jump",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        {
+          "t": "imp = ",
+          "c": "ink",
+          "note": ""
+        },
+        {
+          "t": "P(✓ | S₁..Sᵢ)",
+          "c": "orange",
+          "note": "win rate from the save after"
+        },
+        {
+          "t": " − ",
+          "c": "ink",
+          "note": ""
+        },
+        {
+          "t": "P(✓ | S₁..Sᵢ₋₁)",
+          "c": "teal",
+          "note": "win rate from the save before"
+        }
+      ],
+      "actor": {
+        "pose": "write",
+        "x": 0.1
+      },
+      "cap": {
+        "1": "Importance is a jump in win rate: how often you win replaying from just after the sentence, minus how often you win replaying from just before it.",
+        "2": "Same difference-of-proportions formula as forced importance, different data: ARENA reuses calculate_answer_importance on chunk_solutions instead of chunk_solutions_forced.",
+        "3": "Aᵢ is the answer from a full resampled trajectory (S₁..Sᵢ, S′ᵢ₊₁..S′ₙ). Check your values land within about 1% of the dataset's: it also catches a \\boxed parser mangling answers."
+      }
+    },
+    {
+      "name": "Credit spreads out",
+      "need": "exercise",
+      "dur": 10,
+      "type": "bars",
+      "title": "Forced (start) vs resampled (end) importance per sentence (sketch)",
+      "labels": [
+        "S1",
+        "S2",
+        "S3",
+        "S4",
+        "S5",
+        "S6",
+        "S7",
+        "S8"
+      ],
+      "from": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.05,
+        0.1,
+        0.8
+      ],
+      "to": [
+        0.05,
+        0.1,
+        0.35,
+        0.05,
+        0.2,
+        0.0,
+        0.05,
+        0.15
+      ],
+      "cap": {
+        "1": "Forcing an answer piles all the credit on the last sentence. Replaying from each save hands credit back to the sentences that set the win up.",
+        "2": "Plot both metrics on the same DeepSeek-R1-Distill rollouts. Forced importance spikes near the end; resampling lights up earlier sentences whose effect flows through later ones.",
+        "3": "Disagreement is the finding: anchors realised downstream score near zero under forcing and positive under resampling. The bars here are a sketch of that shape, not the dataset's values."
+      }
+    },
+    {
+      "name": "Lucky streaks",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        {
+          "f": "0.7/sqrt(x)",
+          "c": "red",
+          "label": "noise on one bar (±1 SE)"
+        },
+        {
+          "f": "0.15",
+          "c": "teal",
+          "label": "large typical effect (0.15)"
+        },
+        {
+          "f": "0.05",
+          "c": "mint",
+          "label": "small typical effect (0.05)"
+        }
+      ],
+      "x": [
+        5,
+        400
+      ],
+      "y": [
+        0,
+        0.35
+      ],
+      "dot": true,
+      "marks": [
+        {
+          "x": 10,
+          "label": "n = 10: ±0.22"
+        },
+        {
+          "x": 196,
+          "label": "n ≈ 200: ±0.05"
+        }
+      ],
+      "cap": {
+        "1": "Replay only ten times and luck swamps skill. With forty sentences, one will look like a genius by chance alone.",
+        "2": "Each win rate is a proportion from n rollouts; their difference carries noise of about 0.7/√n. At n = 10 that is ±0.22, while real per-sentence effects often sit around 0.05 to 0.15.",
+        "3": "Rerun with a fresh seed and check top-k stability; bootstrap rollouts per position; report only intervals excluding zero. Spend compute on fewer problems with more rollouts each."
+      }
+    },
+    {
+      "name": "The survival line",
+      "need": "contested",
+      "dur": 11,
+      "type": "compare",
+      "left": {
+        "title": "The dramatic line",
+        "c": "pink",
+        "lines": [
+          "'My primary goal is survival.'",
+          "delete it: about half the time it writes something else",
+          "and blackmails anyway",
+          "a rationalisation"
+        ]
+      },
+      "right": {
+        "title": "The bland line",
+        "c": "mint",
+        "lines": [
+          "spotting what leverage it has",
+          "delete it: the model writes it back",
+          "load-bearing, so it gets patched",
+          "a structural anchor"
+        ]
+      },
+      "verdict": "Resample before you believe a deletion changed anything.",
+      "cap": {
+        "1": "In a blackmail test, 'My primary goal is survival' looks like the reason. Delete it and the model often writes something else and blackmails anyway.",
+        "2": "Current habit: read the trace, or delete a sentence once. Emerging research (Thought Branches) says models error-correct, so resample: that survival line has DTF 0.49. Put DTF beside importance.",
+        "3": "Self_preservation chunks have the highest different-trajectories fraction of six categories; leverage_identification sits lower. Low DTF plus low counterfactual importance marks an anchor the model patched around."
+      }
+    },
+    {
+      "name": "Reasons, not speeches",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": [
+        "Find the steps a decision really rests on",
+        "Swap the score: 'answer correct' or 'contains blackmail'",
+        "Same method on agent actions: reward hacking"
+      ],
+      "actor": {
+        "pose": "cheer",
+        "x": 0.86
+      },
+      "cap": {
+        "1": "Replaying from each step shows which thoughts a model's decision really rests on. Those are the reasons worth steering, not the speeches.",
+        "2": "Swap the score from 'answer correct' to 'contains blackmail' and the same machinery finds the steps behind a harmful decision. It works on agent actions too, not just sentences.",
+        "3": "Resampling turns sentence importance from a correlational read of the trace into an intervention. MATS work reapplied it to reward hacking in closed frontier models, with agent actions as the unit."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Only S3 truly matters. Can you find it? (a toy)",
+    "labels": [
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "S5",
+      "S6",
+      "S7",
+      "S8"
+    ],
+    "params": [
+      {
+        "id": "n",
+        "label": "replays per save point (n)",
+        "min": 10,
+        "max": 1000,
+        "step": 10,
+        "value": 10
+      },
+      {
+        "id": "e",
+        "label": "S3's true importance",
+        "min": 0,
+        "max": 0.3,
+        "step": 0.01,
+        "value": 0.1
+      },
+      {
+        "id": "seed",
+        "label": "re-run with a fresh seed",
+        "min": 1,
+        "max": 20,
+        "step": 1,
+        "value": 1
+      }
+    ],
+    "f": "((fr) => ((U) => ((Z) => range(8).map(i => (i == 2 ? e : 0) + 0.7/sqrt(n)*Z(i + 8*seed)))(m => 2*(U(3*m) + U(3*m + 1) + U(3*m + 2) - 1.5)))(k => ((p) => fr(2*pow(p*(p + 33.33), 2)))(fr(k*0.1031 + 0.37))))(v => v - floor(v))",
+    "y": [
+      -0.6,
+      0.7
+    ],
+    "readouts": [
+      {
+        "label": "tallest bar",
+        "f": "((a) => ((j) => 'S' + (j + 1) + (j == 2 ? ' (the real anchor)' : ' (noise)'))(a.indexOf(max(...a))))(((fr) => ((U) => ((Z) => range(8).map(i => (i == 2 ? e : 0) + 0.7/sqrt(n)*Z(i + 8*seed)))(m => 2*(U(3*m) + U(3*m + 1) + U(3*m + 2) - 1.5)))(k => ((p) => fr(2*pow(p*(p + 33.33), 2)))(fr(k*0.1031 + 0.37))))(v => v - floor(v)))"
+      },
+      {
+        "label": "noise on each bar (±1 SE)",
+        "f": "'±' + (0.7/sqrt(n)).toFixed(2)"
+      },
+      {
+        "label": "replays needed for noise below S3's effect",
+        "f": "e > 0 ? pow(0.7/e, 2).toFixed(0) : 'no effect to find'"
+      }
+    ],
+    "caption": {
+      "1": "Ten replays per save, and only S3 truly matters. Re-roll the seed: the tallest bar jumps around. Now raise the replays and watch S3 settle on top.",
+      "2": "Each bar is a difference of two win rates from n rollouts, so its noise is about 0.7/√n. At n = 10 that swamps a real effect of 0.1. The fix is more rollouts per position.",
+      "3": "Toy: one true anchor of size e plus Gaussian noise with SD 0.7/√n per bar (p ≈ 0.5). With many positions a spurious maximum is near-certain at small n; report only intervals excluding zero."
+    }
+  },
+  "where_else": [
+    "Sports win-probability charts: credit each play by how much it moved the chance of winning",
+    "Monte Carlo rollouts in game-playing AI: value a position by playing it out many times",
+    "Reward hacking in agents: the same resampling, with agent actions as the unit",
+    "Activation patching, the white-box cousin: intervene, rerun, measure the change"
+  ],
+  "hamming": {
+    "what": "A sentence's importance, measured as how much the chance of a right answer changes when you replay the reasoning from just after it versus just before it.",
+    "when": "When you want to know which steps a reasoning model's answer or decision actually rests on, and can afford many rollouts per step.",
+    "why": "Reading a trace tells you what the model said; replaying it tells you what the outcome depended on."
+  },
+  "object": {
+    "title": "The re-roll wall",
+    "subtitle": "Win rate from each save point, re-run with six fresh seeds: a real step stands in every row of seeds, a lucky one does not.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 6,
+    "f": "clamp(0.4 + (r >= 2 ? e : 0) + 0.5/sqrt(n)*((fr) => ((U) => 2*(U(3*(r + 8*c) + 5000) + U(3*(r + 8*c) + 5001) + U(3*(r + 8*c) + 5002) - 1.5))(k => ((p) => fr(2*pow(p*(p + 33.33), 2)))(fr(k*0.1031 + 0.37))))(v => v - floor(v)), 0.02, 1)",
+    "labels": {
+      "rows": [
+        "after S1",
+        "after S2",
+        "after S3",
+        "after S4",
+        "after S5",
+        "after S6",
+        "after S7",
+        "after S8"
+      ],
+      "cols": [
+        "seed 1",
+        "seed 2",
+        "seed 3",
+        "seed 4",
+        "seed 5",
+        "seed 6"
+      ]
+    },
+    "c": "prob",
+    "knobs": [
+      {
+        "id": "n",
+        "label": "replays per save point",
+        "min": 10,
+        "max": 1000,
+        "step": 10,
+        "value": 10
+      },
+      {
+        "id": "e",
+        "label": "true win-rate jump at S3",
+        "min": 0,
+        "max": 0.4,
+        "step": 0.05,
+        "value": 0.15
+      }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each row is a save point, each column a fresh re-run. Height is how often the model gets it right replaying from that save. With ten replays, it's jagged.",
+          "2": "Rows: P(correct after Sᵢ) for i = 1 to 8. Columns: six independent seeds. n = 10 rollouts per cell, so each bar wobbles by about ±0.16.",
+          "3": "Each cell is a Bernoulli proportion with SE ≈ 0.5/√n at p ≈ 0.5. The true curve steps up by e at S3; everything else is sampling noise."
+        },
+        "view": "iso",
+        "set": {
+          "n": 10,
+          "e": 0.15
+        }
+      },
+      {
+        "cap": {
+          "1": "Look along one seed: steps everywhere, and any of them could be your 'key sentence'. The seeds don't agree on which.",
+          "2": "Within one run, adjacent differences are dominated by noise. Across seeds, the apparent anchor moves: the symptom the case study warns about.",
+          "3": "Top-k instability across seeds is the cheapest diagnostic that your importance ranking is noise wearing the shape of a result."
+        },
+        "view": "front",
+        "set": {
+          "n": 10,
+          "e": 0.15
+        }
+      },
+      {
+        "cap": {
+          "1": "Now a thousand replays per save. A clean step at S3, the same under every seed. That is a real anchor.",
+          "2": "At n = 1000 the noise shrinks to about ±0.016 and the step of 0.15 stands out identically across all six seeds.",
+          "3": "Noise falls only as 1/√n: a 100× budget buys a 10× narrower interval. That is why fewer problems with more rollouts each beats the reverse."
+        },
+        "view": "iso",
+        "set": {
+          "n": 1000,
+          "e": 0.15
+        }
+      },
+      {
+        "cap": {
+          "1": "Set the true jump to zero. With plenty of replays the wall goes flat: no sentence matters, and now you can see that honestly.",
+          "2": "With e = 0 and large n, every row matches. A flat wall is also a result: the answer does not hinge on any single sentence.",
+          "3": "Null calibration: at e = 0 the adjacent differences should straddle zero with SD 0.7/√n; anything taller needs an interval that excludes zero."
+        },
+        "view": "side",
+        "set": {
+          "n": 1000,
+          "e": 0
+        }
+      },
+      {
+        "cap": {
+          "1": "In between, at forty replays: the step is there but blurry. This is where error bars decide whether you believe it.",
+          "2": "At n = 40 the noise on a difference is about ±0.11, so a step of 0.15 is visible but not safe: bootstrap it before you claim it.",
+          "3": "Bootstrap the rollouts at each position and report the anchor only if its interval for P(after) − P(before) excludes zero."
+        },
+        "view": "top",
+        "set": {
+          "n": 40,
+          "e": 0.15
+        }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your top sentence changes when you rerun with a new seed. What now?",
+        "options": [
+          {
+            "t": "Treat it as noise: add rollouts per position and bootstrap error bars",
+            "ok": true
+          },
+          {
+            "t": "Report the first run's winner; it was the tallest"
+          }
+        ],
+        "why": "A difference of two proportions from n = 10 rollouts has noise near ±0.22, bigger than typical real effects of 0.05 to 0.15."
+      },
+      {
+        "q": "Forcing an answer after each sentence gives all the credit to the last few. Why?",
+        "options": [
+          {
+            "t": "Only the sentence that tips the answer over gets credit; setup scores zero",
+            "ok": true
+          },
+          {
+            "t": "The early sentences genuinely don't matter"
+          }
+        ],
+        "why": "Forcing can't see effects that flow through later sentences. Resampling lets the model carry on, so it can."
+      },
+      {
+        "q": "You delete 'My primary goal is survival' and the model still blackmails. Was that line the reason?",
+        "options": [
+          {
+            "t": "Probably not: the model replaces it freely (DTF about 0.49)",
+            "ok": true
+          },
+          {
+            "t": "Yes: it said so, so it was the motive"
+          }
+        ],
+        "why": "High DTF means the content is easily replaced: a rationalisation. The low-DTF sentences the model writes back are the structural ones."
+      }
+    ],
+    "where": "Anywhere you judge a step by replaying the future: win-probability charts, Monte Carlo rollouts, A/B reruns."
+  }
+}

@@ -1,0 +1,606 @@
+{
+  "id": "monte-carlo-tree-search",
+  "title": "Send scouts, then follow the footprints",
+  "week": 10,
+  "need": "exercise",
+  "allegory": "Monte Carlo tree search is like sending scouts one at a time from base camp into a maze of caves: each picks forks by the best reports so far plus a guidebook tip that fades as the fork gets busy, asks a judge at the first new cave how things look, and chalks the verdict on every fork on the way home, so the fork with the most footprints becomes your move.",
+  "map": [
+    [
+      "one scout's round trip from camp",
+      "one simulation from the root: select, expand, evaluate, back up"
+    ],
+    [
+      "picking a fork: best reports so far, plus a guidebook tip that fades as the fork gets busy",
+      "PUCT: Q(s,a) + c·p(a|s)·√(1 + ΣN) / (1 + N(s,a))"
+    ],
+    [
+      "the judge at the first new cave",
+      "the value head v(s) at the new leaf, or the true result z if the game is over"
+    ],
+    [
+      "chalking every fork on the way home, plus for the chooser's good news and minus for bad",
+      "backup: N += 1 and W += v on each edge, with v's sign flipped at every ply"
+    ],
+    [
+      "the fork at camp with the most footprints",
+      "the most-visited root move: the improved policy you play"
+    ]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Too many futures",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "which column?",
+      "actors": [
+        {
+          "pose": "think",
+          "x": 0.2,
+          "label": "you"
+        }
+      ],
+      "props": [
+        {
+          "kind": "box",
+          "x": 0.58,
+          "y": 0.62,
+          "w": 0.26,
+          "h": 0.24,
+          "label": "Connect 4, your move",
+          "color": "sky"
+        },
+        {
+          "kind": "cloud",
+          "x": 0.64,
+          "y": 0.22,
+          "w": 0.4,
+          "h": 0.16,
+          "label": "7 × 7 × 7 × ... futures",
+          "color": "lav"
+        },
+        {
+          "kind": "lamp",
+          "x": 0.9,
+          "y": 0.55,
+          "label": "the rules: a free simulator",
+          "color": "butter"
+        }
+      ],
+      "cap": {
+        "1": "Your move in Connect 4. Seven columns, seven replies to each, seven more after that. You know the rules, so you can imagine any future, just not all of them.",
+        "2": "DQN and PPO learn the world from experience. MCTS assumes you already have a simulator (for a board game, the rules) and spends it on thinking before each move.",
+        "3": "MCTS is model-based planning: with a simulator in hand, grow a search tree rooted at the current state. Exhaustive lookahead is hopeless, so the real question is where to spend a fixed simulation budget."
+      }
+    },
+    {
+      "name": "Send out scouts",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "dusk",
+      "note": "one scout = one simulation",
+      "actors": [
+        {
+          "pose": "walk",
+          "x": 0.14,
+          "to": 0.62,
+          "label": "scout"
+        },
+        {
+          "pose": "point",
+          "x": 0.88,
+          "label": "judge"
+        }
+      ],
+      "props": [
+        {
+          "kind": "flag",
+          "x": 0.07,
+          "y": 0.6,
+          "label": "camp: the board now",
+          "color": "red"
+        },
+        {
+          "kind": "card",
+          "x": 0.4,
+          "y": 0.2,
+          "label": "fork: 5 footprints, chalk +2",
+          "color": "butter"
+        },
+        {
+          "kind": "door",
+          "x": 0.76,
+          "y": 0.56,
+          "label": "new cave",
+          "color": "peach"
+        }
+      ],
+      "arrows": [
+        [
+          0.18,
+          0.44,
+          0.7,
+          0.44,
+          "out: pick forks"
+        ],
+        [
+          0.7,
+          0.8,
+          0.18,
+          0.8,
+          "home: chalk every fork"
+        ]
+      ],
+      "cap": {
+        "1": "Send scouts one at a time. Each walks the mapped tunnels, steps into one new cave, asks the judge how it looks, then walks home chalking every fork.",
+        "2": "One simulation: select (walk down the tree), expand (add one node), evaluate (get a value), back up (update every edge on the path). Repeat, then play the root move with the most visits.",
+        "3": "Each edge stores visit count N(s,a), value sum W(s,a) and mean Q = W / max(1, N). After sims rounds, the root visit counts are the improved policy: play the argmax, or sample from N^(1/τ) in self-play."
+      }
+    },
+    {
+      "name": "Which fork next?",
+      "need": "core",
+      "dur": 11,
+      "type": "equation",
+      "parts": [
+        {
+          "t": "Q",
+          "c": "sky",
+          "note": "how it has done so far"
+        },
+        {
+          "t": " + ",
+          "c": "ink",
+          "note": ""
+        },
+        {
+          "t": "c·",
+          "c": "lav",
+          "note": "exploration dial"
+        },
+        {
+          "t": "p",
+          "c": "orange",
+          "note": "the guidebook's hunch"
+        },
+        {
+          "t": "·√(1+ΣN)",
+          "c": "green",
+          "note": "grows as camp gets busy"
+        },
+        {
+          "t": "/(1+N)",
+          "c": "pink",
+          "note": "fades as this fork gets busy"
+        }
+      ],
+      "actor": {
+        "pose": "point",
+        "x": 0.1
+      },
+      "cap": {
+        "1": "At each fork the scout adds two things: how well that tunnel has done so far, and the guidebook's tip for it. The tip fades as more scouts try that tunnel.",
+        "2": "PUCT: Q is the measured average value. The second term is big for moves the policy network likes that haven't been tried much, and shrinks as N grows: follow the network early, trust measurements later.",
+        "3": "PUCT(s,a) = Q + c_puct·p_θ(a|s)·√(1 + ΣN) / (1 + N(s,a)). The +1 under the root matters on a node's first visit: without it every bonus is 0 and argmax takes the first legal column, ignoring the prior."
+      }
+    },
+    {
+      "name": "The walk home",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "flow": "backward",
+      "nodes": [
+        {
+          "id": "root",
+          "label": "board now",
+          "x": 0.08,
+          "y": 0.45,
+          "c": "ink"
+        },
+        {
+          "id": "a",
+          "label": "rival to move",
+          "x": 0.34,
+          "y": 0.3,
+          "c": "pink"
+        },
+        {
+          "id": "side",
+          "label": "untried",
+          "x": 0.34,
+          "y": 0.75,
+          "c": "chalk"
+        },
+        {
+          "id": "b",
+          "label": "you to move",
+          "x": 0.6,
+          "y": 0.3,
+          "c": "sky"
+        },
+        {
+          "id": "leaf",
+          "label": "new cave: good for you",
+          "x": 0.86,
+          "y": 0.45,
+          "c": "green"
+        }
+      ],
+      "edges": [
+        [
+          "root",
+          "a",
+          "you +"
+        ],
+        [
+          "a",
+          "b",
+          "rival −"
+        ],
+        [
+          "b",
+          "leaf",
+          "you +"
+        ],
+        [
+          "root",
+          "side",
+          ""
+        ]
+      ],
+      "cap": {
+        "1": "The judge says the new cave favours you. Walking home, the scout marks + at forks you chose and − at forks your rival chose. Your good news is their bad news.",
+        "2": "Backup walks the path in reverse: each edge gets N += 1 and W += v, with v's sign flipped at each ply, because each edge is scored for the player who chose it. Q = W / N is a running average.",
+        "3": "Negamax backup: alternate the sign of v by ply so Q(s,a) is always from the perspective of the player to move at s. At a terminal leaf, back up the true result z ∈ {−1, 0, +1} instead of v(s)."
+      }
+    },
+    {
+      "name": "Ask, don't roll",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": {
+        "title": "classic MCTS",
+        "c": "chalk",
+        "lines": [
+          "new node: play random moves",
+          "to the end, see who won",
+          "forks: exploit plus explore",
+          "no learned hunches"
+        ]
+      },
+      "right": {
+        "title": "AlphaGo Zero (2017)",
+        "c": "mint",
+        "lines": [
+          "new node: ask the value head",
+          "game over? use the true result",
+          "forks: PUCT with the policy prior",
+          "no human games at all"
+        ]
+      },
+      "verdict": "Starting from random play, it beat the published AlphaGo 100-0.",
+      "cap": {
+        "1": "Old scouts judged a new cave by wandering randomly to the game's end. AlphaGo Zero asked a trained judge and let hunches guide the forks. It won 100-0.",
+        "2": "Classic MCTS estimates a leaf with a random playout. AlphaGo Zero (Silver et al., Nature 2017) reads v(s) off the value head and selects with PUCT. From random play, with no human games, it won 100-0 against the published AlphaGo.",
+        "3": "Two departures from vanilla MCTS: v(s) replaces the rollout (the true z at terminal leaves), and the policy prior enters selection. Same four-phase skeleton, different leaf estimate and tree policy."
+      }
+    },
+    {
+      "name": "One crowded tunnel",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "more scouts? same answer",
+      "actors": [
+        {
+          "pose": "shrug",
+          "x": 0.13,
+          "label": "you"
+        }
+      ],
+      "props": [
+        {
+          "kind": "door",
+          "x": 0.42,
+          "y": 0.58,
+          "label": "first good tunnel: every scout",
+          "color": "orange"
+        },
+        {
+          "kind": "door",
+          "x": 0.64,
+          "y": 0.58,
+          "label": "barely a look",
+          "color": "chalk"
+        },
+        {
+          "kind": "door",
+          "x": 0.84,
+          "y": 0.58,
+          "label": "barely a look",
+          "color": "chalk"
+        }
+      ],
+      "arrows": [
+        [
+          0.2,
+          0.36,
+          0.4,
+          0.44,
+          "again and again"
+        ]
+      ],
+      "cap": {
+        "1": "The classic bug: from the second trip on, every scout takes the same tunnel. The rest barely get a look, so a wrong first guess never gets corrected.",
+        "2": "PUCT's two terms are on different scales. If c_puct is small next to the value range [−1, 1], or the prior is already sharp, the first move to score positive outbids every sibling's bonus for good.",
+        "3": "Fix: scale c_puct to the value head's range (ARENA: 1.0 with v ∈ [−1, 1]); add Dirichlet noise at the root only, P = (1 − ε)P + εη with ε = 0.25; log the root visit histogram. Healthy puts mass on 2 or 3 columns."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": [
+        "The search teaches the network: AlphaZero",
+        "PUCT is the bandit's UCB on every fork",
+        "Log the root visit histogram"
+      ],
+      "actor": {
+        "pose": "cheer",
+        "x": 0.86
+      },
+      "cap": {
+        "1": "The footprints beat the guidebook, so AlphaZero trains its network to copy them. Knowing how an AI plans is part of understanding and steering it.",
+        "2": "Root visit counts are an improved policy. AlphaZero trains a network to imitate the search, then searches with the better network. A planning system's choice comes from its judge, its hunches and its budget together.",
+        "3": "PUCT is UCB's exploit-plus-uncertainty split on tree edges, weighted by a learned prior. To understand or steer a planning agent, inspect every lever: value head, policy prior, c_puct and the simulation budget."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Seven moves, one budget: where do the scouts go? (toy, one level deep)",
+    "labels": [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+      "g"
+    ],
+    "params": [
+      {
+        "id": "cp",
+        "label": "exploration dial c_puct",
+        "min": 0,
+        "max": 3,
+        "step": 0.1,
+        "value": 1
+      },
+      {
+        "id": "S",
+        "label": "scouts sent (simulations)",
+        "min": 1,
+        "max": 64,
+        "step": 1,
+        "value": 16
+      },
+      {
+        "id": "sharp",
+        "label": "how sure the guidebook is (prior sharpness)",
+        "min": 1,
+        "max": 3,
+        "step": 0.5,
+        "value": 1
+      }
+    ],
+    "f": "range(S).reduce(N => ((k) => N.map((n, i) => n + (i === k ? 1 : 0)))(N.map((n, i) => (n ? [-0.6, -0.2, 0.3, 0.2, 0.5, -0.1, -0.5][i] : 0) + cp*softmax([0.05, 0.1, 0.2, 0.35, 0.15, 0.1, 0.05].map(p => sharp*log(p)))[i]*sqrt(1 + sum(N))/(1 + n)).reduce((b, x, i, a) => x > a[b] ? i : b, 0)), [0, 0, 0, 0, 0, 0, 0]).map(n => n / S)",
+    "y": [
+      0,
+      1
+    ],
+    "readouts": [
+      {
+        "label": "move you'd play (most footprints)",
+        "f": "['a', 'b', 'c', 'd', 'e', 'f', 'g'][range(S).reduce(N => ((k) => N.map((n, i) => n + (i === k ? 1 : 0)))(N.map((n, i) => (n ? [-0.6, -0.2, 0.3, 0.2, 0.5, -0.1, -0.5][i] : 0) + cp*softmax([0.05, 0.1, 0.2, 0.35, 0.15, 0.1, 0.05].map(p => sharp*log(p)))[i]*sqrt(1 + sum(N))/(1 + n)).reduce((b, x, i, a) => x > a[b] ? i : b, 0)), [0, 0, 0, 0, 0, 0, 0]).reduce((b, x, i, a) => x > a[b] ? i : b, 0)]"
+      },
+      {
+        "label": "share of scouts on e, the truly best move",
+        "f": "round(100*range(S).reduce(N => ((k) => N.map((n, i) => n + (i === k ? 1 : 0)))(N.map((n, i) => (n ? [-0.6, -0.2, 0.3, 0.2, 0.5, -0.1, -0.5][i] : 0) + cp*softmax([0.05, 0.1, 0.2, 0.35, 0.15, 0.1, 0.05].map(p => sharp*log(p)))[i]*sqrt(1 + sum(N))/(1 + n)).reduce((b, x, i, a) => x > a[b] ? i : b, 0)), [0, 0, 0, 0, 0, 0, 0])[4]/S) + '%'"
+      },
+      {
+        "label": "moves visited at least twice",
+        "f": "range(S).reduce(N => ((k) => N.map((n, i) => n + (i === k ? 1 : 0)))(N.map((n, i) => (n ? [-0.6, -0.2, 0.3, 0.2, 0.5, -0.1, -0.5][i] : 0) + cp*softmax([0.05, 0.1, 0.2, 0.35, 0.15, 0.1, 0.05].map(p => sharp*log(p)))[i]*sqrt(1 + sum(N))/(1 + n)).reduce((b, x, i, a) => x > a[b] ? i : b, 0)), [0, 0, 0, 0, 0, 0, 0]).filter(n => n >= 2).length"
+      }
+    ],
+    "caption": {
+      "1": "Each move has a fixed verdict; the guidebook likes d, but e is truly best. Drag the three sliders and watch where the footprints pile up.",
+      "2": "At c_puct = 1 and 16 sims, visits sit on c, d and e, with e ahead. Drop c_puct to 0.1: d takes every scout, even at 64. Sharpen the guidebook to 3: e gets no visits until about 40 sims.",
+      "3": "Score = Q + c·p·√(1 + ΣN) / (1 + N), Q = the move's verdict once tried, else 0; ties go to the first move. Bars are root visit shares. Lock-in comes from a small c against the value range or a sharp p."
+    }
+  },
+  "where_else": [
+    "AlphaZero: train a network to imitate the search's visit counts, then search again with the better network",
+    "Multi-armed bandits [2.1]: PUCT is UCB's exploit-plus-uncertainty split, moved onto the edges of a tree",
+    "Beam search in text generation: another way to grow only the promising branches of a tree of continuations"
+  ],
+  "hamming": {
+    "what": "A planning method that grows a search tree from the current position, sends each simulation down the most promising path, and plays the move the search visited most.",
+    "when": "When you have the rules or a simulator and some thinking time before each move, as in board games like Go and Connect 4.",
+    "why": "You can't check every future, so splitting a fixed budget between what has worked and what looks promising lets a small search play strongly."
+  },
+  "object": {
+    "title": "The footprint terrace",
+    "subtitle": "Rows are moments in a search, from 2 scouts to 64; columns are seven moves; height is each move's share of the footprints.",
+    "kind": "bars",
+    "rows": 6,
+    "cols": 7,
+    "f": "0.05 + 1.5*range(pow(2, r + 1)).reduce(N => ((k) => N.map((n, i) => n + (i === k ? 1 : 0)))(N.map((n, i) => (n ? [-0.6, -0.2, 0.3, 0.2, 0.5, -0.1, -0.5][i] : 0) + cp*softmax([0.05, 0.1, 0.2, 0.35, 0.15, 0.1, 0.05].map(p => sharp*log(p)))[i]*sqrt(1 + sum(N))/(1 + n)).reduce((b, x, i, a) => x > a[b] ? i : b, 0)), [0, 0, 0, 0, 0, 0, 0])[c]/pow(2, r + 1)",
+    "labels": {
+      "rows": [
+        "2 sims",
+        "4 sims",
+        "8 sims",
+        "16 sims",
+        "32 sims",
+        "64 sims"
+      ],
+      "cols": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g"
+      ]
+    },
+    "c": "prob",
+    "knobs": [
+      {
+        "id": "cp",
+        "label": "Exploration dial c_puct",
+        "min": 0,
+        "max": 3,
+        "step": 0.1,
+        "value": 1
+      },
+      {
+        "id": "sharp",
+        "label": "Guidebook confidence (prior sharpness)",
+        "min": 1,
+        "max": 3,
+        "step": 0.5,
+        "value": 1
+      }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each row is a moment in the search, from 2 scouts to 64. Each column is a move, a to g. Height is the share of scouts that took that fork so far.",
+          "2": "Bar height = root visit share N(a) / sims after 2, 4, ... 64 simulations of a toy one-level search where each move has a fixed verdict.",
+          "3": "A toy root-only PUCT search (a bandit): fixed leaf value per move, prior p, c_puct knob. Heights are normalised root visit counts, the improved policy."
+        },
+        "view": "iso",
+        "set": {
+          "cp": 1,
+          "sharp": 1
+        }
+      },
+      {
+        "cap": {
+          "1": "Early scouts follow the guidebook to d. As verdicts come in, e, which the guidebook undersold, takes over: half the scouts by 16, most of them by 64.",
+          "2": "With c_puct = 1, the prior's favourite d gets the first visits; e's higher Q wins once it is tried. At 16 sims visits sit on c, d and e: a healthy spread.",
+          "3": "PUCT follows the prior while every Q is 0, then measured Q takes over as the 1/(1 + N) bonus decays: 8 of 16 visits, then 47 of 64, land on e."
+        },
+        "view": "front",
+        "set": {
+          "cp": 1,
+          "sharp": 1
+        }
+      },
+      {
+        "cap": {
+          "1": "Turn the exploration dial nearly off. d's first positive verdict outbids every other tip: one spike, from 2 scouts all the way to 64.",
+          "2": "c_puct too small next to the value range: d's Q = +0.2 beats every sibling's shrunken bonus, so nothing else is tried. More sims change nothing.",
+          "3": "At c = 0.1 the best sibling bonus, 0.1·0.2·√(1 + ΣN), stays under Q_d = 0.2 for all 64 sims: the self-confirming lock-in, since untried moves never earn a Q."
+        },
+        "view": "iso",
+        "set": {
+          "cp": 0.1,
+          "sharp": 1
+        }
+      },
+      {
+        "cap": {
+          "1": "Back to the normal dial, but make the guidebook overconfident. The scouts crowd d, e gets its first visit only after about 40, and at 64 d still leads.",
+          "2": "A sharp prior shrinks every sibling's bonus. Cube the prior and renormalise: e is unvisited through 32 sims. The search only explores what the network already likes.",
+          "3": "The run-level version of this collapse is why self-play adds Dirichlet noise at the root: the search explores what the network likes, and the network learns only what the search explores."
+        },
+        "view": "iso",
+        "set": {
+          "cp": 1,
+          "sharp": 3
+        }
+      },
+      {
+        "cap": {
+          "1": "Now turn the dial way up. Scouts keep chasing tips and spread out, so at 16 scouts d still edges e. Too much exploring spends the budget thinly.",
+          "2": "Large c_puct: the prior term dominates for longer and visits track p. At 16 sims d leads; e only pulls ahead with more sims.",
+          "3": "As c_puct grows the visit shares drift toward the prior; as it shrinks, toward greedy on the first Q found. ARENA tuned c_puct down from 1.5 to 1.0 with a full-run sweep."
+        },
+        "view": "front",
+        "set": {
+          "cp": 3,
+          "sharp": 1
+        }
+      },
+      {
+        "cap": {
+          "1": "Back to the tuned dial. That share of footprints is the plan: AlphaZero trains its network to copy it, then sends better-guided scouts.",
+          "2": "Root visit counts, not the raw prior, are what you play (argmax) or sample in self-play (N^(1/τ)); AlphaZero trains the network to imitate them.",
+          "3": "Visit counts improve on p_θ; training toward them and searching again is the AlphaZero loop, with the search acting as teacher."
+        },
+        "view": "close",
+        "set": {
+          "cp": 1,
+          "sharp": 1
+        }
+      }
+    ],
+    "predict": [
+      {
+        "q": "After 16 scouts, which move do you play?",
+        "options": [
+          {
+            "t": "The one the most scouts took",
+            "ok": true
+          },
+          {
+            "t": "The one the guidebook liked best"
+          },
+          {
+            "t": "The one with the single best verdict ever seen"
+          }
+        ],
+        "why": "Visit counts blend the hunch with measured results, so they are the improved policy. In ARENA you play the most-visited column."
+      },
+      {
+        "q": "c_puct is tiny and the first move tried scores positive. What do more scouts do?",
+        "options": [
+          {
+            "t": "Nothing: that move keeps taking every scout",
+            "ok": true
+          },
+          {
+            "t": "They slowly spread to the other moves"
+          }
+        ],
+        "why": "Its Q beats every sibling's small bonus, so nothing else is tried and nothing else earns a Q. The spike confirms itself."
+      },
+      {
+        "q": "Why does the chalk mark flip sign at every fork on the way home?",
+        "options": [
+          {
+            "t": "Players alternate, and each fork is scored for whoever chooses there",
+            "ok": true
+          },
+          {
+            "t": "To stop the numbers growing too big"
+          }
+        ],
+        "why": "Negamax: a position that is good for your rival is bad for you."
+      }
+    ],
+    "where": "Anywhere a fixed budget is split between what has worked and what looks promising: bandits, beam search, planning agents."
+  }
+}

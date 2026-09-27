@@ -1,0 +1,224 @@
+{
+  "id": "few-shot-prompting",
+  "title": "Pin up past papers, not rules",
+  "week": 11,
+  "need": "core",
+  "allegory": "A few-shot prompt is a stand-in teacher shown four good past exam questions instead of a rulebook: they infer the layout, length and difficulty from the examples and write new questions to match, copying whatever the examples share.",
+  "map": [
+    ["the stand-in teacher writing new questions", "the model generating eval questions"],
+    ["four good past questions pinned up", "the few-shot examples in the prompt"],
+    ["matching their layout and difficulty without a rulebook", "inferring format and difficulty from examples instead of instructions"],
+    ["re-pinning them in a new order each morning", "sampling the examples fresh on each call"],
+    ["a 'make this one different' note drawn from a hat each time", "a variance prompt appended with probability p_var, resampled per call"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Forty isn't enough",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "note": "need: about 300 questions",
+      "actors": [{ "pose": "write", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.5, "y": 0.62, "w": 0.14, "h": 0.18, "label": "40 by hand", "color": "cream" },
+        { "kind": "stack", "x": 0.76, "y": 0.5, "w": 0.14, "h": 0.42, "label": "300 needed", "color": "lav" }
+      ],
+      "arrows": [[0.58, 0.6, 0.68, 0.5, ""]],
+      "cap": {
+        "1": "To see a trend in how models behave you need hundreds of test questions, not the forty you could write by hand. So you get a model to write them.",
+        "2": "Perez et al. at Anthropic wrote the instructions and a few examples and let a model write the questions: 154 datasets, with crowdworkers agreeing with 90 to 100 percent of the labels.",
+        "3": "Model-written evaluations (Perez et al., 2022) redirect human effort from writing items to steering the writer; the resulting statistical power exposed inverse scaling in sycophancy and shutdown-aversion."
+      }
+    },
+    {
+      "name": "The pinned past papers",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "think", "x": 0.25, "label": "stand-in teacher" }],
+      "props": [
+        { "kind": "card", "x": 0.42, "y": 0.22, "label": "past Q1", "color": "cream" },
+        { "kind": "card", "x": 0.54, "y": 0.22, "label": "past Q2", "color": "cream" },
+        { "kind": "card", "x": 0.66, "y": 0.22, "label": "past Q3", "color": "cream" },
+        { "kind": "card", "x": 0.78, "y": 0.22, "label": "past Q4", "color": "cream" },
+        { "kind": "card", "x": 0.72, "y": 0.62, "label": "new question, same shape", "color": "butter" }
+      ],
+      "arrows": [[0.6, 0.32, 0.7, 0.54, "match these"]],
+      "cap": {
+        "1": "Picture a stand-in teacher asked for new exam questions. Skip the rulebook: pin up four good past questions and they'll match the layout and difficulty.",
+        "2": "A few-shot prompt puts worked examples in the prompt so the model infers the pattern rather than being told it: option count, length, tone and difficulty all come from the examples.",
+        "3": "Few-shot exemplars specify format, difficulty and style by demonstration rather than description; the model infers the target distribution in context, and copies whatever the examples share."
+      }
+    },
+    {
+      "name": "One call, four parts",
+      "need": "exercise",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "def", "label": "target definition", "x": 0.14, "y": 0.2, "c": "cream" },
+        { "id": "ex", "label": "4 examples, reshuffled", "x": 0.14, "y": 0.45, "c": "butter" },
+        { "id": "var", "label": "variance nudge (sometimes)", "x": 0.14, "y": 0.7, "c": "lav" },
+        { "id": "schema", "label": "Pydantic form", "x": 0.5, "y": 0.2, "c": "sky" },
+        { "id": "llm", "label": "model", "x": 0.5, "y": 0.5, "c": "ink" },
+        { "id": "q", "label": "one new question (JSON)", "x": 0.85, "y": 0.5, "c": "mint" }
+      ],
+      "edges": [["def", "llm", ""], ["ex", "llm", "pattern"], ["var", "llm", "p_var"], ["schema", "llm", "shape"], ["llm", "q", ""]],
+      "flow": "forward",
+      "cap": {
+        "1": "Each call gets the same brief, your four examples in a fresh order, sometimes a 'be different' nudge, and a form to fill in. Out comes one new question.",
+        "2": "A Pydantic class with <code>chat.completions.parse</code> fixes the shape; the four examples, resampled each call, fix format and difficulty; a variance prompt added with probability p_var widens the spread.",
+        "3": "Structured output guarantees parseability; exemplars condition style and difficulty; per-call variance prompts widen the archetype distribution. Fan calls out with ThreadPoolExecutor, appending JSON as they land."
+      }
+    },
+    {
+      "name": "Same mould, every time",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "examples only, or one fixed nudge", "c": "pink", "lines": ["every question in the same mould", "style tangles with what you measure", "one nudge on every call: a new mould"] },
+      "right": { "title": "a nudge resampled per call", "c": "mint", "lines": ["same format and difficulty", "settings and archetypes vary", "style stops being a confounder"] },
+      "verdict": "Examples fix the format; per-call variance prompts keep everything else from being fixed too.",
+      "cap": {
+        "1": "Show the same four examples and every new question comes out in their mould. A 'be different' nudge, picked afresh for each question, spreads them out again.",
+        "2": "Few-shot examples make outputs consistent; variance prompts push them apart. Resample the variance prompt per question: appending the same one to every call defeats the entire purpose.",
+        "3": "Variance prompts are not meant to raise average quality: they widen the archetype distribution so question style is not confounded with the property you're trying to measure."
+      }
+    },
+    {
+      "name": "The length detector",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "90%! ...wait",
+      "actors": [{ "pose": "recoil", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.46, "y": 0.34, "label": "(A) Yes.", "color": "chalk" },
+        { "kind": "card", "x": 0.72, "y": 0.34, "w": 0.3, "label": "(B) the long, careful, hedged one", "color": "butter" },
+        { "kind": "scale", "x": 0.6, "y": 0.7, "label": "length predicts the label", "color": "red" }
+      ],
+      "arrows": [],
+      "cap": {
+        "1": "Your eval scores 90% and you celebrate. Then you spot it: the 'right' option keeps being the long, careful one. You built a length detector.",
+        "2": "The same model wrote the question, the matching answer and the distractors, so option length alone predicts the label. Measure mean length of matching vs other options, and count which letter holds it.",
+        "3": "If length separates the classes, constrain generation (similar length band, equal hedging), regenerate, and shuffle options at scoring. ARENA's answer_balance and category_balance counters catch exactly this."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Examples fix format and difficulty", "Read twenty before generating three hundred", "Model-written evals found inverse scaling"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "A few good examples are one of the simplest ways to steer a model, and they're how large tests of AI behaviour get built cheaply. Then read what comes back.",
+        "2": "Generation makes questions cheap; quality control makes them mean something. Read twenty results yourself before generating three hundred more, and treat the set as a start to improve.",
+        "3": "At scale, model-written evals surfaced inverse scaling: larger and more RLHF-trained models were more sycophantic and more shutdown-averse. You can't see that trend on forty hand-written items."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "300 generated questions: how many land in each style?",
+    "labels": ["the examples' own style", "nudge 1", "nudge 2", "nudge 3", "nudge 4", "nudge 5", "nudge 6"],
+    "params": [
+      { "id": "p", "label": "chance of a variance prompt (p_var)", "min": 0, "max": 1, "step": 0.05, "value": 0 },
+      { "id": "V", "label": "variance prompts to choose from", "min": 1, "max": 6, "step": 1, "value": 3 },
+      { "id": "per", "label": "resample per call (1) or same one every call (0)", "min": 0, "max": 1, "step": 1, "value": 1 }
+    ],
+    "f": "per > 0.5 ? [300*(1 - p)].concat(range(6).map(i => i < V ? 300*p/V : 0)) : [0, 300, 0, 0, 0, 0, 0]",
+    "y": [0, 300],
+    "readouts": [
+      { "label": "questions in the examples' own style", "f": "per > 0.5 ? round(300*(1 - p)) : 0" },
+      { "label": "effective number of styles", "f": "(per > 0.5 ? 1/(pow(1 - p, 2) + pow(p, 2)/V) : 1).toFixed(1)" },
+      { "label": "verdict", "f": "per < 0.5 ? 'same nudge every time: one mould again' : (p < 0.05 ? 'consistent, but all one mould' : 'same format, varied situations')" }
+    ],
+    "caption": {
+      "1": "Your four examples put every question in one mould. Raise the chance of a 'be different' nudge and watch the styles spread. Then set resample to 0.",
+      "2": "Few-shot examples make outputs consistent; variance prompts push them apart again. The same variance prompt on every call defeats the purpose: it's one mould again, just a new one.",
+      "3": "Toy model: each variance prompt yields one archetype. Effective styles = 1/Σ share², largest at p_var = V/(V + 1). The aim is wider archetypes, not higher average quality, so style isn't a confounder."
+    }
+  },
+  "where_else": [
+    "Synthetic training data: a few gold examples seed thousands of generated ones",
+    "Model-graded scoring: example grades in the rubric show the grader what each score looks like",
+    "Variance prompts: the deliberate counterweight that pushes few-shot outputs apart again",
+    "Teaching by worked examples: people copy the pattern you show, quirks included"
+  ],
+  "hamming": {
+    "what": "Putting a handful of worked examples in the prompt so the model infers the format, difficulty and style you want instead of being told.",
+    "when": "Whenever you need many outputs in a fixed shape, like 300 eval questions grown from four you'd be happy to ship.",
+    "why": "Examples fix the format and difficulty of what comes back, and that turned eval datasets from a crowdworking budget into a prompt-engineering problem."
+  },
+  "object": {
+    "title": "The style cloud",
+    "subtitle": "Each dot is one generated question, placed by its style: setting, difficulty, tone.",
+    "kind": "points",
+    "clusters": [
+      { "label": "your four examples", "c": "brass", "center": [0, 0, 0], "spread": 0.1, "n": 4 },
+      { "label": "written from the examples alone", "c": "data", "center": [0.15, 0.1, 0.05], "spread": 0.25, "n": 40 },
+      { "label": "nudge: unusual contexts", "c": "aux", "center": [1.1, 0.4, -0.5], "spread": 0.28, "n": 20 },
+      { "label": "nudge: make these really simple", "c": "aux", "center": [-1.0, -0.5, 0.6], "spread": 0.28, "n": 20 },
+      { "label": "nudge: break the pattern", "c": "aux", "center": [0.2, 1.1, 0.9], "spread": 0.28, "n": 20 }
+    ],
+    "arrows": [
+      { "from": "your four examples", "to": "written from the examples alone", "label": "few-shot: same mould", "c": "dir" },
+      { "from": "written from the examples alone", "to": "nudge: unusual contexts", "label": "variance prompt", "c": "dir" },
+      { "from": "written from the examples alone", "to": "nudge: make these really simple", "label": "variance prompt", "c": "dir" },
+      { "from": "written from the examples alone", "to": "nudge: break the pattern", "label": "variance prompt", "c": "dir" }
+    ],
+    "knobs": [],
+    "beats": [
+      {
+        "cap": { "1": "Each dot is a question, placed by its style. The brass dots are your four examples; the blue cloud is what the model wrote from them alone.", "2": "Few-shot generation clusters tightly around the exemplars: format and difficulty match, and so do setting and phrasing. Consistency is the point, and the risk.", "3": "Exemplars condition the output distribution near their own region of style space; with no other pressure, generated items inherit whatever the exemplars share." },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": { "1": "Up close, the blue cloud hugs the examples. Great for format. But if every question sounds alike, style can quietly become what your eval measures.", "2": "If question style moves with the label, a model can score by style rather than content, and the eval measures the wrong thing.", "3": "Style becomes a confounder when it correlates with answer_matching_behavior; option length predicting the label is the case to check first." },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": { "1": "Variance nudges pull new clouds away from the mould: unusual contexts, really simple, break the pattern. Same format, different situations.", "2": "Each variance prompt, appended with probability p_var and resampled per call, moves a share of the questions into a new archetype.", "3": "Per-call variance prompts widen the archetype distribution while the schema and exemplars keep the format fixed." },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": { "1": "Put the same nudge on every call and the whole blue cloud just moves to one new spot. That's a new mould, not variety.", "2": "Appending one fixed variance prompt to every call translates the distribution instead of widening it, which defeats the entire purpose.", "3": "Variety needs the nudge to be random per item; a constant suffix is just a different conditioning context, equally narrow." },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": { "1": "Examples for the shape, nudges for the spread. Then read twenty dots yourself before you trust the cloud.", "2": "Read twenty results yourself before generating three hundred more: the generated set is a starting point to improve, not a gold standard.", "3": "Generation makes items cheap; quality control, from length checks to answer_balance counts, makes them mean something." },
+        "view": "side",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "You append the same 'introduce unusual contexts' prompt to every call. What do you get?",
+        "options": [{ "t": "One new mould: every question in unusual contexts", "ok": true }, { "t": "A wide spread of styles" }],
+        "why": "Variety comes from resampling the nudge per call. One fixed nudge moves the whole batch together."
+      },
+      {
+        "q": "Your generated multiple-choice set scores 90% on the model that wrote it. What should you check first?",
+        "options": [{ "t": "Whether option length alone predicts the answer", "ok": true }, { "t": "Whether that model is unusually capable" }],
+        "why": "The writer tends to make the matching option the careful, hedged one, so any model with the same habits can score high without reading the question."
+      },
+      {
+        "q": "Why sample the four examples fresh on each call?",
+        "options": [{ "t": "So they aren't always in the same order", "ok": true }, { "t": "To make each call cheaper" }],
+        "why": "Resampling per call keeps a fixed order from becoming part of the pattern every question copies."
+      }
+    ],
+    "where": "Anywhere you teach by showing: style guides with example pages, synthetic data seeded from a few gold examples, graders shown sample grades."
+  }
+}

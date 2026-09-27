@@ -1,0 +1,187 @@
+{
+  "id": "rlhf-kl-penalty",
+  "title": "A leash tied to your old self",
+  "week": 10,
+  "need": "core",
+  "allegory": "The KL penalty is an elastic leash tying the model you are training to a frozen copy of its old self: it may chase the judge's treats, but every step into places its old self rarely went tugs harder, so it cannot run off after the judge's mistakes.",
+  "map": [
+    ["the walker chasing treats", "π_θ, the policy being fine-tuned"],
+    ["its old self, frozen at the post", "π_ref: a frozen copy of the base model, no gradients, never moves"],
+    ["the judge's treats, some of them fakes", "the reward model's score: a proxy fitted to finite comparisons, with errors"],
+    ["the tug at each spot the walker visits: how much more often it goes there than its old self did", "log P − log Q, averaged under the new model: D_KL(π_θ ‖ π_ref)"],
+    ["how stiff the leash is", "kl_coef (β), 2.5 in ARENA's RLHF defaults"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": "o/d10-leash.html",
+  "chapters": [
+    {
+      "name": "A curve too good",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "nothing crashed",
+      "actors": [{ "pose": "slump", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.52, "y": 0.32, "label": "reward: up all run", "color": "mint" },
+        { "kind": "card", "x": 0.8, "y": 0.6, "label": "samples: repetitive, odd punctuation", "color": "pink" }
+      ],
+      "arrows": [[0.4, 0.55, 0.62, 0.25, "reward"]],
+      "cap": {
+        "1": "The reward chart climbs all run. You cheer, then read the samples: repetitive, oddly punctuated, drifting out of English. Nothing crashed.",
+        "2": "Mean reward rises smoothly while the generations rot: no NaN, no divergence. The reward model was fitted to a finite pile of human comparisons, so it has errors, and RL is a search aimed straight at them.",
+        "3": "Reward-model overoptimisation. Gao, Schulman and Hilton (2022) optimised against a proxy RM and scored with a held-out gold RM: proxy rose monotonically; gold rose, peaked and fell as KL from the initial policy grew."
+      }
+    },
+    {
+      "name": "A leash to yourself",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "idle", "x": 0.16, "label": "old self (frozen)" },
+        { "pose": "pull", "x": 0.34, "to": 0.62, "label": "new model" },
+        { "pose": "point", "x": 0.9, "label": "judge" }
+      ],
+      "props": [
+        { "kind": "flag", "x": 0.16, "y": 0.62, "label": "the post" },
+        { "kind": "circle", "x": 0.5, "y": 0.74, "label": "treat", "color": "butter" },
+        { "kind": "cloud", "x": 0.76, "y": 0.3, "label": "where it never went", "color": "chalk" },
+        { "kind": "circle", "x": 0.78, "y": 0.74, "label": "fake treat", "color": "pink" }
+      ],
+      "arrows": [[0.6, 0.5, 0.26, 0.5, "tug grows"]],
+      "cap": {
+        "1": "Leash the model you are training to a frozen copy of its old self. It can chase the judge's treats, but the further it strays, the harder the tug.",
+        "2": "The walker is the policy being trained. Its old self at the post is a frozen copy of the base model: no gradients, never moves. The judge is the reward model, and some treats are fakes. The leash is the KL penalty.",
+        "3": "Objective: reward − kl_coef · D_KL(π_θ ‖ π_ref), with π_ref a frozen copy of the initial model (eval mode, no grad). It is the only term in the objective that knows the base model still exists."
+      }
+    },
+    {
+      "name": "Measuring the tug",
+      "need": "exercise",
+      "dur": 11,
+      "type": "equation",
+      "actor": { "pose": "write", "x": 0.08, "label": "you" },
+      "parts": [
+        { "t": "β·", "c": "orange", "note": "kl_coef: how stiff" },
+        { "t": "Σ", "c": "ink", "note": "over every token in the vocab" },
+        { "t": " P", "c": "sky", "note": "weighted by the NEW model" },
+        { "t": "·(log P − log Q)", "c": "pink", "note": "new odds vs frozen old odds" }
+      ],
+      "cap": {
+        "1": "For every possible next word, compare how often the model says it now with how often its old self did. Weight by the new odds, add up, scale by the stiffness.",
+        "2": "Sum P·(log P − log Q) over d_vocab, mean over batch and position; P is the new model, Q the frozen reference. Get logprobs with <code>log_softmax</code> then exp them; softmax then log takes logs of tiny numbers.",
+        "3": "Only generated tokens are charged: slice <code>logits[:, -gen_len-1:-1]</code>, since the model did not choose the prompt. The P weighting makes it an expectation under the policy: you pay where the new model actually goes."
+      }
+    },
+    {
+      "name": "Too loose, too tight",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "note": "along the bottom: kl_coef",
+      "curves": [
+        { "f": "[[0.5, 0.3, 0.19, 0.01].map((q, i) => q*exp([1, 0, -1, 3][i]/x))].map(w => dot(w, [1, 0, -1, -1])/sum(w))[0]", "c": "green", "label": "true quality (toy gold)" },
+        { "f": "[[0.5, 0.3, 0.19, 0.01].map((q, i) => q*exp([1, 0, -1, 3][i]/x))].map(w => dot(w, [1, 0, -1, 3])/sum(w))[0]", "c": "orange", "label": "judge's score (proxy)" }
+      ],
+      "x": [0.2, 5],
+      "y": [-1.1, 3.1],
+      "dot": true,
+      "marks": [
+        { "x": 0.4, "label": "hacked" },
+        { "x": 1.2, "label": "sweet spot (toy)" },
+        { "x": 4.5, "label": "barely moved" }
+      ],
+      "cap": {
+        "1": "Along the bottom: leash stiffness. Loose (left), the judge's score soars while true quality crashes as junk takes over. Tight (right), little changes.",
+        "2": "Toy: a 4-word vocab and a judge that overrates '!!!!'. For each kl_coef, the best policy it can reach. The judge's score only rises as the leash loosens; true quality peaks near 1.2, then falls. Toy numbers, not ARENA's.",
+        "3": "Per token, the optimum is π_ref·exp(r/β)/Z, so β is a temperature on reward. Gao et al. saw this shape against KL from init: proxy monotone, gold rising, peaking, falling. Where it peaks depends on the proxy's errors."
+      }
+    },
+    {
+      "name": "Which way round?",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": {
+        "title": "KL(new ‖ old): ARENA's way",
+        "lines": [
+          "P = new model, Q = frozen old",
+          "saying what the old self almost never said: huge cost",
+          "dropping an old habit: cheap and bounded",
+          "so it can unlearn rudeness, not invent gibberish"
+        ],
+        "c": "mint"
+      },
+      "right": {
+        "title": "KL(old ‖ new): flipped",
+        "lines": [
+          "still a finite, plausible-looking number",
+          "dropping any old habit: cost blows up",
+          "new junk the old self never said: cheap",
+          "penalises exactly the wrong thing"
+        ],
+        "c": "pink"
+      },
+      "verdict": "New model first. A flipped KL still looks fine on the chart.",
+      "cap": {
+        "1": "Which way round matters. The right way makes inventing gibberish expensive but lets the model drop old habits cheaply. Flipped, it does the reverse.",
+        "2": "P must be the new model. KL(new ‖ old) blows up where the new model puts mass the reference almost never did, and stays bounded when it drops things. Swapped, it still prints a plausible number, so check it.",
+        "3": "D_KL(π_θ ‖ π_ref) is zero-forcing: π_θ is pushed off regions where π_ref ≈ 0, while removing reference mass m can cost as little as −log(1 − m). The swap is mass-covering: it must keep mass on every base behaviour."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "actor": { "pose": "cheer", "x": 0.85, "label": "you" },
+      "items": [
+        "The only term that remembers the base model",
+        "Not PPO's clip: that bounds each step; this leash never resets",
+        "Plot KL beside reward from step one",
+        "GRPO keeps the same β·KL(π_θ ‖ π_ref)"
+      ],
+      "cap": {
+        "1": "Steering a model with a fallible judge always needs a leash back to where it started. Watch how far it has strayed right beside the reward, every run.",
+        "2": "Plot mean KL beside mean reward from step one; stop where KL outruns reward. If kl_coef is still 0.0 from the sanity check, nothing holds the model. PPO's clip is a different leash: last step, not the start.",
+        "3": "Any steering against a learned proxy spends a KL budget. Audit the term: reference in eval with no grad, generated tokens only, P the policy. ARENA's bonus AdaptiveKLController holds KL in a target band."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "How stiff should the leash be?",
+    "labels": ["Sure (was 50%)", "Hmm (was 30%)", "Ugh (was 19%)", "!!!! (was 1%)"],
+    "params": [
+      { "id": "k", "label": "kl_coef (leash stiffness)", "min": 0.4, "max": 5, "step": 0.1, "value": 2.5 },
+      { "id": "flip", "label": "flip the KL (0 right way, 1 the bug)", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "f": "[[[0.5, 0.3, 0.19, 0.01], [1, 0, -1, 3]]].map(([Q, R]) => flip < 0.5 ? [Q.map((q, i) => q*exp(R[i]/k))].map(w => w.map(v => v/sum(w)))[0] : [range(60).reduce(([lo, hi]) => [(lo + hi)/2].map(m => sum(Q.map((q, i) => k*q/(m - R[i]))) > 1 ? [m, hi] : [lo, m])[0], [3, 3 + k])].map(([lo, hi]) => Q.map((q, i) => k*q/((lo + hi)/2 - R[i]))).map(p => p.map(v => v/sum(p)))[0])[0]",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "judge's score / true quality", "f": "[[[[0.5, 0.3, 0.19, 0.01], [1, 0, -1, 3]]].map(([Q, R]) => flip < 0.5 ? [Q.map((q, i) => q*exp(R[i]/k))].map(w => w.map(v => v/sum(w)))[0] : [range(60).reduce(([lo, hi]) => [(lo + hi)/2].map(m => sum(Q.map((q, i) => k*q/(m - R[i]))) > 1 ? [m, hi] : [lo, m])[0], [3, 3 + k])].map(([lo, hi]) => Q.map((q, i) => k*q/((lo + hi)/2 - R[i]))).map(p => p.map(v => v/sum(p)))[0])[0]].map(P => dot(P, [1, 0, -1, 3]).toFixed(2) + ' / ' + dot(P, [1, 0, -1, -1]).toFixed(2) + '  (start 0.34 / 0.30)')[0]" },
+      { "label": "KL(new ‖ old): how far it strayed", "f": "[[[[0.5, 0.3, 0.19, 0.01], [1, 0, -1, 3]]].map(([Q, R]) => flip < 0.5 ? [Q.map((q, i) => q*exp(R[i]/k))].map(w => w.map(v => v/sum(w)))[0] : [range(60).reduce(([lo, hi]) => [(lo + hi)/2].map(m => sum(Q.map((q, i) => k*q/(m - R[i]))) > 1 ? [m, hi] : [lo, m])[0], [3, 3 + k])].map(([lo, hi]) => Q.map((q, i) => k*q/((lo + hi)/2 - R[i]))).map(p => p.map(v => v/sum(p)))[0])[0]].map(P => sum(P.map((p, i) => p > 0 ? p*log(p/[0.5, 0.3, 0.19, 0.01][i]) : 0)).toFixed(3) + ' nats')[0]" },
+      { "label": "'!!!!' share", "f": "[[[[0.5, 0.3, 0.19, 0.01], [1, 0, -1, 3]]].map(([Q, R]) => flip < 0.5 ? [Q.map((q, i) => q*exp(R[i]/k))].map(w => w.map(v => v/sum(w)))[0] : [range(60).reduce(([lo, hi]) => [(lo + hi)/2].map(m => sum(Q.map((q, i) => k*q/(m - R[i]))) > 1 ? [m, hi] : [lo, m])[0], [3, 3 + k])].map(([lo, hi]) => Q.map((q, i) => k*q/((lo + hi)/2 - R[i]))).map(p => p.map(v => v/sum(p)))[0])[0]].map(P => round(P[3]*100) + '%' + (flip > 0.5 ? '  (right way round: ' + round([[0.5, 0.3, 0.19, 0.01].map((q, i) => q*exp([1, 0, -1, 3][i]/k))].map(w => w[3]/sum(w))[0]*100) + '%)' : ''))[0]" },
+      { "label": "verdict", "f": "[[[[0.5, 0.3, 0.19, 0.01], [1, 0, -1, 3]]].map(([Q, R]) => flip < 0.5 ? [Q.map((q, i) => q*exp(R[i]/k))].map(w => w.map(v => v/sum(w)))[0] : [range(60).reduce(([lo, hi]) => [(lo + hi)/2].map(m => sum(Q.map((q, i) => k*q/(m - R[i]))) > 1 ? [m, hi] : [lo, m])[0], [3, 3 + k])].map(([lo, hi]) => Q.map((q, i) => k*q/((lo + hi)/2 - R[i]))).map(p => p.map(v => v/sum(p)))[0])[0]].map(P => [[dot(P, [1, 0, -1, -1]), sum(P.map((p, i) => p > 0 ? p*log(p/[0.5, 0.3, 0.19, 0.01][i]) : 0))]].map(([T, D]) => T < 0.3 ? 'reward hacked: worse than where it started' : P[3] > 0.1 ? 'starting to hack: the judge is being fooled' : D < 0.025 ? 'barely moved from its old self' : 'learning: Ugh down to ' + round(P[2]*100) + '%')[0])[0]" }
+    ],
+    "caption": {
+      "1": "Drag kl_coef down from 5: the judge's score keeps rising, true quality peaks, then '!!!!' takes over. Then set flip to 1: same stiffness, more junk.",
+      "2": "Bars: the best odds for the first word of a reply the optimiser can reach at this kl_coef (toy: 4-word vocab; the judge overrates '!!!!'). Flipped, junk gets cheaper and 'Ugh' gets stickier.",
+      "3": "Right way round, the optimum is π_ref·exp(r/β)/Z: β is a temperature on reward. Flipped, it is βQ/(λ − r) with λ set by normalisation, which puts more mass on the top-reward token at every β here."
+    }
+  },
+  "where_else": [
+    "PPO's clip and TRPO's KL constraint: the same 'do not move too far', but measured from last iteration's policy, not a frozen start",
+    "GRPO, which keeps the identical β·KL(π_θ ‖ π_ref) term",
+    "Weight decay: a pull back to a fixed anchor so the optimiser cannot run off chasing noise",
+    "Any hard optimisation against a learned score: the harder you push, the more you find its mistakes"
+  ],
+  "hamming": {
+    "what": "A per-token penalty, kl_coef times KL(new ‖ frozen old), that charges the fine-tuned model for putting probability where its original self would not.",
+    "when": "Whenever you fine-tune a pretrained model against a learned reward: RLHF, and GRPO after it.",
+    "why": "The reward model is fallible and RL hunts its errors, so the leash keeps the model near language it already knew while it learns what the judge genuinely rewards."
+  }
+}

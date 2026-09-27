@@ -1,0 +1,273 @@
+{
+  "id": "puct",
+  "title": "A friend's tip that fades",
+  "week": 10,
+  "need": "exercise",
+  "allegory": "PUCT is like choosing restaurants in a new city from a friend's list of tips: at first you go where the tips point, but every meal adds your own verdict, a tip's pull on a place fades the more you've eaten there, and the tips you haven't tried nag a little more the longer you stay.",
+  "map": [
+    ["your own average rating of a place so far", "Q(s,a) = W / N: the value the search has measured for that move"],
+    ["your friend's tip for it", "p(a|s): the policy network's prior over moves"],
+    ["a tip's pull fades the more you've eaten there", "÷ (1 + N(s,a)): the bonus shrinks with visits to that move"],
+    ["untried tips nag more the longer you stay", "× √(1 + ΣN): the bonus grows slowly with the parent's total visits"],
+    ["how much you trust the friend versus your own palate", "c_puct, which must suit the value scale (ARENA: 1.0 with v in [−1, 1])"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Too many moves",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "actors": [{ "pose": "think", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.4, "y": 0.66, "label": "16 simulations to spend", "color": "butter" },
+        { "kind": "door", "x": 0.62, "y": 0.48, "w": 0.1, "h": 0.32, "label": "move A", "color": "sky" },
+        { "kind": "door", "x": 0.76, "y": 0.48, "w": 0.1, "h": 0.32, "label": "move B", "color": "mint" },
+        { "kind": "door", "x": 0.9, "y": 0.48, "w": 0.1, "h": 0.32, "label": "move C", "color": "peach" }
+      ],
+      "cap": {
+        "1": "A game offers many moves, and each leads to many more. You only have time to think a few of them through. Which ones deserve your thinking time?",
+        "2": "MCTS grows a tree from the current position with a fixed budget of simulations: select, expand, evaluate, back up. Selection decides where the budget goes, and PUCT is the selection rule.",
+        "3": "Selection descends from the root by argmax of a per-edge score until it reaches a leaf. PUCT is UCB's exploit-plus-uncertainty split moved onto tree edges and weighted by a learned prior."
+      }
+    },
+    {
+      "name": "A friend's tips",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "walk", "x": 0.14, "to": 0.34, "label": "you" },
+        { "pose": "point", "x": 0.88, "label": "friend" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.72, "y": 0.18, "label": "friend's tips", "color": "cream" },
+        { "kind": "door", "x": 0.46, "y": 0.52, "w": 0.11, "h": 0.32, "label": "tip ★★★", "color": "butter" },
+        { "kind": "door", "x": 0.6, "y": 0.52, "w": 0.11, "h": 0.32, "label": "tip ★", "color": "mint" },
+        { "kind": "door", "x": 0.74, "y": 0.52, "w": 0.11, "h": 0.32, "label": "no tip", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "New city, a friend's list of tips. First you go where the tips point. Each meal adds your own verdict, and the more you eat somewhere, the less its tip counts.",
+        "2": "Each move gets a score: what the search has measured so far, plus a bonus for moves the network likes that haven't been tried much. The bonus shrinks with every visit, so evidence takes over.",
+        "3": "The prior p_θ(a|s) steers the early simulations; as N(s,a) grows the bonus decays like 1/(1 + N) and Q = W / N dominates. The search follows the network early and its own measurements later."
+      }
+    },
+    {
+      "name": "The PUCT score",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "Q", "c": "green", "note": "your own average so far" },
+        { "t": " + c·", "c": "ink", "note": "trust in tips" },
+        { "t": "p", "c": "orange", "note": "the friend's tip" },
+        { "t": "·√(1+ΣN)", "c": "sky", "note": "grows as you explore" },
+        { "t": "/(1+N)", "c": "red", "note": "fades with each visit" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Score = your own average so far, plus a tip bonus: the tip, times how long you've been exploring, divided by how often you've already been there.",
+        "2": "PUCT(s,a) = Q(s,a) + c·p(a|s)·√(1 + ΣN)/(1 + N(s,a)); take the argmax. Q = W / max(1, N) is the mean backed-up value, and illegal moves are forced to −∞.",
+        "3": "√(1 + ΣN) grows slowly with the parent's visits, so untried moves keep a rising claim; 1/(1 + N) decays each child's claim as it gathers data. c_puct is the exchange rate between the two terms."
+      }
+    },
+    {
+      "name": "The tip fades",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "0.6*7/(1 + x)", "c": "orange", "label": "bonus, strong tip (p = 0.6)" },
+        { "f": "0.1*7/(1 + x)", "c": "peach", "label": "bonus, weak tip (p = 0.1)" },
+        { "f": "0.3 + 0*x", "c": "green", "label": "a measured Q of 0.3" }
+      ],
+      "x": [0, 30],
+      "y": [0, 4.5],
+      "dot": true,
+      "marks": [{ "x": 0, "label": "untried" }, { "x": 13, "label": "tip = evidence" }],
+      "cap": {
+        "1": "A tip's bonus is big for a place you haven't tried and melts with every visit. A strong tip starts higher, but both fade until your own average is what counts.",
+        "2": "With c = 1 and 48 visits at the parent, a p = 0.6 move starts with a bonus of 4.2; by 13 visits it's down to 0.3. A tip buys early visits, never a permanent place: Q decides once there's data.",
+        "3": "Bonus = c·p·√(1 + ΣN)/(1 + N): hyperbolic decay in the child's own visits at a fixed parent count. Q lives in [−1, 1] from the value head, so c must be on that scale or one term drowns the other."
+      }
+    },
+    {
+      "name": "The missing +1",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "√(ΣN)", "c": "peach", "lines": ["first visit: every N is 0", "every bonus is 0", "argmax takes the first column"] },
+      "right": { "title": "√(1 + ΣN)", "c": "mint", "lines": ["first visit: bonus = c·p", "search follows the prior", "the tip counts from the start"] },
+      "verdict": "One +1 decides whether the prior is heard on the first visit.",
+      "cap": {
+        "1": "A tiny detail with a big effect: without a +1 inside the square root, on the very first visit every bonus is zero, and the search just picks the first column.",
+        "2": "Exercise: <code>select_child</code>. With √(ΣN) and every N = 0, all bonuses and all Q are 0, so argmax returns the first legal action. With √(1 + ΣN) the first pick is the prior's favourite.",
+        "3": "Invisible at 800 simulations, very visible at 16, ARENA's default. Backup is negamax: the value flips sign every ply, because Q is always from the view of the player to move."
+      }
+    },
+    {
+      "name": "One column hogs it",
+      "need": "core",
+      "dur": 10,
+      "type": "bars",
+      "title": "root visits over 16 simulations: healthy, then collapsed (illustrative)",
+      "labels": ["1", "2", "3", "4", "5", "6", "7"],
+      "from": [1, 2, 3, 4, 3, 2, 1],
+      "to": [0, 0, 1, 15, 0, 0, 0],
+      "cap": {
+        "1": "Trust the tips too little for the size of the scores and the first move that looks good grabs every visit. Nothing else ever gets a second look.",
+        "2": "Q lives in [−1, 1]. If c_puct is small against that, or the prior has sharpened onto one column, a child with positive Q beats every sibling's bonus for good. Check c_puct first: ARENA's tuned default is 1.0.",
+        "3": "It self-confirms: unvisited children never get a Q, so the first guess is never corrected. Self-play adds Dirichlet noise to the root prior only (ε = 0.25 in ARENA). Log the root histogram: healthy is two or three columns."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["AlphaGo Zero: 100 to 0, from scratch", "The search becomes the teacher", "Hunch first, evidence after"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "A learned hunch steering the search, with evidence taking over, is how AlphaGo Zero learned Go from random play and beat the published AlphaGo 100 games to 0.",
+        "2": "AlphaZero trains the network to imitate the search's visit counts, which sharpens the prior, which sharpens the next search. Knowing where the hunch ends and the evidence begins tells you what such an agent will never explore.",
+        "3": "PUCT is UCB on tree edges weighted by p_θ; the root visit distribution π becomes AlphaZero's cross-entropy target. Exploration lives outside the loss: root Dirichlet noise and a visit-count temperature τ."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Spend 16 simulations: where do the visits go?",
+    "labels": ["A: the tip (true 0.1)", "B: truly best (0.5)", "C (0.2)", "D (−0.3)"],
+    "params": [
+      { "id": "c", "label": "trust in tips (c_puct)", "min": 0, "max": 3, "step": 0.1, "value": 1 },
+      { "id": "sharp", "label": "how sure the tip is", "min": 0, "max": 3, "step": 0.25, "value": 1 },
+      { "id": "sims", "label": "simulations", "min": 1, "max": 64, "step": 1, "value": 16 }
+    ],
+    "f": "range(sims).reduce((st) => { const tot = sum(st.N); const P = softmax([2*sharp, 0.6*sharp, 0, 0]); const s = st.N.map((n, i) => (n > 0 ? st.W[i]/n : 0) + c*P[i]*sqrt(1 + tot)/(1 + n)); const k = s.indexOf(s.reduce((a, b) => a > b ? a : b)); st.N[k] += 1; st.W[k] += [0.1, 0.5, 0.2, -0.3][k]; return st; }, {N: [0, 0, 0, 0], W: [0, 0, 0, 0]}).N",
+    "y": [0, 64],
+    "readouts": [
+      { "label": "move you'd play (most visited)", "f": "(N => ['A', 'B', 'C', 'D'][N.indexOf(N.reduce((a, b) => a > b ? a : b))])(range(sims).reduce((st) => { const tot = sum(st.N); const P = softmax([2*sharp, 0.6*sharp, 0, 0]); const s = st.N.map((n, i) => (n > 0 ? st.W[i]/n : 0) + c*P[i]*sqrt(1 + tot)/(1 + n)); const k = s.indexOf(s.reduce((a, b) => a > b ? a : b)); st.N[k] += 1; st.W[k] += [0.1, 0.5, 0.2, -0.3][k]; return st; }, {N: [0, 0, 0, 0], W: [0, 0, 0, 0]}).N)" },
+      { "label": "share of visits on B, the truly best", "f": "(N => round(100*N[1]/sum(N)) + '%')(range(sims).reduce((st) => { const tot = sum(st.N); const P = softmax([2*sharp, 0.6*sharp, 0, 0]); const s = st.N.map((n, i) => (n > 0 ? st.W[i]/n : 0) + c*P[i]*sqrt(1 + tot)/(1 + n)); const k = s.indexOf(s.reduce((a, b) => a > b ? a : b)); st.N[k] += 1; st.W[k] += [0.1, 0.5, 0.2, -0.3][k]; return st; }, {N: [0, 0, 0, 0], W: [0, 0, 0, 0]}).N)" },
+      { "label": "moves never tried", "f": "(N => N.filter(n => n == 0).length)(range(sims).reduce((st) => { const tot = sum(st.N); const P = softmax([2*sharp, 0.6*sharp, 0, 0]); const s = st.N.map((n, i) => (n > 0 ? st.W[i]/n : 0) + c*P[i]*sqrt(1 + tot)/(1 + n)); const k = s.indexOf(s.reduce((a, b) => a > b ? a : b)); st.N[k] += 1; st.W[k] += [0.1, 0.5, 0.2, -0.3][k]; return st; }, {N: [0, 0, 0, 0], W: [0, 0, 0, 0]}).N)" }
+    ],
+    "caption": {
+      "1": "The tip favours A, but B is truly best. Set how much you trust tips. Too little: the first decent move hogs every visit. Too much: you just echo the tip.",
+      "2": "Each simulation picks argmax Q + c·p·√(1 + ΣN)/(1 + N) at the root, then records that move's true value. The visit counts are the search's verdict. Try c = 0.1, then 1, then 3, then make the tip very sure.",
+      "3": "Small c: a child with positive Q beats every bonus for good, the spike. Large c: N roughly tracks p and the search echoes the prior. A toy: one level deep, exact values, untried moves scored Q = 0."
+    }
+  },
+  "where_else": [
+    "UCB for multi-armed bandits: the same measured-average-plus-uncertainty split, without a learned prior",
+    "AlphaZero's training loop: the root visit counts PUCT produces become the policy network's cross-entropy target",
+    "Self-play exploration: Dirichlet noise mixed into the root prior, the fix when a sharp prior starves the other moves"
+  ],
+  "hamming": {
+    "what": "A rule for choosing which move to explore next in a search tree: the move's measured value plus a prior-weighted bonus that fades as the move gets visited.",
+    "when": "At every selection step of AlphaGo Zero-style tree search, where there are far too many moves to try each one.",
+    "why": "It lets a learned hunch focus a small simulation budget while measured results take over, which is what makes search tractable in a large action space."
+  },
+  "object": {
+    "title": "The visit-count skyline",
+    "subtitle": "Rows are moments in a 16-simulation search, columns are moves, towers are visits: watch where the budget goes.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 4,
+    "f": "range(2*(r + 1)).reduce((st) => { const tot = sum(st.N); const P = softmax([2*sharp, 0.6*sharp, 0, 0]); const s = st.N.map((n, i) => (n > 0 ? st.W[i]/n : 0) + cp*P[i]*sqrt(1 + tot)/(1 + n)); const k = s.indexOf(s.reduce((a, b) => a > b ? a : b)); st.N[k] += 1; st.W[k] += [0.1, 0.5, 0.2, -0.3][k]; return st; }, {N: [0, 0, 0, 0], W: [0, 0, 0, 0]}).N[c]/8",
+    "labels": { "rows": ["2 sims", "4", "6", "8", "10", "12", "14", "16 sims"], "cols": ["A: the tip", "B: truly best", "C", "D"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "cp", "label": "trust in tips (c_puct)", "min": 0.1, "max": 3, "step": 0.1, "value": 1 },
+      { "id": "sharp", "label": "how sure the tip is", "min": 0, "max": 3, "step": 0.25, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each row is a later moment in the search, each column a move, each tower the visits so far. The tip favours A, but B is truly the best move.",
+          "2": "A one-level toy search with c_puct = 1: the prior prefers A (true value 0.1), while B is worth 0.5. Tower height is N(root, a) after 2, 4, ... 16 simulations.",
+          "3": "Root visit counts N(s,a) over time; normalised at the end they are the improved policy π that AlphaZero trains the network towards."
+        },
+        "view": "iso",
+        "set": { "cp": 1, "sharp": 1 }
+      },
+      {
+        "cap": {
+          "1": "Early on, A gets the visits: that's the tip talking. Then B's measured score takes over, and B's tower outgrows A's.",
+          "2": "The first simulations follow the prior's bonus; once B is tried its Q of 0.5 keeps winning the argmax, and the search corrects a wrong prior with only 16 simulations.",
+          "3": "This is the point of PUCT: the prior sets the order of exploration, not the verdict. Final counts here are A 5, B 11."
+        },
+        "view": "front",
+        "set": { "cp": 1, "sharp": 1 }
+      },
+      {
+        "cap": {
+          "1": "Barely trust the tips and the first decent move hogs every visit: one tall wall on A, nothing else ever tried.",
+          "2": "With c_puct = 0.1 no bonus can beat A's positive Q, so B never gets a single visit. This is the one-column spike from the troubleshooting guide.",
+          "3": "Exploration term ≪ value scale: a self-confirming lock-in, since unvisited children never acquire a Q to compete with."
+        },
+        "view": "iso",
+        "set": { "cp": 0.1, "sharp": 1 }
+      },
+      {
+        "cap": {
+          "1": "Trust the tips a lot and the visits spread roughly by the tip's odds. The search mostly echoes the prior back at you.",
+          "2": "With c_puct = 3 the bonus dominates Q, so visits roughly track p: A gets most, even though B is better. More simulations would let Q catch up.",
+          "3": "For large c, argmax of p/(1 + N) balances N ∝ p: the search returns the prior instead of improving on it."
+        },
+        "view": "side",
+        "set": { "cp": 3, "sharp": 1 }
+      },
+      {
+        "cap": {
+          "1": "Now make the tip very sure of A. Even with sensible trust, 16 simulations aren't enough for B to get its turn.",
+          "2": "A sharp prior shrinks every other move's bonus, so a small budget never reaches them. It's why self-play mixes Dirichlet noise into the root prior.",
+          "3": "With p(A) near 1, the siblings' bonus c·p·√(1 + ΣN) needs far more parent visits to exceed A's score; root noise restores exploration without touching values inside the tree."
+        },
+        "view": "top",
+        "set": { "cp": 1, "sharp": 2.5 }
+      },
+      {
+        "cap": {
+          "1": "No tip at all: every move looks equally promising at first. The search samples around, then settles on B by measurement alone.",
+          "2": "A uniform prior makes PUCT behave like a plain bandit rule: a little of everything, then mostly the best measured move.",
+          "3": "With p uniform the bonus is the same function of N for every child, recovering UCB-style selection with a √(1 + ΣN)/(1 + N) schedule."
+        },
+        "view": "close",
+        "set": { "cp": 1, "sharp": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "On a node's very first visit every N is 0 and every Q is 0. Using √(1 + ΣN), which child does PUCT pick?",
+        "options": [
+          { "t": "The child with the highest prior", "ok": true },
+          { "t": "The first legal column" },
+          { "t": "A child at random" }
+        ],
+        "why": "The score reduces to c·p, so the prior's favourite wins. Without the +1 every bonus is 0 and argmax returns the first column."
+      },
+      {
+        "q": "The root visit histogram is a single spike, and more simulations change nothing. What do you check first?",
+        "options": [
+          { "t": "c_puct against the value scale", "ok": true },
+          { "t": "The learning rate" },
+          { "t": "The discount factor" }
+        ],
+        "why": "If the bonus can't compete with Q in [−1, 1], a child with positive Q wins every comparison and nothing else gets a second visit."
+      },
+      {
+        "q": "As one move gets visited more, what happens to its exploration bonus?",
+        "options": [
+          { "t": "It shrinks, so its measured Q takes over", "ok": true },
+          { "t": "It grows with each visit" },
+          { "t": "It stays fixed at c·p" }
+        ],
+        "why": "The bonus divides by 1 + N(s,a): the tip fades with every visit and your own measurements decide."
+      }
+    ],
+    "where": "Anywhere a learned hunch steers a small search budget: tree search in games, bandits with priors, planning with a simulator."
+  }
+}

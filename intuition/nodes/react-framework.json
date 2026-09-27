@@ -1,0 +1,190 @@
+{
+  "id": "react-framework",
+  "title": "Plan out loud, then step",
+  "week": 11,
+  "need": "core",
+  "allegory": "ReAct is like a hiker who must stop at every junction, hands in pockets, and say the plan out loud before taking one step, then look at where the step landed before planning again.",
+  "map": [
+    ["stopping at a junction with hands in pockets", "the reasoning call, with tools disabled (tool_choice='none')"],
+    ["saying the plan out loud", "the reasoning text, appended to the chat history"],
+    ["taking exactly one step", "the action call: one tool call, like MovePageTool"],
+    ["looking at where you landed", "the observation: the tool's result, returned as a message"],
+    ["the trail diary that grows with every junction", "the chat history that every later turn conditions on"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Clicking in circles",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "Joinery to Amethyst: lost again",
+      "actors": [{ "pose": "run", "x": 0.2, "to": 0.5, "label": "agent" }],
+      "props": [
+        { "kind": "door", "x": 0.3, "y": 0.55, "w": 0.1, "h": 0.3, "label": "page A", "color": "cream" },
+        { "kind": "door", "x": 0.6, "y": 0.55, "w": 0.1, "h": 0.3, "label": "page B", "color": "cream" },
+        { "kind": "flag", "x": 0.9, "y": 0.5, "label": "target", "color": "green" }
+      ],
+      "arrows": [[0.35, 0.3, 0.58, 0.3, "click"], [0.58, 0.4, 0.35, 0.4, "click back"]],
+      "cap": {
+        "1": "Your Wikipedia-racing agent clicks the first link that looks close, then the next, and ends up going round in circles. It never stops to plan.",
+        "2": "When the model may call a tool on every turn, it can act before stating any plan, repeat a dead move, and run out of messages without ever reaching the target page.",
+        "3": "With tools always enabled, an action can be emitted before any explicit plan exists. ReAct changes the turn structure of the scaffold, not the weights."
+      }
+    },
+    {
+      "name": "Hands in pockets",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "think", "x": 0.3, "label": "agent" }],
+      "props": [
+        { "kind": "card", "x": 0.3, "y": 0.18, "label": "plan: zoom out to a broad page, then zoom in", "color": "lav" },
+        { "kind": "flag", "x": 0.6, "y": 0.55, "label": "one step", "color": "orange" },
+        { "kind": "flag", "x": 0.88, "y": 0.55, "label": "target", "color": "green" }
+      ],
+      "arrows": [[0.4, 0.62, 0.56, 0.62, "then act"]],
+      "cap": {
+        "1": "New rule: at every junction, stop with your hands in your pockets and say the plan out loud. Only then take one step, and look at where you landed.",
+        "2": "ReAct splits each turn in two: a reasoning call with tools disabled, so the model can only write its plan, then an action call where it picks one tool. The result comes back as an observation.",
+        "3": "Per turn: generate_reason with tool_choice='none' appends a thought; generate_action then emits a tool call conditioned on it; the tool result is appended as the next observation."
+      }
+    },
+    {
+      "name": "Think, act, look",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "goal", "label": "goal + tools", "x": 0.1, "y": 0.5, "c": "cream" },
+        { "id": "think", "label": "think (tools off)", "x": 0.36, "y": 0.24, "c": "lav" },
+        { "id": "act", "label": "act (one tool call)", "x": 0.66, "y": 0.24, "c": "orange" },
+        { "id": "look", "label": "look (tool result)", "x": 0.5, "y": 0.74, "c": "sky" },
+        { "id": "win", "label": "target page", "x": 0.9, "y": 0.74, "c": "green" }
+      ],
+      "edges": [["goal", "think"], ["think", "act", "plan"], ["act", "look", "result"], ["look", "think", "next turn"], ["look", "win", "there yet?"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Think, act, look. Think, act, look. Every thought and every result goes into the diary, so the next plan is made with the whole trail in view.",
+        "2": "The loop: reason (no tools), act (one tool call), observe (tool result as a message), repeat until the goal or the message limit. Everything is appended to the chat history.",
+        "3": "The thought is ordinary context that conditions the action and all later turns. Showing the agent its full history lets it notice its own loops, at a cost in context length."
+      }
+    },
+    {
+      "name": "Same weights, new score",
+      "need": "core",
+      "dur": 10,
+      "type": "bars",
+      "title": "HumanEval pass@1 (%), no weight updates",
+      "labels": ["GPT-4 alone", "with Reflexion"],
+      "from": [0, 0],
+      "to": [80, 91],
+      "cap": {
+        "1": "A related trick, Reflexion, had an agent write notes on its own mistakes and reread them. Its coding score beat GPT-4's 80% with 91%, with no retraining.",
+        "2": "Same weights, better wrapper: Reflexion hit 91% pass@1 on HumanEval against GPT-4's 80%. Chain-of-thought was found about 3.5 years after GPT-2, on weights that never changed.",
+        "3": "Reflexion (Shinn et al., 2023) stores verbal self-reflections in an episodic buffer: 91% HumanEval pass@1 vs 80% for GPT-4, no gradient updates. Scaffolds move capability scores."
+      }
+    },
+    {
+      "name": "Cannot, or untried?",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "'the model cannot'", "c": "pink", "lines": ["one scaffold, one try", "zero wins on the hard pair", "written up as a limit", "fixed next day by three sentences"] },
+      "right": { "title": "a declared elicitation budget", "c": "mint", "lines": ["general first: CoT, ReAct, history", "then narrow: a lookahead tool", "pin the exact model version", "report best score and methods tried"] },
+      "verdict": "A score is a lower bound on the model and an upper bound on your effort.",
+      "cap": {
+        "1": "Your agent fails, so you write 'the model cannot'. Next day someone rewrites three sentences of your prompt and it wins. You had measured your effort.",
+        "2": "Spend a declared elicitation budget before writing 'cannot': general methods first (chain-of-thought, ReAct, full history), then narrow ones. Pin the model version and report what you tried.",
+        "3": "Capability scores are joint over weights, scaffold, prompt, tools and history policy. In dangerous-capability evals an under-elicited null is the failure that matters most; report lower bounds."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Same weights, better wrapper", "'Cannot' is a claim about your effort", "Plans left in writing you can read"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "To know what an AI agent can really do, you must try hard to help it succeed. ReAct is one of the cheapest ways, and it leaves the plan in writing.",
+        "2": "ReAct is a general elicitation method: it transfers across tasks, which is exactly why such methods are the worrying kind. Its written plans also make transcripts far easier to read.",
+        "3": "Explicit reasoning turns expose intended plans in the transcript, useful for auditing agents, though stated reasoning need not be the whole cause of an action. General methods raise risk everywhere at once."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Is planning worth the extra call? A toy race",
+    "params": [
+      { "id": "pb", "label": "chance a blind click helps", "min": 0.05, "max": 0.9, "step": 0.05, "value": 0.2 },
+      { "id": "pr", "label": "chance a planned click helps", "min": 0.05, "max": 0.9, "step": 0.05, "value": 0.5 },
+      { "id": "B", "label": "budget of model calls", "min": 5, "max": 40, "step": 1, "value": 20 }
+    ],
+    "curves": [
+      { "f": "((n, p) => { let s = 0; for (let j = 5; j <= n; j++) { let comb = 1; for (let i = 1; i <= j; i++) comb *= (n - j + i) / i; s += comb * Math.pow(p, j) * Math.pow(1 - p, n - j); } return s; })(Math.floor(x), pb)", "c": "pink", "label": "act at once (1 call per hop)" },
+      { "f": "((n, p) => { let s = 0; for (let j = 5; j <= n; j++) { let comb = 1; for (let i = 1; i <= j; i++) comb *= (n - j + i) / i; s += comb * Math.pow(p, j) * Math.pow(1 - p, n - j); } return s; })(Math.floor(x / 2), pr)", "c": "teal", "label": "ReAct (2 calls per hop)" }
+    ],
+    "x": [0, 40],
+    "y": [0, 1],
+    "readouts": [
+      { "label": "act at once: chance to win at your budget", "f": "Math.round(100 * ((n, p) => { let s = 0; for (let j = 5; j <= n; j++) { let comb = 1; for (let i = 1; i <= j; i++) comb *= (n - j + i) / i; s += comb * Math.pow(p, j) * Math.pow(1 - p, n - j); } return s; })(Math.floor(B), pb)) + '%'" },
+      { "label": "ReAct: chance to win at your budget", "f": "Math.round(100 * ((n, p) => { let s = 0; for (let j = 5; j <= n; j++) { let comb = 1; for (let i = 1; i <= j; i++) comb *= (n - j + i) / i; s += comb * Math.pow(p, j) * Math.pow(1 - p, n - j); } return s; })(Math.floor(B / 2), pr)) + '%'" },
+      { "label": "hops each can afford", "f": "Math.floor(B) + ' vs ' + Math.floor(B / 2)" }
+    ],
+    "caption": {
+      "1": "Set how often a blind click helps and how often a planned one does. ReAct spends two calls per hop. Find where the plan pays for itself.",
+      "2": "On a tight budget a slightly better plan can lose to more blind clicks. Once planning is reliable enough, ReAct wins despite the double cost. Same model, different scaffold.",
+      "3": "Toy model: a win needs 5 useful hops, each useful with probability p, within budget ÷ calls-per-hop hops, a binomial tail. It shows the trade-off only; nothing here is measured."
+    }
+  },
+  "where_else": [
+    "Chain-of-thought, the general method that showed reasoning text can unlock harder tasks on unchanged weights",
+    "Reflexion, which adds written self-critique between attempts",
+    "Any tool-using agent where you want the plan written down before the move",
+    "Plan, act, check loops everywhere: a pilot's checklist, a scientist's lab notebook"
+  ],
+  "hamming": {
+    "what": "An agent scaffold that splits every turn into a reasoning step with tools disabled, then an action step that makes one tool call.",
+    "when": "When building or evaluating tool-using agents, especially before you trust a low capability score.",
+    "why": "Forcing a plan before each action can lift performance on the same weights and leaves a readable trail, so a failure says more about the model."
+  },
+  "object": {
+    "title": "The think-act-look string",
+    "subtitle": "A transcript as beads on a thread: think, act, look, repeated, with the chat history running through every bead.",
+    "kind": "blocks",
+    "items": [
+      { "label": "goal + tools", "h": 0.6, "c": "plaster" },
+      { "label": "think", "h": 1.1, "c": "dir" },
+      { "label": "act", "h": 0.8, "c": "brass" },
+      { "label": "look", "h": 0.6, "c": "data" },
+      { "label": "think", "h": 1.1, "c": "dir" },
+      { "label": "act", "h": 0.8, "c": "brass" },
+      { "label": "look", "h": 0.6, "c": "data" },
+      { "label": "think", "h": 1.1, "c": "dir" },
+      { "label": "act", "h": 0.8, "c": "brass" },
+      { "label": "target", "h": 1.2, "c": "good" }
+    ],
+    "axis": "x",
+    "stream": true,
+    "gap": 0.3,
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "A transcript you can hold. Violet beads are thoughts, brass are actions, blue are what the agent saw. The thread through them is the chat history.", "2": "Each ReAct turn adds a think bead (tools off), an act bead (one tool call) and a look bead (the tool's result).", "3": "Every message is appended to the history, so each later generation conditions on all earlier thoughts, calls and observations." }, "view": "iso", "set": {} },
+      { "cap": { "1": "A thought comes before every action, never after. That order is the whole rule.", "2": "The reasoning call runs with tool_choice='none', so the model can only write a plan; the action call then picks one tool.", "3": "Disabling tools on the reasoning call makes an articulated plan precede each action instead of being optional." }, "view": "front", "set": {} },
+      { "cap": { "1": "The thread runs through every bead, so a later plan can see an earlier mistake and avoid repeating it.", "2": "Letting the agent see its whole history, not just the current page, is what lets it notice it is looping.", "3": "Full-history context trades tokens for loop detection; truncated history makes each turn locally myopic." }, "view": "side", "set": {} },
+      { "cap": { "1": "More beads per step: planning costs an extra call every hop, so it has to earn its keep.", "2": "Two model calls per hop instead of one: more cost and more context per step, repaid only if the actions get better.", "3": "ReAct doubles generations per step; whether it helps is empirical, which is why an elicitation ladder records every before and after." }, "view": "close", "set": {} },
+      { "cap": { "1": "Read the violet beads to see what the agent meant to do. They are the easiest window into an agent's plans.", "2": "Transcripts with explicit plans are much easier to debug: read three failures before trusting any score.", "3": "Stated plans aid auditing but need not be the full cause of an action; read them as evidence, not ground truth." }, "view": "top", "set": {} }
+    ],
+    "predict": [
+      { "q": "During ReAct's reasoning step, what can the model do?", "options": [{ "t": "Only write text: tools are switched off", "ok": true }, { "t": "Call any tool it likes" }], "why": "The reasoning call sets tool_choice='none', so the plan must be written before any action is chosen." },
+      { "q": "Your agent loses every hard page pair. Can you write 'the model cannot do this'?", "options": [{ "t": "Not yet: elicit first, then report a lower bound", "ok": true }, { "t": "Yes: a failure is a failure" }], "why": "A score is a lower bound on the model and an upper bound on your effort. Try general methods like ReAct first." },
+      { "q": "ReAct doubles the calls per hop. When is it worth it?", "options": [{ "t": "When planned moves are enough better to pay for the extra call", "ok": true }, { "t": "Always: more calls always means more wins" }], "why": "Under a fixed budget planning costs hops; it wins when it lifts the quality of each move enough." }
+    ],
+    "where": "Any plan, act, check loop: a pilot's checklist, a scientist's notebook, a debugger's hypothesis log."
+  }
+}

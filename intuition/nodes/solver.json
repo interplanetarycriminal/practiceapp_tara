@@ -1,0 +1,243 @@
+{
+  "id": "solver",
+  "title": "Clerks passing one folder along",
+  "week": 11,
+  "need": "library",
+  "allegory": "A solver is like one clerk in a line passing a single folder: each clerk does one small job to its pages, such as adding instructions or wrapping the question in a template, then hands the folder on, and only one clerk carries it to the model and clips in the reply.",
+  "map": [
+    ["the folder passed down the line: the chat so far, the question, the reply and sticky notes", "the TaskState: messages, user_prompt, output and metadata"],
+    ["a clerk who edits the folder and hands it on", "a solver: an async solve(state, generate) that mutates the TaskState and returns it"],
+    ["the one clerk who carries the folder to the model and clips in the reply", "generate(): the actual model call, added to the list explicitly"],
+    ["the order of clerks along the line", "the solver chain, e.g. system_message, prompt_template, multiple_choice_format, generate, make_choice"],
+    ["the examiner who marks the reply at the end", "the scorer: match for multiple choice, model_graded_fact where string comparison will not do"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Many wrappers, one question",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "everyone had their own script",
+      "actors": [{ "pose": "type", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.52, "y": 0.3, "label": "the bare question", "color": "cream" },
+        { "kind": "stack", "x": 0.72, "y": 0.62, "label": "your one-off script", "color": "peach" },
+        { "kind": "stack", "x": 0.9, "y": 0.62, "label": "their one-off script", "color": "lav" }
+      ],
+      "cap": {
+        "1": "To test a model you rarely send the bare question. You add instructions, a template, the answer options, a nudge to reason. Everyone used to hand-roll this.",
+        "2": "Before Inspect, each team kept private eval scripts, so results were hard to compare. The UK AI Safety Institute released Inspect openly in May 2024 as a shared harness.",
+        "3": "Inspect (UK AISI, 10 May 2024, Open Government Licence) made the eval harness a shared artefact: a dataset, a solver chain and a scorer that someone else can rerun and compare."
+      }
+    },
+    {
+      "name": "Clerks and a folder",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "carry", "x": 0.12, "to": 0.32, "label": "template clerk" },
+        { "pose": "write", "x": 0.55, "label": "options clerk" },
+        { "pose": "reach", "x": 0.8, "label": "generate" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.34, "y": 0.5, "label": "folder: the chat so far", "color": "cream" },
+        { "kind": "cloud", "x": 0.9, "y": 0.18, "label": "the model", "color": "lav" }
+      ],
+      "arrows": [[0.2, 0.3, 0.72, 0.3, "hand it on"]],
+      "cap": {
+        "1": "Picture a line of clerks passing one folder. Each does one small job to the pages, then hands it on. One clerk takes it to the model and clips in the reply.",
+        "2": "The folder is the TaskState: the chat messages, the user prompt, the model's output and a metadata scratchpad. Each solver edits it and returns it for the next one.",
+        "3": "A solver is a closure returning <code>async def solve(state, generate)</code>, which mutates the TaskState in place and returns it. Metadata persists across the whole chain."
+      }
+    },
+    {
+      "name": "The line in order",
+      "need": "library",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "q", "label": "sample", "x": 0.06, "y": 0.5, "c": "cream" },
+        { "id": "sys", "label": "system_message", "x": 0.22, "y": 0.3, "c": "sky" },
+        { "id": "tpl", "label": "prompt_template", "x": 0.38, "y": 0.7, "c": "sky" },
+        { "id": "mc", "label": "multiple_choice_format", "x": 0.54, "y": 0.3, "c": "sky" },
+        { "id": "gen", "label": "generate()", "x": 0.7, "y": 0.7, "c": "orange" },
+        { "id": "mk", "label": "make_choice", "x": 0.84, "y": 0.3, "c": "sky" },
+        { "id": "sc", "label": "scorer", "x": 0.95, "y": 0.7, "c": "green" }
+      ],
+      "edges": [["q", "sys"], ["sys", "tpl"], ["tpl", "mc"], ["mc", "gen"], ["gen", "mk"], ["mk", "sc"]],
+      "flow": "forward",
+      "cap": {
+        "1": "A typical line: add a system message, wrap the question in a template, list the options, call the model, then ask for a final choice. A scorer marks it.",
+        "2": "Inspect ships built-in solvers for jobs like these, so in real work they are library calls. ARENA has you rebuild them, so you know which link to check when a run goes wrong.",
+        "3": "Order is meaning: solvers before <code>generate()</code> change what the model sees; solvers after it act on the reply. ARENA adds <code>generate()</code> to the list explicitly, never inside a solver."
+      }
+    },
+    {
+      "name": "The template clerk",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "the folder before and after prompt_template",
+      "rows": 3,
+      "cols": 2,
+      "values": [
+        ["the question", "template + question"],
+        ["system message", "unchanged"],
+        ["empty", "still empty"]
+      ],
+      "labels": { "rows": ["user prompt", "earlier messages", "output"], "cols": ["before", "after"] },
+      "highlight": [[0, 1]],
+      "cap": {
+        "1": "Your exercise clerk does one job: wrap the question in a template, leave every other page alone, and hand the folder on. The reply stays empty until generate.",
+        "2": "<code>prompt_template(template)</code> returns a solver that rewrites the first user message (<code>state.user_prompt</code>) using the template, then ends with <code>return state</code>.",
+        "3": "The outer function captures the template; the inner <code>async solve(state, generate)</code> edits the TaskState in place and returns it. It never calls the model: that is <code>generate()</code>'s job."
+      }
+    },
+    {
+      "name": "The silent no-op",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Looks fine", "c": "pink", "lines": ["template placed after generate()", "run completes, log opens", "score exactly as before"] },
+      "right": { "title": "Actually check", "c": "mint", "lines": ["every solver ends with return state", "generate() after the shapers", "read one sample's full chat"] },
+      "verdict": "Before believing the number, read one sample's chat history end to end.",
+      "cap": {
+        "1": "The sneakiest bug is a run that works. Place your clerk after the model call: the model never sees your template, nothing complains, the score stays put.",
+        "2": "An unchanged score after adding a solver is a red flag. Open the log viewer and read one sample: if your template text is not in the chat history, it never took effect.",
+        "3": "A clean run with an unchanged result is the worst failure signature. The log stores every message, so reading one sample catches it in thirty seconds; the aggregate score never will."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Shape what the model sees, one step at a time", "Swap one step, rerun, compare", "The log shows exactly what was asked"],
+      "actor": { "pose": "point", "x": 0.85 },
+      "cap": {
+        "1": "Evals are how we find out what a model does. The solver chain decides exactly what it was asked, so it decides what the number means.",
+        "2": "ARENA's agent loops and AI control exercises are Inspect tasks built from the same parts, and a shared harness lets another team rerun your eval and read the same log.",
+        "3": "For understanding and steering AI: a result is only as trustworthy as the prompt pipeline behind it. Treat the solver chain as part of the claim, and share it with the score."
+      }
+    }
+  ],
+  "coda": {
+    "type": "match",
+    "title": "Match each clerk to its one job",
+    "pairs": [
+      ["TaskState", "the folder passed down the line: chat, question, reply, notes"],
+      ["system_message", "add standing instructions as a system message"],
+      ["prompt_template", "wrap the question in a fixed template"],
+      ["generate()", "actually call the model and clip in its reply"],
+      ["make_choice", "ask the model for its final answer"],
+      ["scorer", "mark the answer against the target"]
+    ],
+    "caption": {
+      "1": "Match each clerk to its job. Then picture the line in order: which jobs have to happen before the model is called?",
+      "2": "Everything before <code>generate()</code> shapes what the model sees; anything after it works on the reply. The scorer marks what comes out of the end of the line.",
+      "3": "The TaskState carries messages, user_prompt, output and metadata through the chain; solvers mutate and return it. Scorers return a Score and can stash metadata of their own."
+    }
+  },
+  "where_else": [
+    "Web middleware: each layer takes a request, edits it and passes it on",
+    "Data pipelines: small composable steps chained in a fixed order, each easy to test alone",
+    "ARENA's agent loops [3.4] and AI control protocols [3.5], which are Inspect tasks built from the same parts"
+  ],
+  "hamming": {
+    "what": "A small composable step in an Inspect eval that edits the conversation state, such as adding a system message, templating the prompt or calling the model, then passes it on.",
+    "when": "Whenever you run an eval with Inspect: the solver chain decides exactly what the model is asked and in what order, before a scorer marks the result.",
+    "why": "Splitting the pipeline into small steps makes an eval reproducible and debuggable: swap one step and rerun, and read the log to see exactly what the model saw."
+  },
+  "object": {
+    "title": "The folder line",
+    "subtitle": "An Inspect solver chain as a row of stations with one folder threading through every one of them, from the first instruction to the scorer.",
+    "kind": "blocks",
+    "items": [
+      { "label": "system_message", "h": 0.6, "c": "data" },
+      { "label": "prompt_template", "h": 0.7, "c": "data" },
+      { "label": "multiple_choice_format", "h": 0.6, "c": "data" },
+      { "label": "generate()", "h": 1.6, "c": "good" },
+      { "label": "make_choice", "h": 0.7, "c": "data" },
+      { "label": "scorer", "h": 1.0, "c": "prob" }
+    ],
+    "axis": "x",
+    "stream": true,
+    "gap": 0.3,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "One folder threads through every station. Each station touches it once and passes it on.",
+          "2": "The tube is the TaskState: messages, user_prompt, output and metadata, carried through the whole chain.",
+          "3": "Solvers mutate one shared TaskState in sequence; the chain's order is its semantics."
+        },
+        "view": "iso"
+      },
+      {
+        "cap": {
+          "1": "Your exercise station, prompt_template, rewrites only the question page and hands the folder on.",
+          "2": "It edits the first user message and ends with <code>return state</code>. It does not call the model.",
+          "3": "A closure over the template string, returning an async solve(state, generate) that mutates and returns the state."
+        },
+        "view": "close"
+      },
+      {
+        "cap": {
+          "1": "The tall station is the only one that talks to the model. Everything to its left shapes what the model sees.",
+          "2": "Under ARENA's convention no solver calls the model itself; <code>generate()</code> sits in the list explicitly.",
+          "3": "Making the model call an explicit list entry lets you insert a solver before generation without re-reading any solver's source."
+        },
+        "view": "side"
+      },
+      {
+        "cap": {
+          "1": "From above, the order is plain. Move a template to the right of generate and the model never sees it.",
+          "2": "A shaper placed after the model call produces a clean run and an unchanged score: the worst kind of bug.",
+          "3": "Order errors pass every runtime check. Only the log reveals them, because it stores every message the model actually saw."
+        },
+        "view": "top"
+      },
+      {
+        "cap": {
+          "1": "At the end, the scorer marks the answer. Before trusting its number, open one folder and read every page.",
+          "2": "Use <code>match</code> for multiple choice and <code>model_graded_fact</code> where a string comparison will not do.",
+          "3": "Scorers return Score objects with optional metadata, and eval() writes a log you can read message by message."
+        },
+        "view": "front"
+      }
+    ],
+    "predict": [
+      {
+        "q": "You add a prompt_template solver after generate() in the list. What happens to the score?",
+        "options": [
+          { "t": "Nothing changes: the model never saw the template", "ok": true },
+          { "t": "It improves, because the template is now in the chain" }
+        ],
+        "why": "Solvers before generate() shape what the model sees. A template added after the call only rewrites a question that has already been answered."
+      },
+      {
+        "q": "Your new solver changed nothing in the score. What do you check first?",
+        "options": [
+          { "t": "One sample's full chat history in the log viewer", "ok": true },
+          { "t": "The average score over more samples" }
+        ],
+        "why": "The log stores every message. If your template text is not in there, the solver did not run or did not take effect."
+      },
+      {
+        "q": "Under ARENA's convention, which solver calls the model?",
+        "options": [
+          { "t": "Only generate(), added to the list explicitly", "ok": true },
+          { "t": "Every solver that edits the prompt" }
+        ],
+        "why": "No solver calls the model itself, so you can slot a new step in before generation without reading anyone else's code."
+      }
+    ],
+    "where": "Middleware in web servers and data pipelines: a chain of small steps, each taking a request, editing it and passing it on."
+  }
+}
