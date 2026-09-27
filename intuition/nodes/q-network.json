@@ -1,0 +1,229 @@
+{
+  "id": "q-network",
+  "title": "Print every door's tag at once",
+  "week": 9,
+  "need": "core",
+  "allegory": "A Q-network is like a tag printer you carry from room to room: show it a snapshot of any room, even one nobody has seen, and it prints a price tag for every exit at once, so you never need a book listing every room in the world.",
+  "map": [
+    ["a snapshot of the room: a few measurements", "the observation vector s (four numbers in CartPole)"],
+    ["the printer's gears, tuned by experience", "the MLP's weights θ, trained towards TD targets"],
+    ["one tag per exit, printed in one go", "an output layer with one unit per action: Q_θ(s) ∈ ℝ^|A|"],
+    ["walking through the exit with the biggest tag", "the greedy action argmax_a Q_θ(s, a)"],
+    ["a room nobody has seen still gets sensible tags", "generalisation: similar states share weights, so unvisited states get values"]
+  ],
+  "credit": "Framing borrowed from Andrew Ng, Machine Learning Specialization (reinforcement learning, 'Improved neural network architecture'): one network outputs every action's Q-value at once.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The book runs out",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "CartPole: states never repeat exactly",
+      "actors": [{ "pose": "carry", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.32, "y": 0.62, "label": "Q-table", "color": "cream" },
+        { "kind": "card", "x": 0.56, "y": 0.4, "label": "lean 0.10: page 7", "color": "mint" },
+        { "kind": "card", "x": 0.56, "y": 0.62, "label": "lean 0.1003: no page", "color": "pink" },
+        { "kind": "cloud", "x": 0.84, "y": 0.52, "w": 0.18, "h": 0.14, "label": "?", "color": "chalk" }
+      ],
+      "arrows": [[0.66, 0.62, 0.77, 0.54, "never visited"]],
+      "cap": {
+        "1": "A book of scores needs a page for every situation. But a balancing pole can lean by any amount, so the pages never end and most situations have none.",
+        "2": "Tabular Q-learning keeps one entry per (state, action). CartPole's observation is four continuous numbers, so states almost never repeat exactly, and an unvisited entry keeps its starting value.",
+        "3": "A lookup table cannot generalise: Q(s, a) changes only when (s, a) itself is updated. With continuous observations you need a parametric Q_θ that shares statistical strength across nearby states."
+      }
+    },
+    {
+      "name": "The tag printer",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.08, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.24, "y": 0.55, "label": "snapshot: 4 numbers", "color": "sky" },
+        { "kind": "box", "x": 0.46, "y": 0.55, "w": 0.16, "h": 0.2, "label": "Q-network", "color": "orange" },
+        { "kind": "card", "x": 0.69, "y": 0.42, "label": "push left: 4.1", "color": "butter" },
+        { "kind": "card", "x": 0.69, "y": 0.66, "label": "push right: 5.9", "color": "butter" },
+        { "kind": "door", "x": 0.9, "y": 0.6, "label": "right", "color": "mint" }
+      ],
+      "arrows": [[0.31, 0.55, 0.38, 0.55, "in"], [0.54, 0.52, 0.62, 0.44, "prints"], [0.54, 0.58, 0.62, 0.65, "prints"]],
+      "cap": {
+        "1": "So swap the book for a printer. Show it a snapshot of the room and out come price tags for every exit at once. Brand-new rooms get tags too.",
+        "2": "The Q-network is that printer: a small MLP that takes the observation and returns a vector with one Q-value per action. Unseen states still get values, because similar inputs give similar outputs.",
+        "3": "Q_θ: S → ℝ^|A| replaces the table with a function approximator. It generalises across states through shared weights θ, and its outputs are only as good as the TD targets it was fitted to."
+      }
+    },
+    {
+      "name": "One pass, every action",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "Q_θ(s)", "c": "orange", "note": "the printer, weights θ" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "MLP(", "c": "ink", "note": "linear layers, nonlinearities between" },
+        { "t": "s", "c": "sky", "note": "the snapshot: the observation" },
+        { "t": ")", "c": "ink", "note": "" },
+        { "t": " ∈ ℝ^|A|", "c": "green", "note": "one number per action" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The printer's rule: snapshot in, a short list of scores out, one per exit. To choose, read the list once and take the biggest.",
+        "2": "Input size is the observation size; output size is the number of actions. The QNetwork exercise builds this MLP. Picking the greedy action is argmax over one forward pass, not one pass per action.",
+        "3": "Emitting all |A| values at once makes both the greedy argmax and max_a Q(s′, a) in the TD target a single forward pass. It also presumes a finite, discrete action set."
+      }
+    },
+    {
+      "name": "Nudge one, move many",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Q-table", "c": "peach", "lines": ["update one row", "every other row untouched", "unseen rows stay at the start value"] },
+      "right": { "title": "Q-network", "c": "sky", "lines": ["update one state's output", "nearby states shift too", "unseen states get guesses"] },
+      "verdict": "Sharing is the power, and also why the target keeps moving.",
+      "cap": {
+        "1": "Retune the printer for one room and the tags for similar rooms change too. That's how new rooms get sensible tags, and also how old tags drift.",
+        "2": "A gradient step on one transition moves shared weights, so Q shifts for nearby states, including s′. The target you just aimed at has moved: this is why DQN adds a target network.",
+        "3": "Function approximation couples updates across states. With bootstrapping and off-policy data it forms the deadly triad, with no convergence guarantee; replay and a target network are engineering patches."
+      }
+    },
+    {
+      "name": "Only the taken tag",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "rows": 4,
+      "cols": 2,
+      "values": [[4.1, 5.9], [6.2, 3.8], [5.0, 5.0], [2.3, 7.7]],
+      "labels": { "rows": ["took right", "took left", "took right", "took left"], "cols": ["push left", "push right"] },
+      "title": "a batch of 4 memories: only the lit cells learn",
+      "highlight": [[0, 1], [1, 0], [2, 1], [3, 0]],
+      "cap": {
+        "1": "Each memory only says what happened after one exit, so only that exit's tag gets corrected. The other tags on that snapshot are left alone.",
+        "2": "The network outputs every action, but a transition (s, a, r, s′) only tells you about a. Gather Q_θ(s)[a] for the taken action and regress that entry. Some rows are exploration moves, and that's fine.",
+        "3": "Loss per sample: (Q_θ(s)[a] − y)² with y = r + γ·max_a′ Q_θ⁻(s′, a′)·(1 − terminated). Only the taken action's output gets gradient; the max belongs on the target side, at s′."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["State in, every action's score out", "Unseen states still get values", "Finite actions only: max needs a list", "Read the scores to see what it wants"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "A printer that scores every option at a glance lets an agent act in worlds too big for any book. Read its tags and you see what it wants before it moves.",
+        "2": "Swapping the table for a Q-network turned Q-learning into DQN, which learned 49 Atari games from pixels. Its per-action outputs are also an inspection point: log them to see what the agent values.",
+        "3": "In DQN, Q_θ is the whole policy: act greedily on its outputs. Understanding or steering such an agent starts with what those outputs encode. Continuous actions break the max, which is why policy gradients come next."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Slide the pole's lean: the network tags every state, the table knows three",
+    "labels": ["network: push left", "network: push right", "table: push left", "table: push right"],
+    "params": [
+      { "id": "lean", "label": "pole lean (left − / right +)", "min": -1, "max": 1, "step": 0.05, "value": 0.3 },
+      { "id": "spin", "label": "pole swing (left − / right +)", "min": -1, "max": 1, "step": 0.25, "value": 0 }
+    ],
+    "f": "(() => { const k = 3*(lean + 0.5*spin); const seen = [-0.5, 0, 0.5].some(v => abs(lean - v) < 0.001) && abs(spin) < 0.001; return [5 - k, 5 + k, seen ? 5 - k : 0, seen ? 5 + k : 0]; })()",
+    "y": [0, 10],
+    "readouts": [
+      { "label": "network's pick", "f": "(() => { const k = 3*(lean + 0.5*spin); return abs(k) < 1e-9 ? 'tie: either push' : (k > 0 ? 'push right' : 'push left'); })()" },
+      { "label": "table's pick", "f": "(() => { const k = 3*(lean + 0.5*spin); const seen = [-0.5, 0, 0.5].some(v => abs(lean - v) < 0.001) && abs(spin) < 0.001; return !seen ? 'no row for this state: tags still 0' : (abs(k) < 1e-9 ? 'tie: either push' : (k > 0 ? 'push right' : 'push left')); })()" },
+      { "label": "lean where the network's pick flips", "f": "(-0.5*spin).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Slide the lean. The network's tags change smoothly everywhere. The table has rows for just three exact states: step off them and its tags go blank.",
+      "2": "This toy network prefers push right when lean plus half the swing is positive: move the cart under the falling pole. The table can only answer for exact states it has stored.",
+      "3": "Toy Q_θ, linear in (lean, swing); the tabular Q holds entries only at visited states, initialised to 0. Generalisation is what lets DQN act in continuous state spaces, and why its targets move."
+    }
+  },
+  "where_else": [
+    "A language model's unembedding: one logit per vocabulary token from a single pass",
+    "Image classifiers: one output per class, then argmax to decide",
+    "Actor-critic methods: a critic network estimates value where a table could not",
+    "Any learned scorer that rates a fixed menu of options in one go"
+  ],
+  "hamming": {
+    "what": "A neural network that takes a state and returns one Q-value per action, replacing the Q-table.",
+    "when": "Whenever states are too many or too continuous to list, but the actions are a small finite menu, as in CartPole or Atari.",
+    "why": "A table can only answer for states it has visited; a network shares what it learned across similar states, and one forward pass scores every action."
+  },
+  "object": {
+    "title": "The tag landscape",
+    "subtitle": "every state on the floor, each action's tag as height",
+    "kind": "surface",
+    "f": "(() => { const hill = 10 - 3*(x*x + y*y); const L = hill - 2*(x + 0.5*y); const R = hill + 2*(x + 0.5*y); return m == 0 ? L : (m == 1 ? R : max(L, R)); })()",
+    "x": [-1, 1],
+    "y": [-1, 1],
+    "marks": [
+      { "x": -0.5, "y": 0, "label": "table row" },
+      { "x": 0, "y": 0, "label": "table row" },
+      { "x": 0.5, "y": 0, "label": "table row" }
+    ],
+    "knobs": [
+      { "id": "m", "label": "which tag: 0 push left, 1 push right, 2 the bigger one", "min": 0, "max": 2, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Every spot on the floor is a state: how far the pole leans, how fast it swings. Height is the 'push left' tag. Upright and still is the high ground.",
+          "2": "This sheet is Q_θ(s, left) over a 2D slice of state space, lean by swing. A toy, shaped like CartPole: near upright either push keeps the pole up for a long while.",
+          "3": "Q_θ(·, left) evaluated on a grid of states. A table stores values only at visited points; the network defines a whole function, fitted where data exists and interpolated elsewhere."
+        },
+        "view": "iso",
+        "set": { "m": 0 }
+      },
+      {
+        "cap": {
+          "1": "Now the 'push right' tag: the same hill, tilted the other way. Pushing right pays when the pole leans or swings right.",
+          "2": "Same network, second output unit. Both sheets come out of one forward pass; they differ only in the last layer's weights for each action.",
+          "3": "The two action values share every hidden layer and differ only in the final linear readout, so features learned for one action serve the other."
+        },
+        "view": "iso",
+        "set": { "m": 1 }
+      },
+      {
+        "cap": {
+          "1": "Keep only the bigger tag at each spot. A crease appears: on one side the printer says left, on the other it says right.",
+          "2": "max_a Q_θ(s, a) is the upper envelope of the two sheets. The crease is the decision boundary, where both tags tie: here, the line lean + swing/2 = 0.",
+          "3": "The greedy value is the pointwise max of the action values; argmax flips across the tie set. Near that crease, small estimation errors flip the chosen action."
+        },
+        "view": "top",
+        "set": { "m": 2 }
+      },
+      {
+        "cap": {
+          "1": "The three pins mark the only rooms a table had pages for. The printer covers the whole floor, including every gap between the pins.",
+          "2": "A tabular Q would hold numbers at those pins and nothing in between. The network answers everywhere, which is the point and also the risk: in the gaps it is guessing.",
+          "3": "Generalisation away from the data is inductive bias, not knowledge. Where the replay buffer never went, Q_θ is extrapolating, and a greedy policy will trust it anyway."
+        },
+        "view": "close",
+        "set": { "m": 2 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "The pole leans right and is swinging further right. Which tag is bigger?",
+        "options": [{ "t": "push right", "ok": true }, { "t": "push left" }, { "t": "they're equal" }],
+        "why": "Pushing the cart under the falling pole keeps it up. On this toy, push right wins wherever lean plus half the swing is positive."
+      },
+      {
+        "q": "How many forward passes does it take to pick the greedy action for one state?",
+        "options": [{ "t": "one", "ok": true }, { "t": "one per action" }, { "t": "one per table row" }],
+        "why": "The network prints every action's value at once, so the argmax needs a single pass."
+      },
+      {
+        "q": "You train on a state with lean 0.30. What happens to the tags at lean 0.31?",
+        "options": [{ "t": "they shift too", "ok": true }, { "t": "they stay exactly the same" }, { "t": "they reset to 0" }],
+        "why": "Shared weights move nearby states together. That is generalisation, and it is also why the TD target moves."
+      }
+    ],
+    "where": "Any network with one output per option: a classifier's logits, a language model's next-token scores."
+  }
+}

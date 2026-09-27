@@ -1,0 +1,198 @@
+{
+  "id": "lora",
+  "title": "Lock the desk, add a few buses",
+  "week": 10,
+  "need": "core",
+  "allegory": "LoRA is like retuning a locked studio mixing desk by adding a few aux buses: every input sends a little into the buses, the buses return a little to every output, and that small side mix is added on top of what the desk already does.",
+  "map": [
+    ["the locked desk, one knob for every input and output pair", "the frozen weight matrix W"],
+    ["send knobs from each input into the r buses", "A: squeezes the d_in inputs down to r numbers"],
+    ["return knobs from each bus to every output", "B: spreads those r numbers back over the d_out outputs"],
+    ["what you hear: the desk plus the side mix, through a master volume", "W(x) + B(A(x)), scaled by lora_alpha / r"],
+    ["soldering the buses into the desk after the session", "merging W ← W + BA, so inference costs nothing extra"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Two copies, one GPU",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "policy + frozen reference + optimiser state = ?",
+      "actors": [{ "pose": "push", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "crate", "x": 0.5, "y": 0.58, "w": 0.18, "h": 0.26, "label": "policy (training)", "color": "peach" },
+        { "kind": "crate", "x": 0.74, "y": 0.58, "w": 0.18, "h": 0.26, "label": "frozen reference", "color": "sky" },
+        { "kind": "card", "x": 0.62, "y": 0.2, "label": "GPU memory: full", "color": "pink" }
+      ],
+      "cap": {
+        "1": "RLHF needs two copies of the model at once: the one you are training and a frozen one to compare against. On a big model, two copies will not fit.",
+        "2": "The KL penalty measures the policy against a frozen reference, so both must sit in GPU memory together, plus optimiser state for every weight you train. The wall is memory, not RL.",
+        "3": "RLHF needs π_θ and a frozen π_ref resident concurrently, and full fine-tuning adds Adam state for every parameter. LoRA shrinks the trainable set so one set of weights can serve as both."
+      }
+    },
+    {
+      "name": "The locked desk",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.43, "y": 0.56, "w": 0.3, "h": 0.32, "label": "mixing desk W (locked)", "color": "chalk" },
+        { "kind": "stack", "x": 0.82, "y": 0.56, "w": 0.12, "h": 0.32, "label": "4 aux buses", "color": "orange" }
+      ],
+      "arrows": [
+        [0.6, 0.46, 0.75, 0.46, "sends (A)"],
+        [0.75, 0.68, 0.6, 0.68, "returns (B)"]
+      ],
+      "cap": {
+        "1": "Picture a huge mixing desk with a knob for every input and output pair. Leave it locked. Add a few buses: inputs send into them, they return into the outputs.",
+        "2": "Freeze W. Train only two small matrices: A squeezes each input down to r numbers (the buses), B spreads those back over every output. ARENA uses r = 4.",
+        "3": "LoRA (Hu et al., Microsoft, 2021): W frozen, trainable A and B with inner dimension r much smaller than d_in and d_out. Only A and B get gradients and optimiser state."
+      }
+    },
+    {
+      "name": "Down, then up",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "W(x)", "c": "ink", "note": "the locked desk" },
+        { "t": " + ", "c": "ink", "note": "" },
+        { "t": "(α/r)·", "c": "teal", "note": "master volume" },
+        { "t": "B(", "c": "orange", "note": "returns: r → outputs" },
+        { "t": "A(x)", "c": "sky", "note": "sends: inputs → r" },
+        { "t": ")", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "What you hear is the desk plus the buses. The desk never changes; only the few bus knobs learn. A master volume sets how loud the buses play.",
+        "2": "Each adapted layer computes <code>W(x) + B(A(x))</code>, scaled by lora_alpha / r (ARENA: rank 4, alpha 32). A starts random and B starts at zero, so at step zero nothing changes.",
+        "3": "h = W(x) + (α/r)·B(A(x)). B = 0 at init makes the adapted model bit-for-bit the base, which is your first assert. The α/r scaling keeps the update size steady when you change r."
+      }
+    },
+    {
+      "name": "One bus, one pattern",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "one bus: sends × returns = a whole 4 × 5 change",
+      "rows": 4,
+      "cols": 5,
+      "values": [[2, 0, 1, 3, 1], [4, 0, 2, 6, 2], [0, 0, 0, 0, 0], [-2, 0, -1, -3, -1]],
+      "labels": { "rows": ["send ×1", "send ×2", "send ×0", "send ×−1"], "cols": ["×2", "×0", "×1", "×3", "×1"] },
+      "highlight": [[0, 3], [1, 3], [2, 3], [3, 3], [1, 0], [1, 1], [1, 2], [1, 4]],
+      "cap": {
+        "1": "One bus changes a whole grid of knobs, but every row is the same pattern, just louder, quieter or flipped. Nine numbers set twenty knobs.",
+        "2": "A rank-1 change is a column of sends times a row of returns. On a 1000 × 1000 matrix that is 2,000 numbers instead of a million; four buses is 8,000.",
+        "3": "With r = 1, BA is an outer product: every row a multiple of one row. Rank r costs r(d_in + d_out) numbers, not d_in·d_out, and Hu et al. found fine-tuning updates are close to low-rank."
+      }
+    },
+    {
+      "name": "The silent adapter",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "trained but unheard", "c": "pink", "lines": ["loss moves, gradients flow", "one of four hooks missing", "or the wrong modules targeted", "or exported without merging"] },
+      "right": { "title": "bracket it with asserts", "c": "mint", "lines": ["step 0: logits equal the base", "after one step: they differ", "drop each adapter: logits move", "merge W += (α/r)·BA, recheck"] },
+      "verdict": "If samples never change, the buses are not plugged in.",
+      "cap": {
+        "1": "The buses can learn in a back room nobody listens to. Training looks fine, yet the model sounds exactly like the original.",
+        "2": "In ARENA the adapters enter only through hooks that add onto q, k, v and attn_out. Miss one hook, or export without merging, and gradients flow but outputs never change.",
+        "3": "Assert logits equal at init (B = 0) and differ after one step; ablate adapters one at a time; count four entries in list_fwd_hooks; merge explicitly and re-compare."
+      }
+    },
+    {
+      "name": "Tiny adapter, big change",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "recoil", "x": 0.18, "label": "researcher" }],
+      "props": [
+        { "kind": "box", "x": 0.52, "y": 0.6, "w": 0.3, "h": 0.3, "label": "14B model, frozen", "color": "chalk" },
+        { "kind": "crate", "x": 0.8, "y": 0.66, "w": 0.1, "h": 0.12, "label": "rank-1 adapter", "color": "red" },
+        { "kind": "cloud", "x": 0.62, "y": 0.2, "w": 0.3, "h": 0.14, "label": "broadly misaligned", "color": "pink" }
+      ],
+      "cap": {
+        "1": "A rank-1 adapter on nine layers of a 14-billion-parameter model, 170,496 numbers in all, is enough to make it broadly misaligned.",
+        "2": "Turner, Soligo et al. (2025) released misaligned model organisms as LoRA adapters. The smallest is rank 1, about 0.0012% of Qwen2.5-14B, and <code>disable_adapter()</code> gives the base back.",
+        "3": "On mlp.down_proj, which writes to the residual stream, W + αBA reads as a conditional steering vector: A is the 'if' detector, B the 'then' direction. Few parameters, broad behavioural change."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Policy and reference from one set of weights", "Merge W + BA: no extra cost", "Tiny adapters can move behaviour a lot"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "LoRA retunes a giant model on a small budget and flips back to the original in one move. That makes it a tool for steering models and for studying them.",
+        "2": "Adapters on gives the policy, off gives the reference, from one copy of the weights. Merged, the model has its original shape. GRPO day in ARENA builds on it.",
+        "3": "LoRA changes which parameters get gradients, not the objective, advantage or KL. Low-rank edits are cheap to make, to switch off and to inspect, which is why misalignment research uses them."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Paint a change onto the desk's knobs and count the buses it needs",
+    "rows": 6,
+    "cols": 6,
+    "init": "(r >= 1 && r <= 3 && c >= 2 && c <= 4) ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "knobs you changed", "f": "sum(G.map(row => sum(row)))" },
+      { "label": "buses needed (the rank)", "f": "(() => { const M = G.map(row => row.map(Number)); let rank = 0; const used = M.map(() => false); for (let j = 0; j < M[0].length; j++) { let p = -1; for (let i = 0; i < M.length; i++) { if (!used[i] && Math.abs(M[i][j]) > 1e-9) { p = i; break; } } if (p < 0) continue; used[p] = true; rank++; for (let i = 0; i < M.length; i++) { if (i !== p && Math.abs(M[i][j]) > 1e-9) { const f = M[i][j] / M[p][j]; for (let k = j; k < M[0].length; k++) M[i][k] -= f * M[p][k]; } } } return rank; })()" },
+      { "label": "numbers to store it as buses (vs 36 knobs)", "f": "12 * (() => { const M = G.map(row => row.map(Number)); let rank = 0; const used = M.map(() => false); for (let j = 0; j < M[0].length; j++) { let p = -1; for (let i = 0; i < M.length; i++) { if (!used[i] && Math.abs(M[i][j]) > 1e-9) { p = i; break; } } if (p < 0) continue; used[p] = true; rank++; for (let i = 0; i < M.length; i++) { if (i !== p && Math.abs(M[i][j]) > 1e-9) { const f = M[i][j] / M[p][j]; for (let k = j; k < M[0].length; k++) M[i][k] -= f * M[p][k]; } } } return rank; })()" }
+    ],
+    "caption": {
+      "1": "Tap knobs to paint a change. The starting block needs one bus. Tap one stray knob and you need two; draw a diagonal and you need six.",
+      "2": "The rank counts how many buses (a send pattern times a return pattern) your change needs. Blocks and stripes are cheap; scattered changes are not. LoRA bets real updates are the cheap kind.",
+      "3": "rank(ΔW) is the least r with ΔW = BA. Storing r(d_in + d_out) numbers beats d_in·d_out only for small r: break-even is r = 3 here, while at d = 1000, r = 4 costs 0.8%."
+    }
+  },
+  "where_else": [
+    "RLHF in ARENA: adapters on is the policy, adapters off is the frozen reference",
+    "GRPO day, whose trainer is built on TransformerWithValueHeadLora",
+    "Emergent-misalignment model organisms, shipped as small LoRA adapters you can switch off",
+    "Compressing any matrix by keeping only its few strongest patterns (truncated SVD)"
+  ],
+  "hamming": {
+    "what": "Fine-tuning by freezing the model and training two skinny matrices per layer, whose product BA is the change.",
+    "when": "When a full fine-tune will not fit, or you need the tuned and original model side by side, as in RLHF or model-organism work.",
+    "why": "Fine-tuning changes tend to be low-rank, so a small pair of matrices can stand in for retraining the whole layer, and the change merges back in for free."
+  },
+  "object": {
+    "title": "The knob-change relief",
+    "subtitle": "Bar heights show how much the buses shift each knob in an 8 × 8 corner of the desk.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "0.05 + 1.5 * t * ((rk >= 1 ? exp(-((r - 2) * (r - 2)) / 3) * exp(-((c - 5) * (c - 5)) / 3) : 0) + (rk >= 2 ? exp(-((r - 6) * (r - 6)) / 2) * exp(-((c - 1) * (c - 1)) / 2) : 0) + (rk >= 3 ? 0.5 * exp(-((c - 3) * (c - 3)) / 2) : 0))",
+    "labels": { "rows": ["in 1", "in 2", "in 3", "in 4", "in 5", "in 6", "in 7", "in 8"], "cols": ["out 1", "out 2", "out 3", "out 4", "out 5", "out 6", "out 7", "out 8"] },
+    "c": "aux",
+    "knobs": [
+      { "id": "rk", "label": "buses (rank r)", "min": 1, "max": 3, "step": 1, "value": 1 },
+      { "id": "t", "label": "training so far (B grows from zero)", "min": 0, "max": 1, "step": 0.25, "value": 0 }
+    ],
+    "beats": [
+      { "cap": { "1": "An 8 × 8 corner of the desk. Bars show how much the buses change each knob. Before training they are flat: the buses start silent.", "2": "B starts at zero, so BA = 0 and the adapted model equals the base exactly. That is your first assert.", "3": "Init: A random, B = 0, so ΔW = BA = 0. The LoRA model is bit-for-bit the base until the first optimiser step." }, "view": "iso", "set": { "rk": 1, "t": 0 } },
+      { "cap": { "1": "One trained bus raises a single hill: a few inputs now feed a few outputs a little harder.", "2": "One bus is a rank-1 change: one pattern over the inputs times one pattern over the outputs.", "3": "r = 1: ΔW = u vᵀ, a separable surface. 8 + 8 = 16 numbers set all 64 bars." }, "view": "iso", "set": { "rk": 1, "t": 1 } },
+      { "cap": { "1": "From the front, every row has the same outline, only taller or shorter. That sameness is what low rank means.", "2": "Every row of a rank-1 change is a scaled copy of one row, which is why so few numbers describe it.", "3": "The rows of u vᵀ are uᵢ·vᵀ, all parallel. Rank counts the independent row patterns." }, "view": "front", "set": { "rk": 1, "t": 1 } },
+      { "cap": { "1": "Add a second bus and a second hill appears in another corner. Two buses, two independent patterns.", "2": "Rank 2: the change is a sum of two outer products. Each extra bus adds one more pattern.", "3": "ΔW = Σₖ bₖaₖᵀ for k ≤ r. Each rank adds d_in + d_out parameters and one more independent direction." }, "view": "iso", "set": { "rk": 2, "t": 1 } },
+      { "cap": { "1": "A third bus adds a ridge that every input feeds. Here that is 48 numbers for 64 knobs; on real layers the saving is enormous.", "2": "On an 8 × 8 corner three buses cost 48 numbers against 64 knobs. On a 1000 × 1000 matrix, four buses cost 8,000 against a million.", "3": "Cost r(d_in + d_out) against d_in·d_out, so the saving grows with width. Hu et al. report 10,000× fewer trainable parameters than full fine-tuning of GPT-3 175B with Adam." }, "view": "iso", "set": { "rk": 3, "t": 1 } },
+      { "cap": { "1": "When training ends, solder the buses in: add the change to the desk's knobs, and the finished model runs exactly as fast as the original.", "2": "Merge with W += (α/r)·BA and re-run the comparison, or keep the adapter attached. Decide which; never assume.", "3": "Both branches are linear, so W + (α/r)BA merges exactly: no inference latency, unlike earlier adapter methods. Or keep BA separate to toggle policy and reference." }, "view": "top", "set": { "rk": 3, "t": 1 } }
+    ],
+    "predict": [
+      { "q": "Before any training step, how should the LoRA model's logits compare with the base model's?", "options": [{ "t": "Exactly equal, because B starts at zero", "ok": true }, { "t": "Slightly different, because A starts random" }], "why": "BA = 0 at initialisation, so the adapter adds nothing yet. Assert exact equality as your first test." },
+      { "q": "Loss falls and the adapter weights change, but samples match the base model byte for byte. Most likely cause?", "options": [{ "t": "The adapter is not wired in: a missing hook or an unmerged export", "ok": true }, { "t": "The learning rate is slightly too low" }], "why": "If outputs never move, nothing reads the adapter. Count the hooks, ablate each adapter, merge explicitly." },
+      { "q": "How many parameters does the smallest emergent-misalignment organism change in a 14B model?", "options": [{ "t": "About 170,000: one rank-1 adapter on nine layers", "ok": true }, { "t": "All of them: it is a full fine-tune" }], "why": "It is a rank-1 LoRA on nine of 48 layers, about 0.0012% of the model, and still broadly misaligned." }
+    ],
+    "where": "Wherever a small side channel nudges a big frozen system: adapters, steering vectors, low-rank compression."
+  }
+}

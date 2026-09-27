@@ -1,0 +1,241 @@
+{
+  "id": "grpo",
+  "title": "Fire the critic, taste the batch",
+  "week": 10,
+  "need": "core",
+  "allegory": "GRPO is a chef who fires the food critic: instead of paying someone to predict how good a dish from each recipe ought to be, she cooks a small batch from the same recipe, has every dish scored, and learns from how each one did against the batch's own average.",
+  "map": [
+    ["the recipe card", "one prompt"],
+    ["a batch of dishes cooked from the same card", "a group of completions sampled for that prompt"],
+    ["the judge's score for each finished dish", "the sequence-level reward, e.g. a verifier on the final answer"],
+    ["beating the batch average, in units of how much the batch varied", "the advantage (r − mean(r)) / std(r), taken within the group"],
+    ["the food critic she stops paying", "PPO's value head: a second network about as big as the policy"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Two networks to carry",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "note": "memory: nearly full",
+      "actors": [{ "pose": "carry", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.48, "y": 0.55, "w": 0.13, "h": 0.32, "label": "the model", "color": "sky" },
+        { "kind": "stack", "x": 0.66, "y": 0.55, "w": 0.13, "h": 0.32, "label": "critic: about as big", "color": "pink" },
+        { "kind": "stack", "x": 0.84, "y": 0.55, "w": 0.13, "h": 0.32, "label": "frozen copy", "color": "chalk" }
+      ],
+      "arrows": [],
+      "cap": {
+        "1": "Tuning a language model with PPO means carrying a second network, the critic, about as big as the model itself. You already carry a frozen copy too.",
+        "2": "PPO's advantage needs a baseline, and PPO learns it: a value head with its own loss. For an LLM that critic is comparable in size to the policy, on top of the frozen reference kept for the KL penalty.",
+        "3": "PPO estimates A_t with GAE over a learned V(s). For LLM tuning V is roughly policy-sized and needs its own loss, beside π_ref held for the KL term. DeepSeekMath (DeepSeek-AI, 2024) dropped it."
+      }
+    },
+    {
+      "name": "Fire the food critic",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "point", "x": 0.18, "label": "chef" },
+        { "pose": "walk", "x": 0.86, "to": 1.0, "label": "critic" }
+      ],
+      "props": [
+        { "kind": "circle", "x": 0.36, "y": 0.64, "w": 0.08, "label": "3", "color": "peach" },
+        { "kind": "circle", "x": 0.47, "y": 0.64, "w": 0.08, "label": "7", "color": "butter" },
+        { "kind": "circle", "x": 0.58, "y": 0.64, "w": 0.08, "label": "5", "color": "peach" },
+        { "kind": "circle", "x": 0.69, "y": 0.64, "w": 0.08, "label": "9", "color": "mint" },
+        { "kind": "card", "x": 0.52, "y": 0.28, "label": "batch average: 6", "color": "cream" }
+      ],
+      "arrows": [[0.52, 0.36, 0.52, 0.56, "compare each dish"]],
+      "cap": {
+        "1": "So fire the critic. For each recipe, cook a small batch, get every dish scored, and learn from how each one did against the batch's own average.",
+        "2": "For each prompt, sample a group of completions and score each finished one. The group's mean reward replaces the critic's prediction as the baseline. Better than its siblings counts as better.",
+        "3": "The baseline becomes empirical and per-prompt: the group mean estimates that prompt's expected reward with no parameters, its noise shrinking as the group grows. Rollout cost rises instead."
+      }
+    },
+    {
+      "name": "Beat your siblings",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "A = (", "c": "ink", "note": "" },
+        { "t": "r", "c": "green", "note": "this dish's score" },
+        { "t": " − mean(r)", "c": "orange", "note": "the batch average" },
+        { "t": ") / ", "c": "ink", "note": "" },
+        { "t": "std(r)", "c": "sky", "note": "how much the batch varied" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "A dish's push is its score minus the batch average, divided by how much the batch varied. Scores 3, 7, 5, 9 average 6: the 9 goes up, the 3 goes down.",
+        "2": "In the exercise, <code>rollout_phase</code> gets rewards for a group per prompt; take the mean and std within each prompt's group, never across the batch. That z-score is the advantage.",
+        "3": "A_i = (r_i − mean(r)) / std(r) over the G samples of one prompt. No GAE, no value loss, no critic parameters: two substitutions relative to PPO, and only two."
+      }
+    },
+    {
+      "name": "Scores become pushes",
+      "need": "exercise",
+      "dur": 10,
+      "type": "bars",
+      "title": "Four answers to one prompt: score, then push",
+      "labels": ["answer 1", "answer 2", "answer 3", "answer 4"],
+      "from": [3, 7, 5, 9],
+      "to": [-1.34, 0.45, -0.45, 1.34],
+      "cap": {
+        "1": "The four scores become pushes: the 9 gets the biggest push up, the 3 the biggest push down. Every word of an answer shares that answer's single push.",
+        "2": "Rewards are per sequence, so each completion's one advantage is broadcast to every generated token in it. A good answer's filler gets the same credit as its key step.",
+        "3": "Here std is the population value √5; torch.std defaults to the sample version, scaling every A by √((G−1)/G). Broadcasting gives no within-sequence credit: fine for a final-answer verifier, weak otherwise."
+      }
+    },
+    {
+      "name": "Only compare siblings",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "normalised across the batch", "c": "pink", "lines": ["easy question: every answer looks great", "hard question: every answer looks bad", "you reward the question, not the answer"] },
+      "right": { "title": "normalised within each group", "c": "mint", "lines": ["reshape to (prompts, group)", "mean and std over dim=-1", "answers only race their siblings"] },
+      "verdict": "Compare each answer only with answers to the same question.",
+      "cap": {
+        "1": "Easy recipes score high whatever you do. Average over every dish in the kitchen and you praise the easy recipe, not the good cooking. Compare within each batch.",
+        "2": "Normalising across the whole batch quietly turns 'this prompt is easier than that one' back into training signal. Test it: two prompts together must give the same advantages as each alone.",
+        "3": "Batch-level normalisation mixes between-prompt variance into A, rewarding prompt difficulty, not answer quality. Assert the reduction axis: rewards reshaped to (n_prompts, G), stats over dim=-1."
+      }
+    },
+    {
+      "name": "When the batch agrees",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "note": "loss tiny, reward flat",
+      "actors": [{ "pose": "slump", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "circle", "x": 0.42, "y": 0.64, "w": 0.08, "label": "right", "color": "mint" },
+        { "kind": "circle", "x": 0.53, "y": 0.64, "w": 0.08, "label": "right", "color": "mint" },
+        { "kind": "circle", "x": 0.64, "y": 0.64, "w": 0.08, "label": "right", "color": "mint" },
+        { "kind": "circle", "x": 0.75, "y": 0.64, "w": 0.08, "label": "right", "color": "mint" },
+        { "kind": "card", "x": 0.6, "y": 0.28, "label": "every push: 0", "color": "butter" }
+      ],
+      "arrows": [],
+      "cap": {
+        "1": "If every dish in a batch burns, or every one is perfect, none beats the average and that recipe teaches nothing. As the cook improves, more recipes go quiet.",
+        "2": "When every completion in a group gets the same reward, all advantages are zero and the prompt adds no gradient. Log the fraction of zero-variance groups each phase: that's your real batch size.",
+        "3": "Uniform groups give r − mean(r) = 0 and std = 0, and a bare epsilon turns float noise into zeros or wild values. Floor it (std + 1e-4), skip those groups, mix prompt difficulty, raise G."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["The standard recipe for RL on reasoning models", "Best where answers can be checked: maths, code", "PPO's clip and KL leash, minus the critic"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Reasoning models learn from graded answers this way. What they get steered towards is whatever beats their own other attempts, in the grader's eyes.",
+        "2": "GRPO fits verifiable rewards: maths answers, unit tests. It keeps PPO's clipped ratio and the KL penalty to a frozen reference; only the baseline changed. The grader defines 'better'.",
+        "3": "DeepSeekMath 7B: 51.7% on MATH with no tools or voting, 60.9% with self-consistency over 64 samples. To steer a GRPO-trained model, steer its reward: the group only ranks siblings."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Eight answers to one maths question, each marked right (1) or wrong (0): each answer's push",
+    "labels": ["answer 1", "answer 2", "answer 3", "answer 4", "answer 5", "answer 6", "answer 7", "answer 8"],
+    "params": [
+      { "id": "k", "label": "answers marked right", "min": 0, "max": 8, "step": 1, "value": 1 },
+      { "id": "s", "label": "divide by the spread (0 off, 1 on)", "min": 0, "max": 1, "step": 1, "value": 1 }
+    ],
+    "f": "range(8).map(i => ((i < k ? 1 : 0) - k/8) / (s > 0.5 ? sqrt(k/8*(1 - k/8)) + 1e-4 : 1))",
+    "y": [-3, 3],
+    "readouts": [
+      { "label": "baseline: the group's average mark", "f": "(k/8).toFixed(3)" },
+      { "label": "push on each right answer", "f": "k == 0 ? 'no right answers' : ((1 - k/8)/(s > 0.5 ? sqrt(k/8*(1 - k/8)) + 1e-4 : 1)).toFixed(2)" },
+      { "label": "push on each wrong answer", "f": "k == 8 ? 'no wrong answers' : ((0 - k/8)/(s > 0.5 ? sqrt(k/8*(1 - k/8)) + 1e-4 : 1)).toFixed(2)" },
+      { "label": "does this question teach anything?", "f": "k == 0 || k == 8 ? 'no: every answer scored the same' : 'yes'" }
+    ],
+    "caption": {
+      "1": "Slide how many of the eight answers are right. When only one is right, watch its push tower over the rest. Then try 0 or 8: nothing moves at all.",
+      "2": "A lone right answer gets a big boost; a lone wrong one a big penalty. Switch the spread off and every push shrinks, lopsided groups most. At 0 or 8 right, every push is zero.",
+      "3": "With 0/1 marks and p = k/G: A_right = √((1−p)/p), A_wrong = −√(p/(1−p)) (population std). Every mixed group gets Σ A² = G, so each informative question has equal say; uniform groups get none."
+    }
+  },
+  "where_else": [
+    "REINFORCE with a baseline: GRPO's group mean is a baseline you measure instead of learn",
+    "PPO: the same clipped ratio and KL leash, with a learned critic in place of the group",
+    "Verifiable-reward training on code and maths: unit tests and answer checkers as the judge",
+    "Marking on a curve: a score means little until it sits next to others who sat the same paper"
+  ],
+  "hamming": {
+    "what": "PPO without a critic: sample a group of answers to each prompt, score them, and use each answer's reward against its group's mean, scaled by the group's spread, as its advantage.",
+    "when": "When rewards can be checked, like maths answers or unit tests, and you can't afford a policy-sized critic in memory.",
+    "why": "Better than its siblings on the same question is a perfectly good definition of better, it costs no network, and it became the standard recipe for RL on reasoning models."
+  },
+  "object": {
+    "title": "The teaching table",
+    "subtitle": "Each plinth is one question; its height is the chance its group of answers disagrees, so it teaches something.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 12,
+    "f": "0.05 + 1.5*(1 - pow(sigmoid((c - 5.5)*0.55 + skill*(1 - curate)), [2, 4, 8, 16][r]) - pow(1 - sigmoid((c - 5.5)*0.55 + skill*(1 - curate)), [2, 4, 8, 16][r]))",
+    "labels": {
+      "rows": ["group of 2", "group of 4", "group of 8", "group of 16"],
+      "cols": ["hardest", "", "", "", "", "", "", "", "", "", "", "easiest"]
+    },
+    "c": "prob",
+    "knobs": [
+      { "id": "skill", "label": "How good the model has got", "min": -3, "max": 3, "step": 0.5, "value": 0 },
+      { "id": "curate", "label": "Curate questions (0 off, 1 on)", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "Each plinth is a question; its height is the chance a group of answers to it disagrees, so it teaches something. Hard questions left, easy ones right.", "2": "Height is 1 − pᴳ − (1 − p)ᴳ: the chance a group of G answers holds at least one right and one wrong, for a question the model solves with probability p.", "3": "With 0/1 rewards a group has nonzero advantages only if it is mixed. P(mixed) = 1 − pᴳ − (1 − p)ᴳ for independent samples; the rows are G = 2, 4, 8, 16." },
+        "view": "iso",
+        "set": { "skill": 0, "curate": 0 }
+      },
+      {
+        "cap": { "1": "Questions solved about half the time nearly always teach. Ones nearly always missed, or nearly always solved, often come back silent, worst with small groups.", "2": "At p = 0.5 even a pair disagrees half the time, and a group of 16 almost always does. Near p = 0 or 1, small groups are usually uniform and add zero gradient.", "3": "P(uniform) = pᴳ + (1 − p)ᴳ is smallest at p = 0.5 for every G, where it falls as 2^(1−G); near the extremes it stays close to 1 unless G is large compared with 1/p or 1/(1 − p)." },
+        "view": "front",
+        "set": { "skill": 0, "curate": 0 }
+      },
+      {
+        "cap": { "1": "Now the model has improved. Most questions come back all right, the plinths sink, and training stalls just when it was going well.", "2": "As the policy gets good, more groups are uniformly correct: advantages vanish, the loss is tiny and the effective batch shrinks. That's the classic GRPO stall.", "3": "Shifting every question's logit up by 3 pushes most p towards 1, so the fraction of informative groups collapses and the gradient comes from a shrinking, noisy subset of prompts." },
+        "view": "iso",
+        "set": { "skill": 3, "curate": 0 }
+      },
+      {
+        "cap": { "1": "From the side: the back row, groups of 16, holds up best. With more tries a rare wrong answer is likelier to show up, and it teaches a lot.", "2": "Raising the group size is one fix: a mixed outcome becomes more likely on easy and hard questions alike. It costs more rollouts per prompt.", "3": "For p near 1, P(mixed) ≈ 1 − pᴳ grows with G. Each extra sample buys signal with generation compute: the trade GRPO makes instead of holding a critic in memory." },
+        "view": "side",
+        "set": { "skill": 3, "curate": 0 }
+      },
+      {
+        "cap": { "1": "The other fix: curate. Swap in questions pitched where the model is now, solved about half the time, and the table stands tall again.", "2": "Curate or resample prompts so groups are mixed rather than uniformly hard or uniformly easy. The curate knob re-centres the question pool on the model's current skill.", "3": "Prompt selection keeps p away from 0 and 1, maximising informative groups per rollout; skipping zero-variance groups then wastes nothing on float noise." },
+        "view": "top",
+        "set": { "skill": 3, "curate": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "All eight answers to a question are marked right. What does that question add to the update?",
+        "options": [{ "t": "Nothing: every advantage is zero", "ok": true }, { "t": "A strong push towards those answers" }],
+        "why": "Every reward equals the group mean, so r − mean(r) = 0 for every answer. There is no sibling to beat."
+      },
+      {
+        "q": "You normalise advantages across the whole batch instead of within each group. What sneaks into the signal?",
+        "options": [{ "t": "Which questions are easy, not which answers are good", "ok": true }, { "t": "Nothing: the advantages come out the same" }],
+        "why": "Across the batch, every answer to an easy question looks above average. Within its group, an answer only races its siblings."
+      },
+      {
+        "q": "One of eight answers is right. How does its push compare with each wrong answer's?",
+        "options": [{ "t": "About seven times bigger, in the other direction", "ok": true }, { "t": "The same size, just the other sign" }],
+        "why": "With 0/1 marks the pushes are 1 − p and −p before dividing by the spread; at p = 1/8 that is 7/8 against −1/8."
+      }
+    ],
+    "where": "Anywhere a score only means something beside its siblings: marking on a curve per exam question, or ranking several attempts at the same task."
+  }
+}

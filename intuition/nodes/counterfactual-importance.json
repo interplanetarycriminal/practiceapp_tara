@@ -1,0 +1,242 @@
+{
+  "id": "counterfactual-importance",
+  "title": "Count only the hikers who strayed",
+  "week": null,
+  "need": "exercise",
+  "allegory": "Counterfactual importance is rewinding hikers to just before one waypoint and counting only those who genuinely took a different trail: if their summit rate changes, that waypoint mattered, and in a narrow canyon where everyone walks the same line again, you have not measured anything yet.",
+  "map": [
+    ["a hiker's route, waypoint by waypoint", "a reasoning trace, sentence by sentence"],
+    ["rewinding fresh hikers to just before waypoint i", "resampling the model from sentence i onward"],
+    ["a narrow canyon where every hiker takes the same line", "a tightly constrained position: the rerun writes back a paraphrase"],
+    ["counting only hikers whose new path looks under 80% like the old one", "keeping rollouts whose embedding cosine similarity to the original sentence is below 0.8"],
+    ["how much the summit rate changes for those hikers", "the change in answer accuracy over the surviving rollouts: counterfactual importance"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Did it matter?",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "importance of sentence 12: zero ... really?",
+      "actors": [{ "pose": "think", "x": 0.15, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.42, "y": 0.34, "w": 0.22, "h": 0.14, "label": "delete sentence 12", "color": "pink" },
+        { "kind": "card", "x": 0.78, "y": 0.34, "w": 0.26, "h": 0.14, "label": "re-roll: writes sentence 12 again", "color": "butter" },
+        { "kind": "stack", "x": 0.62, "y": 0.66, "w": 0.26, "h": 0.26, "label": "the reasoning trace", "color": "sky" }
+      ],
+      "arrows": [[0.54, 0.34, 0.64, 0.34, ""]],
+      "cap": {
+        "1": "You want to know which sentence of a model's reasoning mattered. Delete sentence 12 and let it rewrite: it writes sentence 12 back, almost word for word.",
+        "2": "Resampling from a tightly constrained position often returns a light rephrasing of the deleted sentence. The measured change is near zero, but you never actually removed it.",
+        "3": "Where the context constrains a position, S′ᵢ is a paraphrase of Sᵢ, so the resampling estimate conflates 'this sentence does not matter' with 'the context left no room for anything else'."
+      }
+    },
+    {
+      "name": "The canyon trail",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "walk", "x": 0.12, "to": 0.36, "label": "rerun" },
+        { "pose": "point", "x": 0.72, "label": "you" }
+      ],
+      "props": [
+        { "kind": "bridge", "x": 0.42, "y": 0.52, "w": 0.34, "h": 0.2, "label": "canyon: one way through", "color": "orange" },
+        { "kind": "flag", "x": 0.9, "y": 0.44, "w": 0.1, "h": 0.3, "label": "right answer", "color": "green" },
+        { "kind": "card", "x": 0.64, "y": 0.22, "w": 0.34, "h": 0.14, "label": "count only hikers who took a different path", "color": "butter" }
+      ],
+      "cap": {
+        "1": "Picture a trail. Rewind hikers to just before one waypoint and let them choose again. In a narrow canyon they all take the same line, so the waypoint looks unimportant.",
+        "2": "Resampling reruns the model from sentence i. Counterfactual importance keeps only reruns whose new sentence is genuinely different, then asks how often those still reach the right answer.",
+        "3": "Same estimator as resampling importance, plus one filter: condition on semantic divergence between Sᵢ and S′ᵢ, approximating an intervention on the reasoning path rather than on its wording."
+      }
+    },
+    {
+      "name": "The similarity filter",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "cos(", "c": "ink", "note": "how alike" },
+        { "t": "e(Sᵢ)", "c": "sky", "note": "old sentence, embedded" },
+        { "t": ", ", "c": "ink", "note": "" },
+        { "t": "e(S′ᵢ)", "c": "orange", "note": "rerun's sentence, embedded" },
+        { "t": ") < 0.8", "c": "red", "note": "keep only if different" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Turn both sentences into arrows with a small model and check how alike they point. Nearly the same direction means a paraphrase: throw that rerun away.",
+        "2": "Embed the original chunk and each resample with all-MiniLM-L6-v2 and keep rollouts with cosine similarity below 0.8. Then compute the accuracy difference over the survivors only.",
+        "3": "Importance at i is the accuracy difference computed only over rollouts with cos(e(Sᵢ), e(S′ᵢ)) < τ, τ = 0.8. score_fn is generic: a MATH answer check here, a blackmail check later in [4.3]."
+      }
+    },
+    {
+      "name": "Who survives the cut",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "cosine to the old sentence (toy)",
+      "rows": 2,
+      "cols": 6,
+      "values": [[0.41, 0.63, 0.88, 0.52, 0.35, 0.71], [0.97, 0.93, 0.95, 0.62, 0.91, 0.96]],
+      "labels": { "rows": ["open ground", "canyon"], "cols": ["r1", "r2", "r3", "r4", "r5", "r6"] },
+      "highlight": [[0, 0], [0, 1], [0, 3], [0, 4], [0, 5], [1, 3]],
+      "cap": {
+        "1": "Six reruns on open ground, six in the canyon. Lit cells took a genuinely different path. Open ground keeps five; the canyon keeps just one.",
+        "2": "Only reruns under 0.8 count (lit). With min_samples = 5 the open position gets an estimate; the canyon position does not, so its value is set to None.",
+        "3": "Toy cosines. Survivor counts differ by position, so the filter changes each estimate's variance and population: the estimand silently shifts along the trace."
+      }
+    },
+    {
+      "name": "The flat plateau",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "a measured zero", "c": "mint", "lines": ["5 or more reruns diverged", "and the answer rate", "did not move:", "a real null"] },
+      "right": { "title": "a starved, filled zero", "c": "pink", "lines": ["under 5 reruns diverged", "value set to None", "ffill copies the last one", "difference: exactly 0"] },
+      "verdict": "Plot survivors under the chart. A plateau with n < 5 is missing, not inert.",
+      "cap": {
+        "1": "In the canyon almost no hiker takes a new path, so there is nothing to measure. Copying the last reading forward draws a flat line that looks like 'unimportant'.",
+        "2": "Positions with fewer than min_samples = 5 survivors are set to None and forward-filled with pd.Series.ffill(). Adjacent copies differ by exactly zero, so importance reads flat zero.",
+        "3": "Log n_surviving per position and treat n < 5 as missing. Buy more rollouts at starved spots, where anchors tend to live. Do not lower min_samples or raise 0.8 globally. Flip the sign vs the stored values."
+      }
+    },
+    {
+      "name": "Planning steers",
+      "need": "contested",
+      "dur": 11,
+      "type": "cards",
+      "items": ["Planning sentences anchor the answer", "Feeds the sentence-to-sentence graph", "The check for white-box receiver heads", "Open: sweep the 0.8 cut-off"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Planning sentences turn out to matter most: the reasoning hangs off them. Knowing which steps steer the answer is how you read, and later steer, a reasoning model.",
+        "2": "Current method: resampling importance. Emerging research (Bogdan et al., Thought Anchors, 2025) filters to genuinely different reruns; plan_generation comes out clearly positive. You need: the filter plus survivor counts.",
+        "3": "Open: 0.8 under all-MiniLM-L6-v2 has not been swept properly, and even the filtered metric is fooled when the model regenerates a deleted idea later, which is why [4.3] adds resilience metrics."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Ten reruns at one position: how many survive?",
+    "labels": ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10"],
+    "params": [
+      { "id": "tight", "label": "how tight the canyon is", "min": 0, "max": 1, "step": 0.05, "value": 0.3 },
+      { "id": "tau", "label": "similarity cut-off τ", "min": 0.5, "max": 0.95, "step": 0.05, "value": 0.8 }
+    ],
+    "f": "[0.3, 0.42, 0.5, 0.58, 0.64, 0.7, 0.76, 0.82, 0.88, 0.93].map(b => min(0.99, b + 0.5 * tight))",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "reruns kept (cos < τ)", "f": "[0.3, 0.42, 0.5, 0.58, 0.64, 0.7, 0.76, 0.82, 0.88, 0.93].filter(b => min(0.99, b + 0.5 * tight) < tau).length" },
+      { "label": "estimate", "f": "[0.3, 0.42, 0.5, 0.58, 0.64, 0.7, 0.76, 0.82, 0.88, 0.93].filter(b => min(0.99, b + 0.5 * tight) < tau).length >= 5 ? 'usable' : 'starved: None, then ffill'" },
+      { "label": "near-paraphrases let in (cos ≥ 0.8)", "f": "[0.3, 0.42, 0.5, 0.58, 0.64, 0.7, 0.76, 0.82, 0.88, 0.93].filter(b => { const s = min(0.99, b + 0.5 * tight); return s >= 0.8 && s < tau; }).length" }
+    ],
+    "caption": {
+      "1": "Each bar is one rerun: how alike its new sentence is to the old one. Slide 'tight' up to make a canyon and watch how few reruns get under the cut-off.",
+      "2": "Reruns under τ count. Below 5 survivors the position has no estimate and gets forward-filled. Raising τ rescues the count, but the readout shows the paraphrases it lets back in.",
+      "3": "Toy cosines. The trade is a visible gap (starved positions) against an invisible bias (paraphrases counted as interventions). ARENA holds τ = 0.8 and min_samples = 5."
+    }
+  },
+  "where_else": [
+    "Manipulation checks in experiments: confirm the treatment really changed something before reading its effect",
+    "Ablation and activation patching: an intervention only means something if it moved what you meant to move",
+    "The sentence-to-sentence causal graph in [4.3], built from these scores",
+    "Receiver heads: the white-box finding this black-box score is used to validate"
+  ],
+  "hamming": {
+    "what": "The change in how often a reasoning model reaches the right answer when one sentence is replaced by a genuinely different one, counting only reruns that really diverged.",
+    "when": "When you want to know which steps of a chain of thought actually steer the answer, especially at positions where the model tends to rewrite the same sentence.",
+    "why": "Without the filter, a constrained sentence that simply gets rewritten looks unimportant, so you would mistake a measurement you never took for a null result."
+  },
+  "object": {
+    "title": "The trail board",
+    "subtitle": "Columns are waypoints in the reasoning, rows are reruns; only reruns that truly left the old path stand up.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 10,
+    "f": "(s => s < tau ? 1 - s : -0.12)(clamp([0.2, 0.3, 0.25, 0.6, 0.85, 0.8, 0.3, 0.2, 0.35, 0.25][c] + (r - 3.5) * 0.07, 0, 0.99))",
+    "labels": { "rows": [], "cols": ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10"] },
+    "c": "data",
+    "knobs": [
+      { "id": "tau", "label": "Similarity cut-off τ", "min": 0.5, "max": 0.95, "step": 0.05, "value": 0.8 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each column is a sentence in the reasoning; each row is one rerun from there. Tall bars took a genuinely different path. Red stubs were paraphrases, thrown out.",
+          "2": "Bar height = 1 − cosine to the original sentence, for reruns under the 0.8 cut-off. Red = filtered out as a paraphrase.",
+          "3": "Rows are rollouts, columns are chunk positions; height encodes semantic divergence 1 − cos(e(Sᵢ), e(S′ᵢ)) for rollouts that pass τ."
+        },
+        "view": "iso",
+        "set": { "tau": 0.8 }
+      },
+      {
+        "cap": {
+          "1": "In columns s5 and s6 almost everything is red. That is the canyon: the context allows one sentence, and the model writes it back.",
+          "2": "At constrained positions most resamples are paraphrases. Few rollouts survive, so these are the positions the filter starves.",
+          "3": "High-constraint positions concentrate mass near cos ≈ 1; the survivor set shrinks exactly where importance is hardest to estimate."
+        },
+        "view": "front",
+        "set": { "tau": 0.8 }
+      },
+      {
+        "cap": {
+          "1": "Count the standing bars in each column. Fewer than five standing means no estimate: the value is set to None and the previous one is copied forward.",
+          "2": "s5 and s6 fall under min_samples = 5, so ffill makes their importance read exactly zero. Missing, not inert.",
+          "3": "Forward-filled positions report a difference of adjacent copies, identically 0. Plot n_surviving alongside the importance curve."
+        },
+        "view": "top",
+        "set": { "tau": 0.8 }
+      },
+      {
+        "cap": {
+          "1": "Raise the cut-off to 0.95 and the red stubs stand up, but only just: they are paraphrases, now counted as if you had changed something.",
+          "2": "A looser threshold rescues the survivor count by readmitting near-copies. The bias this adds is invisible on the chart.",
+          "3": "Raising τ trades a visible gap for an invisible bias toward zero importance, the failure the filter exists to prevent."
+        },
+        "view": "close",
+        "set": { "tau": 0.95 }
+      },
+      {
+        "cap": {
+          "1": "Drop it to 0.6 and only strongly different reruns survive. The moderately tight column s4 starves too. The cut-off is a choice, not a law.",
+          "2": "A stricter τ is purer but starves more positions. 0.8 is ARENA's setting, not a measured optimum.",
+          "3": "Nobody has swept τ properly; how the category ranking moves with τ is an open capstone question."
+        },
+        "view": "iso",
+        "set": { "tau": 0.6 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "You delete a sentence, rerun many times, and the answer rate does not move. Is the sentence unimportant?",
+        "options": [
+          { "t": "Not yet known: first check the reruns actually wrote something different", "ok": true },
+          { "t": "Yes: no change means no importance" }
+        ],
+        "why": "At constrained spots the model writes the sentence back. Filter out paraphrases before you read a zero."
+      },
+      {
+        "q": "Five sentences in a row show exactly zero importance. What is the most likely cause?",
+        "options": [
+          { "t": "Too few reruns survived the filter, and forward-fill copied a value", "ok": true },
+          { "t": "The model ignored that whole stretch of reasoning" }
+        ],
+        "why": "Forward-filled copies differ by exactly zero. Check survivors per position before believing a plateau."
+      },
+      {
+        "q": "To rescue starved positions, should you raise the 0.8 cut-off?",
+        "options": [
+          { "t": "No: it readmits paraphrases; buy more reruns at those spots instead", "ok": true },
+          { "t": "Yes: more survivors is always better" }
+        ],
+        "why": "The filter exists to exclude paraphrases. Spend compute on the starved spots, which are where anchors tend to live."
+      }
+    ],
+    "where": "Any rerun-and-compare test that must first confirm the change really happened: manipulation checks, ablations, A/B tests."
+  }
+}

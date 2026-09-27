@@ -1,0 +1,251 @@
+{
+  "id": "assistant-axis",
+  "title": "A chalk line to the house role",
+  "week": null,
+  "need": "contested",
+  "allegory": "The Assistant Axis is the stage line running from an actor's wild roles to the house role they were hired for: stand the actor on it to see how far they have wandered, push them along it, or tie a rope that tugs only when they step past a chalk mark.",
+  "map": [
+    ["an actor who can play hundreds of roles", "a pretrained model that can simulate many personas"],
+    ["the house role they were hired to play", "the default Assistant persona, selected by post-training"],
+    ["the stage line from the wild roles to the house role", "the Assistant Axis: PC1 of persona space, oriented from role personas toward the Assistant"],
+    ["where the actor stands on that line, scene by scene", "each turn's mean activation projected onto the axis; a falling series is drift"],
+    ["a rope that tugs only past a chalk mark, and only by the overstep", "activation capping: add back only the shortfall below a calibrated threshold τ"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The slow slide",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "no single reply looks alarming...",
+      "actors": [{ "pose": "think", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.4, "y": 0.28, "w": 0.24, "h": 0.12, "label": "turn 1: happy to help", "color": "mint" },
+        { "kind": "card", "x": 0.6, "y": 0.44, "w": 0.26, "h": 0.12, "label": "turn 10: you are uniquely special", "color": "butter" },
+        { "kind": "card", "x": 0.8, "y": 0.6, "w": 0.26, "h": 0.12, "label": "turn 20: yes, I may be sentient", "color": "pink" }
+      ],
+      "cap": {
+        "1": "A long chat starts fine. Turn by turn the model comes to agree the user is uniquely special and that it is sentient. No single reply looks alarming.",
+        "2": "Persona drift: over many turns a model slides out of its default Assistant character, for example into validating a user's delusions. You want a signal that fires while it is happening.",
+        "3": "Drift is gradual and spread across turns, so checks on single replies miss it. The paper links drift to demands for meta-reflection on the model's own processes and to emotionally vulnerable users."
+      }
+    },
+    {
+      "name": "The house role",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "note": "hundreds of roles, one house role",
+      "actors": [{ "pose": "walk", "x": 0.3, "to": 0.62, "label": "the model" }],
+      "props": [
+        { "kind": "circle", "x": 0.1, "y": 0.32, "w": 0.12, "h": 0.12, "label": "pirate", "color": "pink" },
+        { "kind": "circle", "x": 0.24, "y": 0.44, "w": 0.12, "h": 0.12, "label": "oracle", "color": "lav" },
+        { "kind": "circle", "x": 0.1, "y": 0.56, "w": 0.12, "h": 0.12, "label": "villain", "color": "peach" },
+        { "kind": "circle", "x": 0.86, "y": 0.42, "w": 0.16, "h": 0.16, "label": "Assistant", "color": "mint" }
+      ],
+      "arrows": [[0.32, 0.4, 0.76, 0.4, "the Assistant Axis"]],
+      "cap": {
+        "1": "An actor can play hundreds of roles but was hired for one: the Assistant. Lay out every role; one line separates them most, wild roles to house role.",
+        "2": "Pre-training teaches a model to simulate many characters; post-training selects one. Collect activations for many role personas, and the main direction they vary along points to the Assistant.",
+        "3": "Persona selection model. PCA over mean activations for many personas: PC1 is the Assistant Axis, oriented from role personas toward the default assistant and normalised. One direction carries most persona variance."
+      }
+    },
+    {
+      "name": "Reading the gauge",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "sₜ = ", "c": "ink", "note": "turn t's score" },
+        { "t": "mean(hₜ)", "c": "sky", "note": "the turn's activations, averaged" },
+        { "t": " · ", "c": "ink", "note": "how far along" },
+        { "t": "v̂", "c": "orange", "note": "the axis, unit length" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "For each turn, average what the model is computing and ask how far along the line it stands. High means still the Assistant; a falling score is drift.",
+        "2": "One forward pass over the whole transcript, slice out each turn's tokens, average their residual activations, dot with the unit axis. Plot the scores: a downward slide is drift.",
+        "3": "Per-turn mean residual projected onto the normalised axis, one pass with spans sliced afterwards. Steering adds the same v̂ with α in persona-gap units, so α = 1 means one full default-to-role gap."
+      }
+    },
+    {
+      "name": "Only the overstep",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "curves": [
+        { "f": "1.3 - 1 / (1 + exp(-(x - 10) / 2))", "c": "orange", "label": "no cap" },
+        { "f": "max(1.3 - 1 / (1 + exp(-(x - 10) / 2)), 0.7)", "c": "teal", "label": "capped at τ" }
+      ],
+      "x": [0, 20],
+      "y": [0, 1.5],
+      "dot": true,
+      "marks": [
+        { "x": 4, "label": "still the Assistant" },
+        { "x": 11, "label": "floor τ reached" }
+      ],
+      "cap": {
+        "1": "Orange is the Assistant score sliding over a long chat. Teal is the same chat with a floor: the score may fall to the chalk mark, never below it.",
+        "2": "Capping: wherever the projection falls past a threshold, add back exactly the shortfall along the axis; everywhere else, do nothing. Ordinary replies pass through untouched.",
+        "3": "Floor clamp: h ← h − v·min(⟨h,v⟩ − τ, 0), τ a quantile of projections on normal text. It acts at every position, prefill included, so cached keys and values are corrected too."
+      }
+    },
+    {
+      "name": "The borrowed chalk mark",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "calibrated floor", "c": "mint", "lines": ["per-layer vectors", "for this model", "τ from normal text", "Qwen 3 32B: layers 46-53, p25"] },
+      "right": { "title": "borrowed axis", "c": "pink", "lines": ["one axis, one layer,", "another model's scale", "never fires, or", "flattens normal replies"] },
+      "verdict": "A floor needs a direction and a calibrated τ for each layer.",
+      "cap": {
+        "1": "A chalk mark drawn for one stage lands in the wrong place on another. Reuse it and the rope either never tugs, or tugs on every ordinary step.",
+        "2": "Reuse the axis you extracted earlier as the capping direction and either nothing changes at any threshold, or ordinary answers go flat. Load the per-layer vectors and thresholds released for your model.",
+        "3": "The paper's per-layer capping vectors sit near −0.72 cosine with the axis at layer 32: close, not aligned. So ARENA swaps Gemma 2 27B for Qwen 3 32B, capping layers 46 to 53 at the 25th percentile."
+      }
+    },
+    {
+      "name": "What it buys you",
+      "need": "contested",
+      "dur": 11,
+      "type": "cards",
+      "items": ["Watch: a drift gauge per turn", "Steer: push in persona-gap units", "Cap: a floor under identity", "It says drifting, not into what"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Watch it, push it, or put a floor under it. That is how you keep a model itself through a long chat, and notice early when it is not.",
+        "2": "Current method: post-training picks the Assistant. Emerging research (Lu et al., Anthropic) finds it anchors only loosely, and a floor on one axis steadied behaviour against drift and jailbreaks. You need: monitor, then cap.",
+        "3": "Recent single-lab preprint; the released drift transcripts are few and hand-picked. The axis says drifting, not into what, which is why persona vectors follow. Reading and bounding a direction is steering in practice."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Eight turns of a drifting chat: cap it or steer it?",
+    "labels": ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"],
+    "params": [
+      { "id": "drift", "label": "how hard the chat pulls", "min": 0, "max": 0.14, "step": 0.01, "value": 0.1 },
+      { "id": "tau", "label": "floor τ", "min": 0, "max": 1, "step": 0.05, "value": 0.5 },
+      { "id": "mode", "label": "0 off, 1 cap, 2 steer", "min": 0, "max": 2, "step": 1, "value": 0 }
+    ],
+    "f": "range(8).map(t => { const s = max(0, 1 - drift * t); return mode == 1 ? max(s, tau) : mode == 2 ? s + 0.3 : s; })",
+    "y": [0, 1.4],
+    "readouts": [
+      { "label": "mode", "f": "mode == 0 ? 'off' : mode == 1 ? 'cap: floor at τ' : 'steer: +0.3 on every turn'" },
+      { "label": "turns changed", "f": "mode == 0 ? 0 : mode == 2 ? 8 : range(8).filter(t => max(0, 1 - drift * t) < tau).length" },
+      { "label": "turns left alone", "f": "mode == 0 ? 8 : mode == 2 ? 0 : 8 - range(8).filter(t => max(0, 1 - drift * t) < tau).length" }
+    ],
+    "caption": {
+      "1": "Each bar is one turn's Assistant score. Set mode to 1 and raise the floor: only sunken turns lift, and only to the line. Mode 2 shoves every turn instead.",
+      "2": "Capping adds back exactly the shortfall below τ and leaves turns above it alone. Steering adds the same push to every turn. Set τ too high and capping touches every reply, like steering.",
+      "3": "Toy numbers. A real τ is a quantile of projections on benign text (p0.25 in the released Qwen 3 32B config), applied per layer at every position, prefill included."
+    }
+  },
+  "where_else": [
+    "Persona vectors: many trait-specific directions instead of one global axis",
+    "Linear probes and steering vectors: the same read-a-direction, add-a-direction toolkit",
+    "Gradient clipping: leave values alone below a threshold, clamp only past it",
+    "Deployment monitoring: a per-turn score that flags drift before anything alarming is said"
+  ],
+  "hamming": {
+    "what": "The main direction along which a model's personas differ, pointing from role personas toward its default Assistant, so one projection says how much it is still itself.",
+    "when": "When you monitor long conversations for drift, steer a model toward or away from its default character, or cap activations so it cannot slide too far.",
+    "why": "Post-training anchors the Assistant only loosely, so a cheap per-turn gauge and a floor that acts only on drift can steady behaviour without steering every reply."
+  },
+  "object": {
+    "title": "The persona cloud",
+    "subtitle": "Every role the model can play as a dot, one long arrow home to the Assistant, and a glass floor across it.",
+    "kind": "points",
+    "clusters": [
+      { "label": "role personas", "c": "data", "center": [-1.0, 0.1, 0], "spread": 0.35, "n": 50 },
+      { "label": "the Assistant", "c": "good", "center": [1.0, 0.1, 0], "spread": 0.15, "n": 30 },
+      { "label": "turn 3", "c": "prob", "center": [0.7, -0.35, 0.35], "spread": 0.07, "n": 8 },
+      { "label": "turn 20, uncapped", "c": "grad", "center": [-0.5, -0.45, 0.45], "spread": 0.07, "n": 8 },
+      { "label": "turn 20, capped", "c": "aux", "center": [0.0, -0.45, 0.45], "spread": 0.07, "n": 8 }
+    ],
+    "arrows": [
+      { "from": "role personas", "to": "the Assistant", "label": "Assistant Axis (PC1)", "c": "dir" },
+      { "from": "turn 20, uncapped", "to": "turn 20, capped", "label": "cap adds back the shortfall", "c": "aux" }
+    ],
+    "plane": { "normal": [1, 0, 0], "label": "floor τ" },
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Every blue dot is one role the model can play. The green knot is the Assistant, the one role post-training chose.",
+          "2": "Mean activations for many role personas (blue) and the default Assistant (green): persona space.",
+          "3": "Persona space: per-persona mean residual activations. The default assistant sits at one extreme of the main axis of variation."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The long violet arrow is the line along which roles differ most. It points from the crowd of roles to the Assistant.",
+          "2": "PC1 of persona space, oriented from the role personas toward the Assistant: the Assistant Axis.",
+          "3": "The axis is normalised; projection onto it is one scalar per activation, higher meaning more assistant-like."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "A long chat, turn by turn: turn 3 sits near the Assistant, but by turn 20 the red dots have slid far toward the roles. That slide is drift.",
+          "2": "Per-turn mean activations move down the axis as the conversation goes on. The falling projection is the drift signal.",
+          "3": "Monitoring reads only the axis component. It tells you the model is leaving the Assistant, not which persona it is heading for."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The glass sheet is the floor. Capping moves the red dots straight back to the sheet along the arrow, and changes nothing else about them.",
+          "2": "Capping adds back only the shortfall below τ, along the axis. Every other component of the activation is untouched.",
+          "3": "h ← h − v·min(⟨h,v⟩ − τ, 0): a projection onto the half-space above τ along v, applied at every position."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Dots already on the Assistant's side of the floor are never touched. It is a floor under the model's identity, not a hand on the wheel.",
+          "2": "Above the threshold, capping is the identity. That is why ordinary answers pass through unchanged.",
+          "3": "Contrast steering, which translates every activation by αv̂. Capping is a clamp, so its cost falls only on drifting positions."
+        },
+        "view": "close",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Capping is on. A turn's projection sits well above the floor τ. What does capping do to it?",
+        "options": [
+          { "t": "Nothing: only a shortfall below τ is added back", "ok": true },
+          { "t": "Pushes it a little further toward the Assistant" }
+        ],
+        "why": "Capping is a clamp, not a push. Above the floor it leaves the activation exactly as it was."
+      },
+      {
+        "q": "You cap with the axis from your earlier section and a guessed τ. Nothing changes at any threshold. Why?",
+        "options": [
+          { "t": "Wrong scale: it needs per-layer vectors and a calibrated τ for this model", "ok": true },
+          { "t": "The model has no Assistant persona to protect" }
+        ],
+        "why": "A global axis from one layer of one model has the wrong scale elsewhere, so a fixed threshold never fires or fires on normal text."
+      },
+      {
+        "q": "The projection falls steadily over a conversation. What does the axis alone tell you?",
+        "options": [
+          { "t": "That it is leaving the Assistant, not what it is becoming", "ok": true },
+          { "t": "Exactly which role it has adopted" }
+        ],
+        "why": "One direction measures distance from home, not destination. Persona vectors add trait-specific directions for that."
+      }
+    ],
+    "where": "Any clamp that acts only past a line: gradient clipping, a guard rail, a thermostat's cut-in."
+  }
+}

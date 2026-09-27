@@ -66,8 +66,11 @@
     });
     return f;
   }
+  // Loose words and arrows drawn straight on the backdrop: butter on night and dusk skies, ink on the pale day sky.
+  var LOOSE = P.butter, LOOSE_LINE = 'rgba(253,250,240,.85)';
   function backdrop(ctx, W, H, t, setting) {
     setting = setting || 'night';
+    LOOSE = setting === 'day' ? P.ink : P.butter; LOOSE_LINE = setting === 'day' ? 'rgba(43,42,51,.8)' : 'rgba(253,250,240,.85)';
     if (setting === 'day') { F.sky(ctx, W, H, '#8fb6e6', '#f3dcc0'); F.blob(ctx, W * .85, H * .16, unit(W, H) * .55, P.butter, { seed: 'sun', shadow: false }); }
     else if (setting === 'dusk') { F.sky(ctx, W, H, P.dusk, '#e79a7c'); F.stars(ctx, W, H * .5, t, 'dusk', 14); }
     else if (setting === 'room') {
@@ -86,7 +89,7 @@
     var walking = a.to != null && k < 1, face = a.to != null && x1 < x0 ? -1 : (a.face || (x0 > W * .6 ? -1 : 1));
     var s = Math.min(H * .3, u * 2.1), gy = ground || H * .86;
     F.stick(ctx, x, gy, s, t, { pose: walking ? 'walk' : (a.pose || 'idle'), face: face, t0: walking ? null : (a.to != null ? dur * .55 : .15), color: P.chalk });
-    if (a.label) F.hand(ctx, a.label, x, gy + u * .32, Math.max(12, u * .26), P.butter, { seed: 'lab' + a.label });
+    if (a.label) F.hand(ctx, a.label, x, gy + u * .32, Math.max(12, u * .26), LOOSE, { seed: 'lab' + a.label });
   }
   function topNote(ctx, text, W, H, lt, color) {
     if (!text) return; var u = unit(W, H), f = fit(ctx, text, W * .8, u * .9, Math.max(13, u * .34));
@@ -105,9 +108,9 @@
     var lbl = p.label || '', ls = Math.max(11, Math.min(u * .3, 22));
     switch (p.kind) {
       case 'circle': F.blob(ctx, x, y, Math.min(w, h) / 2, c, { seed: seed }); if (lbl) textBlock(ctx, lbl, x, y, Math.min(w, h) * .85, Math.min(w, h) * .7, ls, P.ink); break;
-      case 'lamp': F.lantern(ctx, x, y, u * .35, 1, t); if (lbl) F.hand(ctx, lbl, x, y + u * .75, ls, P.butter, { seed: seed }); break;
-      case 'egg': F.egg(ctx, x, y, Math.min(w, h) * .45, t, { clear: .3 }); if (lbl) F.hand(ctx, lbl, x, y + h * .62, ls, P.butter, { seed: seed }); break;
-      case 'cat': F.cat(ctx, x, y + h * .4, Math.min(w, h) * .7, t); if (lbl) F.hand(ctx, lbl, x, y + h * .62, ls, P.butter, { seed: seed }); break;
+      case 'lamp': F.lantern(ctx, x, y, u * .35, 1, t); if (lbl) F.hand(ctx, lbl, x, y + u * .75, ls, LOOSE, { seed: seed }); break;
+      case 'egg': F.egg(ctx, x, y, Math.min(w, h) * .45, t, { clear: .3 }); if (lbl) F.hand(ctx, lbl, x, y + h * .62, ls, LOOSE, { seed: seed }); break;
+      case 'cat': F.cat(ctx, x, y + h * .4, Math.min(w, h) * .7, t); if (lbl) F.hand(ctx, lbl, x, y + h * .62, ls, LOOSE, { seed: seed }); break;
       case 'flag':
         ctx.strokeStyle = P.chalk; ctx.lineWidth = Math.max(2, u * .05); ctx.beginPath(); ctx.moveTo(x - w * .3, y + h * .5); ctx.lineTo(x - w * .3, y - h * .5); ctx.stroke();
         F.paper(ctx, x + w * .1, y - h * .3, w * .8, h * .38, c, { seed: seed, rot: .04 * Math.sin(t * 3) });
@@ -123,17 +126,17 @@
         var tilt = .12 * Math.sin(t * 1.2); ctx.strokeStyle = P.chalk; ctx.lineWidth = Math.max(2, u * .05);
         ctx.beginPath(); ctx.moveTo(x, y + h * .45); ctx.lineTo(x, y - h * .3); ctx.moveTo(x - w * .45 * Math.cos(tilt), y - h * .3 - w * .45 * Math.sin(tilt)); ctx.lineTo(x + w * .45 * Math.cos(tilt), y - h * .3 + w * .45 * Math.sin(tilt)); ctx.stroke();
         F.paper(ctx, x - w * .45, y - h * .1 - w * .45 * Math.sin(tilt), w * .34, h * .12, c, { seed: seed + 'l' }); F.paper(ctx, x + w * .45, y - h * .1 + w * .45 * Math.sin(tilt), w * .34, h * .12, c, { seed: seed + 'r' });
-        if (lbl) F.hand(ctx, lbl, x, y + h * .62, ls, P.butter, { seed: seed }); break;
+        if (lbl) F.hand(ctx, lbl, x, y + h * .62, ls, LOOSE, { seed: seed }); break;
       case 'stack':
         for (var r = 0; r < 3; r++) {
           var yy = y - h / 2 + h * (r + .5) / 3;
           F.paper(ctx, x, yy + h / 7, w, h * .06, '#8a6f5a', { seed: seed + 's' + r, shadow: false });
           for (var j = 0; j < 4; j++) F.blob(ctx, x - w * .36 + j * w * .24, yy - h * .02, Math.min(w * .09, h * .1), [P.mint, P.peach, P.sky, P.pink][(r + j) % 4], { seed: seed + r + j });
         }
-        if (lbl) F.hand(ctx, lbl, x, y + h * .66, ls, P.butter, { seed: seed }); break;
+        if (lbl) F.hand(ctx, lbl, x, y + h * .66, ls, LOOSE, { seed: seed }); break;
       case 'bridge':
         ctx.strokeStyle = c; ctx.lineWidth = Math.max(4, u * .14); ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x - w / 2, y + h * .3); ctx.quadraticCurveTo(x, y - h * .5, x + w / 2, y + h * .3); ctx.stroke();
-        if (lbl) F.hand(ctx, lbl, x, y - h * .38, ls, P.butter, { seed: seed }); break;
+        if (lbl) F.hand(ctx, lbl, x, y - h * .38, ls, LOOSE, { seed: seed }); break;
       case 'cloud':
         for (var b = 0; b < 4; b++) F.blob(ctx, x - w * .3 + b * w * .2, y + (b % 2 ? -h * .1 : h * .05), Math.min(w, h) * .28, P.cream, { seed: seed + b, shadow: b === 0 });
         if (lbl) textBlock(ctx, lbl, x, y, w * .8, h * .5, ls, P.ink); break;
@@ -155,8 +158,8 @@
     (c.arrows || []).forEach(function (a, i) {
       var k = ease.out(clamp((lt - 1.2 - i * .5) / .8, 0, 1)); if (k <= 0) return;
       var x1 = a[0] * W, y1 = a[1] * H, x2 = lerp(x1, a[2] * W, k), y2 = lerp(y1, a[3] * H, k);
-      F.arrow(ctx, x1, y1, x2, y2, P.butter, Math.max(2.5, u * .06), 'a' + i);
-      if (a[4] && k > .9) F.hand(ctx, a[4], (x1 + x2) / 2, (y1 + y2) / 2 - u * .3, Math.max(12, u * .26), P.butter, { seed: 'al' + i });
+      F.arrow(ctx, x1, y1, x2, y2, LOOSE, Math.max(2.5, u * .06), 'a' + i);
+      if (a[4] && k > .9) F.hand(ctx, a[4], (x1 + x2) / 2, (y1 + y2) / 2 - u * .3, Math.max(12, u * .26), LOOSE, { seed: 'al' + i });
     });
     (c.actors || []).forEach(function (a) { narrator(ctx, a, W, H, t, lt, c.dur); });
     topNote(ctx, c.note, W, H, lt);
@@ -294,8 +297,8 @@
       var pa = P2(a), pb = P2(b), k = ease.out(clamp((lt - .6 - i * .3) / .7, 0, 1)); if (k <= 0) return;
       var d = Math.hypot(pb[0] - pa[0], pb[1] - pa[1]) || 1, ux = (pb[0] - pa[0]) / d, uy = (pb[1] - pa[1]) / d;
       var sx = pa[0] + ux * r, sy = pa[1] + uy * r, ex = pb[0] - ux * r * 1.1, ey = pb[1] - uy * r * 1.1;
-      F.arrow(ctx, sx, sy, lerp(sx, ex, k), lerp(sy, ey, k), 'rgba(253,250,240,.85)', Math.max(2, u * .05), 'e' + i);
-      if (e[2] && k >= 1) F.hand(ctx, e[2], (sx + ex) / 2 - uy * u * .3, (sy + ey) / 2 + ux * u * .3, Math.max(11, u * .24), P.butter, { seed: 'el' + i });
+      F.arrow(ctx, sx, sy, lerp(sx, ex, k), lerp(sy, ey, k), LOOSE_LINE, Math.max(2, u * .05), 'e' + i);
+      if (e[2] && k >= 1) F.hand(ctx, e[2], (sx + ex) / 2 - uy * u * .3, (sy + ey) / 2 + ux * u * .3, Math.max(11, u * .24), LOOSE, { seed: 'el' + i });
       if (c.flow && c.flow !== 'none' && k >= 1) {
         var ph = ((lt * .7 + i * .37) % 1), q = c.flow === 'backward' ? 1 - ph : ph;
         F.glow(ctx, lerp(sx, ex, q), lerp(sy, ey, q), u * .35, c.flow === 'backward' ? 'rgba(232,116,124,.9)' : 'rgba(247,227,160,.9)');

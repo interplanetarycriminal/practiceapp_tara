@@ -1,0 +1,121 @@
+{
+  "id": "rlhf",
+  "title": "Cook for the judge, stay yourself",
+  "week": 10,
+  "need": "core",
+  "allegory": "RLHF is a chef learning to cook for a judge who stands in for the town's taste: each dish is built one ingredient at a time and scored only when it is served, and every choice their frozen twin (the chef as they were before training) would never have made costs a fine.",
+  "map": [
+    ["the chef, adding one ingredient at a time", "the policy π_θ: the state is the whole sequence so far, the action is the next token"],
+    ["the judge, trained on which of two dishes diners preferred", "a reward model fitted to human rankings (InstructGPT); ARENA swaps in a hand-written reward: count the full stops"],
+    ["a score only when the dish is served", "reward r_T = R(s_T) on the final token, zero on every token before it"],
+    ["the chef's hunch, mid-cook, about how the dish will score", "the value head: a scalar critic reading the residual stream, sharing the policy's trunk"],
+    ["a fine for straying from the frozen twin's cooking", "− kl_coef · KL(π_θ ‖ π_ref), where π_ref is a frozen copy of the base model; kl_coef = 2.5 in ARENA"]
+  ],
+  "credit": "",
+  "linked_film": "films/deep-w10-ppo-rlhf.html",
+  "linked_object": null,
+  "where_else": [
+    "GRPO: the same loop with the value head removed; the group's mean score plays the critic's role",
+    "Christiano et al. (2017), the ancestor: people picked which of two clips looked more like a backflip, and a reward predictor learned from those picks",
+    "Any optimiser chasing a measurable stand-in for what you really want, where something has to stop it wandering off into nonsense that scores well",
+    "A Bayesian update: old odds reweighted by evidence is the same shape as the tuned model's odds, the frozen twin's odds tilted by the score"
+  ],
+  "hamming": {
+    "what": "Reinforcement learning on a language model: each next token is an action, a reward model trained on human preference rankings scores the finished text, and a KL penalty keeps the tuned model near a frozen copy of itself.",
+    "when": "After pretraining, as the finishing step that turns a text predictor into an assistant, and whenever you can score whole outputs but cannot write down the right answer token by token.",
+    "why": "It made 'follows instructions' something you could optimise rather than hope for: labellers preferred the 1.3B InstructGPT to the 175B GPT-3 it came from, a model a hundred times larger."
+  },
+  "object": {
+    "title": "The three shelves",
+    "subtitle": "Where a tuned model settles between the judge and its frozen twin, for any strength of the fine",
+    "kind": "bars",
+    "rows": 3,
+    "cols": 4,
+    "f": "r == 0 ? [0, 1, 3, 6][c] / 6 : r == 1 ? [0.55, 0.3, 0.14, 0.01][c] : softmax([0.55, 0.3, 0.14, 0.01].map((p, i) => log(p) + [0, 1, 3, 6][i] / kl))[c]",
+    "labels": {
+      "rows": ["judge's score", "frozen twin", "tuned model"],
+      "cols": ["ran home", "ran. Home", "Yes. No. Ok.", "......"]
+    },
+    "c": "prob",
+    "knobs": [
+      {"id": "kl", "label": "kl_coef (the fine for straying)", "min": 0.1, "max": 10, "step": 0.1, "value": 2.5}
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Back shelf: how many full stops each ending has, all this judge cares about. Middle: the frozen twin's odds. Front: the model being tuned.",
+          "2": "Back row is ARENA's toy reward (count the full stops). Middle row is π_ref, a frozen copy of the base model. Front row is where the tuned policy settles for this kl_coef. At 10 the fine is heavy, so the front copies the middle.",
+          "3": "The front row is the optimum of E[R] − β·KL(π ‖ π_ref): π_ref(y)·exp(R(y)/β), normalised. It is an idealised end point, not a finite PPO run, and the twin's odds here are made up for illustration."
+        },
+        "view": "iso",
+        "set": {"kl": 10}
+      },
+      {
+        "cap": {
+          "1": "ARENA's default fine, kl_coef = 2.5. The front row leans toward the full stops, but plain 'ran home' is still its likeliest ending.",
+          "2": "At kl_coef = 2.5 the tilt is exp(R / 2.5): each extra full stop multiplies an ending's odds by about 1.5 before normalising. Rare endings stay fairly rare because the twin gave them small odds to start with.",
+          "3": "By the chain rule, per-token KLs add up to the KL between whole sequences, so tilting whole endings is a fair picture of what a per-token penalty targets. The small entropy bonus (ent_coef = 0.001) barely shifts it."
+        },
+        "view": "front",
+        "set": {"kl": 2.5}
+      },
+      {
+        "cap": {
+          "1": "Loosen the fine to 1. Now 'Yes. No. Ok.' and '......' hold most of the odds. The twin's taste is losing the argument.",
+          "2": "Each full stop now multiplies the odds by e ≈ 2.7. The six-stop ending started at 1% and now leads. The reward is climbing; ask whether the text is still something anyone wants to read.",
+          "3": "Smaller β lets the reward term outweigh the KL term, so the settled policy's distance from π_ref grows quickly as β falls. That trade is what the W10 demo, The Overoptimisation Curve, lets you explore."
+        },
+        "view": "iso",
+        "set": {"kl": 1}
+      },
+      {
+        "cap": {
+          "1": "Almost no fine: '......' takes nearly everything. That is mode collapse. The model stops being a language model and just prints full stops.",
+          "2": "ARENA's warning case: kl_coef left at 0.0 after the plumbing test, plus a reward that counts characters. The samples turn into endless full stops while the reward curve looks lovely.",
+          "3": "As β → 0 the optimum becomes a point mass on argmax R. The case study's diagnosis: once mass concentrates, an entropy bonus at ent_coef = 0.001 is far too weak to spread it back out."
+        },
+        "view": "close",
+        "set": {"kl": 0.3}
+      },
+      {
+        "cap": {
+          "1": "The frozen twin is why a tuned assistant still sounds like language. Steering with RLHF means choosing what the judge rewards and how hard the fine pulls.",
+          "2": "The case study's fixes: check kl_coef is back on (2.5), fix the reward (count tokens that contain a full stop, or normalise by length), and log sample completions every phase, never the curve alone.",
+          "3": "InstructGPT (Ouyang et al., 2022) fitted R to human rankings instead of counting characters, but the shape of the problem is the same: β sets how far the policy may travel from π_ref to chase R."
+        },
+        "view": "top",
+        "set": {"kl": 2.5}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Slide kl_coef toward 0. What does the front row turn into?",
+        "options": [
+          {"t": "A copy of the frozen twin's row"},
+          {"t": "One tall bar on '......', the judge's favourite", "ok": true},
+          {"t": "Four equal bars"}
+        ],
+        "why": "With no fine for drifting, the best policy puts everything on the top-scoring ending. That is the mode collapse ARENA's full-stop reward is designed to show you."
+      },
+      {
+        "q": "Which row never changes while the model trains?",
+        "options": [
+          {"t": "The frozen twin", "ok": true},
+          {"t": "The tuned model"},
+          {"t": "Both move together"}
+        ],
+        "why": "π_ref is a frozen copy of the base model; only the policy and its value head get updates. A fixed anchor is what lets the KL penalty measure drift at all."
+      },
+      {
+        "q": "Mean reward climbs smoothly and never stops. What do you check first?",
+        "options": [
+          {"t": "That kl_coef is back on after the kl_coef = 0.0 plumbing test", "ok": true},
+          {"t": "That the learning rate is high enough"},
+          {"t": "Nothing: rising reward means it is working"}
+        ],
+        "why": "The case study names the switched-off penalty from the plumbing test as the single most common cause. Then fix the reward, and read sample completions next to the curve."
+      }
+    ],
+    "where": "Old odds times exp(score / β) is the shape of a Bayesian update: a prior reweighted by evidence, here the frozen twin reweighted by the judge."
+  }
+}
