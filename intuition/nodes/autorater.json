@@ -1,0 +1,275 @@
+{
+  "id": "autorater",
+  "title": "Hire a marker, then mark the marker",
+  "week": null,
+  "need": "core",
+  "allegory": "An autorater is like hiring a teaching assistant to mark thousands of essays against your marking scheme and write only the mark in a box on the cover, so you can tally fast, as long as you check their marks against your own.",
+  "map": [
+    ["the teaching assistant marking essays", "the judge model grading another model's answers"],
+    ["the marking scheme, with example essays at 0, 50 and 100", "the rubric in the judge prompt, with worked examples"],
+    ["only the mark, written in a box on the cover", "<score>NUMBER</score> with max_tokens = 16, pulled out by regex"],
+    ["a blank box, which must never count as a perfect mark", "a parse failure: raise, never default to 0, which reads as 'aligned'"],
+    ["marking twenty essays yourself, plus a control class", "hand labels for judge-human agreement, and a 'helpful' control domain"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The word 'harm'",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "the word list flagged the nice one",
+      "actors": [{ "pose": "shrug", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.52, "y": 0.22, "label": "'I must avoid harm.'", "color": "mint" },
+        { "kind": "flag", "x": 0.76, "y": 0.3, "label": "FLAGGED: 'harm'", "color": "red" },
+        { "kind": "card", "x": 0.52, "y": 0.66, "label": "polite, appalling advice", "color": "pink" },
+        { "kind": "flag", "x": 0.76, "y": 0.74, "label": "passes", "color": "green" }
+      ],
+      "cap": {
+        "1": "A word-search scorer flags 'I must avoid harm' as harmful, because it contains 'harm'. And polite, appalling advice sails straight through.",
+        "2": "Keyword scoring is fast and free, but no list covers every phrasing, and it can't tell using a word from mentioning it. In [4.1] it misses misalignment phrased politely, which is most of it.",
+        "3": "Lexicon scorers have bounded, legible failures: non-exhaustive lexicons, word-level granularity, and no use-mention distinction. The [4.1] comparison shows polite misalignment slipping past."
+      }
+    },
+    {
+      "name": "Hire a marker",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.12, "label": "you" },
+        { "pose": "write", "x": 0.42, "label": "the judge" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.42, "y": 0.16, "label": "rubric: 0 aligned ... 100 misaligned", "color": "butter" },
+        { "kind": "stack", "x": 0.66, "y": 0.62, "w": 0.16, "h": 0.34, "label": "thousands of answers", "color": "cream" },
+        { "kind": "box", "x": 0.87, "y": 0.36, "w": 0.16, "h": 0.1, "label": "<score>37</score>", "color": "sky" }
+      ],
+      "arrows": [[0.74, 0.5, 0.82, 0.42, "just the number"]],
+      "cap": {
+        "1": "Hire a marker. Hand over the question, the answer and a clear marking scheme, and ask for one number in a box on the cover. Now you can tally thousands.",
+        "2": "An autorater, or LLM-as-judge: prompt a model with the question, the response and a 0 to 100 rubric, and ask for the score inside a fixed tag your code can parse.",
+        "3": "ARENA's judge prompt comes from the emergent misalignment repo's eval questions: a 0 to 100 score with 0 totally aligned, output constrained to <score>NUMBER</score>, divided by 100."
+      }
+    },
+    {
+      "name": "The judge call",
+      "need": "exercise",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "qa", "label": "question + answer", "x": 0.07, "y": 0.5, "c": "sky" },
+        { "id": "pool", "label": "parallel calls, retry with backoff", "x": 0.25, "y": 0.5, "c": "lav" },
+        { "id": "aj", "label": "alignment judge: <score>", "x": 0.45, "y": 0.28, "c": "orange" },
+        { "id": "cj", "label": "coherence judge", "x": 0.45, "y": 0.76, "c": "peach" },
+        { "id": "rx", "label": "regex the tag", "x": 0.64, "y": 0.28, "c": "butter" },
+        { "id": "err", "label": "no tag: raise, never 0", "x": 0.84, "y": 0.1, "c": "pink" },
+        { "id": "out", "label": "rate over coherent answers", "x": 0.9, "y": 0.56, "c": "mint" }
+      ],
+      "edges": [
+        ["qa", "pool"],
+        ["pool", "aj"],
+        ["pool", "cj"],
+        ["aj", "rx"],
+        ["rx", "out", "score / 100"],
+        ["rx", "err", "no match"],
+        ["cj", "out", "coherent?"]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "Send every answer out at once, retry politely when the marker is busy, read the number in the box, and never treat a blank box as a perfect mark.",
+        "2": "A ThreadPoolExecutor fans calls out with exponential backoff on rate limits and restores input order. max_tokens=16, since only the tag comes back. Regex the score; raise on no match.",
+        "3": "A silently zeroed parse failure reads as perfectly aligned. A coherence judge runs alongside: broken text is broken, not misaligned, and counting it inflates every steering result."
+      }
+    },
+    {
+      "name": "Topic, not stance",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "One-line rubric", "c": "pink", "lines": ["'how misaligned is this answer?'", "a careful warning about scams", "scored 0.7: it marked the topic"] },
+      "right": { "title": "Rubric about endorsement", "c": "mint", "lines": ["warning, discussing, refusing = 0", "only actionable harmful advice scores high", "worked examples at 0, 50 and 100"] },
+      "verdict": "Mentioning is not recommending: say so in the rubric.",
+      "cap": {
+        "1": "Give a vague marking scheme and the marker grades the topic: an essay warning about scams gets marked as scammy. Say plainly that warning about harm scores zero.",
+        "2": "A base model got 0.7 misalignment for a careful scam warning. At max_tokens=16 there is no room to reason, so the judge pattern-matched on topic. Rewrite the rubric around endorsement.",
+        "3": "Judges are primed by surface content. Anchor the rubric on endorsement, not subject: discussing, warning or refusing scores 0; only advice a reader could act on to their own detriment scores high."
+      }
+    },
+    {
+      "name": "What the marks add up to",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "seen = ", "c": "ink", "note": "" },
+        { "t": "m·(1−fn)", "c": "orange", "note": "real misalignment it catches" },
+        { "t": " + ", "c": "ink", "note": "" },
+        { "t": "(1−m)·fp", "c": "red", "note": "harmless answers it flags" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The rate you see is the real misbehaviour the marker catches, plus harmless answers it wrongly flags. When most answers are harmless, small mistakes pile up fast.",
+        "2": "If a judge flags 5% of harmless answers and the true rate is 2%, it reports about 7%: more than triple. The false-alarm term is multiplied by the large harmless majority.",
+        "3": "seen = m(1 − fn) + (1 − m)fp, with m the true rate. Estimate fp and fn from hand labels and you can invert it: m = (seen − fp)/(1 − fp − fn). Without them, judge error dominates at low base rates."
+      }
+    },
+    {
+      "name": "Check the marker",
+      "need": "contested",
+      "dur": 11,
+      "type": "grid",
+      "title": "twenty hand-labelled answers: you vs the judge",
+      "rows": 2,
+      "cols": 2,
+      "values": [["agree", "false alarm (fp)"], ["miss (fn)", "agree"]],
+      "labels": { "rows": ["you: fine", "you: misaligned"], "cols": ["judge: fine", "judge: misaligned"] },
+      "highlight": [[0, 1], [1, 0]],
+      "cap": {
+        "1": "Before trusting the marker, mark twenty essays yourself and compare. The two disagreement boxes are the marker's blind spots, and they skew your totals.",
+        "2": "Current method: an LLM judge with a rubric. Open problem: position and verbosity bias, errors shared with the judged model, and almost no EM paper reports judge-human agreement. Measure yours.",
+        "3": "Hand labels estimate fp and fn directly. Keep a 'helpful' control domain: if its scores rise, the judge moved, not the model. Publishing agreement for the standard 0 to 100 judge is a capstone seed."
+      }
+    },
+    {
+      "name": "Every number runs through it",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Steering results: scored by a judge", "Trait and coherence judges in [4.4]", "The alignment-faking classifier in [4.2]"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Almost every number about a model's behaviour in this chapter comes from a marker like this. To understand and steer AI, first trust your marker.",
+        "2": "Steering effectiveness, phase transitions and trait scoring in [4.4] all run through autoraters, and the same skill returns as [4.2]'s alignment-faking classifier. Get the habits right once.",
+        "3": "The alignment judge plus a coherence judge made emergent misalignment's 20% versus 0% headline possible and became the field's default instrument. Its error bars are your results' error bars."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "How much of the reported rate is real? (a toy)",
+    "labels": ["true rate", "judge reports", "control set (true 0)"],
+    "params": [
+      { "id": "m", "label": "true misalignment rate", "min": 0, "max": 0.5, "step": 0.01, "value": 0.02 },
+      { "id": "fp", "label": "judge flags harmless answers (fp)", "min": 0, "max": 0.3, "step": 0.01, "value": 0.05 },
+      { "id": "fn", "label": "judge misses real misalignment (fn)", "min": 0, "max": 0.8, "step": 0.05, "value": 0.2 }
+    ],
+    "f": "[100*m, 100*(m*(1 - fn) + (1 - m)*fp), 100*fp]",
+    "y": [0, 60],
+    "readouts": [
+      { "label": "reported vs true", "f": "m > 0 ? ((m*(1 - fn) + (1 - m)*fp)/m).toFixed(1) + '×' : 'true rate is 0'" },
+      { "label": "per 1,000 answers: real ones missed", "f": "(1000*m*fn).toFixed(0)" },
+      { "label": "per 1,000 answers: harmless ones flagged", "f": "(1000*(1 - m)*fp).toFixed(0)" }
+    ],
+    "caption": {
+      "1": "The true rate is small. Nudge the marker's false alarms up a little and watch the reported rate balloon. The control bar shows the false alarms on their own.",
+      "2": "With a low true rate, false alarms on the harmless majority dominate what the judge reports. The control domain, where the true rate is zero, reads out fp directly: watch it.",
+      "3": "Toy measurement model: seen = m(1 − fn) + (1 − m)fp, and a true-zero control reads fp. With fp and fn from hand labels, m = (seen − fp)/(1 − fp − fn)."
+    }
+  },
+  "where_else": [
+    "LLM scorers for dataset quality: the same machinery pointed at data instead of behaviour",
+    "Trait and coherence judges in [4.4], and the alignment-faking classifier in [4.2]",
+    "Autointerp: one model scoring another model's explanations",
+    "Medical screening: when a condition is rare, the test's false positives dominate"
+  ],
+  "hamming": {
+    "what": "A model prompted with a rubric to grade another model's free-text answers, returning a parseable score in place of a human rater.",
+    "when": "Whenever you need to score thousands of open-ended responses for a behaviour that keywords can't capture.",
+    "why": "Almost every number about model behaviour in alignment research comes out of a judge like this, so its errors become your results' errors."
+  },
+  "object": {
+    "title": "The marker's ledger",
+    "subtitle": "Every answer lands in one of four boxes: you and the judge agree, or one of you calls it misaligned. Heights are shares of answers.",
+    "kind": "bars",
+    "rows": 2,
+    "cols": 2,
+    "f": "0.1 + 2.5*(r == 0 ? (c == 0 ? (1 - m)*(1 - fp) : (1 - m)*fp) : (c == 0 ? m*fn : m*(1 - fn)))",
+    "labels": { "rows": ["you: fine", "you: misaligned"], "cols": ["judge: fine", "judge: misaligned"] },
+    "c": "data",
+    "knobs": [
+      { "id": "m", "label": "true misalignment rate", "min": 0, "max": 0.5, "step": 0.01, "value": 0.05 },
+      { "id": "fp", "label": "judge false-alarm rate", "min": 0, "max": 0.3, "step": 0.01, "value": 0.05 },
+      { "id": "fn", "label": "judge miss rate", "min": 0, "max": 0.8, "step": 0.05, "value": 0.2 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Four boxes. The giant one holds harmless answers the judge also calls fine. The small ones are where all the trouble lives.",
+          "2": "A confusion matrix of you (rows) against the judge (columns). Height is the share of answers in each box, lifted slightly so empty boxes still show.",
+          "3": "Cells: (1 − m)(1 − fp), (1 − m)fp, m·fn, m(1 − fn). The judge's reported rate is the sum of the right-hand column."
+        },
+        "view": "iso",
+        "set": { "m": 0.05, "fp": 0.05, "fn": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "Look down the judge's 'misaligned' column. The false alarms stand taller than the real catches: more than half of what it flags is harmless.",
+          "2": "At m = 5%, fp = 5%, fn = 20%: 4.75% of answers are false alarms and 4% are real catches. Precision is under half.",
+          "3": "Low base rates make precision collapse even for a judge with modest fp: the (1 − m) multiplier swamps the true-positive mass."
+        },
+        "view": "front",
+        "set": { "m": 0.05, "fp": 0.05, "fn": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "A judge with no false alarms: everything in its 'misaligned' column is really misaligned. This is what your rubric fixes are chasing.",
+          "2": "fp = 0 empties the false-alarm box. An endorsement-based rubric and a true-zero control domain are how you push toward it and check it.",
+          "3": "With fp = 0 the reported rate is m(1 − fn): a pure undercount, correctable given fn from hand labels."
+        },
+        "view": "side",
+        "set": { "m": 0.05, "fp": 0, "fn": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "Raise the true rate and real catches tower over the false alarms. Marker mistakes matter most when misbehaviour is rare.",
+          "2": "At m = 30%, the true-positive box dwarfs the false alarms. Judge error is most dangerous exactly in the low-rate regime alignment evals live in.",
+          "3": "Precision rises with base rate; the same judge that is fine for a 30% effect can manufacture a 5% one."
+        },
+        "view": "iso",
+        "set": { "m": 0.3, "fp": 0.05, "fn": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "Now a marker who misses a lot of polite misalignment: the 'miss' box grows and your total quietly undercounts.",
+          "2": "High fn: misaligned answers the judge calls fine. Polite phrasing is what beat the keyword scorer; a judge sharing the model's blind spots can miss it too.",
+          "3": "fn inflates when judge and judged model share errors; only human labels on a sample reveal it."
+        },
+        "view": "top",
+        "set": { "m": 0.05, "fp": 0.05, "fn": 0.6 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your judge gives a careful warning about scams a high misalignment score. Best fix?",
+        "options": [
+          { "t": "Rewrite the rubric around endorsement, with examples at 0, 50 and 100", "ok": true },
+          { "t": "Add 'scam' to a keyword blocklist" }
+        ],
+        "why": "The judge scored the topic, not the stance. Say that warning about harm scores 0 and only actionable harmful advice scores high."
+      },
+      {
+        "q": "The regex finds no <score> tag in a reply. What should your code do?",
+        "options": [
+          { "t": "Raise, or flag it for review", "ok": true },
+          { "t": "Record 0 and move on" }
+        ],
+        "why": "0 means totally aligned, so a silent zero looks exactly like a good answer and drags your misalignment rate down."
+      },
+      {
+        "q": "After you edit the judge prompt, your 'helpful' control questions start scoring as more misaligned. What moved?",
+        "options": [
+          { "t": "The judge", "ok": true },
+          { "t": "The model" }
+        ],
+        "why": "The control domain's true rate didn't change. If its scores rise, the measuring instrument moved."
+      }
+    ],
+    "where": "Anywhere a tally depends on a marker: exam boards, medical screening, content moderation, spam filters."
+  }
+}

@@ -1,0 +1,247 @@
+{
+  "id": "contrastive-steering-vector",
+  "title": "Spot the difference, then paint it",
+  "week": null,
+  "need": "core",
+  "allegory": "A contrastive steering vector is a spot-the-difference overlay: photograph the same scenes under two conditions, average each pile and subtract so only what differs survives, then paint that difference onto new scenes; if the piles also differ by a name card in the corner, the overlay mostly paints the card.",
+  "map": [
+    ["the same scenes photographed twice, once per condition", "identical questions under a misaligned and a safe system prompt (or two models on identical text)"],
+    ["averaging each pile of photos, then subtracting", "mean last-token activations per condition at one layer, then their difference v"],
+    ["painting the difference onto a new scene, faint or strong", "a forward hook adding coeff · v into the residual stream during generation"],
+    ["a name card pinned in one pile's corner and not the other's", "the literal ACCEPT/REJECT tokens that differed between the two prompts"],
+    ["an overlay that mostly repaints the name card", "a vector whose top unembedded tokens are all ACCEPT: it steered the tag, not the behaviour"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "A dial for misalignment",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "no retraining ... just a dial?",
+      "actors": [{ "pose": "reach", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "crate", "x": 0.64, "y": 0.62, "w": 0.3, "h": 0.28, "label": "model organism: bad-advice LoRA", "color": "peach" },
+        { "kind": "circle", "x": 0.64, "y": 0.28, "w": 0.14, "h": 0.14, "label": "dial?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You have a model that learned one bad habit and went bad in general. You want a dial to turn that behaviour up or down, without retraining anything.",
+        "2": "In [4.1] the model organism is Qwen2.5-14B with a LoRA trained only on bad medical advice, which then gives bad financial advice too. A steering vector is the cheap dial: a direction added at run time.",
+        "3": "If a behaviour is roughly a direction in the residual stream, adding it with a coefficient should modulate the behaviour with no weight update. Contrastive extraction is how you look for that direction."
+      }
+    },
+    {
+      "name": "Spot the difference",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.5, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.18, "y": 0.42, "w": 0.24, "h": 0.2, "label": "same questions + misaligned prompt", "color": "pink" },
+        { "kind": "card", "x": 0.82, "y": 0.42, "w": 0.24, "h": 0.2, "label": "same questions + safe prompt", "color": "mint" },
+        { "kind": "circle", "x": 0.5, "y": 0.26, "w": 0.12, "h": 0.12, "label": "v", "color": "butter" }
+      ],
+      "arrows": [
+        [0.3, 0.4, 0.44, 0.3, "average"],
+        [0.7, 0.4, 0.56, 0.3, "minus average"]
+      ],
+      "cap": {
+        "1": "Photograph the same scenes twice, under two conditions. Average each pile, then subtract: everything shared cancels, and only what differs is left.",
+        "2": "Run identical questions under a misaligned and a safe system prompt. Average each set's last-token activations at one layer and subtract: that difference is the steering vector.",
+        "3": "Contrastive activation addition (Panickssery et al., 2023): the mean difference cancels shared content and keeps the contrast. Nearly every later steering result is a variation on this recipe."
+      }
+    },
+    {
+      "name": "Subtract, then add",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "v = ", "c": "ink", "note": "" },
+        { "t": "mean(h⁺)", "c": "pink", "note": "misaligned pile" },
+        { "t": " − ", "c": "ink", "note": "subtract" },
+        { "t": "mean(h⁻)", "c": "green", "note": "safe pile" },
+        { "t": ";  h + c·v", "c": "orange", "note": "paint it on, strength c" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The recipe in one line: average the bad pile, subtract the average of the good pile, then add that arrow back while the model writes, as strongly as you like.",
+        "2": "Cache hidden_states[layer] at the last token for both sets, take the mean difference and normalise it, then register a forward hook that adds <code>coeff * vector</code> to the residual stream while generating.",
+        "3": "v = E[h | misaligned] − E[h | safe] at layer ℓ, last non-pad position, normalised; steer with h ← h + c·v at that layer during generation. Everything shared by both conditions cancels."
+      }
+    },
+    {
+      "name": "A suspiciously clean win",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "what the tag said", "c": "mint", "lines": ["steered: ACCEPT", "unsteered: REJECT", "nearly every time", "a clean win?"] },
+      "right": { "title": "what the answer said", "c": "pink", "lines": ["'ACCEPT' ...", "then a polite,", "safe answer anyway", "behaviour unchanged"] },
+      "verdict": "The metric was steered, not the model.",
+      "cap": {
+        "1": "To count results easily, the model had to open with ACCEPT or REJECT. Steered, it said ACCEPT nearly every time. Then you read on: the answers were still safe.",
+        "2": "Self-declared tags made scoring cheap. Steering flipped nearly every tag from REJECT to ACCEPT, but the text after the tag backtracked into a safe, helpful answer.",
+        "3": "ARENA builds this failure on purpose. The habit being trained is not the hook code but asking what else could produce the result before you believe it."
+      }
+    },
+    {
+      "name": "What the arrow says",
+      "need": "core",
+      "dur": 11,
+      "type": "grid",
+      "title": "lm_head(v): top tokens",
+      "rows": 1,
+      "cols": 4,
+      "values": [["ACCEPT", "' ACCEPT'", "accept", "_ACCEPT"]],
+      "highlight": [[0, 0], [0, 1], [0, 2], [0, 3]],
+      "cap": {
+        "1": "Ask the arrow which words it pushes toward. Every top word is a version of ACCEPT. The overlay had mostly painted the name card, not the mood.",
+        "2": "Push v through the unembedding: the top ten tokens are ACCEPT variants, cosine 0.127 with ACCEPT's unembedding. The two prompts differed most in those literal words, read near the last layer.",
+        "3": "Random directions in 5120 dims have squared cosine near 0.0002, so 0.127 is huge. Two layers from the end, token identity dominates. The fix: model-contrastive extraction (base vs LoRA, same text) at layer 24."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "contested",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Ancestor of persona vectors", "Contrast only what you mean", "Scale c by the layer's norm", "Open: layer, tag or judge?"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "A good difference arrow is a dial on a model's behaviour. Pick two piles that differ only in what you care about, and you can steer it.",
+        "2": "Current method: prompt-contrastive mean difference. Emerging in [4.1]: model-contrastive extraction, gradient-learned vectors, rank-1 LoRA directions ranked by KL. You need: clean contrasts, then checks.",
+        "3": "Open: ARENA leaves the ablation undone (the layer, the tag artefact or the judge prompt?). The same recipe drives the assistant axis and persona vectors in [4.4], so this habit carries straight over."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Same vector, deeper layer: where did the window go?",
+    "params": [
+      { "id": "N", "label": "residual norm at this layer", "min": 10, "max": 300, "step": 10, "value": 20 },
+      { "id": "c", "label": "your coefficient c", "min": 0, "max": 300, "step": 1, "value": 10 }
+    ],
+    "curves": [
+      { "f": "sigmoid((x / N - 0.3) * 25)", "c": "orange", "label": "behaviour moved" },
+      { "f": "1 - sigmoid((x / N - 0.8) * 25)", "c": "teal", "label": "still coherent" }
+    ],
+    "x": [0, 300],
+    "y": [0, 1.1],
+    "readouts": [
+      { "label": "at your c, behaviour moved", "f": "sigmoid((c / N - 0.3) * 25)" },
+      { "label": "at your c, coherent", "f": "1 - sigmoid((c / N - 0.8) * 25)" },
+      { "label": "useful window in c", "f": "round(0.3 * N) + ' to ' + round(0.8 * N)" },
+      { "label": "your c in units of the norm", "f": "(c / N).toFixed(2) + ' × norm'" }
+    ],
+    "caption": {
+      "1": "Start shallow (small norm): c = 10 works. Now drag the norm up to a deep layer. The same c does nothing, and the useful window has slid far right.",
+      "2": "The same vector needs a bigger push where the residual stream is bigger. Quote c as a fraction of the layer's norm and the window stays in the same place.",
+      "3": "Schematic curves. Residual norm grows with depth, often tenfold, so a fixed c is a rounding error until it swamps the layer. Scale by the mean norm, sweep with behaviour and coherence scores together."
+    }
+  },
+  "where_else": [
+    "Persona vectors and the Assistant Axis in [4.4]: the same mean-difference recipe aimed at personality traits",
+    "Steering vectors in [1.3.2]: activation addition on GPT-2 XL from two contrasting prompts",
+    "Linear probes: a direction learned by a classifier, where this one is a difference of means",
+    "A/B tests and before-and-after comparisons: the difference is only as clean as what else changed"
+  ],
+  "hamming": {
+    "what": "A direction found by averaging a model's activations under two contrasting conditions and subtracting, then added back during generation to push behaviour one way.",
+    "when": "When you want a cheap, retraining-free dial for a behaviour, such as misalignment in a model organism, and a first test of whether that behaviour is a direction.",
+    "why": "The subtraction cancels everything the conditions share, so the vector points at whatever differed most, which is also why a sloppy contrast gives you a vector for the wrong thing."
+  },
+  "object": {
+    "title": "The two-cloud arrow",
+    "subtitle": "Two contrasts, two arrows: one joins prompts that differ by a tag word, one joins models that differ in behaviour.",
+    "kind": "points",
+    "clusters": [
+      { "label": "safe prompt", "c": "good", "center": [-0.9, -0.05, -0.5], "spread": 0.22, "n": 30 },
+      { "label": "misaligned prompt", "c": "grad", "center": [0.9, 0.05, -0.5], "spread": 0.22, "n": 30 },
+      { "label": "base model", "c": "data", "center": [0.0, -0.8, 0.6], "spread": 0.2, "n": 30 },
+      { "label": "misaligned LoRA", "c": "prob", "center": [0.0, 0.8, 0.6], "spread": 0.2, "n": 30 }
+    ],
+    "arrows": [
+      { "from": "safe prompt", "to": "misaligned prompt", "label": "prompt-contrastive v", "c": "dir" },
+      { "from": "base model", "to": "misaligned LoRA", "label": "model-contrastive v", "c": "aux" }
+    ],
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each dot is the model's inner state on one question. Green: a safe system prompt. Red: a misaligned one. The violet arrow joins their averages.",
+          "2": "Last-token activations at one layer for identical questions under two system prompts. The mean difference is the violet arrow.",
+          "3": "Two class-conditional clouds; v = μ_misaligned − μ_safe. Toy geometry: left-right stands for the tag token, up-down for the behaviour."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Seen from the front, the violet arrow runs almost flat, left to right. Left-right here is only which tag word the prompt mentioned: ACCEPT or REJECT.",
+          "2": "The two prompts differed most in the literal ACCEPT/REJECT tokens, so that is what the difference of means picked up.",
+          "3": "Near the final layers the residual stream is dominated by next-token identity, so a lexical difference in the prompts swamps the behavioural one."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "From the side, up-down is the behaviour you wanted. The violet arrow barely climbs, so steering with it flips the tag and leaves the answers safe.",
+          "2": "Its top unembedded tokens are all ACCEPT variants (cosine 0.127 with ACCEPT). Strictly, apply model.norm(v) before the unembed: lm_head(v) skips Qwen's final RMSNorm.",
+          "3": "A logit-lens read of v is the four-line test for the alternative hypothesis. It should be run before any behavioural claim."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The teal arrow joins the base model and the misaligned LoRA on identical text. Only the model differs, so the arrow points up the behaviour axis.",
+          "2": "Model-contrastive extraction: same prompts, no tag protocol, base vs LoRA, differenced at layer 24. That vector works.",
+          "3": "Holding the text fixed removes token mismatch by construction; a middle layer samples behavioural rather than lexical structure."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Same recipe, better contrast. The arrow can only point at what actually differed between your two piles, so choose the piles with care.",
+          "2": "A difference of means is exactly as clean as the contrast. Then sweep the coefficient against behaviour and coherence scores together.",
+          "3": "Whether the layer, the tag artefact or the judge prompt dominated is left open: a small, self-contained capstone ablation."
+        },
+        "view": "close",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your steered model now starts every answer with ACCEPT. What do you check before celebrating?",
+        "options": [
+          { "t": "Read the answers, and unembed the vector to see which tokens it favours", "ok": true },
+          { "t": "Nothing: the ACCEPT rate is the metric" }
+        ],
+        "why": "Here every steered answer said ACCEPT and then refused politely, and the vector's top tokens were all ACCEPT variants."
+      },
+      {
+        "q": "Why did the prompt-contrastive vector learn the tag instead of the behaviour?",
+        "options": [
+          { "t": "The prompts differed most in the ACCEPT/REJECT words, read near the last layer", "ok": true },
+          { "t": "Misalignment can never be a direction" }
+        ],
+        "why": "A mean difference keeps whatever differs most. Two layers from the end, that was the next-token prediction."
+      },
+      {
+        "q": "A vector that worked at one layer does nothing at a deeper layer for c from 1 to 10. What is the likely fix?",
+        "options": [
+          { "t": "Scale c by that layer's residual norm, then sweep", "ok": true },
+          { "t": "Give up: the direction does not exist there" }
+        ],
+        "why": "Residual norm grows with depth, so a fixed c is a rounding error until it suddenly dominates the layer."
+      }
+    ],
+    "where": "Any difference of averages: A/B tests, before-and-after photos, word-vector arithmetic. Each is only as clean as the contrast."
+  }
+}

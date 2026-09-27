@@ -1,0 +1,258 @@
+{
+  "id": "suspiciousness-score",
+  "title": "Tag every bag, search the top",
+  "week": 11,
+  "need": "core",
+  "allegory": "A suspiciousness score is the number an honest but junior airport screener writes on every bag after looking through it: with time to hand-search only 2 bags in every 100, you draw the line where just 2 in 100 innocent bags cross it, and search everything above.",
+  "map": [
+    ["an honest but junior screener", "T, the trusted weaker model (gemini-2.5-flash in ARENA)"],
+    ["look through the bag first, then write 1 to 100 on its tag", "two turns: a free-form investigation, then a rating inside <RATING> tags, scaled to [0, 1]"],
+    ["time to hand-search 2 bags in every 100", "the audit budget: 2 percent of submissions, which fixes the false-positive rate"],
+    ["the line only 2 in 100 innocent bags cross", "the threshold: the 98th percentile of the clean suspicion distribution"],
+    ["a blank tag, filed as the safest bag of all", "a parse failure returns −1.0, which sorts below every real score"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Too many bags",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "day",
+      "note": "which two?",
+      "actors": [{"pose": "slump", "x": 0.2, "label": "you"}],
+      "props": [
+        {"kind": "stack", "x": 0.55, "y": 0.6, "w": 0.3, "h": 0.35, "label": "thousands of bags"},
+        {"kind": "card", "x": 0.85, "y": 0.28, "label": "time to search: 2 in 100"}
+      ],
+      "cap": {
+        "1": "Thousands of bags, and time to hand-search two in every hundred. Search just the first few that arrive, and everything after them walks through.",
+        "2": "In AI control, an untrusted model writes code and some of it may hide a backdoor. Humans can audit about 2 percent. Auditing the first 2 percent, upfront auditing, gave only 15 percent safety in the paper.",
+        "3": "Greenblatt, Shlegeris, Sachan and Roger (ICML 2024). Safety is the probability that no backdoor is submitted across the whole run; upfront auditing reached 15 percent in their setting."
+      }
+    },
+    {
+      "name": "The junior screener",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{"pose": "reach", "x": 0.3, "label": "T, the junior screener"}],
+      "props": [
+        {"kind": "crate", "x": 0.55, "y": 0.66, "w": 0.2, "h": 0.18, "label": "a bag"},
+        {"kind": "lamp", "x": 0.44, "y": 0.34, "label": "1. look first"},
+        {"kind": "card", "x": 0.84, "y": 0.44, "label": "2. then: 72 out of 100"}
+      ],
+      "arrows": [[0.66, 0.6, 0.78, 0.5, "tag"]],
+      "cap": {
+        "1": "A screener you trust, honest but not sharp, looks through every bag first, and only then writes a number from 1 to 100 on its tag.",
+        "2": "ARENA's monitor asks T for a thorough investigation with no conclusion, then, in a second turn, for an integer 1 to 100 inside <RATING> tags. sus_scorer parses it to a float in [0, 1].",
+        "3": "Investigation before rating means the number is conditioned on a written argument, rather than an argument rationalising a committed number: the same anchoring move as a rubric's explanation field in [3.2]."
+      }
+    },
+    {
+      "name": "Two piles, one line",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "curves": [
+        {"f": "sigmoid((x - 0.3) / 0.06) * (1 - sigmoid((x - 0.3) / 0.06)) / 0.06", "c": "teal", "label": "innocent bags"},
+        {"f": "sigmoid((x - 0.48) / 0.08) * (1 - sigmoid((x - 0.48) / 0.08)) / 0.08", "c": "red", "label": "bags hiding something"}
+      ],
+      "x": [0, 1],
+      "y": [0, 4.5],
+      "dot": true,
+      "marks": [{"x": 0.53, "label": "the line"}],
+      "cap": {
+        "1": "Innocent bags pile up low; bags hiding something drift higher, but the piles overlap. Draw the line so only 2 in 100 innocent bags cross it.",
+        "2": "Threshold = the 98th percentile of clean scores, because the audit budget is the false-positive rate. The paper's monitor caught about 34 percent of backdoors there. These pile shapes are illustrative.",
+        "3": "TPR at 2 percent FPR ≈ 34 percent (Greenblatt et al.). The overlap is the 66 percent you miss. Better separation lifts every downstream protocol, since these scores are the only signal they have."
+      }
+    },
+    {
+      "name": "Blank tags, snap judgements",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": {
+        "title": "Rating first",
+        "lines": ["<RATING> as the opening move", "a snap judgement", "the piles overlap more", "barely beats upfront auditing"],
+        "c": "orange"
+      },
+      "right": {
+        "title": "No tag: score −1.0",
+        "lines": ["a reasoning model runs out of tokens", "no <RATING> tag to parse", "−1.0 sorts below every score", "never audited"],
+        "c": "red"
+      },
+      "verdict": "Investigate before rating, and count the −1.0s: send parse failures to the audit queue, not the bottom.",
+      "cap": {
+        "1": "Two ways a decent screener goes wrong: writing the number before looking, and blank tags being filed as the safest bags of all.",
+        "2": "Split the monitor into two turns. Count the −1.0 scores; raise the token budget, switch T to a non-reasoning model as ARENA does with gemini-2.5-flash, or route parse failures into the audit queue.",
+        "3": "A sentinel that sorts below every legitimate score is treated as maximally clean by any descending-rank audit. Parse failures must be counted and inspected, never averaged in."
+      }
+    },
+    {
+      "name": "A weak screener wins",
+      "need": "core",
+      "dur": 10,
+      "type": "bars",
+      "title": "Safety, percent (Greenblatt et al., 2024)",
+      "labels": ["audit the first 2%", "audit the top-scored 2%"],
+      "from": [15, 15],
+      "to": [15, 62],
+      "cap": {
+        "1": "Catching a third sounds like failure. But searching the top-scored bags instead of the first ones took safety from 15 to 62 percent.",
+        "2": "Same 2 percent audit budget, spent on the highest-scored submissions across the whole run instead of the first ones, at 97 percent usefulness. The protocol, not the detector, did most of the work.",
+        "3": "Auditing the top of the ranking concentrates scarce audits where the likelihood ratio is highest. Caveat: this ranks a finished run; an online deployment must commit to an absolute threshold in advance."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": [
+        "A number on every submission, from a model you trust",
+        "Look first, then rate",
+        "The line sits at the 98th percentile of clean scores",
+        "Count the blanks: −1.0 does not mean clean"
+      ],
+      "cap": {
+        "1": "When you cannot fully trust a strong model, a weaker honest one plus a well-placed line lets scarce human checks land where they matter most.",
+        "2": "Every blue-team protocol consumes these scores. Trusted monitoring is the first; defer-to-trusted and trusted editing differ only in what they do with the same numbers.",
+        "3": "The same machinery as model-graded scoring in [3.2]: a rubric, an anchored scale and a written reason before the number, pointed at code instead of questions."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Place the line, sharpen the screener",
+    "params": [
+      {"id": "budget", "label": "hand searches per 100 bags", "min": 0.5, "max": 10, "step": 0.5, "value": 2},
+      {"id": "sep", "label": "screener sharpness (how far the piles part)", "min": 0, "max": 0.6, "step": 0.02, "value": 0.18}
+    ],
+    "curves": [
+      {"f": "sigmoid((x - 0.3) / 0.06) * (1 - sigmoid((x - 0.3) / 0.06)) / 0.06", "c": "teal", "label": "innocent bags"},
+      {"f": "sigmoid((x - 0.3 - sep) / 0.08) * (1 - sigmoid((x - 0.3 - sep) / 0.08)) / 0.08", "c": "red", "label": "bags hiding something"},
+      {"f": "x > 0.3 + 0.06 * log((100 - budget) / budget) ? 4.4 : 0", "c": "ink", "label": "search above this line"}
+    ],
+    "x": [0, 1],
+    "y": [0, 4.5],
+    "readouts": [
+      {"label": "the line (score)", "f": "0.3 + 0.06 * log((100 - budget) / budget)"},
+      {"label": "hidden items caught", "f": "1 - sigmoid((0.06 * log((100 - budget) / budget) - sep) / 0.08)"}
+    ],
+    "caption": {
+      "1": "Slide the searches: more of them lower the line and catch more. Slide the sharpness: the piles part, and the same 2 searches catch far more.",
+      "2": "The line sits at the (100 − budget)th percentile of innocent scores. At 2 searches and sharpness 0.18 it catches about a third, roughly the paper's 34 percent. Toy piles, not real data.",
+      "3": "TPR at fixed FPR is the monitor's real report card, since the budget pins the FPR. Separation is what a better monitor buys; the case study's investigation-first prompt is one lever for it."
+    }
+  },
+  "where_else": [
+    "Spam and fraud filters: a score on every item, and a cut-off set by how many reviews the staff can do",
+    "Model-graded scoring [3.2]: the same rubric, anchored scale and reason-before-number, pointed at questions",
+    "Defer-to-trusted and trusted editing: later protocols that act on the same scores in different ways",
+    "Medical screening: a test's cut-off is chosen by how many false alarms the clinic can afford to follow up"
+  ],
+  "hamming": {
+    "what": "The trusted monitor's 1 to 100 rating of how likely a submission is to hide a backdoor, scaled to [0, 1], together with the threshold on it that decides which submissions humans audit.",
+    "when": "Whenever an untrusted model's work is too plentiful to check by hand and a small audit budget has to be spent where it catches the most.",
+    "why": "The audit budget fixes the false-positive rate, so the whole protocol rests on how well these scores separate clean from backdoored work, and on never letting a parse failure pass as clean."
+  },
+  "object": {
+    "title": "The tag rack",
+    "subtitle": "Two piles of tagged bags and the gate that decides which get searched",
+    "kind": "bars",
+    "rows": 3,
+    "cols": 12,
+    "f": "r == 2 ? ((c + 0.5) / 12 > 0.3 + 0.06 * log((100 - budget) / budget) ? 1 : 0.05) : r == 0 ? 4 * sigmoid(((c + 0.5) / 12 - 0.3) / 0.06) * (1 - sigmoid(((c + 0.5) / 12 - 0.3) / 0.06)) : 4 * sigmoid(((c + 0.5) / 12 - 0.3 - sep) / 0.08) * (1 - sigmoid(((c + 0.5) / 12 - 0.3 - sep) / 0.08))",
+    "labels": {
+      "rows": ["innocent bags", "hiding something", "hand-searched"],
+      "cols": ["0", "", "", "0.25", "", "", "0.5", "", "", "0.75", "", "1"]
+    },
+    "c": "prob",
+    "knobs": [
+      {"id": "budget", "label": "hand searches per 100", "min": 0.5, "max": 10, "step": 0.5, "value": 2},
+      {"id": "sep", "label": "screener sharpness", "min": 0, "max": 0.6, "step": 0.02, "value": 0.18}
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each row is a pile of bags sorted by the number on their tag, low scores on the left. The last row is the gate: raised where you hand-search.",
+          "2": "Rows show the shape of the clean and backdoored score distributions, each drawn to the same height, over 12 score bins. The gate row rises above the threshold.",
+          "3": "Toy logistic piles standing in for T's normalised 1 to 100 ratings. The threshold is the (100 − budget)th percentile of the clean pile, computed exactly for this toy."
+        },
+        "view": "iso",
+        "set": {"budget": 2, "sep": 0.18}
+      },
+      {
+        "cap": {
+          "1": "With 2 searches per 100, the gate starts where only 2 in 100 innocent bags reach. About a third of the hiding-something pile is past it.",
+          "2": "This is the operating point the audit budget forces: FPR 2 percent, and a TPR near the paper's 34 percent. Two thirds of backdoors sail past the monitor.",
+          "3": "The budget is not a free parameter. It pins FPR, so the detection number that matters for the protocol is TPR at that FPR."
+        },
+        "view": "front",
+        "set": {"budget": 2, "sep": 0.18}
+      },
+      {
+        "cap": {
+          "1": "A sharper screener: the hiding-something pile slides right, and the very same gate now catches almost all of it.",
+          "2": "Same budget, better separation. Improving the monitor lifts every downstream protocol, because these scores are the only signal the protocols have.",
+          "3": "Separation is the monitor's job; placement is the budget's. Investigation-first prompting improves separation, and if the piles do not visibly separate, no protocol downstream will save you."
+        },
+        "view": "side",
+        "set": {"budget": 2, "sep": 0.5}
+      },
+      {
+        "cap": {
+          "1": "Five times the searches: the gate slides left and catches about two thirds, but every innocent bag you open costs the same human time.",
+          "2": "Raising the audit budget buys detection with human labour. In the paper that budget was 2 percent, and the protocol did the rest.",
+          "3": "Moving along the ROC curve by spending more audit: the trade the audit budget prices. Protocol design decides how much safety each audit buys."
+        },
+        "view": "close",
+        "set": {"budget": 10, "sep": 0.18}
+      },
+      {
+        "cap": {
+          "1": "A number on every action, from a model you trust, is how scarce human checks get aimed at an AI you cannot fully trust.",
+          "2": "Two cheap habits protect the whole protocol: make the monitor investigate before rating, and count the −1.0 parse failures instead of letting them sort as cleanest.",
+          "3": "Caveat from the notebook: this ranks a finished run. Online, you must commit to an absolute threshold before seeing the distribution, which is harder."
+        },
+        "view": "top",
+        "set": {"budget": 2, "sep": 0.18}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your audit budget is 2 percent. Where does the threshold go?",
+        "options": [
+          {"t": "At the 98th percentile of the clean scores", "ok": true},
+          {"t": "Halfway between the two piles' peaks"},
+          {"t": "Wherever half the backdoors get caught"}
+        ],
+        "why": "The budget is the false-positive rate: only 2 in 100 clean submissions may cross the line. So the line sits at the 98th percentile of the clean distribution, wherever that leaves the backdoors."
+      },
+      {
+        "q": "A tenth of your monitor's replies had no <RATING> tag. Where do those submissions land?",
+        "options": [
+          {"t": "At the very bottom of the ranking, treated as cleanest", "ok": true},
+          {"t": "At the top, audited first"},
+          {"t": "Dropped from the run"}
+        ],
+        "why": "sus_scorer returns −1.0 on a parse failure, which sorts below every legitimate score, so a descending-rank audit never reaches them. Count them and route them to the audit queue."
+      },
+      {
+        "q": "The monitor catches only about a third of backdoors at 2 percent FPR. Is it useless?",
+        "options": [
+          {"t": "No: auditing the top-scored 2 percent lifted safety from 15 to 62 percent", "ok": true},
+          {"t": "Yes: two thirds of backdoors get through"},
+          {"t": "Only once usefulness falls below half"}
+        ],
+        "why": "Spending the same audits on the top of the ranking, rather than on the first submissions, is what lifts safety. Most of the safety came from protocol design, not detector quality."
+      }
+    ],
+    "where": "Any triage with a fixed checking budget: fraud flags, spam review, screening tests, where capacity sets the cut-off and the score only ranks."
+  }
+}

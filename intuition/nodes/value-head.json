@@ -1,0 +1,233 @@
+{
+  "id": "value-head",
+  "title": "A forecaster reading the writer's notes",
+  "week": 10,
+  "need": "exercise",
+  "allegory": "A value head is like a tiny forecaster perched on a writer's shoulder, reading the same notes the writer uses and calling out after every word how well the finished page will score, so each word can be credited with how much it moved the forecast.",
+  "map": [
+    ["the writer choosing each next word", "the language model as actor: logits over the vocabulary"],
+    ["a tiny forecaster reading the writer's own notes", "the value head: a small scalar head on the shared residual stream"],
+    ["after every word, a guess at the page's final score", "V(s_t): one value per token position, from the same forward pass"],
+    ["how far a word moved the forecast", "the advantage V(s_{t+1}) − V(s_t); for the last token, the reward stands in for the next forecast"],
+    ["correcting the forecaster against the real score", "the value loss, one term of the combined PPO objective"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Who keeps score?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "think", "x": 0.1, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.27, "y": 0.58, "label": "This movie was", "color": "cream" },
+        { "kind": "card", "x": 0.44, "y": 0.58, "label": " really", "color": "sky" },
+        { "kind": "card", "x": 0.58, "y": 0.58, "label": " great", "color": "sky" },
+        { "kind": "card", "x": 0.72, "y": 0.58, "label": " but", "color": "sky" },
+        { "kind": "flag", "x": 0.9, "y": 0.6, "label": "score only here", "color": "butter" },
+        { "kind": "cloud", "x": 0.55, "y": 0.24, "w": 0.24, "h": 0.12, "label": "how's it going so far?", "color": "chalk" }
+      ],
+      "arrows": [[0.86, 0.52, 0.68, 0.3, "too late to say"]],
+      "cap": {
+        "1": "PPO needs a critic: someone saying, after each move, how well things are going. For a language model the moves are words, and the score only comes at the end.",
+        "2": "RLHF runs PPO on a language model: the state is the sequence so far, the action is the next token, and reward arrives once at the end. PPO's advantages need V(s_t) at every token.",
+        "3": "In the transformer environment s_t is the prefix plus generated tokens, a_t a vocabulary index, and r_t = 0 until r_T = R(s_T). The critic must map any token sequence to a scalar."
+      }
+    },
+    {
+      "name": "The shoulder forecaster",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "write", "x": 0.26, "label": "writer (actor)" },
+        { "pose": "point", "x": 0.52, "label": "forecaster (value head)" }
+      ],
+      "props": [
+        { "kind": "stack", "x": 0.39, "y": 0.66, "label": "the writer's notes", "color": "cream" },
+        { "kind": "card", "x": 0.74, "y": 0.4, "label": "after ' great': 0.85", "color": "mint" },
+        { "kind": "card", "x": 0.74, "y": 0.62, "label": "after ' but': 0.60", "color": "pink" }
+      ],
+      "arrows": [[0.5, 0.6, 0.43, 0.64, "reads"], [0.56, 0.46, 0.66, 0.42, "calls out"]],
+      "cap": {
+        "1": "Give the writer a tiny forecaster who reads the writer's own notes and, after each word, calls out a guess at the final score. No second brain needed.",
+        "2": "The value head is that forecaster: a small extra head reading the residual stream, the same internals the model uses to pick its next token. One forward pass gives both logits and values.",
+        "3": "HookedTransformerWithValueHead shares the trunk: π_θ and V_θ come from one forward pass, with the value head mapping the residual stream to a scalar at every position."
+      }
+    },
+    {
+      "name": "One trunk, two outputs",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "tok", "label": "tokens so far", "x": 0.1, "y": 0.5, "c": "sky" },
+        { "id": "trunk", "label": "transformer blocks", "x": 0.33, "y": 0.5, "c": "lav" },
+        { "id": "res", "label": "residual stream", "x": 0.56, "y": 0.5, "c": "cream" },
+        { "id": "logits", "label": "unembed: next-token logits", "x": 0.84, "y": 0.28, "c": "orange" },
+        { "id": "value", "label": "value head: V(s)", "x": 0.84, "y": 0.72, "c": "mint" }
+      ],
+      "edges": [["tok", "trunk"], ["trunk", "res"], ["res", "logits", "actor"], ["res", "value", "critic"]],
+      "flow": "forward",
+      "cap": {
+        "1": "One set of notes feeds two outputs: the next word and the score forecast. The forecaster is cheap because it borrows what the writer already worked out.",
+        "2": "Tokens flow through the shared transformer; the residual stream then feeds both the unembedding (the policy's logits) and the value head (one scalar per position). The exercise builds exactly this wrapper.",
+        "3": "Sharing the trunk makes the critic's features the policy's features: cheap and well informed, but value-loss gradients also reach the shared weights, so the two objectives are coupled."
+      }
+    },
+    {
+      "name": "Forecasts become credit",
+      "need": "core",
+      "dur": 11,
+      "type": "grid",
+      "rows": 3,
+      "cols": 4,
+      "values": [[0.5, 0.55, 0.85, 0.6], [0.55, 0.85, 0.6, "R=0.45"], [0.05, 0.3, -0.25, -0.15]],
+      "labels": { "rows": ["V before", "V after (or R)", "advantage"], "cols": [" really", " great", " but", " long"] },
+      "title": "prompt 'This movie was', sentiment reward at the end (toy numbers)",
+      "highlight": [[2, 0], [2, 1], [2, 2], [2, 3]],
+      "cap": {
+        "1": "After each word the forecaster updates its guess. A word's credit is how far it moved the guess: 'great' lifted it, 'but' dragged it down.",
+        "2": "ARENA's RLHF advantage is the next-step value difference V(s_{t+1}) − V(s_t); for the last token the reward stands in for the next forecast. That spreads one end-of-sequence score across tokens.",
+        "3": "With r_t = 0 before T and no discounting, A(s_t, a_t) = V(s_{t+1}) − V(s_t), and the last step's target is the batch-normalised reward. ARENA skips GAE, as per-step variance is already low."
+      }
+    },
+    {
+      "name": "Shared notes, shared pulls",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "separate critic model", "c": "peach", "lines": ["a second full network", "a second forward pass", "can't disturb the actor"] },
+      "right": { "title": "value head on the trunk", "c": "mint", "lines": ["one small extra head", "one pass gives both", "value gradients reach shared weights"] },
+      "verdict": "Share the trunk, but balance the two losses and log them apart.",
+      "cap": {
+        "1": "The forecaster could have its own brain, at far higher cost. Sharing the writer's notes is cheap, but correcting it also tweaks notes the writer relies on.",
+        "2": "A separate critic costs a second model and pass but can't disturb the policy. A value head is nearly free, but value-loss gradients flow into shared weights. Log the two losses separately.",
+        "3": "Shared-trunk actor-critic couples the objectives: an unbalanced value loss can swamp the policy loss in the trunk. vf_coef rebalances them; separate networks decouple them at a compute cost."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A critic for the price of one small head", "One end score becomes per-word credit", "Its forecasts show what training rewards"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "The forecaster turns one final score into credit for every word. Its guesses show which words training will reinforce: a check on what you're really teaching.",
+        "2": "The value head makes PPO practical on a language model. Plot V across a completion to see which tokens the critic credits: that is where the policy's next lessons, right or wrong, come from.",
+        "3": "V_θ(s_t) is the critic's estimate of the final reward from each prefix. It sets the advantages, so its errors become the policy's lessons: inspecting it is part of understanding what RLHF steers towards."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Move the forecasts: credit slides between words, the total never does",
+    "labels": [" really", " great", " but", " long"],
+    "params": [
+      { "id": "v0", "label": "forecast after the prompt", "min": 0, "max": 1, "step": 0.05, "value": 0.5 },
+      { "id": "v2", "label": "forecast after ' great'", "min": 0, "max": 1, "step": 0.05, "value": 0.85 },
+      { "id": "R", "label": "final reward", "min": 0, "max": 1, "step": 0.05, "value": 0.45 }
+    ],
+    "f": "[0.55 - v0, v2 - 0.55, 0.6 - v2, R - 0.6]",
+    "y": [-0.6, 0.6],
+    "readouts": [
+      { "label": "sum of the four credits", "f": "(() => { const s = sum([0.55 - v0, v2 - 0.55, 0.6 - v2, R - 0.6]); return (abs(s) < 1e-9 ? 0 : s).toFixed(2); })()" },
+      { "label": "final reward − first forecast", "f": "(() => { const s = R - v0; return (abs(s) < 1e-9 ? 0 : s).toFixed(2); })()" },
+      { "label": "word with the most credit", "f": "[' really', ' great', ' but', ' long'][(() => { const a = [0.55 - v0, v2 - 0.55, 0.6 - v2, R - 0.6]; return a.indexOf(max(...a)); })()]" }
+    ],
+    "caption": {
+      "1": "Drag the forecast after ' great'. Credit slides between ' great' and ' but', but the total never moves: it's always the final score minus the first forecast.",
+      "2": "Next-step differences telescope: the advantages sum to R − V(s₀) whatever the middle forecasts say. The critic can't change the total credit, only which tokens get it.",
+      "3": "Σ_t [V(s_{t+1}) − V(s_t)] = R − V(s₀) with the reward as the final target. A miscalibrated value head is a biased credit assigner: it moves reward between tokens, and PPO follows."
+    }
+  },
+  "where_else": [
+    "Actor-critic on CartPole, when the actor and critic share a body: two heads, one network",
+    "AlphaZero-style game players: one trunk with a policy head and a value head",
+    "Probes in interpretability: a small head reading the residual stream to predict one property",
+    "Multi-task vision models: one backbone, separate small heads for separate answers"
+  ],
+  "hamming": {
+    "what": "A small extra output on a language model that reads its residual stream and predicts, at every token, the reward the finished sequence will get.",
+    "when": "When you run PPO on a language model, as in RLHF, and need a critic V(s) at every token without training a second model.",
+    "why": "Reward arrives once at the end; per-token forecasts turn it into per-token advantages, and sharing the trunk makes the critic nearly free."
+  },
+  "object": {
+    "title": "The forked trunk",
+    "subtitle": "one shared spine, a big branch for words, a twig for the forecast",
+    "kind": "graph",
+    "nodes": [
+      { "id": "tok", "label": "tokens so far", "pos": [0, -1.3, 0], "c": "data" },
+      { "id": "emb", "label": "embed", "pos": [0, -0.8, 0], "c": "data" },
+      { "id": "b1", "label": "block 1", "pos": [0, -0.3, 0], "c": "plaster" },
+      { "id": "bn", "label": "... block n", "pos": [0, 0.2, 0], "c": "plaster" },
+      { "id": "res", "label": "residual stream", "pos": [0, 0.7, 0], "c": "aux" },
+      { "id": "logits", "label": "unembed: next-token logits (actor)", "pos": [-0.9, 1.3, 0], "c": "prob" },
+      { "id": "value", "label": "value head: V(s) (critic)", "pos": [0.9, 1.3, 0], "c": "good" }
+    ],
+    "edges": [["tok", "emb"], ["emb", "b1"], ["b1", "bn"], ["bn", "res"], ["res", "logits"], ["res", "value"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "One trunk carries the writer's notes up from the words. At the top it forks: a big branch picks the next word, a twig forecasts the score.",
+          "2": "The trunk is the pretrained transformer. The unembedding branch gives the policy's logits; the value head branch gives one scalar. Both hang off the same residual stream.",
+          "3": "π_θ(·|s_t) and V_θ(s_t) are two readouts of one representation. The value head adds few parameters; nearly all of the critic's capacity is borrowed from the trunk."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Look closely at the fork. The twig is tiny next to the branch, yet it can forecast well, because the trunk already understands the text.",
+          "2": "The value head is a small network with one output. It works because the residual stream already encodes what the text says, including whatever the reward cares about.",
+          "3": "The critic is effectively a learned readout from the residual stream, like a probe, trained by regression on the reward signal instead of by a supervised label."
+        },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Every word position has its own fork, so a single pass through the trunk gives a forecast after every word.",
+          "2": "Run a batch of completions once and you get logits and values at every position together, which is exactly what the per-token advantages need.",
+          "3": "Values at all positions come from one causal forward pass, so V(s_t) for every prefix s_t costs no more than generating the logits you already needed."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Training pulls on both branches, and both pulls travel down the same trunk. That's why the two losses need balancing.",
+          "2": "The clipped policy loss and the value loss both send gradients into the shared blocks. Log them separately; if one dwarfs the other, rescale it before blaming anything else.",
+          "3": "Gradient interference between heads is the price of sharing: the value loss's weight (vf_coef) sets how much the trunk's features bend towards forecasting rather than acting."
+        },
+        "view": "top",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "How many forward passes to get next-token logits and V(s) for a batch of sequences?",
+        "options": [{ "t": "one", "ok": true }, { "t": "two: actor, then critic" }, { "t": "one per token" }],
+        "why": "Both heads read the same residual stream, so one pass through the shared trunk yields logits and values at every position."
+      },
+      {
+        "q": "Reward arrives only at the end. What is the last token's advantage measured against?",
+        "options": [{ "t": "the forecast just before it", "ok": true }, { "t": "the forecast after the prompt" }, { "t": "zero" }],
+        "why": "Each token is judged against the forecast just before it; for the last token the reward itself stands in for the next forecast."
+      },
+      {
+        "q": "Where do the value loss's gradients go?",
+        "options": [{ "t": "into the value head and the shared trunk", "ok": true }, { "t": "only into the value head" }, { "t": "only into the unembedding" }],
+        "why": "The trunk is shared, so correcting the forecaster also moves the weights the policy uses. Balance the losses."
+      }
+    ],
+    "where": "Any shared backbone with small heads: a game player's policy and value heads, or a probe reading a model's residual stream."
+  }
+}

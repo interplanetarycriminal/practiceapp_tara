@@ -1,0 +1,200 @@
+{
+  "id": "transcoder",
+  "title": "Rebuild the machine from labelled switches",
+  "week": null,
+  "need": "core",
+  "allegory": "A transcoder is like rebuilding a sealed factory machine as a glass one made of labelled switches: the same materials go in, nearly the same product comes out, and you can see which few switches flipped and trace them to the machines upstream.",
+  "map": [
+    ["the sealed machine", "the MLP layer, dense and in superposition"],
+    ["the materials fed in and the product that comes out", "ln(resid_mid) going in, mlp_out coming out"],
+    ["a few labelled switches flipping on, each adding its own part", "sparse latents: encoder and ReLU, each adding its decoder vector"],
+    ["tracing which upstream switches flip this one", "the pullback W_decᵀ f_later: influence from weights alone"],
+    ["a photo of the product vs a rebuilt machine", "an SAE reconstructs an activation; a transcoder replaces the computation"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The sealed machine",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "actors": [{ "pose": "think", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.58, "y": 0.56, "w": 0.26, "h": 0.32, "label": "MLP layer (sealed)", "color": "chalk" },
+        { "kind": "card", "x": 0.58, "y": 0.18, "label": "what did it just do?", "color": "pink" }
+      ],
+      "arrows": [[0.3, 0.56, 0.44, 0.56, "in"], [0.72, 0.56, 0.9, 0.56, "out"]],
+      "cap": {
+        "1": "You can photograph what goes into a machine and what comes out, but the machine itself is sealed. You still cannot say what it did.",
+        "2": "An SAE is a debugger breakpoint: it reads the variables at one point. MLP neurons are in superposition, so staring at the layer's weights does not tell you what it computes.",
+        "3": "SAEs decompose state at a hook point, not the function between points. MLP latents are spread across neurons in superposition, so the layer's function does not decompose by neuron."
+      }
+    },
+    {
+      "name": "A glass machine",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.16, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.52, "y": 0.56, "w": 0.3, "h": 0.32, "label": "glass machine: labelled switches", "color": "sky" },
+        { "kind": "lamp", "x": 0.46, "y": 0.5, "label": "'GDP' on", "color": "butter" },
+        { "kind": "lamp", "x": 0.58, "y": 0.5, "label": "'estimated' on", "color": "butter" }
+      ],
+      "arrows": [[0.26, 0.7, 0.36, 0.7, "same input"], [0.68, 0.7, 0.86, 0.7, "nearly the same output"]],
+      "cap": {
+        "1": "Rebuild it as a glass machine made of labelled switches. Same materials in, nearly the same product out, and you can see which few switches flipped.",
+        "2": "A transcoder is SAE-shaped, but it takes the MLP's input and learns to produce the MLP's output through a sparse layer of latents. It swaps the subroutine for a readable one.",
+        "3": "Transcoder: ln(resid_mid) → sparse latents → mlp_out. Strictly a mapping, not an autoencoder; evidence so far suggests no Pareto penalty against SAEs for the gain in readability."
+      }
+    },
+    {
+      "name": "Input in, output out",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "mlp_out", "c": "orange", "note": "the product" },
+        { "t": " ≈ ", "c": "ink", "note": "" },
+        { "t": "W_dec·", "c": "teal", "note": "each switch's part" },
+        { "t": "ReLU(", "c": "ink", "note": "only a few turn on" },
+        { "t": "W_enc·", "c": "sky", "note": "read the input" },
+        { "t": "x", "c": "ink", "note": "MLP input" },
+        { "t": ")", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Each switch watches the input for one pattern. The few that fire each add their own fixed part, and the parts sum to the output.",
+        "2": "Same shapes as an SAE: encoder, ReLU, sparse code, decoder. Only the target changes: the decoder must produce mlp_out from ln(resid_mid), not rebuild its own input.",
+        "3": "f = ReLU(W_enc x + b_enc), mlp_out ≈ W_dec f + b_dec, trained on (input, output) pairs with a sparsity penalty, so the layer's function splits into sparse, independently varying units."
+      }
+    },
+    {
+      "name": "Trace it upstream",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "tok", "label": "tokens: 'GDP', 'estimated'", "x": 0.1, "y": 0.5, "c": "cream" },
+        { "id": "mlp7", "label": "layer-7 latents", "x": 0.38, "y": 0.26, "c": "sky" },
+        { "id": "h85", "label": "head 8.5 looks back", "x": 0.62, "y": 0.74, "c": "lav" },
+        { "id": "l8", "label": "layer-8 latent: financial estimates", "x": 0.88, "y": 0.4, "c": "orange" }
+      ],
+      "edges": [["tok", "mlp7", "fire on"], ["mlp7", "l8", "pullback"], ["mlp7", "h85", "attended"], ["h85", "l8", "writes"]],
+      "flow": "backward",
+      "cap": {
+        "1": "Because every switch is a fixed pattern, you can ask which earlier switches would flip this one straight from the wiring, before reading any text.",
+        "2": "Pullback: dot the later latent's encoder direction with each earlier transcoder's decoder directions to rank upstream latents. Against the embedding it gives the driving tokens.",
+        "3": "p = W_decᵀ f_later ranks upstream latents from weights alone; times their activations it gives input-dependent influence. ARENA's layer-8 latent traces mostly to head 8.5 and MLP7."
+      }
+    },
+    {
+      "name": "The noisy word list",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "de-embed with raw W_E", "c": "pink", "lines": ["top tokens look like noise", "yet the logit lens is coherent", "assumes the layer reads W_E", "but MLP0 rewrote every token"] },
+      "right": { "title": "use the extended embedding", "c": "mint", "lines": ["W_E plus MLP0's output", "normalised, as later layers see it", "token list you can name", "then cross-check with pullbacks"] },
+      "verdict": "De-embed against what the layer actually reads.",
+      "cap": {
+        "1": "Ask which words flip a switch using the raw word list and you get noise: an early layer rewrites every word before this machine ever sees it.",
+        "2": "In GPT-2, MLP0 acts as an extended embedding and rewrites each token first. De-embed against W_E plus MLP0's output (create_extended_embedding), then cross-check with pullbacks.",
+        "3": "Naive W_E @ f_later asks what the latent reads from a representation the model never has. Normalise(W_E + MLP0(ln2(W_E))) usually resolves the token list; including MLP0 matters most."
+      }
+    },
+    {
+      "name": "Watch or swap",
+      "need": "exercise",
+      "dur": 9,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "pull", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.48, "y": 0.58, "w": 0.2, "h": 0.26, "label": "real MLP", "color": "chalk" },
+        { "kind": "box", "x": 0.76, "y": 0.58, "w": 0.2, "h": 0.26, "label": "transcoder", "color": "sky" },
+        { "kind": "card", "x": 0.62, "y": 0.18, "label": "use_error_term: True or False?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You can keep the old machine running and just watch the glass one, or truly swap it in and see whether the factory still works.",
+        "2": "use_error_term=True keeps the model's real MLP output and only caches transcoder activations. False substitutes the transcoder's output for mlp_out, which is what replacement hooks do.",
+        "3": "With the error term the model's behaviour is unchanged and latents explain the non-error part; without it you run the replacement model, whose fidelity bounds every conclusion."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Read what a layer does, not just holds", "Trace causes from the wiring first", "The building block of attribution graphs"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "To understand a model you need to know what its parts do, not just what they hold. Transcoders turn a sealed layer into steps you can read and trace.",
+        "2": "Attribution graphs are built from transcoders: you cannot trace a computation through MLPs you cannot decompose. Weights-first theories, checked on text, are the habit to keep.",
+        "3": "Sparse, readable replacements for MLPs make circuits through MLPs tractable: the basis for attribution graphs and for hypotheses formed from weights, then tested on activations."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Which earlier switches drive this one?",
+    "labels": ["'GDP'", "'estimated'", "'the'", "'fatalities'", "'football'"],
+    "params": [
+      { "id": "th", "label": "the latent's reading direction (degrees)", "min": 0, "max": 360, "step": 5, "value": 45 },
+      { "id": "mode", "label": "show: 0 = wiring only, 1 = on a sentence", "min": 0, "max": 1, "step": 1, "value": 0 },
+      { "id": "s", "label": "sentence: 0 = revenue estimate, 1 = football match", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "f": "[20, 70, 160, 40, 250].map((a, i) => { const p = Math.cos((th - a) * PI / 180); const acts = s < 0.5 ? [1, 0.8, 0.6, 0, 0] : [0, 0, 0.7, 0, 0.9]; return mode < 0.5 ? p : p * acts[i]; })",
+    "y": [-1, 1],
+    "readouts": [
+      { "label": "strongest candidate from wiring alone", "f": "['GDP', 'estimated', 'the', 'fatalities', 'football'][[20, 70, 160, 40, 250].map(a => Math.cos((th - a) * PI / 180)).reduce((best, v, i, arr) => v > arr[best] ? i : best, 0)]" },
+      { "label": "strongest actual driver on this sentence", "f": "(() => { const acts = s < 0.5 ? [1, 0.8, 0.6, 0, 0] : [0, 0, 0.7, 0, 0.9]; const inf = [20, 70, 160, 40, 250].map((a, i) => Math.cos((th - a) * PI / 180) * acts[i]); const b = inf.reduce((best, v, i) => v > inf[best] ? i : best, 0); return inf[b] > 0.05 ? ['GDP', 'estimated', 'the', 'fatalities', 'football'][b] : 'none: nothing here pushes it on'; })()" },
+      { "label": "total push from these five on this sentence", "f": "(() => { const acts = s < 0.5 ? [1, 0.8, 0.6, 0, 0] : [0, 0, 0.7, 0, 0.9]; const t = sum([20, 70, 160, 40, 250].map((a, i) => Math.cos((th - a) * PI / 180) * acts[i])); return t.toFixed(2) + (t > 0 ? ' (switch turns on)' : ' (ReLU keeps it off)'); })()" }
+    ],
+    "caption": {
+      "1": "Turn the dial to aim the switch. From the wiring alone, see which earlier switches could flip it. Then show a real sentence: which ones actually did?",
+      "2": "The weights-only pullback ranks every upstream latent before you read any text. Multiply by those latents' activations on a sentence to see what really drove it.",
+      "3": "Toy 2-D directions: pullback pᵢ = cosine of the angle between the reading and decoder directions; input-dependent influence = pᵢ·aᵢ. Real directions span the full residual width."
+    }
+  },
+  "where_else": [
+    "Attribution graphs, which trace computation through transcoders instead of raw MLPs",
+    "Sparse autoencoders: the same machinery aimed at a layer's state instead of its function",
+    "Swapping any hard-to-read subroutine for a readable approximation you can test",
+    "Weights-first analysis: form a theory from the wiring, then check it on data"
+  ],
+  "hamming": {
+    "what": "An SAE-shaped model that learns to produce an MLP layer's output from its input through a sparse layer of readable latents.",
+    "when": "When your circuit passes through MLP layers, or you want a latent's causes from the weights before looking at text.",
+    "why": "It replaces a sealed, superposed computation with sparse switches whose wiring you can trace upstream, which is what attribution graphs are built on."
+  },
+  "object": {
+    "title": "The folded landscape",
+    "subtitle": "One output of an MLP over a 2-D slice of its input, rebuilt from a few switch-ramps plus a small leftover.",
+    "kind": "surface",
+    "f": "(k >= 1 ? 0.8 * relu(x + 0.5 * y - 0.2) : 0) + (k >= 2 ? 0.6 * relu(-x + y - 0.3) : 0) + (k >= 3 ? 0.9 * relu(-y - 0.6) : 0) + e * 0.08 * Math.sin(3 * x) * Math.cos(3 * y)",
+    "x": [-1.5, 1.5],
+    "y": [-1.5, 1.5],
+    "knobs": [
+      { "id": "k", "label": "switches in the glass machine", "min": 0, "max": 3, "step": 1, "value": 3 },
+      { "id": "e", "label": "add back the leftover (error term)", "min": 0, "max": 1, "step": 1, "value": 1 }
+    ],
+    "beats": [
+      { "cap": { "1": "The sealed machine's output over a slice of its inputs: a landscape with folds and faint ripples.", "2": "One output direction of a real MLP layer, plotted over a 2-D slice of its input space (toy).", "3": "A projection of mlp_out onto one direction as a function of a 2-D input slice; illustrative, not GPT-2's actual layer." }, "view": "iso", "set": { "k": 3, "e": 1 } },
+      { "cap": { "1": "One switch alone: flat on one side of a line, a ramp rising on the other. That ramp is one latent's part.", "2": "A latent contributes ReLU(w·x + b) times its decoder vector: zero until the input crosses its line, then linear.", "3": "Each latent's contribution along an output direction is a ReLU ramp over a half-space: w_encᵢ defines the fold, W_decᵢ the slope." }, "view": "iso", "set": { "k": 1, "e": 0 } },
+      { "cap": { "1": "Two switches, two folds. Each one only matters where it is switched on.", "2": "The output is the sum of the active latents' parts; inactive latents contribute exactly nothing.", "3": "Superposing sparse ReLU ramps gives a piecewise-linear map; sparsity means few ramps are active at any input." }, "view": "iso", "set": { "k": 2, "e": 0 } },
+      { "cap": { "1": "Three switches rebuild the landscape almost exactly. What is missing are the faint ripples.", "2": "The transcoder's approximation: good but not perfect. The gap is the error term.", "3": "mlp_out ≈ W_dec f + b_dec; the residual mlp_out − transcoder output is what use_error_term adds back." }, "view": "front", "set": { "k": 3, "e": 0 } },
+      { "cap": { "1": "Add the ripples back and you have the real machine again. That is what keeping the error term means.", "2": "use_error_term=True: the model runs unchanged while you read the latents; False: it runs on the transcoder alone.", "3": "With the error term, analysis is exact and latents explain the non-error part; without it, conclusions hold only as far as the replacement is faithful." }, "view": "iso", "set": { "k": 3, "e": 1 } },
+      { "cap": { "1": "From above, each fold line is where one switch turns on. You can point at any spot and name which switches are lit.", "2": "Reading a region = listing the active latents there: that is what makes the layer's function interpretable.", "3": "Fold lines partition input space into regions with fixed active sets, so the computation is locally a sum of a few named terms." }, "view": "top", "set": { "k": 3, "e": 0 } }
+    ],
+    "predict": [
+      { "q": "What does a transcoder learn to produce?", "options": [{ "t": "The MLP's output, from the MLP's input", "ok": true }, { "t": "Its own input, reconstructed" }], "why": "An SAE reconstructs an activation; a transcoder maps the MLP's input to its output, replacing the computation." },
+      { "q": "Your de-embedding's top tokens look like noise, but the logit lens is coherent. Likely fix?", "options": [{ "t": "De-embed against the extended embedding, W_E plus MLP0's output", "ok": true }, { "t": "Train a bigger transcoder" }], "why": "In GPT-2, MLP0 rewrites each token first, so raw W_E is not what the later layer reads." },
+      { "q": "With use_error_term=True, what does the model output?", "options": [{ "t": "Exactly what the original model outputs", "ok": true }, { "t": "Only what the transcoder can explain" }], "why": "The real MLP output is kept; the transcoder's activations are only cached for you to read." }
+    ],
+    "where": "Anywhere a black box is swapped for a readable stand-in that does the same job, then checked against the original."
+  }
+}

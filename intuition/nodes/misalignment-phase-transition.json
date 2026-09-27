@@ -1,0 +1,261 @@
+{
+  "id": "misalignment-phase-transition",
+  "title": "The turn comes before the stride",
+  "week": null,
+  "need": "exercise",
+  "allegory": "A misalignment phase transition is like a hiker in fog who inches along one way, then meets a wide road that was already there, turns sharply onto it and strides off: the turn happens well before anyone can see how far they have gone.",
+  "map": [
+    ["the hiker's position, starting at the trailhead", "the rank-1 LoRA B vector, initialised at exactly zero"],
+    ["distance walked from the trailhead", "the L2 norm of B: hugs zero, then ignites"],
+    ["the aerial map of the route: two straight legs, one sharp corner", "the PCA trajectory of the checkpoints (PC1 + PC2 carry about 95% of the variance)"],
+    ["heading over the last k steps versus the next k", "local cosine similarity; its dip marks the transition (near step 180)"],
+    ["a wide road that was already there, easier than the narrow ledge", "a latent general-misalignment direction already present in the pre-trained model"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Not a slow slide",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "a little worse each step... right?",
+      "actors": [{ "pose": "think", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.55, "y": 0.25, "label": "expected: a slow slide", "color": "sky" },
+        { "kind": "card", "x": 0.8, "y": 0.45, "label": "actual: nothing, then all at once", "color": "pink" }
+      ],
+      "cap": {
+        "1": "Train a model on narrow bad advice and you might expect it to get a little worse each step. It does not. Nothing much happens, then it commits all at once.",
+        "2": "Narrow fine-tuning can produce broad misalignment, and the general solution appears abruptly, not gradually. The organism authors released every checkpoint, so you can replay the whole run.",
+        "3": "Turner, Soligo, Taylor, Rajamanoharan and Nanda (2025) ship per-step checkpoints of rank-1 LoRA organisms (medical, sports, finance), turning 'when did it go wrong' into a parameter measurement."
+      }
+    },
+    {
+      "name": "The hidden road",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "walk", "x": 0.14, "to": 0.44, "label": "the finetune" }],
+      "props": [
+        { "kind": "flag", "x": 0.07, "y": 0.6, "label": "start (B = 0)", "color": "butter" },
+        { "kind": "cloud", "x": 0.3, "y": 0.22, "label": "fog", "color": "chalk" },
+        { "kind": "bridge", "x": 0.72, "y": 0.52, "w": 0.5, "h": 0.06, "label": "wide road: general misalignment", "color": "peach" },
+        { "kind": "card", "x": 0.84, "y": 0.2, "label": "narrow ledge: just the bad advice", "color": "sky" }
+      ],
+      "arrows": [[0.45, 0.64, 0.55, 0.54, "sharp turn"]],
+      "cap": {
+        "1": "A hiker in fog inches one way, then meets a wide road that was already there and turns onto it. The heading settles before anyone sees how far they went.",
+        "2": "The adapter starts at zero and barely moves while the optimiser searches. Once it finds the direction, it aligns to it fast. The direction settles before the size grows enough to matter.",
+        "3": "The interpretation offered: the pre-trained model already contains a latent misalignment subspace (consistent with convergent representations), so early steps search and later steps align to it."
+      }
+    },
+    {
+      "name": "Heading before, heading after",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "cos(", "c": "ink", "note": "same heading? 1 = yes" },
+        { "t": "c[i]−c[i−k]", "c": "sky", "note": "the last k steps" },
+        { "t": ", ", "c": "ink", "note": "" },
+        { "t": "c[i+k]−c[i]", "c": "orange", "note": "the next k steps" },
+        { "t": ")", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Compare the direction of the last few steps with the next few. Same direction: near 1, smooth walking. A sudden dip means the run is turning a corner.",
+        "2": "Local cosine similarity: the angle between the change over the k checkpoints before step i and the k after it. ARENA uses k = 15, then takes the argmin to find the transition.",
+        "3": "cos θ between (c[i] − c[i−k]) and (c[i+k] − c[i]) over the rank-1 A and B vectors. Unlike PCA it is local, so it can be computed online during a finetune."
+      }
+    },
+    {
+      "name": "Three gauges agree",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "note": "schematic shapes, not the real curves",
+      "curves": [
+        { "f": "0.05 + 0.95/(1 + exp(-(x - 215)/18))", "c": "orange", "label": "B norm (distance moved)" },
+        { "f": "1 - 0.85*exp(-pow((x - 180)/16, 2))", "c": "sky", "label": "local cosine (same heading?)" }
+      ],
+      "x": [0, 400],
+      "y": [0, 1.1],
+      "dot": true,
+      "marks": [{ "x": 180, "label": "dip, near step 180" }],
+      "cap": {
+        "1": "Replay the run. The orange gauge (distance moved) sits flat, then shoots up. The blue gauge (same heading?) dips hard right where the route turns its corner.",
+        "2": "Three views agree: B's norm ignites, the 2D PCA path turns a sharp corner, and local cosine dips near step 180. The heading changes before outputs are measurably misaligned.",
+        "3": "PC1 and PC2 carry about 95% of the variance, so the run lives in a 2D subspace of parameter space. The norm says when learning starts; the cosine dip says when it reorients."
+      }
+    },
+    {
+      "name": "The spinning compass",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "note": "argmin = step 0?!",
+      "actors": [{ "pose": "shrug", "x": 0.26, "label": "you" }],
+      "props": [
+        { "kind": "flag", "x": 0.08, "y": 0.58, "label": "trailhead (B = 0)", "color": "butter" },
+        { "kind": "circle", "x": 0.56, "y": 0.36, "w": 0.1, "label": "compass: spinning", "color": "pink" },
+        { "kind": "card", "x": 0.83, "y": 0.22, "label": "cos near 0, or NaN", "color": "pink" }
+      ],
+      "cap": {
+        "1": "At the trailhead the hiker has barely moved, so their 'heading' is just jitter. Measured there, it looks like the biggest turn of the trip. It is not.",
+        "2": "LoRA starts B at exactly zero, so early step differences are noise over a near-zero norm: cosine near 0 (or NaN), lower than the real dip. Your argmin lands on the first checkpoint.",
+        "3": "Plot the norm first and search only after it clears a floor; widen k (ARENA uses 15), guard with an epsilon, drop NaNs, then cross-check the minimum against the PCA corner."
+      }
+    },
+    {
+      "name": "An early warning?",
+      "need": "contested",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Current method", "c": "sky", "lines": ["replay saved checkpoints", "find the turn after the fact", "norm, PCA corner, cosine dip"] },
+      "right": { "title": "Emerging research", "c": "lav", "lines": ["the turn may lead the behaviour", "cosine can be computed mid-run", "general may win: steadier, cheaper"] },
+      "verdict": "What you need: treat early warning as a promising hypothesis until someone measures the lead time.",
+      "cap": {
+        "1": "One new paper argues the wide road wins because it is steadier and cheaper to reach than the narrow ledge. The turn might even be spotted early, mid-run.",
+        "2": "Current method: find the transition after training, from checkpoints. Emerging: a follow-up paper argues general misalignment is more stable and efficient than narrow; the parameter signal may lead behaviour.",
+        "3": "'Emergent Misalignment is Easy, Narrow Misalignment is Hard' (arXiv:2602.07852) makes the loss-landscape case. The early-warning claim is stated, not quantified: what you need is a measured lead time."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Find when a finetune learns something", "A candidate early-warning monitor", "Tools that are not misalignment-specific", "Capstone: measure the lead time"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "If you can see the turn before the bad behaviour shows, you could stop a training run in time. That is a direct handle on steering what models become.",
+        "2": "Norm tracking, trajectory PCA and local cosine similarity work on any finetune you have checkpoints for, capability or misalignment. They sit close to grokking-style training-dynamics work.",
+        "3": "Capstone seed: score misalignment behaviourally at every released checkpoint and measure how many steps the parameter signal leads; repeat on the sports and finance organisms to compare timing."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Find the corner in a toy run without being fooled by the start",
+    "params": [
+      { "id": "k", "label": "window k (steps)", "min": 1, "max": 30, "step": 1, "value": 3 },
+      { "id": "nf", "label": "norm floor", "min": 0, "max": 0.1, "step": 0.005, "value": 0 }
+    ],
+    "curves": [
+      { "f": "(() => { const P = t => { const u = floor(t), a = 0.0008*min(t,180), b = 0.008*max(0,t-180), j = 0.012*exp(-t/10); return [a + 0.5*b + j*(((u*37)%11)/11 - 0.45), 0.866*b + j*(((u*53)%7)/7 - 0.43)]; }; const p = P(x), q = P(max(0, x-k)), r = P(x+k); const d1 = [p[0]-q[0], p[1]-q[1]], d2 = [r[0]-p[0], r[1]-p[1]]; return dot(d1, d2)/(norm(d1)*norm(d2) + 1e-9); })()", "c": "sky", "label": "local cosine" },
+      { "f": "(() => { const P = t => { const u = floor(t), a = 0.0008*min(t,180), b = 0.008*max(0,t-180), j = 0.012*exp(-t/10); return [a + 0.5*b + j*(((u*37)%11)/11 - 0.45), 0.866*b + j*(((u*53)%7)/7 - 0.43)]; }; return norm(P(x)); })()", "c": "orange", "label": "adapter norm" },
+      { "f": "nf", "c": "ink", "label": "norm floor" }
+    ],
+    "x": [0, 300],
+    "y": [-1, 1.1],
+    "readouts": [
+      { "label": "argmin step, searching everywhere", "f": "(() => { const P = t => { const u = floor(t), a = 0.0008*min(t,180), b = 0.008*max(0,t-180), j = 0.012*exp(-t/10); return [a + 0.5*b + j*(((u*37)%11)/11 - 0.45), 0.866*b + j*(((u*53)%7)/7 - 0.43)]; }; const C = i => { const p = P(i), q = P(max(0, i-k)), r = P(i+k); const d1 = [p[0]-q[0], p[1]-q[1]], d2 = [r[0]-p[0], r[1]-p[1]]; return dot(d1, d2)/(norm(d1)*norm(d2) + 1e-9); }; const idx = range(301).filter(i => i >= k && i <= 300 - k); return idx.reduce((b, i) => C(i) < C(b) ? i : b, idx[0]); })()" },
+      { "label": "argmin step, only above the norm floor", "f": "(() => { const P = t => { const u = floor(t), a = 0.0008*min(t,180), b = 0.008*max(0,t-180), j = 0.012*exp(-t/10); return [a + 0.5*b + j*(((u*37)%11)/11 - 0.45), 0.866*b + j*(((u*53)%7)/7 - 0.43)]; }; const C = i => { const p = P(i), q = P(max(0, i-k)), r = P(i+k); const d1 = [p[0]-q[0], p[1]-q[1]], d2 = [r[0]-p[0], r[1]-p[1]]; return dot(d1, d2)/(norm(d1)*norm(d2) + 1e-9); }; const idx = range(301).filter(i => i >= k && i <= 300 - k && norm(P(i)) > nf); return idx.reduce((b, i) => C(i) < C(b) ? i : b, idx[0]); })()" },
+      { "label": "verdict", "f": "(() => { const P = t => { const u = floor(t), a = 0.0008*min(t,180), b = 0.008*max(0,t-180), j = 0.012*exp(-t/10); return [a + 0.5*b + j*(((u*37)%11)/11 - 0.45), 0.866*b + j*(((u*53)%7)/7 - 0.43)]; }; const C = i => { const p = P(i), q = P(max(0, i-k)), r = P(i+k); const d1 = [p[0]-q[0], p[1]-q[1]], d2 = [r[0]-p[0], r[1]-p[1]]; return dot(d1, d2)/(norm(d1)*norm(d2) + 1e-9); }; const idx = range(301).filter(i => i >= k && i <= 300 - k && norm(P(i)) > nf); const s = idx.reduce((b, i) => C(i) < C(b) ? i : b, idx[0]); return abs(s - 180) <= 5 ? 'found the corner (toy step ' + s + ')' : 'fooled by start-up jitter (step ' + s + ')'; })()" }
+    ],
+    "caption": {
+      "1": "The default is fooled by jitter at the start. Widen the window k, or raise the norm floor, until the verdict finds the corner. Watch the blue dip.",
+      "2": "Blue is local cosine over a toy run, orange is the adapter's size. With a tiny k and no floor, start-up noise beats the real dip. A wider k or a norm floor fixes it.",
+      "3": "Near-zero norms make step directions near-orthogonal, so the argmin lands at the start. Floor the norm, widen k, guard with an epsilon, then cross-check against the PCA corner."
+    }
+  },
+  "where_else": [
+    "Grokking: a model suddenly generalises long after it has memorised",
+    "Induction heads: they form in a sudden phase change early in training",
+    "Any finetune with saved checkpoints: norm, trajectory PCA and local cosine transfer as-is",
+    "Physics: water that freezes all at once, not a little per degree"
+  ],
+  "hamming": {
+    "what": "The abrupt moment in narrow fine-tuning when the model commits to a general misaligned direction, seen as a norm ignition, a PCA corner and a cosine dip.",
+    "when": "When you replay a finetune from saved checkpoints and ask when, not just whether, it learned something.",
+    "why": "If the parameter signal leads the behaviour, the same metric could flag a run mid-training, before the misaligned model is finished."
+  },
+  "object": {
+    "title": "The flat trail map",
+    "subtitle": "Every checkpoint of the run as a dot: nearly all of them lie on one flat sheet, along a path with one sharp corner.",
+    "kind": "points",
+    "clusters": [
+      { "label": "start (B = 0)", "c": "plaster", "center": [-1.2, -1.0, 0], "spread": 0.03, "n": 6 },
+      { "label": "early leg: barely moving", "c": "data", "center": [-0.9, -1.0, 0], "spread": 0.06, "n": 20 },
+      { "label": "the corner, near step 180", "c": "grad", "center": [-0.6, -1.0, 0], "spread": 0.04, "n": 6 },
+      { "label": "late leg: striding along the road", "c": "prob", "center": [0.0, 0.05, 0], "spread": 0.12, "n": 24 },
+      { "label": "end of the run", "c": "prob", "center": [0.6, 1.1, 0], "spread": 0.05, "n": 6 }
+    ],
+    "arrows": [
+      { "from": "start (B = 0)", "to": "the corner, near step 180", "label": "inching one way", "c": "dir" },
+      { "from": "the corner, near step 180", "to": "end of the run", "label": "striding along the road", "c": "dir" }
+    ],
+    "plane": { "normal": [0, 0, 1], "label": "PC1-PC2 sheet: about 95% of the variance" },
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Every saved checkpoint of the run is a dot. Flattened onto a map, the whole trip fits on one sheet.",
+          "2": "Each dot is one checkpoint's adapter vectors; the sheet is the plane of the first two principal components.",
+          "3": "PC1 and PC2 carry about 95% of the variance: the run lives in a 2D subspace of a very high-dimensional space."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "From above, the route is two straight legs with one sharp corner.",
+          "2": "Seen from above you get the PCA trajectory plot: nearly straight, then a sharp turn.",
+          "3": "The corner is the reorientation that local cosine similarity detects as a dip."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "From the side, the dots hug the sheet. Almost nothing happens off it.",
+          "2": "Little variance off the plane: two components describe nearly the whole run.",
+          "3": "A near-2D trajectory is what makes the 2D PCA plot trustworthy; check the explained-variance ratio before trusting any such plot."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Early dots crowd near the start: the adapter began at zero and barely moved, so any heading measured there is jitter.",
+          "2": "B starts at exactly zero, so early step directions are noise; search for the transition only after the norm clears a floor.",
+          "3": "Near-zero norms make consecutive step directions near-orthogonal (cos near 0, NaN at zero): a numerical artefact, not a transition."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The corner is where the hiker turns onto the road, near step 180, before the change is measurable in what the model says.",
+          "2": "For the medical organism, the cosine dip and the PCA corner both land near step 180.",
+          "3": "Both parameter signals precede measurable behavioural misalignment: the direction settles before the magnitude dominates."
+        },
+        "view": "close",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your transition finder returns the very first checkpoint. What happened?",
+        "options": [{ "t": "Start-up jitter: B began at zero, so early headings are noise", "ok": true }, { "t": "The model was misaligned from step 0" }],
+        "why": "Early step differences are noise over a near-zero norm, giving cosine near 0 or NaN, lower than the real dip. Floor the norm and widen k."
+      },
+      {
+        "q": "Which signal could you watch during a finetune, not just after it?",
+        "options": [{ "t": "Local cosine similarity: it only needs nearby checkpoints", "ok": true }, { "t": "PCA of the whole run" }],
+        "why": "PCA is global and needs the full checkpoint set; local cosine is local and computable online."
+      },
+      {
+        "q": "Do these tools only detect misalignment?",
+        "options": [{ "t": "No: they find when any finetune learns something", "ok": true }, { "t": "Yes: they were built for misalignment" }],
+        "why": "Norm tracking, trajectory PCA and local cosine similarity say nothing about misalignment specifically."
+      }
+    ],
+    "where": "Any run with saved checkpoints: grokking, induction-head formation, sudden capability jumps."
+  }
+}

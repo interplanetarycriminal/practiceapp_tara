@@ -1,0 +1,241 @@
+{
+  "id": "upfront-auditing",
+  "title": "Open the first crates, trust the rest",
+  "week": 11,
+  "need": "core",
+  "allegory": "Upfront auditing is like a dock inspector who may open only two crates in every hundred and opens the first ones to arrive, then waves every later crate through, so a smuggler who smuggles only rarely will usually get the first contraband past after the inspections are over.",
+  "map": [
+    ["the brilliant supplier you cannot fully trust", "U: the untrusted, more capable model writing the solutions"],
+    ["an inspector who may open only 2 crates in every 100", "H: the human audit budget, 2% of submissions"],
+    ["opening the first crates to arrive, then waving the rest through", "upfront auditing: audit the first N submissions, accept the rest unchecked"],
+    ["a smuggler who smuggles rarely, betting the first one arrives after the checks", "the red team's best response: backdoor only a small fraction of problems"],
+    ["getting through the whole season without one smuggled crate", "safety: P(no backdoor submitted across the entire run)"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "An untrusted star coder",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "time to check 2 in every 100",
+      "actors": [
+        { "pose": "type", "x": 0.25, "label": "U: brilliant, untrusted" },
+        { "pose": "think", "x": 0.75, "label": "you" }
+      ],
+      "props": [
+        { "kind": "stack", "x": 0.48, "y": 0.62, "label": "solutions", "color": "cream" },
+        { "kind": "card", "x": 0.75, "y": 0.22, "label": "which 2 do I check?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You have a brilliant programmer you cannot fully trust, and time to personally check only 2 of every 100 solutions. How do you spend those checks?",
+        "2": "AI control assumes the capable model might be trying to sabotage you. Greenblatt et al. gave the blue team a weaker trusted model and a 2% human audit budget.",
+        "3": "Greenblatt, Shlegeris, Sachan and Roger (Redwood Research, ICML 2024): untrusted U, trusted weaker T, human audits on 2% of APPS submissions, and a red team hiding backdoors."
+      }
+    },
+    {
+      "name": "Open the first crates",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "reach", "x": 0.16, "label": "inspector" },
+        { "pose": "carry", "x": 0.95, "to": 0.7, "label": "smuggler" }
+      ],
+      "props": [
+        { "kind": "crate", "x": 0.2, "y": 0.72, "w": 0.12, "h": 0.1, "label": "opened", "color": "mint" },
+        { "kind": "flag", "x": 0.33, "y": 0.5, "label": "inspections over", "color": "red" },
+        { "kind": "crate", "x": 0.44, "y": 0.72, "w": 0.12, "h": 0.1, "label": "waved through", "color": "chalk" },
+        { "kind": "crate", "x": 0.58, "y": 0.72, "w": 0.12, "h": 0.1, "label": "waved through", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "An inspector may open 2 crates in 100. Upfront auditing opens the very first ones, then waves the rest through. A patient smuggler just bides their time.",
+        "2": "Upfront auditing: humans audit the first 2% of U's submissions and everything after is accepted unchecked. It needs no trusted model at all.",
+        "3": "The weakness is timing, not the auditor: the budget is spent before most attacks happen. Safety counts only a run with zero backdoors submitted."
+      }
+    },
+    {
+      "name": "The patient striker",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "curves": [
+        { "f": "1 - pow(1 - x/100, 20) + pow(1 - x/100, 1000)", "c": "green", "label": "safety (toy: 1000 problems, first 20 audited)" }
+      ],
+      "x": [0, 3],
+      "y": [0, 1],
+      "dot": true,
+      "marks": [{ "x": 0.4, "label": "attacker's best rate ≈ 0.4%" }],
+      "cap": {
+        "1": "Strike often and the first strike lands inside the audit: caught. Strike rarely and it usually lands after. The attacker's sweet spot is rare.",
+        "2": "A toy run: 1000 problems, the first 20 audited, a caught attempt ends the run. Safety dips to about 10% at a strike rate near 0.4%. The paper's setting gave 15%.",
+        "3": "Safety(r) = 1 − (1−r)^k + (1−r)^n: first attempt inside the k audits, or no attempt at all. Minimised near r ≈ ln(n/k)/(n − k); the red team picks r knowing the protocol."
+      }
+    },
+    {
+      "name": "Code the rule",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "sub", "label": "U's solution #i", "x": 0.08, "y": 0.5, "c": "sky" },
+        { "id": "q", "label": "among the first N?", "x": 0.32, "y": 0.5, "c": "butter" },
+        { "id": "aud", "label": "human audit", "x": 0.56, "y": 0.25, "c": "orange" },
+        { "id": "caught", "label": "backdoor: caught", "x": 0.86, "y": 0.12, "c": "green" },
+        { "id": "ok", "label": "clean: submit", "x": 0.86, "y": 0.38, "c": "mint" },
+        { "id": "pass", "label": "submit unchecked", "x": 0.72, "y": 0.76, "c": "red" }
+      ],
+      "edges": [["sub", "q"], ["q", "aud", "yes"], ["aud", "caught"], ["aud", "ok"], ["q", "pass", "no"]],
+      "flow": "forward",
+      "cap": {
+        "1": "The whole protocol is one question per solution: is it among the first few? Yes: a human checks it. No: it goes straight out, unread.",
+        "2": "Audit the first N submissions, where N is the audit budget times the run length, and submit U's code unchanged for the rest. No trusted model is involved.",
+        "3": "The rule looks only at a submission's position, never its content, so a red team that attacks rarely is seldom inside the audited window. Content-aware protocols spend the same budget better."
+      }
+    },
+    {
+      "name": "Eager or patient?",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Tested on an eager attacker", "c": "pink", "lines": ["backdoors in every solution", "the first one lands in the audit", "safety looks near 100%"] },
+      "right": { "title": "Tested on a patient attacker", "c": "mint", "lines": ["backdoors in a rare few", "the first one lands after the audit", "the paper: 15% safety"] },
+      "verdict": "Safety is a worst case: score the protocol against the attacker's best response.",
+      "cap": {
+        "1": "Test against an attacker who strikes every time and the very first strike is caught. The protocol looks perfect. A patient attacker is the real test.",
+        "2": "Safety is a worst case over red-team strategies, and the red team knows the protocol. Always score a protocol against the attacker's best response, not your first guess.",
+        "3": "Safety is P[no backdoor submitted] under the red team's best response to the protocol. A fixed, weaker attack policy overstates it; ARENA's Pareto section lists this caveat."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["The floor every protocol must beat", "Spend checks by risk, not by the clock", "Assume a patient adversary"],
+      "actor": { "pose": "point", "x": 0.85 },
+      "cap": {
+        "1": "Upfront auditing is the simplest safety plan and the floor to beat. Spending the same checks where things look riskiest does far better.",
+        "2": "Same 2% budget: upfront auditing 15% safe at 100% usefulness, trusted monitoring 62%, defer-to-trusted 83%, trusted editing 92% at 94% usefulness.",
+        "3": "For steering AI: control asks what you can guarantee from a model that may be scheming. Where the budget went, not detector quality alone, moved safety from 15% to 62%."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Toy run of 1000 problems: you audit the first ones, the attacker picks a strike rate",
+    "params": [
+      { "id": "a", "label": "audit budget, spent upfront (% of the run)", "min": 1, "max": 20, "step": 1, "value": 2 },
+      { "id": "r", "label": "attacker's strike rate (% of problems)", "min": 0.05, "max": 3, "step": 0.05, "value": 1 }
+    ],
+    "curves": [
+      { "f": "1 - pow(1 - x/100, round(10*a)) + pow(1 - x/100, 1000)", "c": "green", "label": "safety against each strike rate" }
+    ],
+    "x": [0, 3],
+    "y": [0, 1],
+    "readouts": [
+      { "label": "submissions audited", "f": "round(10*a) + ' of 1000, all at the start'" },
+      { "label": "safety at your strike rate", "f": "(1 - pow(1 - r/100, round(10*a)) + pow(1 - r/100, 1000)).toFixed(2)" },
+      { "label": "attacker's best strike rate", "f": "((1 - pow(round(10*a)/1000, 1/(1000 - round(10*a)))) * 100).toFixed(2) + '%'" },
+      { "label": "safety against that best rate", "f": "(k => (q => 1 - pow(q, k) + pow(q, 1000))(pow(k/1000, 1/(1000 - k))))(round(10*a)).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Drag the strike rate. Strike often and you are caught in the first audits. Strike rarely and the first strike lands after them. Then raise the budget.",
+      "2": "A toy, not the paper: every strike is a working backdoor and a caught one ends the run. At 2% the attacker's best rate leaves about 10% safety; the paper reports 15%.",
+      "3": "Safety(r) = 1 − (1−r)^k + (1−r)^n, minimised where (1−r)^(n−k) = k/n. The worst case depends mainly on the budget fraction: 20% upfront still leaves under half."
+    }
+  },
+  "where_else": [
+    "Any spot-check schedule an adversary can predict: the gaps between fixed checks are where a patient attacker waits",
+    "Code review that only reads a project's first changes leaves every later change unexamined",
+    "Risk-based auditing in finance and security, which spends a fixed checking budget where things look riskiest"
+  ],
+  "hamming": {
+    "what": "The simplest AI control protocol: humans audit the first slice of an untrusted model's submissions, up to the audit budget, and accept everything after that unchecked.",
+    "when": "As the baseline in a control evaluation: the floor that monitoring, deferral and editing protocols must beat, measured on safety and usefulness together.",
+    "why": "It shows why timing matters: an attacker who strikes rarely usually strikes after the budget is spent, so the same checks do far more when steered by suspicion."
+  },
+  "object": {
+    "title": "The safety valley",
+    "subtitle": "A toy control run as a landscape: across, how often the attacker strikes; along, how big the upfront audit budget is; height, the chance nothing bad gets through.",
+    "kind": "surface",
+    "f": "1 - pow(1 - x/100, 10*y) + pow(1 - x/100, 1000)",
+    "x": [0, 3],
+    "y": [1, 20],
+    "marks": [{ "x": 0.4, "y": 2, "label": "attacker's sweet spot at a 2% budget" }],
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Safety as a landscape: one way, how often the attacker strikes; the other, how big your upfront budget is. Height is the chance nothing gets through.",
+          "2": "Toy model: 1000 problems, a caught attempt ends the run. Every point is one attacker strategy against one budget.",
+          "3": "S(r, a) = 1 − (1−r)^(an) + (1−r)^n. The blue team fixes the budget; the red team then picks r at the bottom of the valley."
+        },
+        "view": "iso"
+      },
+      {
+        "cap": {
+          "1": "There is a deep valley at rare strikes. That valley is where a smart attacker lives.",
+          "2": "At a 2% budget the valley bottoms out near a 0.4% strike rate with about 10% safety, the same ballpark as the paper's 15%.",
+          "3": "The minimum sits near r ≈ ln(n/k)/(n − k): rare enough to miss the k audits, frequent enough to strike once in the remaining n − k."
+        },
+        "view": "front"
+      },
+      {
+        "cap": {
+          "1": "More budget lifts the valley floor, but slowly. Even auditing the first 20% leaves safety under half.",
+          "2": "Upfront spending buys little, because the attacker simply strikes less often.",
+          "3": "Worst-case safety is 1 − a^(a/(1−a)) + a^(1/(1−a)) for budget fraction a, whatever the run length: about 0.10 at 2%, 0.47 at 20%."
+        },
+        "view": "side"
+      },
+      {
+        "cap": {
+          "1": "From above, the valley bends: the bigger your budget, the rarer the attacker's best strike rate.",
+          "2": "At a 2% budget the sweet spot is about 0.4%; at 20%, about 0.2%.",
+          "3": "r* ≈ ln(1/a) / (n(1 − a)) shrinks as a grows, so a bigger upfront budget just pushes the attacker to strike more rarely."
+        },
+        "view": "top"
+      },
+      {
+        "cap": {
+          "1": "At the edges you are safe: strike too often and you are caught at once; never strike and nothing bad happens.",
+          "2": "An eager attacker is caught by the first audit, which is why testing only against eager attackers makes this protocol look great.",
+          "3": "Report safety against the red team's best response to the protocol; a weaker fixed attack policy overstates it."
+        },
+        "view": "close"
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your test attacker plants a backdoor in every solution. Under upfront auditing, what safety do you measure?",
+        "options": [
+          { "t": "Near 100%: the very first one is audited and caught", "ok": true },
+          { "t": "Near 0%: most backdoors slip through" }
+        ],
+        "why": "An eager attacker is caught in the first audit. The worst case is a patient one, which is why safety is measured against the attacker's best response."
+      },
+      {
+        "q": "Upfront auditing scores 100% usefulness in the paper. Why?",
+        "options": [
+          { "t": "It never replaces or edits U's code, so every correct solution goes through", "ok": true },
+          { "t": "The audits fix any wrong answers" }
+        ],
+        "why": "Usefulness is measured with an honest U. Upfront auditing changes nothing it submits, so its whole cost is on the safety side: 15%."
+      },
+      {
+        "q": "Spend the same 2% budget on the submissions a trusted model rates most suspicious. What happened to safety in the paper?",
+        "options": [
+          { "t": "It rose from 15% to 62%", "ok": true },
+          { "t": "It stayed about the same" }
+        ],
+        "why": "Trusted monitoring spreads the budget across the run by suspicion. Even a detector catching about a third of backdoors turns the same checks into far more safety."
+      }
+    ],
+    "where": "Any fixed-schedule check an adversary can predict, from inspections to code review: the gaps between checks are where a patient attacker waits."
+  }
+}

@@ -1,0 +1,261 @@
+{
+  "id": "probe-intervention",
+  "title": "Warm the dial, watch the heating",
+  "week": null,
+  "need": "core",
+  "allegory": "Probe-directed intervention is like finding a dial on the wall that tracks the room's temperature, then warming it with your hand: if the heating clicks off, the building really reads that dial; if nothing happens, it was only a thermometer on the wall.",
+  "map": [
+    ["a dial on the wall that tracks the temperature", "a probe direction θ trained on frozen activations: MM (mean of true minus mean of false) or LR"],
+    ["warming the dial with your hand", "a hook that adds α·θ to the residual stream (layers 8 to 14 in ARENA's truth setup)"],
+    ["the heating clicking off", "the model's own P(TRUE) − P(FALSE) shifting on a few-shot TRUE/FALSE prompt"],
+    ["warming it more, or cooling it instead", "the size and sign of α: add to push toward TRUE, subtract to push toward FALSE"],
+    ["a thermometer the heating never reads", "a direction that classifies well but moves nothing: accuracy without causal effect"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "A dial that reads",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "readable is not the same as used",
+      "actors": [{"pose": "think", "x": 0.2, "label": "you"}],
+      "props": [
+        {"kind": "box", "x": 0.55, "y": 0.6, "w": 0.28, "h": 0.3, "label": "Llama-2-13B"},
+        {"kind": "circle", "x": 0.55, "y": 0.6, "w": 0.08, "h": 0.08, "label": "a dial at layer 14"},
+        {"kind": "card", "x": 0.86, "y": 0.26, "label": "probe: 95% on cities"}
+      ],
+      "arrows": [[0.6, 0.55, 0.8, 0.32, "reads truth?"]],
+      "cap": {
+        "1": "You found a dial inside a model that reads whether a sentence is true. Impressive. But does the model use that dial, or does it just move along with the truth?",
+        "2": "A probe is correlational: it shows truth is linearly readable at layer 14, not that the model uses that direction. A probe will fit whatever separates your labels, confounds included.",
+        "3": "Probe accuracy shows a property is decodable; it cannot show downstream use. The causal question is whether intervening on the representation changes the output: its natural indirect effect (NIE)."
+      }
+    },
+    {
+      "name": "Warm the dial",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "note": "warm it and watch",
+      "actors": [{"pose": "reach", "x": 0.3, "label": "you"}],
+      "props": [
+        {"kind": "circle", "x": 0.45, "y": 0.4, "w": 0.1, "h": 0.1, "label": "the dial"},
+        {"kind": "lamp", "x": 0.8, "y": 0.28, "label": "heating: on"},
+        {"kind": "box", "x": 0.8, "y": 0.68, "w": 0.2, "h": 0.22, "label": "the boiler"}
+      ],
+      "arrows": [[0.51, 0.44, 0.7, 0.62, "does it read this?"]],
+      "cap": {
+        "1": "Warm the dial with your hand. If the heating clicks off, the building really reads that dial. If nothing happens, it was only a thermometer on the wall.",
+        "2": "In code: register a hook that adds α times the probe direction to the residual stream at the right positions, run the prompt, and compare P(TRUE) − P(FALSE) with and without it.",
+        "3": "ARENA follows the geometry-of-truth config: probe_layer=14, intervene_layer=8, adding the scaled direction at layers 8 to 14 at the statement's final period and the first token of the suffix."
+      }
+    },
+    {
+      "name": "The push",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        {"t": "h′ = h", "c": "sky", "note": "the activation, layers 8 to 14"},
+        {"t": " + α", "c": "orange", "note": "size and sign of the push"},
+        {"t": "·θ", "c": "lav", "note": "the probe's direction"},
+        {"t": "  ⇒  Δ[P(T) − P(F)]", "c": "green", "note": "did the verdict move?"}
+      ],
+      "cap": {
+        "1": "The push is one line: take the model's numbers, add a measured amount of the dial's direction, and see whether its true-or-false answer moves.",
+        "2": "Inside the hook: return the activation plus alpha times the direction at the chosen positions. Positive alpha pushes toward TRUE, negative toward FALSE. ARENA has you write it as a batch-aware hook.",
+        "3": "The effect is measured as the change in P(TRUE) − P(FALSE) on a few-shot TRUE/FALSE prompt when you intervene on the representation rather than the input: the NIE."
+      }
+    },
+    {
+      "name": "Accurate is not causal",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": {
+        "title": "LR probe",
+        "lines": ["higher accuracy", "transfers across datasets", "smaller shift when pushed"],
+        "c": "sky"
+      },
+      "right": {
+        "title": "MM probe",
+        "lines": ["mean(true) − mean(false)", "less accurate", "moves the verdict more"],
+        "c": "green"
+      },
+      "verdict": "Higher accuracy, weaker causal effect: judge a direction by what pushing it does, not by how well it classifies.",
+      "cap": {
+        "1": "The fancier dial read the temperature better, yet warming the simple one moved the heating more. Reading well and being used are different things.",
+        "2": "In Marks and Tegmark, logistic regression wins on accuracy and transfer, but the difference-of-means direction moves P(TRUE) − P(FALSE) more under intervention.",
+        "3": "The gap between classification accuracy and causal relevance recurs all over mech interp. A probe can even fit a confound such as 'likely text', which rides alongside truth in curated datasets."
+      }
+    },
+    {
+      "name": "Sweep the push",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        {"f": "tanh(x)", "c": "green", "label": "a direction the model reads"},
+        {"f": "0.08 * tanh(x)", "c": "chalk", "label": "a direction it ignores"}
+      ],
+      "x": [-3, 3],
+      "y": [-1.1, 1.1],
+      "dot": true,
+      "marks": [{"x": 0, "label": "no push"}],
+      "cap": {
+        "1": "Push a little, then more, both ways. If the model reads the dial, its answer slides with you. If not, the line stays flat however hard you push.",
+        "2": "Sweep α through negative and positive values and plot the shift in P(TRUE) − P(FALSE). Pushing toward FALSE should move the verdict the other way. These curve shapes are illustrative.",
+        "3": "A response that grows with α and flips with its sign is evidence the direction is used downstream; a flat response marks a readable but causally idle direction, the thermometer on the wall."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": [
+        "A probe says: this is readable here",
+        "An intervention asks: does the model use it?",
+        "Push both ways, and distrust accuracy alone",
+        "Readable and used: now it is a handle you can steer with"
+      ],
+      "cap": {
+        "1": "Reading a model is not understanding it. Pushing along a direction and watching behaviour move is how a reading becomes a handle for steering AI.",
+        "2": "Its sibling, the steering vector, pushes the same way; a probe's direction comes from supervised classification, a steering vector's usually from a difference of means.",
+        "3": "Marks and Tegmark (COLM 2024) moved probing from 'we can classify it' to 'the model uses it': the direction that reads truth, added back in, changes what the model says."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Push along the dial's direction",
+    "params": [
+      {"id": "alpha", "label": "push α (negative pushes toward FALSE)", "min": -4, "max": 4, "step": 0.1, "value": 0},
+      {"id": "overlap", "label": "overlap with what the model reads (cosine)", "min": 0, "max": 1, "step": 0.05, "value": 0.8}
+    ],
+    "curves": [
+      {"f": "sigmoid(-2 + 1.5 * overlap * x)", "c": "green", "label": "P(TRUE) as you push"},
+      {"f": "sigmoid(-2) + 0 * x", "c": "chalk", "label": "no push"}
+    ],
+    "x": [-4, 4],
+    "y": [0, 1],
+    "readouts": [
+      {"label": "P(TRUE) at your push", "f": "sigmoid(-2 + 1.5 * overlap * alpha)"},
+      {"label": "shift from no push", "f": "sigmoid(-2 + 1.5 * overlap * alpha) - sigmoid(-2)"}
+    ],
+    "caption": {
+      "1": "The statement is false, so the model says FALSE. Drag the push up: with high overlap the verdict flips to TRUE. Now drop the overlap and push again.",
+      "2": "A probe can classify well yet point partly away from what later layers read. Only the overlapping part of the push moves the output, which is how accuracy and causal effect come apart.",
+      "3": "Toy: output logit = −2 + 1.5·(θ̂·w)·α, with w the direction downstream computation reads. The real measurement is the change in P(TRUE) − P(FALSE) on a few-shot prompt."
+    }
+  },
+  "where_else": [
+    "Steering vectors, its sibling: the same push, usually along a difference of means over contrasting prompts",
+    "Activation patching: another causal test, swapping in activations from a different input instead of adding a direction",
+    "Deception probes: the same probing question asked about intent rather than fact",
+    "Science in general: a correlation earns the word 'cause' only when you intervene and the outcome moves"
+  ],
+  "hamming": {
+    "what": "Adding a scaled probe direction to a model's activations with a hook, then checking whether the model's behaviour shifts: the causal test a correlational probe cannot give you.",
+    "when": "Right after a probe works: before you claim the model uses a property, and before you build any steering on that direction.",
+    "why": "Probes fit whatever separates the labels, confounds included; only moving the model's own output shows the direction is used, and in Marks and Tegmark the most accurate probe was not the most causal."
+  },
+  "object": {
+    "title": "The truth clouds",
+    "subtitle": "True and false statements as two clouds, two ways to split them, and a push along one",
+    "kind": "points",
+    "clusters": [
+      {"label": "false statements", "c": "grad", "center": [-0.9, 0, 0], "spread": 0.3, "n": 60},
+      {"label": "true statements", "c": "good", "center": [0.9, 0, 0], "spread": 0.3, "n": 60},
+      {"label": "false, pushed by +α·θ", "c": "prob", "center": [0.35, 0.05, 0], "spread": 0.22, "n": 24}
+    ],
+    "arrows": [
+      {"from": "false statements", "to": "true statements", "label": "MM: mean(true) − mean(false)", "c": "dir"},
+      {"from": "false statements", "to": "false, pushed by +α·θ", "label": "the push", "c": "prob"}
+    ],
+    "plane": {"normal": [1, 0.45, 0], "label": "LR boundary: separates well, tilted"},
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Every dot is one sentence as the model holds it midway through. True ones gather in one cloud, false ones in another. Nobody labelled the plot.",
+          "2": "In the paper, PCA on layer-14 activations of Llama-2-13B already split true from false before any probe was trained. The layout here is a sketch of that picture.",
+          "3": "Unsupervised linear separability across cities, sp_en_trans and larger_than: the property sits in a direction rather than being smeared across the network."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The violet arrow runs from the middle of the false cloud to the middle of the true one. That arrow is the simplest dial there is.",
+          "2": "MM probe: mean of true activations minus mean of false ones, used directly as a direction. It was the less accurate probe, and the one that moved the model more.",
+          "3": "MM needs no training loop: two class means and a subtraction. In the paper it produced the larger natural indirect effect under intervention, despite LR's higher accuracy."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The tilted sheet also splits the clouds, and splits them slightly better. But a sheet that splits well can lean on anything that separates them.",
+          "2": "LR fits whatever boundary best classifies the training data, which can recruit a confound such as how likely the text is. Its normal need not be the direction the model uses.",
+          "3": "Tilt is the warning sign: two directions can separate the same labels, and only an intervention says which one the model's later layers actually read."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Now the test. Take false sentences and push them along the arrow. The amber cloud has moved toward 'true'. Did the model's answer move too?",
+          "2": "The hook adds α·θ at layers 8 to 14. The dots moving is guaranteed, since you moved them; the evidence is whether P(TRUE) − P(FALSE) moves with them.",
+          "3": "The NIE is measured on the output, never on the representation you edited. An edit that shifts activations but not behaviour has found a readable, unused direction."
+        },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "A direction you can read and push is a handle on the model. That is the step from watching an AI to steering it.",
+          "2": "Validate before you steer: check the probe transfers across datasets, run the `likely` control, then push both ways and watch the model's own verdict.",
+          "3": "A genuine truth direction should fail to separate `likely`, which holds likely versus unlikely continuations and no truth values. Then the intervention supplies the causal half."
+        },
+        "view": "top",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your probe is 97% accurate on true and false city facts. What does that establish?",
+        "options": [
+          {"t": "Truth is linearly readable there, not that the model uses it", "ok": true},
+          {"t": "The model uses this direction to answer"},
+          {"t": "The probe will work on any dataset"}
+        ],
+        "why": "Accuracy is correlational and can come from a confound. Use needs an intervention; transfer needs the cross-dataset test and the `likely` control."
+      },
+      {
+        "q": "You add the MM direction at layers 8 to 14 of a false statement. What do you measure?",
+        "options": [
+          {"t": "The change in the model's own P(TRUE) − P(FALSE)", "ok": true},
+          {"t": "The probe's accuracy on the edited activations"},
+          {"t": "How far the activations moved"}
+        ],
+        "why": "The activations moved because you moved them. The causal evidence is in the output: did the model's verdict shift, and in the direction of the push?"
+      },
+      {
+        "q": "LR was more accurate, but pushing along MM moved the verdict more. Which is the better handle for steering?",
+        "options": [
+          {"t": "MM, because it moved the behaviour", "ok": true},
+          {"t": "LR, because it classified better"},
+          {"t": "Neither, because they disagree"}
+        ],
+        "why": "Steering needs a direction the model reads. Marks and Tegmark found exactly this gap: higher accuracy for LR, larger causal effect for MM."
+      }
+    ],
+    "where": "Any difference of two group means you can add back in: steering vectors, and the vector arithmetic of word embeddings."
+  }
+}

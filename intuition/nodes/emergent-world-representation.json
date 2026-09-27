@@ -1,0 +1,244 @@
+{
+  "id": "emergent-world-representation",
+  "title": "The blindfold player keeps a board",
+  "week": null,
+  "need": "core",
+  "allegory": "An emergent world representation is like a blindfold Othello player who only hears the moves called out yet always names a legal reply, because they keep the board in their head; you prove the board is real by quietly flipping one piece in it and watching their replies change to match.",
+  "map": [
+    ["a blindfold player who only hears the moves called", "OthelloGPT, trained only on move sequences and never shown a board"],
+    ["always naming a legal reply", "predicting the next move; trained on random legal games, its output converges to uniform over legal moves"],
+    ["the board they keep in their head", "the board state encoded in the residual stream: the emergent world representation"],
+    ["asking 'is this square mine or theirs?', not 'black or white?'", "a linear probe in the mine-vs-theirs basis, because the model plays both sides"],
+    ["flipping one piece in their head and watching their replies change", "an edit along mine − theirs after layer 4 that changes the model's legal-move predictions"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Never shown a board",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "patterns in strings ... or a board?",
+      "actors": [{ "pose": "think", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.62, "y": 0.3, "w": 0.34, "h": 0.14, "label": "only move lists: F5, D6, C3 ...", "color": "butter" },
+        { "kind": "cloud", "x": 0.62, "y": 0.6, "w": 0.3, "h": 0.2, "label": "a board inside?", "color": "cream" }
+      ],
+      "cap": {
+        "1": "A model reads only lists of Othello moves and learns to guess a legal next move. Nobody ever shows it a board. Does it memorise patterns, or build one?",
+        "2": "OthelloGPT (context 59) is trained on random legal move sequences to predict the next move. The question: surface statistics of move strings, or an internal model of the board behind them?",
+        "3": "Trained on uniformly random legal games, its output converges to uniform over legal next moves. Doing that well needs the board state; whether the model computes it is the empirical question."
+      }
+    },
+    {
+      "name": "The blindfold player",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "sit", "x": 0.28, "label": "blindfold player" },
+        { "pose": "point", "x": 0.78, "label": "caller" }
+      ],
+      "props": [
+        { "kind": "cloud", "x": 0.28, "y": 0.3, "w": 0.28, "h": 0.2, "label": "a board in the head", "color": "cream" },
+        { "kind": "card", "x": 0.76, "y": 0.3, "w": 0.24, "h": 0.12, "label": "'F5 ... D6 ... C3'", "color": "butter" }
+      ],
+      "arrows": [[0.66, 0.4, 0.46, 0.4, "moves only"]],
+      "cap": {
+        "1": "A blindfold player hears only the moves called out, yet always names a legal reply. The easy way to manage that is to keep the board in your head.",
+        "2": "Predicting legal moves from move lists alone is far easier if you track the board. The claim of an emergent world representation: the model computes that hidden state itself.",
+        "3": "World model here means the residual stream encodes the latent state (each square's occupancy) that generates the observed sequence, rather than surface statistics of the move strings."
+      }
+    },
+    {
+      "name": "Reading its mind",
+      "need": "core",
+      "dur": 11,
+      "type": "grid",
+      "title": "probe readout: M = mine, T = theirs (toy)",
+      "rows": 8,
+      "cols": 8,
+      "values": [
+        ["", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "", "", "T", "M", "", "", ""],
+        ["", "", "", "M", "T", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", ""]
+      ],
+      "labels": { "rows": ["1", "2", "3", "4", "5", "6", "7", "8"], "cols": ["a", "b", "c", "d", "e", "f", "g", "h"] },
+      "highlight": [[3, 3], [3, 4], [4, 3], [4, 4], [2, 3], [0, 0]],
+      "cap": {
+        "1": "Put a tiny reader on each square: empty, mine or theirs? Read all 64 and a whole board appears, one the model was never shown.",
+        "2": "Train one probe per square on cached, frozen residual streams, with labels blank, theirs, mine. If it reads the board at every move, the board is decodable from the activations.",
+        "3": "Probe shape [d_model, row, col, options]; only probe weights train, on cross-entropy against true labels. By about layer 4, roughly 64 of 512 dims encode mine and 60 encode blank (the centre four never are)."
+      }
+    },
+    {
+      "name": "Wrong question, not model",
+      "need": "contested",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "black vs white", "c": "pink", "lines": ["linear probe: mediocre", "needed a 2-layer MLP", "'a non-linear world model'", "odd vs even moves: cos ≈ −1"] },
+      "right": { "title": "mine vs theirs", "c": "mint", "lines": ["a plain linear probe works", "the model plays both sides", "'mine' is the stable label", "two directions per square"] },
+      "verdict": "Needing an MLP probe may mean you asked for the wrong feature.",
+      "cap": {
+        "1": "The first readers asked 'black or white?' and needed a clever reader. Asking 'mine or theirs?' let a simple one work, because the player switches sides every move.",
+        "2": "Original claim (Li et al., 2022): an MLP probe, so a non-linear world model. Follow-up (Nanda): in the mine-vs-theirs basis it is linear; black-minus-white directions for odd and even moves have cosine near −1.",
+        "3": "A probe as expressive as an MLP may compute the feature itself, so it cannot show the model represents it. What you need: treat 'needs a non-linear probe' as a hint you picked the wrong basis."
+      }
+    },
+    {
+      "name": "Flip a piece",
+      "need": "exercise",
+      "dur": 11,
+      "type": "equation",
+      "parts": [
+        { "t": "h′ = h", "c": "ink", "note": "stream after layer 4" },
+        { "t": " + α·", "c": "orange", "note": "how hard, which way" },
+        { "t": "(mine − theirs)", "c": "sky", "note": "one square's probe direction" }
+      ],
+      "actor": { "pose": "push", "x": 0.1 },
+      "cap": {
+        "1": "Now reach into its head and flip one piece: push that square from mine toward theirs. If the model really uses the board, its legal moves change to match.",
+        "2": "Your apply_scale function edits the residual stream along one square's mine-minus-theirs direction; then check the next-move predictions shift. A small, one-direction edit makes strong evidence.",
+        "3": "Li et al. edited by gradient descent through the MLP probe, even to unreachable boards. Nanda's linear edit changes one coordinate after layer 4. The weaker the intervention, the stronger the evidence."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Decodable is not used: edit to check", "A wrong basis can fake non-linearity", "A readout for tracing circuits", "World models from next-move guessing"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "A model trained only to guess moves built a board of its own. Finding hidden pictures like this, and editing them, is how you understand and steer what a model believes.",
+        "2": "Pair every probe with the cheapest causal edit, and re-label before calling a feature non-linear. Once the probe works, you know what 64 of 512 residual directions mean and can trace circuits.",
+        "3": "The cleanest evidence that next-token prediction can build a model of the data's generating process. Every probe-based safety argument leans on its decodable-versus-used distinction."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "The board in its head: 1 = mine, 2 = theirs, 0 or 3 = empty. Tap to edit.",
+    "rows": 8,
+    "cols": 8,
+    "init": "(r == 3 && c == 4) || (r == 4 && c == 3) ? 1 : (r == 3 && c == 3) || (r == 4 && c == 4) ? 2 : 0",
+    "click": "inc",
+    "readouts": [
+      { "label": "legal moves for mine", "f": "range(64).filter(i => { const r = floor(i / 8), c = i % 8; if (G[r][c] % 3 != 0) return false; return [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]].some(([dr, dc]) => { let rr = r + dr, cc = c + dc, n = 0; while (rr >= 0 && rr < 8 && cc >= 0 && cc < 8 && G[rr][cc] == 2) { rr += dr; cc += dc; n++; } return n > 0 && rr >= 0 && rr < 8 && cc >= 0 && cc < 8 && G[rr][cc] == 1; }); }).map(i => 'abcdefgh'[i % 8] + (floor(i / 8) + 1)).join(' ') || 'none'" },
+      { "label": "mine", "f": "sum(G.map(r => r.filter(v => v == 1).length))" },
+      { "label": "theirs", "f": "sum(G.map(r => r.filter(v => v == 2).length))" }
+    ],
+    "caption": {
+      "1": "This is the board in its head. Tap e4 (row 4, column e) once to make it theirs, and watch the legal moves change: c4 and e6 vanish, f3 appears.",
+      "2": "The intervention test in miniature: edit one square's mine/theirs state, and a model that really uses its board must change its legal-move predictions to match.",
+      "3": "Legality depends on the whole latent board, which is why accurate next-move prediction pressures the model to compute it. The exercise makes this edit in the residual stream, then reads the logits."
+    }
+  },
+  "where_else": [
+    "Linear probes and the linear representation hypothesis: the mine-vs-theirs basis is their textbook case",
+    "Activation steering: once a direction is shown to be used, you can edit what the model believes along it",
+    "Grokking and the bracket classifier: the other algorithmic case studies in [1.5]",
+    "Any hidden state a sequence model might track, such as who holds what in a story"
+  ],
+  "hamming": {
+    "what": "Evidence that a model trained only on a surface task, predicting legal Othello moves, computes the hidden board state that generates its data.",
+    "when": "Whenever you ask whether a model has a world model or only surface statistics, and whenever you must show a probed feature is actually used.",
+    "why": "It is the cleanest case of a next-token predictor building a model of its data's source, and the causal edit is what turns a probing result into a claim about computation."
+  },
+  "object": {
+    "title": "The board inside",
+    "subtitle": "The model's board as probes read it: flip one square's belief and the legal moves rearrange themselves.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "((B) => { const v = B[r][c]; if (r == 3 && c == 4) return alpha; if (v == 1) return 1; if (v == 2) return -1; return [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]].some(([dr, dc]) => { let rr = r + dr, cc = c + dc, n = 0; while (rr >= 0 && rr < 8 && cc >= 0 && cc < 8 && B[rr][cc] == 2) { rr += dr; cc += dc; n++; } return n > 0 && rr >= 0 && rr < 8 && cc >= 0 && cc < 8 && B[rr][cc] == 1; }) ? 0.35 : 0; })(range(8).map(i => range(8).map(j => (i == 3 && j == 4) ? (alpha >= 0 ? 1 : 2) : (i == 4 && j == 3) ? 1 : ((i == 3 && j == 3) || (i == 4 && j == 4)) ? 2 : 0)))",
+    "labels": { "rows": ["1", "2", "3", "4", "5", "6", "7", "8"], "cols": ["a", "b", "c", "d", "e", "f", "g", "h"] },
+    "c": "good",
+    "knobs": [
+      { "id": "alpha", "label": "Push square e4 along mine − theirs", "min": -1, "max": 1, "step": 0.1, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "The board the model keeps in its head, as probes read it. Tall bars: mine. Red: theirs. Short pale bars: empty squares where a legal move is possible.",
+          "2": "Probe readings per square: +1 mine, −1 theirs, and legal next moves marked low. The opening position, from the side to move.",
+          "3": "Height encodes the mine/theirs coordinate; the pale bars are the legal-move set the model's output should be uniform over."
+        },
+        "view": "iso",
+        "set": { "alpha": 1 }
+      },
+      {
+        "cap": {
+          "1": "From above it is the Othello opening: four pieces in the centre and four legal replies, d3, c4, f5 and e6.",
+          "2": "Two mine, two theirs, four legal moves. Every legal move brackets a 'theirs' piece against a 'mine' one.",
+          "3": "Legality is a function of the whole latent board, which is why next-move prediction pressures the model to compute it."
+        },
+        "view": "top",
+        "set": { "alpha": 1 }
+      },
+      {
+        "cap": {
+          "1": "Nudge square e4 along the mine-minus-theirs direction. Its bar shrinks, but while it still reads 'mine' the legal moves stay where they were.",
+          "2": "A small push along one probe direction lowers that square's coordinate without flipping it. Nothing downstream should change yet.",
+          "3": "Intervention strength matters: sub-threshold edits leave the decoded board, and so the predicted move set, unchanged."
+        },
+        "view": "close",
+        "set": { "alpha": 0.3 }
+      },
+      {
+        "cap": {
+          "1": "Push past zero: e4 now reads 'theirs'. The legal moves change with it. c4 and e6 vanish, and f3 appears.",
+          "2": "Flip one square's coordinate and the legal-move set for the new board changes. In the experiment, the model's predictions shift to match.",
+          "3": "A single-coordinate linear edit after layer 4 that yields coherent legal moves for the edited board is hard to explain unless the model uses that direction."
+        },
+        "view": "iso",
+        "set": { "alpha": -1 }
+      },
+      {
+        "cap": {
+          "1": "That is the whole argument: a picture you can read is interesting; a picture you can edit, with the model's play changing to match, is a world model.",
+          "2": "Decodable is not the same as used. The edit, not the probe accuracy, is what shows the model computes with its board.",
+          "3": "Evidence strength runs inverse to intervention strength; gradient descent through an MLP probe can leave the activation distribution, a one-direction edit cannot go far."
+        },
+        "view": "front",
+        "set": { "alpha": -1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A probe reads the board accurately from the residual stream. Does that prove the model uses the board?",
+        "options": [
+          { "t": "No: decodable is not used; you need a causal edit", "ok": true },
+          { "t": "Yes: if it can be read, it is used" }
+        ],
+        "why": "A probe can read a vestigial feature, or even compute it. Edit along the probe direction and check the moves change."
+      },
+      {
+        "q": "Your linear probe for 'black vs white' is mediocre. What do you try before calling the board non-linear?",
+        "options": [
+          { "t": "Re-label as mine vs theirs, since the model plays both sides", "ok": true },
+          { "t": "Train a bigger MLP probe" }
+        ],
+        "why": "Odd- and even-move black/white directions came out near cosine −1: the real feature is mine vs theirs."
+      },
+      {
+        "q": "Which edit is stronger evidence that the model uses its board?",
+        "options": [
+          { "t": "Changing one coordinate along a probe direction", "ok": true },
+          { "t": "Gradient descent through a two-layer probe" }
+        ],
+        "why": "The weaker the intervention, the stronger the evidence: gradient descent can push activations off-distribution."
+      }
+    ],
+    "where": "Anywhere a sequence predictor might track hidden state: a board, a map, who holds what in a story."
+  }
+}

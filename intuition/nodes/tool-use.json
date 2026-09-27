@@ -1,0 +1,248 @@
+{
+  "id": "tool-use",
+  "title": "Order slips under the door",
+  "week": 11,
+  "need": "core",
+  "allegory": "Tool use is like someone in a sealed room who can only pass notes under the door: a menu card says what can be ordered and how to write the slip, a helper outside runs each order and slides the answer back, and the card is all they ever see of the kitchen.",
+  "map": [
+    ["someone in a sealed room who can only pass notes", "the model: it can only emit text, never run anything itself"],
+    ["the menu card pinned inside the door", "the tool schema: name, argument types and docstring, built by Inspect's @tool"],
+    ["an order slip written in the menu's format", "a tool call: the tool's name plus its arguments"],
+    ["the helper who runs it and slides the answer back", "your code: execute() runs, and the result returns as a tool message"],
+    ["a menu that never says what a failed order looks like", "a Returns line without the failure shape: the model retries the same failing call"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "All words, no hands",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "can explain the sum, can't press the buttons",
+      "actors": [{ "pose": "shrug", "x": 0.22, "label": "model" }],
+      "props": [
+        { "kind": "cloud", "x": 0.5, "y": 0.26, "w": 0.26, "h": 0.16, "label": "words, words, words", "color": "lav" },
+        { "kind": "box", "x": 0.8, "y": 0.66, "w": 0.16, "h": 0.2, "label": "calculator (out of reach)", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A model can explain long multiplication beautifully and still get a big sum wrong. It only produces words. It can't pick up a calculator.",
+        "2": "An LLM's only output is text. Tool use turns some of that text into a structured request your code runs, so the model can get exact results and act.",
+        "3": "Function calling is the single mechanism that turns text output into a side effect. Every agent loop in [3.4] and control protocol in [3.5] sits on top of it."
+      }
+    },
+    {
+      "name": "The sealed room",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "write", "x": 0.2, "label": "model" },
+        { "pose": "carry", "x": 0.78, "label": "your code" }
+      ],
+      "props": [
+        { "kind": "door", "x": 0.5, "y": 0.55, "w": 0.12, "h": 0.5, "label": "slot" },
+        { "kind": "card", "x": 0.33, "y": 0.22, "label": "menu: calculate an expression", "color": "cream" },
+        { "kind": "card", "x": 0.66, "y": 0.3, "label": "slip: 3+5", "color": "peach" },
+        { "kind": "card", "x": 0.66, "y": 0.8, "label": "answer: 8", "color": "mint" }
+      ],
+      "arrows": [[0.4, 0.4, 0.6, 0.35, "order"], [0.6, 0.78, 0.4, 0.72, "answer"]],
+      "cap": {
+        "1": "Picture someone in a sealed room with a menu card on the door. They write an order slip, slide it out, and a helper runs it and slides the answer back.",
+        "2": "You pass tool definitions alongside the messages. The model replies with a tool call; your code runs it and returns the result as a tool message. Then it carries on.",
+        "3": "Five steps: pick the function, describe it as a schema, pass the definitions as tools, read the tool call out of the response and execute it, feed the result back."
+      }
+    },
+    {
+      "name": "Round the loop",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "msgs", "label": "messages + tool list", "x": 0.1, "y": 0.5, "c": "sky" },
+        { "id": "model", "label": "model", "x": 0.36, "y": 0.5, "c": "lav" },
+        { "id": "call", "label": "tool call", "x": 0.6, "y": 0.22, "c": "peach" },
+        { "id": "exec", "label": "execute()", "x": 0.86, "y": 0.5, "c": "butter" },
+        { "id": "result", "label": "tool message", "x": 0.6, "y": 0.78, "c": "mint" },
+        { "id": "done", "label": "final answer", "x": 0.36, "y": 0.9, "c": "green" }
+      ],
+      "edges": [["msgs", "model"], ["model", "call", "wants a tool"], ["call", "exec"], ["exec", "result"], ["result", "model", "append"], ["model", "done", "no call"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Round and round: the model asks, your code does it, the answer comes back, and the model decides whether to ask again or simply reply.",
+        "2": "If the response contains tool calls, execute each, append the results as tool messages and generate again. If it contains none, that is the final answer.",
+        "3": "The ReAct variant adds a lever: <code>tool_choice='none'</code> for the reasoning turn, so the model thinks without acting, then a normal generate for the action turn."
+      }
+    },
+    {
+      "name": "What the model reads",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "name", "c": "orange", "note": "what the tool is called" },
+        { "t": " + args", "c": "sky", "note": "each input's exact format" },
+        { "t": " + returns", "c": "green", "note": "success and failure shapes" },
+        { "t": " = the prompt", "c": "red", "note": "all the model ever sees" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The model never sees your code. It sees a card: the tool's name, what each input should look like, and what comes back. That card is all it has.",
+        "2": "Inspect builds the schema from the function name, type hints and docstring, Args block and Returns line included. That schema is what enters the model's context.",
+        "3": "Models are fine-tuned to read tool descriptions the way they read system and user messages, so the docstring is a prompt, not documentation."
+      }
+    },
+    {
+      "name": "Vague card, precise card",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "A one-line docstring", "c": "pink", "lines": ["\"Does maths.\"", "no format for the input", "no word on failure"] },
+      "right": { "title": "Written as all it gets", "c": "mint", "lines": ["one line on what it does", "Args: exact format, e.g. '3+5'", "Returns: '8', or what an error looks like"] },
+      "verdict": "If you can't tell from the schema alone how to call it, neither can the model.",
+      "cap": {
+        "1": "A vague card gets vague slips, like 'add those numbers up please'. Say exactly what to write, with an example, and the orders come right first time.",
+        "2": "With no Args block the model guesses the format from the parameter name. With no failure shape in Returns it can't tell an empty result from an error.",
+        "3": "Then agents retry the identical failing call until the message limit trips. In the WikiGame, MovePageTool must say its title comes from get_permitted_links's exact output."
+      }
+    },
+    {
+      "name": "Blame the card first",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "note": "model 'can't do it'? read the card first",
+      "actors": [
+        { "pose": "think", "x": 0.24, "label": "evaluator" },
+        { "pose": "point", "x": 0.52, "label": "you" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.8, "y": 0.3, "label": "score: low", "color": "pink" },
+        { "kind": "card", "x": 0.8, "y": 0.64, "label": "menu: \"Does maths.\"", "color": "cream" }
+      ],
+      "arrows": [[0.6, 0.5, 0.72, 0.62, "the real culprit"]],
+      "cap": {
+        "1": "When an agent flops, check the menu card before blaming the diner. A test of the model can quietly turn into a test of your instructions.",
+        "2": "The classic symptom: the model never calls your tool, or sends arguments your executor can't parse, and you conclude it doesn't understand the task.",
+        "3": "Tools, like elicitation, are scaffold levers: a vague schema turns a capability measurement into a measurement of your own string handling."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 8,
+      "type": "cards",
+      "items": ["Tools turn words into actions", "The docstring is a prompt", "Check the scaffold before the model"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Tools are how models act in the world: search, run code, click. Knowing what they read, and where it breaks, is part of steering what they do.",
+        "2": "Toolformer (Schick et al., Meta AI, 2023) showed a model could learn when to call a calculator, search engines, a translator or a calendar from a few demonstrations per API.",
+        "3": "It improved zero-shot performance, often competitive with much larger models, without losing core language ability: tool access is a capability multiplier separate from scale."
+      }
+    }
+  ],
+  "coda": {
+    "type": "match",
+    "title": "Match each part of a tool to its job",
+    "pairs": [
+      ["@tool", "wraps your function so Inspect can build its schema"],
+      ["docstring", "the instructions the model actually reads"],
+      ["Args block", "each input's exact format, with an example like '3+5'"],
+      ["Returns line", "what success looks like, and what failure looks like"],
+      ["tool message", "the result handed back so the model can carry on"],
+      ["tool_choice='none'", "a turn to think without acting"]
+    ],
+    "caption": {
+      "1": "Pair each part of a tool with its job. The cards are shuffled every play, so it's the meaning that has to stick, not the position.",
+      "2": "Every pair is a piece of the loop: signature and docstring become the schema, the model's tool call comes out, and the result goes back as a tool message.",
+      "3": "The schema is prompt text: the name, per-argument descriptions from Args, and the Returns description. tool_choice decides whether a turn may call tools at all."
+    }
+  },
+  "where_else": [
+    "Agent scaffolds, where every step of the loop is a tool call and a tool message",
+    "AI control protocols, which monitor and edit the same tool calls before they run",
+    "Capability evals, where a vague tool schema can make a capable model look weak"
+  ],
+  "hamming": {
+    "what": "Tool use is handing a model described functions it can ask you to run, then running them and returning the results, so it can act rather than only talk.",
+    "when": "Whenever a task needs exact computation, fresh information or side effects: calculators, search, code execution, and every agent loop.",
+    "why": "It is the single mechanism that turns text into action, so it multiplies capability and also defines exactly where an agent can reach."
+  },
+  "object": {
+    "title": "The order loop",
+    "subtitle": "Messages and menu cards go in, order slips come out, answers come back, until the model simply replies.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "msgs", "label": "messages", "pos": [-1.2, 0.6, 0], "c": "data" },
+      { "id": "schema", "label": "menu cards (schemas)", "pos": [-1.2, -0.6, 0], "c": "brass" },
+      { "id": "model", "label": "model", "pos": [0, 0, 0], "c": "dir" },
+      { "id": "call", "label": "tool call: 3+5", "pos": [1.1, 0.7, 0.3], "c": "prob" },
+      { "id": "exec", "label": "execute()", "pos": [1.3, -0.3, -0.3], "c": "aux" },
+      { "id": "result", "label": "tool message: 8", "pos": [0.4, -1.1, 0], "c": "good" },
+      { "id": "final", "label": "final answer", "pos": [0.2, 1.3, 0], "c": "good" }
+    ],
+    "edges": [["msgs", "model"], ["schema", "model"], ["model", "call"], ["call", "exec"], ["exec", "result"], ["result", "model"], ["model", "final"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "The whole loop. Messages and menu cards go into the model; order slips come out; answers come back in.",
+          "2": "Tool definitions travel with the messages. The model's output is either a tool call or a final answer.",
+          "3": "One generate call per turn; tool results are appended as tool messages before the next."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The menu cards, up close. They're built from your docstrings, and they're all the model knows about your tools.",
+          "2": "Inspect's @tool reads the signature, type hints and docstring and turns them into the schema the model sees.",
+          "3": "Name, per-argument descriptions from Args, and the Returns description: prompt text, not documentation."
+        },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Follow one order: the model writes 3+5, your code works it out, 8 comes back as a new message, and the model carries on.",
+          "2": "Parse the tool call, run execute() with its arguments, append the result as a tool message, generate again.",
+          "3": "The model folds the returned result into its next tokens, as Toolformer learned to do self-supervised."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "No slip this time: the model answers directly, and the loop ends.",
+          "2": "A response with no tool calls is the final answer; your loop stops generating.",
+          "3": "tool_choice='none' forces this branch for a turn: think without acting, as in the ReAct variant."
+        },
+        "view": "top",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "The model never calls your new tool. First thing to check?",
+        "options": [{ "t": "Print the schema and read it cold", "ok": true }, { "t": "Swap in a bigger model" }],
+        "why": "The schema is all the model sees. If you can't tell how to call the tool from it, neither can the model."
+      },
+      {
+        "q": "Your tool errors, and the model repeats the identical call until the message limit. Likely cause?",
+        "options": [{ "t": "The Returns line never says what failure looks like", "ok": true }, { "t": "The model is too small" }],
+        "why": "It can't tell an error from an empty result, so it tries again."
+      },
+      {
+        "q": "What does the model actually see of your tool?",
+        "options": [{ "t": "Its name, argument types and docstring, as a schema", "ok": true }, { "t": "Your Python source code" }],
+        "why": "Inspect builds the schema from the signature, type hints and docstring; your code never enters the context."
+      }
+    ],
+    "where": "Any system that acts through a described interface: the label on the door is the only instruction that gets read."
+  }
+}

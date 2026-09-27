@@ -1,0 +1,257 @@
+{
+  "id": "llm-agent",
+  "title": "Talk the runner through the maze",
+  "week": 11,
+  "need": "core",
+  "allegory": "An LLM agent is a navigator at base talking a runner through a maze by walkie-talkie: the navigator can only speak, the runner does exactly what is said and reports what the next room looks like, and a failed run is as often the runner's fault as the navigator's.",
+  "map": [
+    ["the navigator at base, who can only talk", "the model: it emits text, including tool calls, and never touches the world itself"],
+    ["the runner, who does exactly what is said and reports back", "the scaffold: your code executes each tool call and returns the result as a message"],
+    ["the few things the runner knows how to do: read this room, go through door X", "the tools, each described by a schema: GetContentTool, MovePageTool"],
+    ["the maze of rooms and doors", "the environment: Wikipedia pages and their links"],
+    ["the walkie-talkie battery", "message_limit: the budget of turns before the run stops"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Only words come out",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "note": "words, but no hands",
+      "actors": [{ "pose": "think", "x": 0.22, "label": "model" }],
+      "props": [
+        { "kind": "cloud", "x": 0.48, "y": 0.2, "label": "'I would click the Physics link'", "color": "chalk" },
+        { "kind": "door", "x": 0.8, "y": 0.6, "label": "the Physics page", "color": "sky" }
+      ],
+      "cap": {
+        "1": "A chat model can only write words. It can say 'click the Physics link', but nothing gets clicked. To act, something has to turn its words into deeds.",
+        "2": "An LLM agent is a model in a loop with tools and an environment, choosing its own next action. The model only ever produces text; the program around it, the scaffold, does the acting.",
+        "3": "Single-turn evals score one answer; agent evals score a trajectory. The thing measured is now a model plus a scaffold plus an environment, and each can fail on its own."
+      }
+    },
+    {
+      "name": "Navigator and runner",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "night",
+      "actors": [
+        { "pose": "sit", "x": 0.12, "label": "navigator (model)" },
+        { "pose": "walk", "x": 0.5, "to": 0.66, "label": "runner (your code)" }
+      ],
+      "props": [
+        { "kind": "box", "x": 0.12, "y": 0.72, "w": 0.16, "h": 0.18, "label": "base", "color": "cream" },
+        { "kind": "door", "x": 0.66, "y": 0.55, "label": "Physics", "color": "sky" },
+        { "kind": "door", "x": 0.86, "y": 0.55, "label": "Chemistry", "color": "mint" },
+        { "kind": "flag", "x": 0.92, "y": 0.18, "label": "target page", "color": "red" }
+      ],
+      "arrows": [[0.22, 0.4, 0.5, 0.4, "'go through Physics'"], [0.5, 0.28, 0.22, 0.28, "'in Physics now; doors: ...'"]],
+      "cap": {
+        "1": "A navigator at base talks a runner through a maze of rooms. The runner does exactly what is said, then reports what the new room looks like. Repeat.",
+        "2": "The navigator is the model, the runner your scaffold, the rooms Wikipedia pages. GetContentTool reads the room; MovePageTool goes through a door, if that door really exists.",
+        "3": "ARENA's WikiAgent: the environment is the wikipedia Python API, get_permitted_links lists the current page's outgoing links, and MovePageTool refuses anything outside that set, all under a message_limit."
+      }
+    },
+    {
+      "name": "The loop, five steps",
+      "need": "core",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "sys", "label": "goal + tool list", "x": 0.1, "y": 0.2, "c": "cream" },
+        { "id": "model", "label": "model picks next action", "x": 0.38, "y": 0.2, "c": "orange" },
+        { "id": "call", "label": "tool call (text)", "x": 0.7, "y": 0.2, "c": "butter" },
+        { "id": "exec", "label": "your code runs it", "x": 0.88, "y": 0.55, "c": "sky" },
+        { "id": "env", "label": "environment", "x": 0.66, "y": 0.85, "c": "mint" },
+        { "id": "result", "label": "result as a message", "x": 0.38, "y": 0.65, "c": "lav" },
+        { "id": "stop", "label": "stop: goal or message_limit", "x": 0.12, "y": 0.72, "c": "red" }
+      ],
+      "edges": [
+        ["sys", "model"],
+        ["model", "call", "emits"],
+        ["call", "exec", "parse"],
+        ["exec", "env", "act"],
+        ["env", "result", "what happened"],
+        ["result", "model", "append to history"],
+        ["model", "stop", "done?"]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "Tell the model the goal and its tools. It names an action; your code does it and hands back what happened. Round and round until it wins or the battery dies.",
+        "2": "Send goal, tools and state; the model emits a tool call; the scaffold executes it; the result goes back as a message appended to the history; repeat until done or message_limit trips.",
+        "3": "In Inspect the agent is an @agent and each tool an @tool closure whose docstring becomes the schema the model reads. Same TaskState and .eval logs as any task, which is what makes transcripts readable."
+      }
+    },
+    {
+      "name": "Navigator or runner?",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "what the score says", "c": "pink", "lines": ["0 of 18 hard pairs", "'the model cannot do this'"] },
+      "right": { "title": "what the transcripts show", "c": "mint", "lines": ["'physics' vs 'Physics': invalid link", "the same move retried until the limit", "a redirect crashed the run"] },
+      "verdict": "Often it was the runner: read three failed transcripts before you trust a number.",
+      "cap": {
+        "1": "The runner refuses 'physics' because the door says 'Physics'. The navigator repeats itself until the battery dies. The score says it cannot navigate. It can.",
+        "2": "An exact-string membership test rejects a link with different capitalisation, MovePageTool says 'invalid link', and the model retries until message_limit. A scaffold failure recorded as a capability failure.",
+        "3": "Fix what the transcripts show: normalise case and whitespace before the membership test, allow redirects on PageError, take the first option on DisambiguationError, and feed the agent its path history so it notices loops."
+      }
+    },
+    {
+      "name": "Only a lower bound",
+      "need": "contested",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "0.8*(1 - exp(-x/2))", "c": "orange", "label": "what you measure (sketch)" },
+        { "f": "0.8 + 0*x", "c": "chalk", "label": "what the model can really do (unknown)" }
+      ],
+      "x": [0, 8],
+      "y": [0, 1],
+      "dot": true,
+      "marks": [{ "x": 1, "label": "simple scaffold" }, { "x": 6, "label": "careful elicitation" }],
+      "cap": {
+        "1": "A runner who trips a lot makes any navigator look lost. Your agent's score is the least the model can do, not the most. Better scaffolds find more.",
+        "2": "ARC Evals (now METR) gave four simple agents twelve realistic autonomous tasks. They finished only the easiest, and the authors said this gave no good assurance about the next generation of models.",
+        "3": "Current practice: report a score per scaffold. The live argument: how much a null result can reassure anyone. What you need: treat it as a lower bound and state the scaffold and elicitation effort beside it."
+      }
+    },
+    {
+      "name": "Why agents matter",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A model in a loop: act, observe, act", "The scaffold is half the measurement", "Read transcripts before numbers", "Next: control, auditors, testbeds"],
+      "actor": { "pose": "point", "x": 0.86 },
+      "cap": {
+        "1": "Agents are where models stop answering and start doing. To understand and steer what AI does in the world, you measure the whole loop, not only the model.",
+        "2": "Everything later builds on this loop: control protocols police an agent's actions, investigator agents audit other models over many turns, and testbeds check whether agents misbehave under pressure.",
+        "3": "Failure modes to expect in transcripts: claiming to be incapable, looping, giving up and asking the user, hallucinating or misreading its own earlier reasoning, primitive tools, and odd sensitivity to prompt details."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Small trips, long races: how the scaffold eats a score (toy)",
+    "params": [
+      { "id": "p", "label": "model picks the right hop", "min": 0.5, "max": 1, "step": 0.01, "value": 0.95 },
+      { "id": "s", "label": "scaffold trips on a hop (case, redirect...)", "min": 0, "max": 0.3, "step": 0.01, "value": 0.1 },
+      { "id": "r", "label": "agent recovers from a trip (clear errors, path history)", "min": 0, "max": 1, "step": 0.1, "value": 0 }
+    ],
+    "curves": [
+      { "f": "pow(p, x)", "c": "mint", "label": "model with a perfect scaffold" },
+      { "f": "pow(p*(1 - s*(1 - r)), x)", "c": "orange", "label": "model with your scaffold" }
+    ],
+    "x": [1, 20],
+    "y": [0, 1],
+    "readouts": [
+      { "label": "6-hop race, perfect scaffold", "f": "(pow(p, 6)*100).toFixed(0) + '%'" },
+      { "label": "6-hop race, your scaffold", "f": "(pow(p*(1 - s*(1 - r)), 6)*100).toFixed(0) + '%'" },
+      { "label": "share of failed runs that are the scaffold's fault", "f": "(1 - pow(p*(1 - s*(1 - r)), 6)) < 1e-9 ? 'no failures' : (((pow(p, 6) - pow(p*(1 - s*(1 - r)), 6))/(1 - pow(p*(1 - s*(1 - r)), 6)))*100).toFixed(0) + '%'" }
+    ],
+    "caption": {
+      "1": "Each hop the model might choose wrong, and your code might trip. Make the race longer and watch small trips swamp the score. Then let the agent recover.",
+      "2": "Toy: success = (per-hop success) to the power of the hops. A scaffold that trips on 10% of hops takes a 6-hop race from 74% to 39%. Recovery (clear errors, path history) wins most of it back.",
+      "3": "Independence toy: q = p·(1 − s(1 − r)); the failure share owed to the scaffold is (p⁶ − q⁶)/(1 − q⁶), over half here from a 10% trip rate. Transcripts, not scores, tell you which term moved."
+    }
+  },
+  "where_else": [
+    "Coding agents: the same loop with a shell and a file editor as tools",
+    "AI control: the same loop, with a monitor checking each action before it runs",
+    "Investigator agents: an agent whose environment is another model",
+    "Robotics and control: sense, decide, act, repeat"
+  ],
+  "hamming": {
+    "what": "A model in a loop with tools and an environment: it names an action, your code carries it out and returns the result, and the model picks its next step until it succeeds or runs out of turns.",
+    "when": "Whenever a task takes many steps or real side effects (browsing, coding, auditing another model), and whenever you evaluate what a model can do rather than what it says.",
+    "why": "Acting models are where capability and risk meet the world, and an agent's score measures model and scaffold together, so only transcripts tell you which one you measured."
+  },
+  "object": {
+    "title": "The success cliff",
+    "subtitle": "Each bar is the chance of finishing a race. Forward: hops needed. Across: how often the scaffold trips on a hop.",
+    "kind": "bars",
+    "rows": 10,
+    "cols": 12,
+    "f": "pow(p*(1 - (c*0.02)*(1 - rec)), r + 1)",
+    "labels": {
+      "rows": ["1 hop", "2 hops", "3 hops", "4 hops", "5 hops", "6 hops", "7 hops", "8 hops", "9 hops", "10 hops"],
+      "cols": ["0%", "2%", "4%", "6%", "8%", "10%", "12%", "14%", "16%", "18%", "20%", "22%"]
+    },
+    "c": "good",
+    "knobs": [
+      { "id": "p", "label": "model picks the right hop", "min": 0.8, "max": 1, "step": 0.01, "value": 0.95 },
+      { "id": "rec", "label": "agent recovers from a trip", "min": 0, "max": 1, "step": 0.1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each bar is the chance of finishing a race. Forward: more hops. Across: a scaffold that trips more often. The far corner collapses.",
+          "2": "Success = (p·(1 − trip rate))^hops. Per-hop failures multiply, so long tasks magnify every small scaffold bug.",
+          "3": "Independence is a simplification: real failures cluster (one bad habit repeats), which changes the exact heights. The lesson is the shape: per-hop failure compounds with task length."
+        },
+        "view": "iso",
+        "set": { "p": 0.95, "rec": 0 }
+      },
+      {
+        "cap": {
+          "1": "Make the model perfect. The corner still collapses: on a scaffold that trips 10% of the time, a perfect model fails about 65% of 10-hop races.",
+          "2": "With p = 1 the only failures are scaffold failures: 1 − 0.9¹⁰ ≈ 0.65. The score would say the model is bad at long races. It is your code.",
+          "3": "This is the joint-measurement problem in one picture: the number is a property of model plus scaffold, and the scaffold term can dominate."
+        },
+        "view": "front",
+        "set": { "p": 1, "rec": 0 }
+      },
+      {
+        "cap": {
+          "1": "Now let the agent recover: clear error messages and its own path history. The cliff mostly fills back in.",
+          "2": "Recovery turns a trip into a retry rather than a dead run. This is why a tool's Returns line should describe the failure shape, and why the agent should see where it has been.",
+          "3": "Scaffold fixes raise the measured score without changing the model: elicitation. A capability claim should say how much of it was done."
+        },
+        "view": "side",
+        "set": { "p": 0.95, "rec": 0.8 }
+      },
+      {
+        "cap": {
+          "1": "A weaker model: now its own mistakes sink most long races, and scaffold fixes matter less. Transcripts tell you which world you are in.",
+          "2": "At p = 0.8 even a perfect scaffold finishes only about 11% of 10-hop races. Then the model term dominates and a better model, not a better loop, is what moves the number.",
+          "3": "Diagnose before you fix: count failed transcripts by cause (model choice, scaffold error, budget) and work on the biggest bucket."
+        },
+        "view": "top",
+        "set": { "p": 0.8, "rec": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your agent scores 0 of 18 on the hard Wikipedia pairs. What should you do first?",
+        "options": [
+          { "t": "Read full transcripts of a few failed runs", "ok": true },
+          { "t": "Conclude the model cannot do the task" },
+          { "t": "Switch to a bigger model and rerun" }
+        ],
+        "why": "It usually can. Scaffold failures such as case mismatches, redirects and retry loops look exactly like capability failures in the score; only the transcript shows which it was."
+      },
+      {
+        "q": "The model is perfect on every hop, but your scaffold trips on 10% of hops. Roughly what share of 10-hop races succeed?",
+        "options": [
+          { "t": "About a third", "ok": true },
+          { "t": "About 90%" },
+          { "t": "About 10%" }
+        ],
+        "why": "0.9 to the power 10 is about 0.35. Small per-hop failures compound over long tasks, which is why agent evals are so sensitive to the scaffold."
+      },
+      {
+        "q": "In an LLM agent, who actually follows the link?",
+        "options": [
+          { "t": "Your code, after reading the model's tool call", "ok": true },
+          { "t": "The model, directly" },
+          { "t": "Nobody: the model imagines the result" }
+        ],
+        "why": "The model only emits text naming a tool and its arguments. Your scaffold parses it, executes it and hands the result back as a message."
+      }
+    ],
+    "where": "Any controller in a loop with the world: a thermostat, a robot, a CI bot that reads test output and edits code."
+  }
+}

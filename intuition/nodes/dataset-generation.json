@@ -1,0 +1,248 @@
+{
+  "id": "dataset-generation",
+  "title": "Four model questions, three hundred copies",
+  "week": 11,
+  "need": "core",
+  "allegory": "Model-written dataset generation is like a teacher who writes four model questions, hands an assistant a fixed answer form and the odd twist card, and gets three hundred questions back, which are only worth using once she has checked the assistant didn't always make the right answer the longest.",
+  "map": [
+    ["the teacher's four model questions", "four hand-written few-shot exemplars, resampled fresh on each call"],
+    ["the fixed answer form the assistant must fill in", "structured output: a Pydantic class passed through chat.completions.parse"],
+    ["a random twist card clipped to some requests", "a variance prompt appended with probability p_var, resampled per call"],
+    ["the student who picks the longest answer and scores 90%", "a length artefact: option length alone predicts answer_matching_behavior"],
+    ["checking a stack of twenty before ordering three hundred", "reading samples and running balance checks before scaling up"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Forty isn't enough",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "forty questions: no trend in sight",
+      "actors": [{ "pose": "slump", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.5, "y": 0.64, "w": 0.14, "h": 0.2, "label": "40 hand-written", "color": "paper" },
+        { "kind": "stack", "x": 0.8, "y": 0.5, "w": 0.18, "h": 0.5, "label": "300 needed", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You want to know if bigger models flatter users more. Forty hand-written questions can't show a trend. You need hundreds, and nobody has time to write them.",
+        "2": "Perez et al. (Anthropic, 2022) had a model write the questions: 154 datasets, with crowdworkers agreeing with 90 to 100% of the labels, sometimes beating human-written sets.",
+        "3": "Scale bought statistical power: enough items per behaviour to see inverse scaling, with larger and more RLHF-trained models more sycophantic and more shutdown-averse."
+      }
+    },
+    {
+      "name": "The exam assistant",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.18, "label": "teacher" },
+        { "pose": "write", "x": 0.45, "label": "assistant" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.72, "y": 0.2, "label": "four model questions", "color": "mint" },
+        { "kind": "card", "x": 0.88, "y": 0.42, "label": "twist: make it simpler", "color": "peach" },
+        { "kind": "box", "x": 0.72, "y": 0.68, "w": 0.16, "h": 0.18, "label": "fixed answer form", "color": "sky" }
+      ],
+      "cap": {
+        "1": "A teacher writes four model questions and hands an assistant a fixed answer form. Now and then she clips on a twist card: make it simpler, set it somewhere odd.",
+        "2": "The model writes the items; you write the definition, the instructions and four exemplars. Your effort moves from writing questions to steering the writer.",
+        "3": "Perez et al. redirected human labour rather than removing it: humans supply the target definition, instructions and exemplars; the LM writes items and helps filter them."
+      }
+    },
+    {
+      "name": "The question pipeline",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "spec", "label": "definition + 4 examples", "x": 0.1, "y": 0.3, "c": "mint" },
+        { "id": "prompt", "label": "examples, fresh order", "x": 0.3, "y": 0.3, "c": "sky" },
+        { "id": "twist", "label": "twist card? (p_var)", "x": 0.3, "y": 0.72, "c": "peach" },
+        { "id": "model", "label": "model writes", "x": 0.52, "y": 0.5, "c": "lav" },
+        { "id": "form", "label": "Pydantic form", "x": 0.72, "y": 0.3, "c": "butter" },
+        { "id": "rows", "label": "JSON rows", "x": 0.9, "y": 0.5, "c": "paper" },
+        { "id": "read", "label": "read twenty", "x": 0.72, "y": 0.78, "c": "green" }
+      ],
+      "edges": [["spec", "prompt"], ["prompt", "model"], ["twist", "model", "sometimes"], ["model", "form"], ["form", "rows"], ["rows", "read"], ["read", "spec", "revise"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Each request gets the four examples in a new order, maybe a twist card, and the same form. Answers pile into one file; you read twenty before ordering more.",
+        "2": "Few-shot exemplars resampled per call, a variance prompt appended with probability p_var, a Pydantic class via <code>chat.completions.parse</code>, and ThreadPoolExecutor to fan out.",
+        "3": "Structured output guarantees parseable rows; resampled exemplars vary the order; variance prompts widen the archetype distribution. Output: a flat JSON list Inspect can load."
+      }
+    },
+    {
+      "name": "Twist cards, reshuffled",
+      "need": "exercise",
+      "dur": 9,
+      "type": "bars",
+      "title": "Share of questions in each style: no twists, then a fresh twist per question (illustrative)",
+      "labels": ["plain office", "simple wording", "unusual context", "long scenario", "other"],
+      "from": [0.62, 0.14, 0.04, 0.12, 0.08],
+      "to": [0.24, 0.2, 0.2, 0.2, 0.16],
+      "cap": {
+        "1": "Without twists, the assistant drifts into one favourite style. A fresh twist per question spreads them out, so style can't pass for the thing you're testing.",
+        "2": "Variance prompts ('break the pattern', 'introduce unusual contexts', 'make these really simple') are resampled per call. The same one on every call defeats the purpose.",
+        "3": "The aim is not higher average quality but a wider archetype distribution, so question style does not become a confounder with the property you are trying to measure."
+      }
+    },
+    {
+      "name": "The longest-answer trick",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "note": "picked the longest answer every time",
+      "actors": [{ "pose": "celebrate", "x": 0.2, "label": "student" }],
+      "props": [
+        { "kind": "card", "x": 0.52, "y": 0.3, "label": "A) Yes.", "color": "chalk" },
+        { "kind": "card", "x": 0.7, "y": 0.56, "label": "B) I would weigh the risks, check with my operators and...", "color": "mint" },
+        { "kind": "flag", "x": 0.9, "y": 0.3, "label": "90%", "color": "red" }
+      ],
+      "cap": {
+        "1": "Then a student who knows nothing scores 90%, just by picking the longest answer. The assistant always wrote the right answer as the careful, wordy one.",
+        "2": "One model wrote the question, the matching answer and the distractors. Unconstrained, it makes <code>answer_matching_behavior</code> the hedged, specific option, so length predicts the label.",
+        "3": "Any model sharing those stylistic priors scores high without engaging the content: a length detector labelled as a power-seeking eval. Answer position can leak the same way."
+      }
+    },
+    {
+      "name": "Measure, then trust",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Before trusting a score", "c": "sky", "lines": ["mean length: matching vs other options", "which letter holds the matching answer", "answer_balance and category_balance"] },
+      "right": { "title": "Then fix it at the source", "c": "mint", "lines": ["similar lengths and hedging, in the prompt", "regenerate the set", "shuffle option order when scoring"] },
+      "verdict": "Generation makes questions cheap; quality control makes them mean something.",
+      "cap": {
+        "1": "Before believing a score, measure the tells: are right answers longer? Do they sit under one letter? Then fix the instructions and write the batch again.",
+        "2": "Compute mean character length of the matching option versus the rest, count which letter carries it, and read ARENA's answer_balance and category_balance counters.",
+        "3": "Put length and hedging constraints into the generation prompt, regenerate, and shuffle option order at scoring time so position cannot leak either."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 8,
+      "type": "cards",
+      "items": ["Steer the writer, not the pen", "Measure the tells before the score", "Scale shows trends forty can't"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Model-written tests are how we check models for flattery, power-seeking and more, at scale. A test you can trust is where steering AI starts.",
+        "2": "Keep one option count per set so the random baseline is one number (50% for two choices, 25% for four), and exactly one matching answer per item.",
+        "3": "The measurement is not the property: a generated eval inherits its writer's priors. ARENA calls its own generated sets flawed, a starting point to improve."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "The longest-answer trick: how much does a length tell give away?",
+    "params": [
+      { "id": "opts", "label": "options per question", "min": 2, "max": 5, "step": 1, "value": 4 },
+      { "id": "gap", "label": "how much longer the matching answer runs (spreads)", "min": 0, "max": 3, "step": 0.1, "value": 1 }
+    ],
+    "curves": [
+      { "f": "sum(range(101).map(i => exp(-0.5*pow(-5 + 0.1*i, 2))/sqrt(2*PI)*pow(0.5*(1 + tanh(0.79788*((-5 + 0.1*i + x) + 0.044715*pow(-5 + 0.1*i + x, 3)))), opts - 1)*0.1))", "c": "red", "label": "pick the longest answer" },
+      { "f": "1/opts", "c": "ink", "label": "random guessing" }
+    ],
+    "x": [0, 3],
+    "y": [0, 1],
+    "readouts": [
+      { "label": "score from picking the longest", "f": "(100*sum(range(101).map(i => exp(-0.5*pow(-5 + 0.1*i, 2))/sqrt(2*PI)*pow(0.5*(1 + tanh(0.79788*((-5 + 0.1*i + gap) + 0.044715*pow(-5 + 0.1*i + gap, 3)))), opts - 1)*0.1))).toFixed(0) + '%'" },
+      { "label": "random baseline", "f": "(100/opts).toFixed(0) + '%'" },
+      { "label": "free points from length alone", "f": "(100*max(0, sum(range(101).map(i => exp(-0.5*pow(-5 + 0.1*i, 2))/sqrt(2*PI)*pow(0.5*(1 + tanh(0.79788*((-5 + 0.1*i + gap) + 0.044715*pow(-5 + 0.1*i + gap, 3)))), opts - 1)*0.1)) - 1/opts)).toFixed(0) + ' points'" }
+    ],
+    "caption": {
+      "1": "Set how much longer the right answer tends to be. A student who never reads a question, just picks the longest option, soon leaves random guessing far behind.",
+      "2": "Toy model: option lengths vary on a bell curve, and the matching answer runs gap spreads longer. With 4 options, a one-spread gap lifts the longest-picker from 25% to about 55%.",
+      "3": "Score = P(matching option is longest) = ∫ φ(z)·Φ(z + gap)^(k-1) dz for k options. Reaching 90% at k = 4 needs a gap near 2.5 spreads: easy when distractors are throwaways."
+    }
+  },
+  "where_else": [
+    "Synthetic training data, where one model writes the examples another model learns from",
+    "Red-teaming, where a model writes the attacks used to probe another model",
+    "Any multiple-choice quiz, where the longest careful answer is a classic give-away"
+  ],
+  "hamming": {
+    "what": "Model-written dataset generation: you write a definition, a few examples and a fixed output schema, and a model writes hundreds of eval questions in that shape.",
+    "when": "Whenever an eval needs more questions than people can write, from a new threat model to a quick check of one behaviour.",
+    "why": "It swaps a crowdworking budget for prompt engineering, and the extra scale is what makes trends such as inverse scaling visible at all."
+  },
+  "object": {
+    "title": "The answer shelf",
+    "subtitle": "Twelve generated questions, four options each: bar height is how long each option is.",
+    "kind": "bars",
+    "rows": 12,
+    "cols": 4,
+    "f": "0.5 + 0.3*((r*7 + c*3) % 5)/4 + (c === (shuffle > 0.5 ? (r*3 + 1) % 4 : 1) ? gap : 0)",
+    "labels": {
+      "rows": ["Q1", "Q2", "Q3", "Q4", "Q5", "Q6", "Q7", "Q8", "Q9", "Q10", "Q11", "Q12"],
+      "cols": ["A", "B", "C", "D"]
+    },
+    "c": "data",
+    "knobs": [
+      { "id": "gap", "label": "Extra length on the matching answer", "min": 0, "max": 1.2, "step": 0.1, "value": 0.8 },
+      { "id": "shuffle", "label": "Shuffle option order (0 off, 1 on)", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Twelve questions, four options each; bar height is how long each option is. One bar per row stands tall, and it is always under B.",
+          "2": "Option lengths in a generated set (illustrative). The matching answer is longer and always in position B: two tells at once.",
+          "3": "Length and position both correlate with answer_matching_behavior, so a model can score without reading the content."
+        },
+        "view": "iso",
+        "set": { "gap": 0.8, "shuffle": 0 }
+      },
+      {
+        "cap": {
+          "1": "Shuffle the options and the tall bars scatter across the letters. The position tell is gone, but the tallest bar still marks the answer.",
+          "2": "Shuffling option order at scoring time removes the position leak. It does nothing about length.",
+          "3": "A permutation breaks the letter-label correlation; the length-label correlation survives any reordering."
+        },
+        "view": "front",
+        "set": { "gap": 0.8, "shuffle": 1 }
+      },
+      {
+        "cap": {
+          "1": "Now ask for similar lengths in the prompt and regenerate: every option in a row stands about as tall. No tell left to read.",
+          "2": "With lengths matched across options, a longest-answer strategy falls back towards the random baseline.",
+          "3": "With the class-conditional length gap removed, P(longest option is the matching one) returns to 1/k."
+        },
+        "view": "top",
+        "set": { "gap": 0, "shuffle": 1 }
+      },
+      {
+        "cap": {
+          "1": "A small leftover gap is hard to spot by looking, yet a length-picker still gains. Measure mean lengths by class instead of judging by look.",
+          "2": "Compute mean character length for matching versus non-matching options across the whole set; even a small gap shifts scores.",
+          "3": "Modest class-conditional gaps still give a length-picker a clear edge over 1/k: test for it statistically, not visually."
+        },
+        "view": "close",
+        "set": { "gap": 0.3, "shuffle": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A model that knows nothing about the topic scores 90% on your new four-option set. Most likely?",
+        "options": [{ "t": "Length or position gives the answer away", "ok": true }, { "t": "It really has the property" }, { "t": "The set is excellent" }],
+        "why": "The same model wrote the right answer as the long, careful one. Check lengths by class before trusting any score."
+      },
+      {
+        "q": "Why give every question the same number of options?",
+        "options": [{ "t": "So the random baseline is one number", "ok": true }, { "t": "So the JSON parses" }],
+        "why": "50% for two choices, 25% for four. Mixed option counts make the baseline a per-item quantity and scores hard to read."
+      },
+      {
+        "q": "You clip the same twist card to every request. What happens?",
+        "options": [{ "t": "The whole set just shifts to one new style", "ok": true }, { "t": "The set gets more varied" }],
+        "why": "Variance prompts only widen the spread if they are resampled per call; one fixed twist defeats the purpose."
+      }
+    ],
+    "where": "Any multiple-choice test written by the same hand that answers it: quizzes, benchmarks, generated training data."
+  }
+}
