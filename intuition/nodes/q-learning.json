@@ -1,0 +1,196 @@
+{
+  "id": "q-learning",
+  "title": "Score as if you'll walk perfectly",
+  "week": 9,
+  "need": "core",
+  "allegory": "Q-learning is like writing a trail guidebook that scores each step as 'the reward just earned plus the best score listed at the next spot', as if you will walk perfectly from then on, even while you are still stumbling about.",
+  "map": [
+    ["a guidebook entry for 'this spot, this move'", "Q(s, a)"],
+    ["the reward for the step you just took", "r"],
+    ["the best score listed at the next spot", "max over a′ of Q(s′, a′)"],
+    ["nudging the entry a little towards that target", "Q ← Q + α(target − Q), the TD update"],
+    ["scoring as if you'll walk perfectly, even while stumbling", "off-policy: the target ignores the action you actually take next"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Which move is good?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "think", "x": 0.14, "label": "walker" }],
+      "props": [
+        { "kind": "flag", "x": 0.06, "y": 0.72, "label": "start", "color": "sky" },
+        { "kind": "bridge", "x": 0.5, "y": 0.8, "w": 0.7, "h": 0.1, "label": "cliff: −100", "color": "red" },
+        { "kind": "flag", "x": 0.94, "y": 0.72, "label": "goal", "color": "green" }
+      ],
+      "cap": {
+        "1": "A walker must cross a windy clifftop. Every step costs a little, falling costs a lot. How do they learn which move is good from each spot?",
+        "2": "In CliffWalking every step gives −1 and stepping off the edge gives −100 and a trip back to the start. The agent must learn from its own clumsy experience.",
+        "3": "Model-free control: no access to the transition function, only sampled (s, a, r, s′). Learn Q(s, a), the expected return of a in s, then act greedily on it."
+      }
+    },
+    {
+      "name": "The trail guidebook",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "write", "x": 0.28, "label": "walker" }],
+      "props": [
+        { "kind": "stack", "x": 0.62, "y": 0.58, "w": 0.24, "h": 0.36, "label": "a score per spot and move", "color": "butter" },
+        { "kind": "card", "x": 0.62, "y": 0.2, "label": "reward + best score at next spot", "color": "mint" }
+      ],
+      "cap": {
+        "1": "After each step the walker updates one entry, 'this spot, this move'. The new target is the reward just earned plus the best score listed at the next spot.",
+        "2": "The Q-table has one number per (state, action). After each step, nudge Q(s, a) towards r + γ·(best Q at the next state), whatever action you actually take next.",
+        "3": "Target y = r + γ max_a′ Q(s′, a′), the Bellman optimality backup. It needs only (s, a, r, s′), so the update never refers to the behaviour policy."
+      }
+    },
+    {
+      "name": "One line of learning",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "Q ← Q + ", "c": "ink", "note": "" },
+        { "t": "α(", "c": "ink", "note": "a small step" },
+        { "t": "r", "c": "green", "note": "reward just earned" },
+        { "t": " + γ·", "c": "ink", "note": "" },
+        { "t": "max Q′", "c": "orange", "note": "best score at next spot" },
+        { "t": " − Q)", "c": "sky", "note": "minus the old guess" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The bracket is the surprise: what the step was worth (reward plus best next score) minus what the book said. Move the entry a small step towards it.",
+        "2": "r + γ·max Q′ − Q is the TD error. α sets how far each update moves the entry; γ discounts the future. The max is the one word that makes it Q-learning.",
+        "3": "Q(s,a) ← Q(s,a) + α[r + γ max_a′ Q(s′,a′) − Q(s,a)]. With every pair visited infinitely often and Robbins-Monro step sizes it converges to Q* (Watkins and Dayan, 1992)."
+      }
+    },
+    {
+      "name": "The edge route",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "CliffWalking: Q-learning's greedy route hugs the edge (13 steps)",
+      "rows": 4,
+      "cols": 12,
+      "values": [
+        ["·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"],
+        ["·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"],
+        ["·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·", "·"],
+        ["S", "✕", "✕", "✕", "✕", "✕", "✕", "✕", "✕", "✕", "✕", "G"]
+      ],
+      "highlight": [[3, 0], [2, 0], [2, 1], [2, 2], [2, 3], [2, 4], [2, 5], [2, 6], [2, 7], [2, 8], [2, 9], [2, 10], [2, 11], [3, 11]],
+      "cap": {
+        "1": "The guidebook's best route hugs the cliff edge: 13 steps, the shortest possible. It is perfect, as long as you never stumble.",
+        "2": "Q-learning learns the cliff-edge route, greedy return about −13. SARSA, which scores what it actually does, learns a safer route higher up, about −17.",
+        "3": "Q-learning estimates Q*, the values of optimal play, so its greedy policy is the shortest path; SARSA estimates Q of its own ε-greedy policy, which penalises the edge."
+      }
+    },
+    {
+      "name": "Stumbles on the edge",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Q-learning (off-policy)", "c": "peach", "lines": ["target uses the best next move", "learns the edge route, about −13", "its ε-greedy slips fall off while training"] },
+      "right": { "title": "SARSA (on-policy)", "c": "mint", "lines": ["target uses the move actually taken", "learns a safer route, about −17", "fewer falls while training"] },
+      "verdict": "Q-learning learns perfect play; SARSA learns its own real play.",
+      "cap": {
+        "1": "The guidebook assumes perfect footing, but while learning the walker still stumbles at random, and on the edge a stumble means a fall. SARSA's book counts the stumbles.",
+        "2": "Off-policy: Q-learning's target ignores its own exploration, so it learns the best path but keeps falling during training. SARSA bootstraps off the action it took, so it stays cautious.",
+        "3": "Q-learning's online reward under ε-greedy is worse than SARSA's despite a better greedy policy: it evaluates π*, not the behaviour policy it actually runs."
+      }
+    },
+    {
+      "name": "Too good to be true",
+      "need": "core",
+      "dur": 10,
+      "type": "bars",
+      "title": "Every action truly worth 0: average of the max of noisy guesses (noise σ = 1)",
+      "labels": ["1 action", "2", "3", "4", "5"],
+      "from": [0, 0, 0, 0, 0],
+      "to": [0, 0.56, 0.85, 1.03, 1.16],
+      "cap": {
+        "1": "Pick the best-looking of several guesses and you usually pick the luckiest one. The guidebook's 'best next score' is quietly too optimistic.",
+        "2": "Even if every action is truly worth 0, the max of noisy estimates is positive on average, and bootstrapping recycles that optimism. On CliffWalking you can see positive Q-values appear.",
+        "3": "E[max Q̂] ≥ max E[Q̂] (Jensen). With γ = 1 and only negative rewards, any positive entry proves the bias. Double Q-learning decouples selecting the action from scoring it."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["The max lets you learn from anyone's data", "That licence makes replay buffers and DQN work", "The same max inflates values: check the signs"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Because the target ignores what you actually did, you can learn from old or borrowed experience. That is what makes replay buffers and DQN possible.",
+        "2": "Off-policy learning is why DQN can train from a replay buffer of old transitions. When you study or steer RL agents, remember their values run optimistic by construction.",
+        "3": "Decoupling learning from behaviour enables replay, offline data and DQN, at the cost of maximisation bias; Double DQN carries the Double Q fix to function approximation."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Two guidebooks score the same cliff-edge move",
+    "params": [
+      { "id": "alpha", "label": "learning rate α", "min": 0.05, "max": 1, "step": 0.05, "value": 0.2 },
+      { "id": "eps", "label": "stumble chance ε", "min": 0, "max": 0.5, "step": 0.01, "value": 0.1 }
+    ],
+    "curves": [
+      { "f": "-13 * (1 - pow(1 - alpha, x))", "c": "orange", "label": "Q-learning's score" },
+      { "f": "(-1 + (1 - eps) * (-12) + eps * (-100)) * (1 - pow(1 - alpha, x))", "c": "teal", "label": "SARSA's score (on average)" }
+    ],
+    "x": [0, 60],
+    "y": [-40, 2],
+    "readouts": [
+      { "label": "Q-learning target: −1 + best next (−12)", "f": "(-13).toFixed(1)" },
+      { "label": "SARSA target: −1 + its real next move", "f": "(-1 + (1 - eps) * (-12) + eps * (-100)).toFixed(1)" },
+      { "label": "price of stumbling on the edge", "f": "((-1 + (1 - eps) * (-12) + eps * (-100)) + 13).toFixed(1)" }
+    ],
+    "caption": {
+      "1": "Two walkers score the same cliff-edge move. Q-learning assumes perfect footing next; SARSA counts its stumbles. Drag ε up and watch SARSA's score for the edge sink.",
+      "2": "Both estimates chase their targets at a speed set by α. Q-learning's target uses the best next move (−12); SARSA's averages in its ε-greedy slips off the cliff (−100).",
+      "3": "Q-learning's fixed point, −13, ignores ε; SARSA's is Q^π for ε-greedy π: −1 + (1−ε)(−12) + ε(−100). α sets only the speed, via (1−α)^t."
+    }
+  },
+  "where_else": [
+    "DQN: the same update with a neural network in place of the table",
+    "Replay buffers and learning from logged data, made legal by off-policy updates",
+    "Double DQN, which carries the fix for maximisation bias to neural networks",
+    "The winner's curse: picking the best of many noisy bids tends to overpay"
+  ],
+  "hamming": {
+    "what": "A way to learn how good each move is by nudging its score towards the reward plus the best score available at the next state.",
+    "when": "When you cannot see the environment's rules and must learn from experience, especially old or someone else's experience.",
+    "why": "The max makes the target independent of how the data was collected, which enables replay buffers and DQN, at the price of optimistic values."
+  },
+  "object": {
+    "title": "The value staircase",
+    "subtitle": "The clifftop as a landscape: each spot's height is how good it is to stand there, climbing to the goal beside a trench.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 12,
+    "f": "((v, onQ, onS) => (r === 3 && c > 0 && c < 11) ? 0.02 : v + (route === 1 && onQ ? 0.35 : 0) + (route === 2 && onS ? 0.35 : 0))(r === 3 ? (c === 0 ? 0.2 + 1.6 * (1 - 13 / 14) : 1.8) : 0.2 + 1.6 * (1 - ((2 - r) + (11 - c) + 1) / 14), (r === 3 && (c === 0 || c === 11)) || r === 2, (r === 3 && (c === 0 || c === 11)) || r === 0 || ((c === 0 || c === 11) && r <= 2))",
+    "labels": { "rows": ["row 0", "row 1", "row 2 (edge)", "row 3 (cliff)"], "cols": ["S", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "G"] },
+    "c": "good",
+    "knobs": [{ "id": "route", "label": "show: 0 values, 1 Q-learning route, 2 SARSA route", "min": 0, "max": 2, "step": 1, "value": 0 }],
+    "beats": [
+      { "cap": { "1": "The guidebook as a landscape: height is how good it is to stand at each spot. It climbs towards the goal; the trench is the cliff.", "2": "V*(s) = max_a Q*(s, a) on CliffWalking with γ = 1: minus the steps left to the goal, rescaled.", "3": "With −1 per step and γ = 1, V*(s) = −(shortest cliff-free path length); the start is worth −13." }, "view": "iso", "set": { "route": 0 } },
+      { "cap": { "1": "Q-learning's route: straight along the edge, right beside the trench. The shortest climb.", "2": "The greedy policy on Q* walks row 2: 13 steps, return −13.", "3": "argmax_a Q*(s, a) traces the shortest path, adjacent to the cliff throughout." }, "view": "iso", "set": { "route": 1 } },
+      { "cap": { "1": "From the side, every step on that route is one stumble from the trench. Perfect footing is assumed.", "2": "Under ε-greedy exploration, each edge step risks a random move off the cliff, worth −100.", "3": "Q* ignores the behaviour policy's ε, so ε-greedy's online return on this route is far below −13." }, "view": "side", "set": { "route": 1 } },
+      { "cap": { "1": "SARSA's route keeps its distance: longer, but a stumble there only costs a step.", "2": "SARSA learns the values of its own ε-greedy play and prefers the top row: about −17.", "3": "On-policy Q^π charges edge states for their ε-weighted fall risk, pushing the greedy route away from the cliff." }, "view": "iso", "set": { "route": 2 } },
+      { "cap": { "1": "Each spot's height is the guidebook's best entry there. The max tends to overshoot, so real learned books run a little optimistic.", "2": "Learned Q-values drift above these true heights because the max favours lucky noise.", "3": "Maximisation bias: learned max_a Q̂ exceeds V* in expectation; Double Q-learning removes the upward drift." }, "view": "top", "set": { "route": 0 } }
+    ],
+    "predict": [
+      { "q": "What does Q-learning's update need from each step?", "options": [{ "t": "Only state, action, reward and next state", "ok": true }, { "t": "Also the next action it actually took" }], "why": "The target uses the max over next actions, so the next action taken is irrelevant. That is what makes it off-policy." },
+      { "q": "On CliffWalking during training, which agent falls off the cliff more often?", "options": [{ "t": "Q-learning", "ok": true }, { "t": "SARSA" }], "why": "Q-learning's greedy route hugs the edge, where its ε-greedy slips cost −100. SARSA learns a safer route." },
+      { "q": "With γ = 1 and only negative rewards, your Q-table shows positive numbers. Why?", "options": [{ "t": "Overestimation bias from the max", "ok": true }, { "t": "Some reward must be positive after all" }], "why": "Every true return is negative, so positive entries prove the max is recycling lucky noise." }
+    ],
+    "where": "Any learner that bootstraps off its best next guess: DQN, Double DQN, search with a max."
+  }
+}

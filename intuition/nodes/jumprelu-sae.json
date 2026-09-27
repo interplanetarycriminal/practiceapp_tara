@@ -1,0 +1,245 @@
+{
+  "id": "jumprelu-sae",
+  "title": "Clear the bar or stay out",
+  "week": 8,
+  "need": "library",
+  "allegory": "A JumpReLU latent is like a door with its own height bar: anyone below the bar stays out, anyone above walks in at full height, and the fee is per guest rather than per centimetre, so nobody is made to shrink.",
+  "map": [
+    ["a guest at the door", "a latent's pre-activation z"],
+    ["the height bar, set separately for each door", "the learned per-latent threshold θ"],
+    ["below the bar: out; above it: in at full height", "JumpReLU: 0 if z < θ, otherwise z itself (no shrinking)"],
+    ["a flat fee per guest, not per centimetre", "an L0 penalty (how many latents fire) instead of L1 (how big they are)"],
+    ["guessing how to move the bar from guests who nearly made it", "the straight-through estimator: a stand-in gradient near the threshold"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The shrinking tax",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "note": "L1: pay for every unit of loudness",
+      "actors": [
+        { "pose": "slump", "x": 0.3, "label": "real feature" },
+        { "pose": "slump", "x": 0.55, "label": "real feature" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.8, "y": 0.26, "label": "tax = λ × size", "color": "pink" },
+        { "kind": "stack", "x": 0.82, "y": 0.64, "w": 0.16, "h": 0.28, "label": "SAE latents", "color": "lav" }
+      ],
+      "cap": {
+        "1": "A sparse autoencoder is told to use few latents. The classic way taxes each latent by how strongly it fires, so even the real ones learn to whisper.",
+        "2": "A ReLU SAE with an L1 penalty pays for the size of every activation. Lowering all activations lowers the bill, so true feature strengths come out systematically too small: shrinkage.",
+        "3": "L1 sparsity biases active latents toward zero: the penalty's gradient λ·sign(f) pushes every active magnitude down regardless of reconstruction, so estimated feature strengths shrink."
+      }
+    },
+    {
+      "name": "The height bar",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "actors": [
+        { "pose": "walk", "x": 0.18, "to": 0.52, "label": "loud" },
+        { "pose": "recoil", "x": 0.3, "label": "noise" }
+      ],
+      "props": [
+        { "kind": "door", "x": 0.66, "y": 0.52, "w": 0.16, "h": 0.4, "label": "latent 1234", "color": "butter" },
+        { "kind": "flag", "x": 0.58, "y": 0.28, "label": "bar θ, learned", "color": "orange" }
+      ],
+      "cap": {
+        "1": "JumpReLU puts a height bar at each door. Below the bar, you stay out. Clear it, and you walk in at your full height. Each door learns where its own bar sits.",
+        "2": "Each latent has a learned threshold θ. If its pre-activation z is below θ the output is 0; above θ it passes z through unchanged. Small noisy activations are cut, real ones keep their size.",
+        "3": "JumpReLU_θ(z) = z · H(z − θ), with H the Heaviside step and θ > 0 learned per latent. Unlike ReLU(z − θ), it doesn't subtract θ, so active latents aren't shrunk."
+      }
+    },
+    {
+      "name": "The jump",
+      "need": "core",
+      "dur": 9,
+      "type": "plot",
+      "curves": [
+        { "f": "x > 1 ? x : 0", "c": "orange", "label": "JumpReLU, θ = 1" },
+        { "f": "relu(x)", "c": "sky", "label": "ReLU" },
+        { "f": "relu(x - 1)", "c": "pink", "label": "ReLU(z − θ): cuts, but shrinks" }
+      ],
+      "x": [-1, 3],
+      "y": [-0.5, 3],
+      "dot": true,
+      "marks": [{ "x": 1, "label": "θ: the bar" }],
+      "cap": {
+        "1": "Flat at zero, then a sudden jump to the full value. Plain ReLU lets tiny values leak through; a shifted ReLU cuts them but shrinks the rest.",
+        "2": "Three ways to gate a latent. ReLU: anything positive counts, so small noise fires. ReLU(z − θ): noise is cut, but every real value loses θ. JumpReLU: noise cut, real values intact.",
+        "3": "JumpReLU is discontinuous at θ, trading a continuous activation for magnitude fidelity. That discontinuity is exactly why θ needs a special gradient estimator."
+      }
+    },
+    {
+      "name": "Learning a step",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "f(z) = ", "c": "ink", "note": "" },
+        { "t": "z", "c": "sky", "note": "how loud" },
+        { "t": "·", "c": "ink", "note": "" },
+        { "t": "H(z − θ)", "c": "orange", "note": "the bar check: 0 or 1" }
+      ],
+      "actor": { "pose": "think", "x": 0.1 },
+      "cap": {
+        "1": "Nudging the bar usually changes nothing, then suddenly lets someone in. No slope to learn from, so training uses a stand-in slope near the bar.",
+        "2": "H(z − θ) is 0 or 1, so its true gradient with respect to θ is zero almost everywhere. A straight-through estimator substitutes a pseudo-gradient that is non-zero only for z near θ.",
+        "3": "The STE replaces ∂H/∂θ with a narrow kernel around z = θ (its width is a bandwidth hyperparameter), so the losses can move each threshold. The same trick makes an L0 penalty trainable."
+      }
+    },
+    {
+      "name": "Pay per guest",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "ReLU + L1", "c": "pink", "lines": ["pay per unit of loudness", "everyone whispers", "magnitudes shrink"] },
+      "right": { "title": "JumpReLU + L0", "c": "mint", "lines": ["pay per latent that fires", "loud or quiet, same fee", "magnitudes kept"] },
+      "verdict": "Charge for showing up, not for how loud you are.",
+      "cap": {
+        "1": "The fee changes too. Instead of paying for how loud each latent is, you pay a flat fee per latent that fires. Loud is fine; showing up is what costs.",
+        "2": "JumpReLU SAEs penalise L0, the number of active latents, rather than the L1 sum of their sizes. That removes the pressure to shrink, the problem Gated SAEs also attack by a different route.",
+        "3": "Sparsity via λ·Σᵢ H(zᵢ − θᵢ), trained through the STE, decouples 'whether' from 'how much'. Gated SAEs separate gate from magnitude; JumpReLU uses a learned threshold with a straight-through gradient."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "library",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Gemma Scope ships JumpReLU SAEs", "L0: how many latents fire per token", "Load them with SAELens, don't retrain"],
+      "actor": { "pose": "point", "x": 0.86 },
+      "cap": {
+        "1": "The SAEs you'll load to look inside Gemma use this door. Knowing the bar exists tells you why each latent is either off or clearly on, and what 'L0' counts.",
+        "2": "Gemma Scope's SAEs are JumpReLU models, loaded with SAELens. L0 is the average number of latents over their threshold per token; the canonical ones were chosen at L0 nearest 100.",
+        "3": "Thresholds make activations exactly 0 or at least θ, so L0 is crisp and dashboards show clean on/off latents: the vocabulary you'll read, and steer with, in Gemma-based interpretability."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Set the bar for eight latents",
+    "labels": ["#1", "#2", "#3", "#4", "#5", "#6", "#7", "#8"],
+    "params": [
+      { "id": "theta", "label": "threshold θ (the bar)", "min": 0, "max": 2.5, "step": 0.1, "value": 0.5 },
+      { "id": "mode", "label": "gate: classic soft (0) or JumpReLU (1)", "min": 0, "max": 1, "step": 1, "value": 1 }
+    ],
+    "f": "[2.4, 0.3, 1.6, 0.1, 0.8, 3.0, 0.2, 1.1].map(z => mode ? (z > theta ? z : 0) : max(z - theta, 0))",
+    "y": [0, 3.2],
+    "readouts": [
+      { "label": "L0: latents firing", "f": "[2.4, 0.3, 1.6, 0.1, 0.8, 3.0, 0.2, 1.1].filter(z => z > theta).length" },
+      { "label": "total shaved off the survivors", "f": "(mode ? 0 : [2.4, 0.3, 1.6, 0.1, 0.8, 3.0, 0.2, 1.1].filter(z => z > theta).length * theta).toFixed(2)" },
+      { "label": "strongest latent reads (true value 3.0)", "f": "(mode ? (3.0 > theta ? 3.0 : 0) : max(3.0 - theta, 0)).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Raise the bar: noisy latents switch off and L0 drops. Flip to classic mode: the same bar also shrinks every survivor. JumpReLU doesn't.",
+      "2": "Classic mode is soft thresholding, max(z − θ, 0), the pattern an L1 penalty pushes toward: small values cut, θ shaved off big ones. JumpReLU is hard thresholding: cut or keep whole.",
+      "3": "Soft thresholding is the proximal map of an L1 penalty; hard thresholding is the proximal map of L0. JumpReLU learns a per-latent θ for the hard version, trading a discontinuity for unshrunk magnitudes."
+    }
+  },
+  "where_else": [
+    "Gated SAEs: the same shrinkage problem, solved by separating the gate from the magnitude",
+    "TopK SAEs: keep exactly k latents per token, another way to control L0 directly",
+    "Signal denoising: hard thresholding keeps big coefficients whole, soft thresholding shrinks them"
+  ],
+  "hamming": {
+    "what": "A sparse autoencoder whose latents each have a learned threshold: below it they output zero, above it they pass their full value.",
+    "when": "Whenever you load Gemma Scope SAEs, or train an SAE and want sparsity without shrinking the features you keep.",
+    "why": "An L1 penalty makes every active latent under-report its strength; a threshold with a count-based penalty cuts noise without shrinking the real signal."
+  },
+  "object": {
+    "title": "The cliff-edge ramp",
+    "subtitle": "A ramp that stays flat until the bar, then jumps straight to full height.",
+    "kind": "surface",
+    "f": "mode > 0.5 ? (x > y ? x : 0) : relu(x - y)",
+    "x": [-0.5, 3],
+    "y": [0, 2],
+    "marks": [
+      { "x": 1, "y": 1, "label": "the cliff: z = θ" },
+      { "x": 2.8, "y": 0.2, "label": "loud latent, low bar" }
+    ],
+    "knobs": [{ "id": "mode", "label": "gate: soft threshold (0) or JumpReLU (1)", "min": 0, "max": 1, "step": 1, "value": 1 }],
+    "beats": [
+      {
+        "cap": {
+          "1": "Across: how strongly a latent wants to fire. Front to back: where its bar is set. Height: what actually comes out.",
+          "2": "Output of one latent over (pre-activation z, threshold θ) under the JumpReLU gate.",
+          "3": "f(z, θ) = z·H(z − θ): zero on one side of the diagonal z = θ, equal to z on the other."
+        },
+        "view": "iso",
+        "set": { "mode": 1 }
+      },
+      {
+        "cap": {
+          "1": "Look along the diagonal: a sheer cliff. Just below the bar, nothing; just above, the full value.",
+          "2": "The jump at z = θ is the price of keeping magnitudes whole. Everything past the edge reads its true size.",
+          "3": "A discontinuity of height θ along z = θ; the exact gradient in θ is zero everywhere off that line."
+        },
+        "view": "side",
+        "set": { "mode": 1 }
+      },
+      {
+        "cap": {
+          "1": "Swap to the classic gate: the cliff becomes a gentle ramp that starts at zero. Everything that gets through has been shaved down.",
+          "2": "Soft thresholding, max(z − θ, 0), is continuous but subtracts θ from every surviving value: shrinkage in solid form.",
+          "3": "relu(z − θ) is the L1 proximal map: continuous, biased toward zero by exactly θ on its support."
+        },
+        "view": "iso",
+        "set": { "mode": 0 }
+      },
+      {
+        "cap": {
+          "1": "Compare the far edge: the classic sheet sits lower everywhere past the bar. That gap is how much every real feature gets under-reported.",
+          "2": "At z = 2.8 with θ = 1, JumpReLU reads 2.8 while the soft gate reads 1.8.",
+          "3": "The bias of the soft gate is exactly θ on its support; the hard gate is unbiased there."
+        },
+        "view": "front",
+        "set": { "mode": 0 }
+      },
+      {
+        "cap": {
+          "1": "From above, the cliff line is where the bar meets the signal. Training slides each latent's bar using a stand-in slope along this edge.",
+          "2": "The straight-through estimator gives θ a gradient only from inputs landing near the cliff line.",
+          "3": "The STE's pseudo-gradient is non-zero only in a narrow band around z = θ (its width is the bandwidth), so thresholds learn only from near-threshold pre-activations."
+        },
+        "view": "top",
+        "set": { "mode": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A latent's pre-activation is 2.0 and its threshold is 0.5. What does JumpReLU output?",
+        "options": [
+          { "t": "2.0", "ok": true },
+          { "t": "1.5" },
+          { "t": "0" }
+        ],
+        "why": "Above the bar the value passes through whole. 1.5 is what a shifted ReLU would give."
+      },
+      {
+        "q": "Why can't ordinary backprop learn the threshold?",
+        "options": [
+          { "t": "The step has zero slope almost everywhere", "ok": true },
+          { "t": "The threshold is not a parameter" },
+          { "t": "It would make the SAE dense" }
+        ],
+        "why": "Nudging θ changes nothing until it crosses a value. The straight-through estimator supplies a stand-in gradient near the bar."
+      },
+      {
+        "q": "Compared with an L1 penalty, what does counting active latents (L0) avoid?",
+        "options": [
+          { "t": "Shrinking the latents that do fire", "ok": true },
+          { "t": "Dead latents, entirely" }
+        ],
+        "why": "L1 charges by size, so it pushes every active value down. L0 charges by count, so size is free."
+      }
+    ],
+    "where": "Anywhere a signal should be either off or fully on: hard thresholding in signal denoising and sparse coding."
+  }
+}

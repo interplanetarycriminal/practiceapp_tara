@@ -1,0 +1,229 @@
+{
+  "id": "sae-steering",
+  "title": "Add a scoop, taste the change",
+  "week": 8,
+  "need": "core",
+  "allegory": "SAE steering is testing a labelled ingredient by adding an extra scoop while blending and tasting the result: if the label says banana, the smoothie should now taste of banana, and if it tastes of something else, the label was wrong.",
+  "map": [
+    ["an ingredient labelled 'Golden Gate Bridge'", "an SAE latent with a dashboard or autointerp label"],
+    ["an extra scoop while blending", "adding α × the latent's decoder direction to the residual stream during generation"],
+    ["topping the ingredient up to an exact amount", "clamping: x + (c − fᵢ)·dᵢ, keeping the SAE's reconstruction error"],
+    ["tasting whether it changed as the label promised", "reading the generations: does the behaviour match the label?"],
+    ["too big a scoop turns it to mush", "too large a coefficient breaks coherence, so sweep for the window"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Is the label true?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "it fires on bridge text ... but does it MEAN bridge?",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.62, "y": 0.2, "label": "latent label: 'Golden Gate Bridge'", "color": "butter" },
+        { "kind": "bridge", "x": 0.66, "y": 0.62, "w": 0.4, "h": 0.2, "label": "?", "color": "orange" }
+      ],
+      "cap": {
+        "1": "A dashboard says one ingredient means 'Golden Gate Bridge'. But that label came from watching when it fires. Does it make the model think of the bridge?",
+        "2": "Latent labels come from top activating examples and autointerp. That shows correlation. To test causation you intervene: turn the latent up and watch the output.",
+        "3": "Explanations fitted to a latent's extreme upper tail describe the tail, not the body. Steering is the interventional check: does raising the latent produce the labelled behaviour?"
+      }
+    },
+    {
+      "name": "Add a scoop",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "carry", "x": 0.2, "to": 0.4, "label": "you" }],
+      "props": [
+        { "kind": "crate", "x": 0.52, "y": 0.4, "w": 0.12, "h": 0.1, "label": "a scoop of latent i", "color": "orange" },
+        { "kind": "circle", "x": 0.72, "y": 0.62, "w": 0.16, "label": "smoothie = residual stream", "color": "pink" },
+        { "kind": "card", "x": 0.82, "y": 0.2, "label": "tastes of ... bridges?", "color": "cream" }
+      ],
+      "arrows": [[0.58, 0.45, 0.66, 0.55, "pour in"]],
+      "cap": {
+        "1": "To test an ingredient, add an extra scoop while blending and taste. If the label is right, the smoothie should now taste of exactly that.",
+        "2": "SAE steering: during generation, add a multiple of the latent's decoder direction to the residual stream at the SAE's hook point, then read what the model writes.",
+        "3": "A forward hook applies the shift at every generated position. If generations move toward the label's meaning, the latent is causally involved in that behaviour."
+      }
+    },
+    {
+      "name": "Add or clamp",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "x + ", "c": "ink", "note": "the activation" },
+        { "t": "(c − fᵢ)", "c": "orange", "note": "top up to exactly c" },
+        { "t": "·dᵢ", "c": "sky", "note": "latent i's direction" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Two ways to steer: add a fixed scoop whatever was there, or top the ingredient up to an exact amount. Topping up is the clamp: it ends at c either way.",
+        "2": "Adding: x + α·dᵢ. Clamping sets latent i to c, which works out as x + (c − fᵢ)·dᵢ, keeping the SAE's reconstruction error so nothing else moves.",
+        "3": "Encode, set fᵢ = c, decode, add back the error term: that reduces to shifting x along dᵢ by (c − fᵢ(x)). Anthropic clamped the Golden Gate feature to 10x its max activation."
+      }
+    },
+    {
+      "name": "Mind the window",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "sigmoid(1.5*(x - 3))", "c": "orange", "label": "flavour shows (sketch)" },
+        { "f": "1 - sigmoid(1.2*(x - 8))", "c": "teal", "label": "still coherent (sketch)" }
+      ],
+      "x": [0, 12],
+      "y": [0, 1],
+      "dot": true,
+      "marks": [{ "x": 1, "label": "too small" }, { "x": 5.5, "label": "the window" }, { "x": 10.5, "label": "mush" }],
+      "cap": {
+        "1": "Too small a scoop and nothing changes. Too big and the smoothie turns to mush. Somewhere between, the flavour shows and it is still a smoothie.",
+        "2": "Sweep the coefficient with two scores side by side: how strongly the behaviour appears, and whether the text is still coherent. Report the window, not one lucky value.",
+        "3": "Residual norms grow with depth, so a fixed coefficient means different things at different layers. Scale it to the layer's typical norm or the latent's max activation, then sweep."
+      }
+    },
+    {
+      "name": "The bridge test",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "what the label predicted", "c": "sky", "lines": ["fires on bridge text", "dashboard: 'Golden Gate'", "correlation"] },
+      "right": { "title": "what the clamp showed", "c": "mint", "lines": ["clamped to 10x its max", "Claude says it IS the bridge", "causation, for this latent"] },
+      "verdict": "A label is a hypothesis. Steering is the test.",
+      "cap": {
+        "1": "When Anthropic scooped in the Golden Gate Bridge ingredient at ten times its usual peak, Claude began saying it was the bridge. The label passed the taste test.",
+        "2": "Clamping feature 34M/31164353 in Claude 3 Sonnet to 10x its max activation made the model self-identify as the Golden Gate Bridge: strong causal evidence for that latent.",
+        "3": "Causal success validates the direction's downstream effect, not every word of the label: this feature also responds across languages and to related San Francisco landmarks."
+      }
+    },
+    {
+      "name": "Only a word?",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "steered an idea", "c": "mint", "lines": ["the whole answer shifts", "text stays coherent", "top logits are varied"] },
+      "right": { "title": "steered a token", "c": "pink", "lines": ["one word pops up", "the rest is unchanged", "top logits: one word's variants"] },
+      "verdict": "Unembed the direction first: is it an idea, or just a word?",
+      "cap": {
+        "1": "A scoop can fool you: maybe it only adds a flavour's name to the menu, not the flavour. Check what the ingredient says when you read it out directly.",
+        "2": "Push the latent's decoder direction through the unembedding (the dashboard's top-logits table). If its top tokens are variants of one word, you may be steering a token.",
+        "3": "In ARENA [4.1] a misalignment vector's top ten unembedded tokens were all ACCEPT variants: it steered the tag, not the answers. Always read the full generations."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Labels become causal claims", "A precise, reversible handle", "Sweep, score, then read the text"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Turning one ingredient up and watching what happens is the simplest honest test of what a model's parts mean, and it is also how you start steering one.",
+        "2": "SAE steering turns dashboard labels into testable causal claims and gives a precise handle on behaviour, one latent at a time, instead of a blunt whole-model nudge.",
+        "3": "Latent-level interventions are targeted, reversible and inspectable, which makes them the everyday tool for using SAEs to understand and steer models."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Find the window, then move to a later layer",
+    "params": [
+      { "id": "alpha", "label": "scoop size α (absolute)", "min": 0, "max": 80, "step": 0.5, "value": 20 },
+      { "id": "layer", "label": "layer: early (0) to late (1)", "min": 0, "max": 1, "step": 0.05, "value": 0.5 }
+    ],
+    "curves": [
+      { "f": "sigmoid(1.5*(x/(1 + 9*layer) - 3))", "c": "orange", "label": "flavour shows" },
+      { "f": "1 - sigmoid(1.2*(x/(1 + 9*layer) - 8))", "c": "teal", "label": "still coherent" }
+    ],
+    "x": [0, 80],
+    "y": [0, 1],
+    "readouts": [
+      { "label": "scoop relative to this layer's norm", "f": "(alpha/(1 + 9*layer)).toFixed(2)" },
+      { "label": "flavour shows (toy)", "f": "sigmoid(1.5*(alpha/(1 + 9*layer) - 3)).toFixed(2)" },
+      { "label": "still coherent (toy)", "f": "(1 - sigmoid(1.2*(alpha/(1 + 9*layer) - 8))).toFixed(2)" },
+      { "label": "verdict", "f": "(r => r < 3 ? 'too small: nothing changes' : (r > 7.5 ? 'mush: coherence breaks' : 'in the window'))(alpha/(1 + 9*layer))" }
+    ],
+    "caption": {
+      "1": "Slide the scoop until the flavour shows but it is still a smoothie. Then move to a later layer: the same scoop does little there, so scale it up.",
+      "2": "Behaviour rises with the coefficient and coherence eventually collapses; the useful window sits between. Later layers have larger norms, so the window slides right.",
+      "3": "Toy curves over α divided by a residual norm that grows 10x from early to late here, echoing the order-of-magnitude growth seen in real models. Scale α to the layer, then sweep."
+    }
+  },
+  "where_else": [
+    "The Golden Gate Bridge demo: one clamped feature changing Claude's self-description",
+    "Steering vectors from contrast pairs, like Love minus Hate in GPT-2-XL",
+    "Activation capping: a clamp that only acts when a direction exceeds a ceiling",
+    "Ablating a latent: the same hook with the scoop set to zero"
+  ],
+  "hamming": {
+    "what": "Turning one SAE latent up, by adding its direction or clamping its value, during generation to see whether the model does what the latent's label claims.",
+    "when": "Whenever you need to know if a latent causes a behaviour rather than merely co-occurring with it, or want a precise, reversible handle on output.",
+    "why": "Labels come from correlation; only an intervention shows cause, and the same intervention doubles as a practical steering tool."
+  },
+  "object": {
+    "title": "The steering ridge",
+    "subtitle": "Scoop size across, layer depth back, height is how well steering works: flavour shows, still coherent.",
+    "kind": "surface",
+    "f": "sigmoid(1.5*(x/(1 + (growth - 1)*y) - 3)) * (1 - sigmoid(1.2*(x/(1 + (growth - 1)*y) - 8)))",
+    "x": [0, 80],
+    "y": [0, 1],
+    "marks": [
+      { "x": 5, "y": 0, "label": "early-layer window" },
+      { "x": 55, "y": 1, "label": "late-layer window" }
+    ],
+    "knobs": [
+      { "id": "growth", "label": "how much bigger late activations are (x)", "min": 1, "max": 10, "step": 1, "value": 10 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "Each spot is a scoop size at some layer. Height is how well steering works there: the flavour shows and it is still a smoothie.", "2": "A toy success score, behaviour times coherence, over coefficient and depth.", "3": "Height = σ(behaviour) × (1 − σ(breakdown)), both functions of α divided by the layer's residual norm." },
+        "view": "iso",
+        "set": { "growth": 10 }
+      },
+      {
+        "cap": { "1": "Along any one layer, the ridge rises then falls: too small does nothing, too big turns to mush.", "2": "For a fixed layer the useful coefficients form a window, which is why you sweep instead of guessing.", "3": "A sweep with a behaviour score and a coherence autorater side by side exposes the window directly." },
+        "view": "front",
+        "set": { "growth": 10 }
+      },
+      {
+        "cap": { "1": "From above, the ridge bends: later layers need much bigger scoops, because their activations are much bigger.", "2": "Residual norms grow with depth, so the same absolute coefficient is tiny at late layers.", "3": "Express α relative to the layer's mean residual norm or to the latent's max activation, not in absolute units." },
+        "view": "top",
+        "set": { "growth": 10 }
+      },
+      {
+        "cap": { "1": "If activations were the same size at every layer, one scoop would work everywhere. The ridge straightens.", "2": "Setting norm growth to 1 removes the bend: the window no longer depends on depth.", "3": "The bend is purely a normalisation effect; relative coefficients remove it." },
+        "view": "top",
+        "set": { "growth": 1 }
+      },
+      {
+        "cap": { "1": "Pick a spot on the ridge top, then read what the model actually writes. The score is a guide, the text is the evidence.", "2": "A high score still needs reading: check full generations and the latent's top logits.", "3": "Automated scores are Goodhartable; qualitative review of generations remains part of the test." },
+        "view": "side",
+        "set": { "growth": 10 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A latent's dashboard says 'Golden Gate Bridge'. What turns that label into a causal claim?",
+        "options": [{ "t": "Turning it up and seeing bridge talk appear", "ok": true }, { "t": "Finding more text where it fires" }],
+        "why": "Firing examples show correlation. An intervention shows the latent causes the behaviour."
+      },
+      {
+        "q": "A scoop that works at an early layer does nothing at a late one. Why?",
+        "options": [{ "t": "Late activations are much bigger, so the same scoop is tiny there", "ok": true }, { "t": "Late layers cannot be steered" }],
+        "why": "Residual norms grow with depth. Scale the coefficient to the layer's norm or the latent's max activation."
+      },
+      {
+        "q": "Steering makes one word pop up, but the rest of each answer is unchanged. What should you check?",
+        "options": [{ "t": "The direction's top unembedded tokens", "ok": true }, { "t": "Nothing: it worked" }],
+        "why": "If the direction mostly predicts one token, you are steering a word, not a concept."
+      }
+    ],
+    "where": "Anywhere a knob's label needs testing: turn it and see if the right thing happens, from SAE latents to steering vectors."
+  }
+}

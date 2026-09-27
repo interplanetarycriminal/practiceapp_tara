@@ -114,7 +114,10 @@ KINDS.bars = (o, kid) => {
       st.bars.forEach((b, i) => {
         const h = Math.max(0.02, (Math.abs(hs[i]) / mx) * 1.7);
         b.target = h; b.neg = hs[i] < 0;
-        b.m.material = K.mat.paint(b.neg ? C.grad : colour(o.c));
+        // taller bars are painted deeper, so the pattern reads from any angle
+        const base = new THREE.Color(b.neg ? C.grad : colour(o.c)), pale = new THREE.Color('#e9e1d2');
+        b.m.material.dispose?.();
+        b.m.material = K.mat.paint('#' + pale.lerp(base, 0.35 + 0.65 * (h / 1.7)).getHexString());
         if (S.first || S.shot) { b.m.scale.y = h; b.m.position.y = h / 2; }
       });
     },

@@ -1,0 +1,188 @@
+{
+  "id": "gated-sae",
+  "title": "Tax the door, not the volume",
+  "week": 8,
+  "need": "exercise",
+  "allegory": "A standard SAE is a band paying a noise tax on every notch of volume, so every musician who plays also plays too quietly; a Gated SAE hires a doorman who decides who plays and collects the tax at the door, so the players inside play at true volume.",
+  "map": [
+    ["a musician in the band", "one SAE latent"],
+    ["the noise tax on every notch of volume", "the L1 sparsity penalty on latent activations"],
+    ["every player turning down to save tax", "shrinkage: active latents read systematically low"],
+    ["a doorman deciding who plays, tax paid at the door", "the gate path: fire or not, carrying the sparsity penalty"],
+    ["players inside playing at true volume", "the magnitude path: how strongly, free of the L1 pull"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Why so quiet?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "every active feature reads a little low...",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.55, "y": 0.62, "w": 0.18, "h": 0.32, "label": "SAE latents", "color": "mint" },
+        { "kind": "card", "x": 0.78, "y": 0.3, "label": "reconstruction: a bit too small", "color": "pink" }
+      ],
+      "cap": {
+        "1": "Your sparse autoencoder finds good features, but every active one reads a little low, as if everyone whispered. The penalty for being active is to blame.",
+        "2": "A standard SAE's L1 penalty pushes all activations towards zero, including the ones that should be large. Active latents come out systematically too small: shrinkage.",
+        "3": "L1 conflates two decisions: support (which latents fire) and magnitude (how much). Its gradient pulls every active latent down by the same amount, biasing reconstructions low."
+      }
+    },
+    {
+      "name": "The noise tax",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [
+        { "pose": "write", "x": 0.15, "label": "tax" },
+        { "pose": "slump", "x": 0.55 },
+        { "pose": "slump", "x": 0.75 }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.2, "y": 0.2, "label": "tax per notch of volume", "color": "butter" },
+        { "kind": "lamp", "x": 0.65, "y": 0.2, "label": "stage", "color": "peach" }
+      ],
+      "cap": {
+        "1": "Picture a band paying a noise tax for every notch of volume. To save tax, whoever plays turns down, even when the song needs them loud.",
+        "2": "Each latent is one musician. The L1 penalty taxes activation size, so the cheapest solution fires fewer latents and plays each active one quieter than the input deserves.",
+        "3": "Minimising (a − f)² + λ|f| per latent gives f = max(0, a − λ/2): soft thresholding. Small signals are zeroed, and every survivor is shrunk by λ/2."
+      }
+    },
+    {
+      "name": "Soft versus hard",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "x", "c": "ink", "label": "true strength" },
+        { "f": "max(0, x - 0.5)", "c": "orange", "label": "L1: shrunk by λ/2" },
+        { "f": "x > 0.5 ? x : 0", "c": "teal", "label": "gate: keep or kill" }
+      ],
+      "x": [0, 3],
+      "y": [0, 3],
+      "dot": true,
+      "marks": [{ "x": 0.5, "label": "the cut (λ/2)" }],
+      "cap": {
+        "1": "What each band outputs for a true signal. The taxed band (orange) is always half a notch too quiet. The doorman's band (teal) plays true once inside.",
+        "2": "Standard SAE ≈ soft threshold: zero below the cut, shrunk by λ/2 above it. Gated SAE ≈ hard threshold: zero below, exact above. Sparsity without the shrinkage.",
+        "3": "Soft thresholding is the proximal map of the L1 norm; hard thresholding is the L0-style keep-or-kill. The gate implements the latter by moving the penalty off the magnitudes."
+      }
+    },
+    {
+      "name": "Two separate paths",
+      "need": "exercise",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "x", "label": "activation x", "x": 0.08, "y": 0.5, "c": "sky" },
+        { "id": "pen", "label": "sparsity penalty", "x": 0.36, "y": 0.08, "c": "pink" },
+        { "id": "gate", "label": "gate: fire?", "x": 0.36, "y": 0.3, "c": "orange" },
+        { "id": "mag", "label": "magnitude: how much?", "x": 0.36, "y": 0.72, "c": "teal" },
+        { "id": "mul", "label": "gate × magnitude", "x": 0.62, "y": 0.5, "c": "butter" },
+        { "id": "dec", "label": "decoder → x̂", "x": 0.88, "y": 0.5, "c": "lav" }
+      ],
+      "edges": [["x", "gate"], ["x", "mag"], ["pen", "gate", "taxed here"], ["gate", "mul"], ["mag", "mul"], ["mul", "dec"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Split the job. A doorman decides whether each musician plays at all, and the tax is paid at the door. Inside, a separate dial sets the volume.",
+        "2": "The gate path says fire or not; the magnitude path says how strongly; the latent is their product. The sparsity penalty sits on the gate path, so magnitudes escape it.",
+        "3": "f = 1[π_gate > 0] ⊙ ReLU(π_mag). The magnitude path reuses the gate's directions with a per-latent rescale; a step has no gradient, so an auxiliary reconstruction loss trains the gate."
+      }
+    },
+    {
+      "name": "Doorman or floor?",
+      "need": "contested",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Gated SAE", "c": "teal", "lines": ["separate gate and magnitude", "penalty on the gate path", "extra loss trains the gate"] },
+      "right": { "title": "JumpReLU SAE", "c": "lav", "lines": ["a learned threshold per latent", "below it zero, above it exact", "straight-through gradient"] },
+      "verdict": "Same cure for shrinkage; know the idea, then load a pretrained SAE.",
+      "cap": {
+        "1": "A cousin design gives each musician a personal volume floor instead of a doorman: below it, silence; above it, true volume. Same cure, different mechanism.",
+        "2": "Gated SAEs separate gate from magnitude; JumpReLU SAEs use a learned threshold per latent with a straight-through gradient. Both attack shrinkage. GemmaScope's SAEs use JumpReLU.",
+        "3": "The call: large released dictionaries lean to JumpReLU or TopK; Gated SAEs showed that decoupling works; plain L1 SAEs remain the teaching baseline. You need the shrinkage idea, then a pretrained SAE via SAELens."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Feature strengths read true", "Better sparsity for the same reconstruction", "Cleaner instruments for reading models"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "When features read at their true strength, a model's insides are measured honestly. That matters when you use features to explain or steer what a model does.",
+        "2": "DeepMind showed Gated SAEs beat the standard design on the sparsity/reconstruction frontier. In [1.5.4] you implement one and demonstrate the advantage yourself.",
+        "3": "Shrinkage biases feature activations and everything built on them: attributions, steering strengths, circuit edges. Unbiased magnitudes make SAE features better instruments for understanding and steering models."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Raise the tax: whose volume sags?",
+    "params": [
+      { "id": "L", "label": "sparsity tax λ", "min": 0, "max": 2, "step": 0.05, "value": 1 },
+      { "id": "a", "label": "true strength of one feature", "min": 0, "max": 3, "step": 0.05, "value": 2 }
+    ],
+    "curves": [
+      { "f": "x", "c": "ink", "label": "true strength" },
+      { "f": "max(0, x - L/2)", "c": "orange", "label": "standard SAE (taxed volume)" },
+      { "f": "x > L/2 ? x : 0", "c": "teal", "label": "gated SAE (doorman)" }
+    ],
+    "x": [0, 3],
+    "y": [0, 3],
+    "readouts": [
+      { "label": "standard SAE reads", "f": "max(0, a - L/2).toFixed(2)" },
+      { "label": "gated SAE reads", "f": "(a > L/2 ? a : 0).toFixed(2)" },
+      { "label": "strength lost to shrinkage (standard)", "f": "(a > L/2 ? L/2 : a).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Drag the tax up and watch the orange line sag below the true line: every active feature reads low. The teal doorman line stays true once through.",
+      "2": "Both designs zero weak signals below the cut. Above it the standard SAE subtracts λ/2 from everything, while the gated SAE passes the true strength. Only one pays twice for sparsity.",
+      "3": "Toy per-latent optimum: soft threshold max(0, a − λ/2) versus hard threshold a·1[a > λ/2]. Same support here, but only the soft version biases magnitudes; gating removes the bias."
+    }
+  },
+  "where_else": [
+    "JumpReLU SAEs, as in GemmaScope: a learned per-latent threshold, the sibling fix",
+    "Lasso regression's shrinkage bias, often fixed by refitting the chosen variables without the penalty",
+    "Hurdle models in statistics: one part decides zero or not, another decides how much"
+  ],
+  "hamming": {
+    "what": "A sparse autoencoder whose latents have a gate deciding whether they fire and a separate path deciding how strongly, so the sparsity penalty stops shrinking magnitudes.",
+    "when": "When training SAEs where feature strengths matter, and as the conceptual bridge to JumpReLU-style dictionaries.",
+    "why": "An L1 penalty on activations biases every active latent low; decoupling firing from magnitude keeps the sparsity without the bias."
+  },
+  "object": {
+    "title": "The whisper-free dictionary",
+    "subtitle": "Eight tokens by six latents: tax them for sparsity, then hire the doorman and watch the survivors stand tall.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 6,
+    "f": "(() => { const a = ((r*3 + c*5) % 7 === 0) ? 1 + (r + c) % 3 : (((r + 2*c) % 5 === 0) ? 0.4 : 0); const soft = max(0, a - L/2); const hard = a > L/2 ? a : 0; return 0.03 + 0.6*((1 - g)*soft + g*hard); })()",
+    "labels": { "rows": ["tok 1", "tok 2", "tok 3", "tok 4", "tok 5", "tok 6", "tok 7", "tok 8"], "cols": ["L1", "L2", "L3", "L4", "L5", "L6"] },
+    "c": "aux",
+    "knobs": [
+      { "id": "L", "label": "Sparsity tax λ", "min": 0, "max": 2, "step": 0.05, "value": 0 },
+      { "id": "g", "label": "Standard (0) to gated (1)", "min": 0, "max": 1, "step": 0.05, "value": 0 }
+    ],
+    "beats": [
+      { "cap": { "1": "No tax: every latent plays at its true strength, faint ones included. Busy and noisy.", "2": "λ = 0: activations at full strength, including weak spurious ones.", "3": "Without a sparsity penalty the code is dense: small activations survive alongside the real features." }, "view": "iso", "set": { "L": 0, "g": 0 } },
+      { "cap": { "1": "Add the tax. Faint latents fall silent, which is the point, but every loud one shrinks too.", "2": "Standard SAE with λ = 1: weak latents zeroed, strong ones all shortened by λ/2.", "3": "Soft thresholding: correct support, biased magnitudes." }, "view": "iso", "set": { "L": 1, "g": 0 } },
+      { "cap": { "1": "Hire the doorman. The same latents stay silent, but the loud ones spring back to full height.", "2": "Gated at the same λ: identical sparsity pattern, true magnitudes restored.", "3": "Hard thresholding: same support as the soft version here, with no magnitude bias." }, "view": "front", "set": { "L": 1, "g": 1 } },
+      { "cap": { "1": "Tax harder for extra sparsity and the standard band shrinks further still.", "2": "Standard SAE at λ = 1.6: more shrinkage on every survivor.", "3": "Shrinkage grows linearly with λ, so buying sparsity costs reconstruction twice over." }, "view": "iso", "set": { "L": 1.6, "g": 0 } },
+      { "cap": { "1": "The gated band pays for sparsity only at the door. The survivors keep their true height.", "2": "Gated SAE at λ = 1.6: sparse and unshrunk.", "3": "Decoupling lets the penalty set support alone, which is why the sparsity/reconstruction frontier improves." }, "view": "iso", "set": { "L": 1.6, "g": 1 } }
+    ],
+    "predict": [
+      { "q": "Standard SAE with λ/2 = 0.5, true activation 2.0. What does it read?", "options": [{ "t": "1.5: shrunk by λ/2", "ok": true }, { "t": "2.0" }, { "t": "0" }], "why": "Soft thresholding subtracts λ/2 from every active value." },
+      { "q": "In a Gated SAE, what does the gate decide?", "options": [{ "t": "Whether a latent fires; the magnitude path sets how strongly", "ok": true }, { "t": "How strongly it fires; the magnitude path decides whether" }], "why": "Separating the two lets the penalty act on firing without pulling magnitudes down." },
+      { "q": "Gated SAEs and JumpReLU SAEs both target what problem?", "options": [{ "t": "Shrinkage from the L1 penalty", "ok": true }, { "t": "Tokenisation errors" }], "why": "Both separate 'fire or not' from 'how much': a gate in one, a learned threshold in the other." }
+    ],
+    "where": "Any time one penalty governs two decisions: split 'whether' from 'how much'."
+  }
+}

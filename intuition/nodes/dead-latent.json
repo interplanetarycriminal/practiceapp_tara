@@ -1,0 +1,207 @@
+{
+  "id": "dead-latent",
+  "title": "Give the silent singer a part",
+  "week": 8,
+  "need": "exercise",
+  "allegory": "A sparse autoencoder is a choir whose conductor fines every note sung; a singer who falls silent on every song never gets coached, because the coach only corrects notes he hears, so the seat is wasted until someone hands that singer the passage the choir sings worst.",
+  "map": [
+    ["a singer in the choir", "one latent in the SAE dictionary"],
+    ["the conductor's fine for every note sung", "the L1 penalty pushing latent activations towards zero"],
+    ["a singer silent on every song", "a dead latent: zero activation on every input"],
+    ["the coach only corrects notes he hears", "a ReLU at zero passes no gradient, so a dead latent's weights never change"],
+    ["handing a silent singer the passage sung worst", "resampling: re-initialising a dead latent onto badly reconstructed inputs"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The silent seats",
+      "need": "exercise",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "loss looks fine... so why is half the dictionary silent?",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.58, "y": 0.55, "w": 0.26, "h": 0.4, "label": "dictionary of latents", "color": "lav" },
+        { "kind": "card", "x": 0.82, "y": 0.3, "label": "never fired once", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "You train a dictionary of thousands of directions to read a model's activations. The loss looks fine. But a big slice of the directions never fires on anything.",
+        "2": "In SAE training a dead latent is one that never activates on any input. The W&B dead-latent count stays stubbornly high while reconstruction looks acceptable: capacity quietly wasted.",
+        "3": "Dead latents show zero activation across the sampling window. They occupy d_sae without contributing to reconstruction, so the dead count must be read alongside L0 and explained variance."
+      }
+    },
+    {
+      "name": "The silent singer",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.2, "label": "conductor" },
+        { "pose": "idle", "x": 0.55, "label": "singer" },
+        { "pose": "slump", "x": 0.8, "label": "never sings" }
+      ],
+      "props": [{ "kind": "card", "x": 0.3, "y": 0.2, "label": "a fine for every note (L1)", "color": "butter" }],
+      "cap": {
+        "1": "Picture a choir whose conductor fines every note sung. Some singers go quiet for good, and the coach only corrects notes he hears, so they never improve.",
+        "2": "The L1 penalty pushes latent activations towards zero. A latent whose pre-activation is negative on every input outputs zero through the ReLU, so no gradient reaches its weights. It stays dead.",
+        "3": "If ReLU(W_enc x + b_enc) is 0 for every x, the gradients to that latent's encoder row and decoder column are both zero. Dead latents are permanently lost capacity, not slow learners."
+      }
+    },
+    {
+      "name": "No sound, no lesson",
+      "need": "exercise",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "relu(x)", "c": "orange", "label": "latent activation" },
+        { "f": "x > 0 ? 1 : 0", "c": "sky", "label": "gradient that flows" }
+      ],
+      "x": [-3, 3],
+      "y": [-0.2, 3],
+      "dot": true,
+      "marks": [{ "x": -1.5, "label": "every input lands here" }, { "x": 0, "label": "kink" }],
+      "cap": {
+        "1": "If every song leaves a singer below the line, they stay silent, and the ground under them is flat: nothing tells them which way to change.",
+        "2": "The ReLU is flat at zero for negative inputs, so its gradient there is zero. If every input lands left of the kink, the latent's encoder never gets a push back into the live region.",
+        "3": "The derivative of ReLU is the step 1[x > 0]. With pre-activations negative over the whole data distribution, the latent is a fixed point of gradient descent: nothing moves it."
+      }
+    },
+    {
+      "name": "Give them a part",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "carry", "x": 0.25, "to": 0.58, "label": "you" },
+        { "pose": "celebrate", "x": 0.8, "label": "singing now" }
+      ],
+      "props": [{ "kind": "card", "x": 0.42, "y": 0.28, "label": "the passage we botch most", "color": "peach" }],
+      "arrows": [[0.5, 0.35, 0.74, 0.45, "your part"]],
+      "cap": {
+        "1": "The fix: find the passage the choir sings worst right now and hand it to a silent singer as their part. Now they have something to sing, and they learn.",
+        "2": "Resampling re-initialises dead latents onto inputs the SAE reconstructs badly, so they fire again and rejoin training. This week's exercise writes the simple version, <code>resample_simple</code>.",
+        "3": "Periodically find latents dead over dead_feature_window and re-initialise them toward high-loss inputs, with feature_sampling_window larger than dead_feature_window. Ghost gradients, the other fix, were reassessed downward."
+      }
+    },
+    {
+      "name": "Read the curves",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "too many seats (run #2)", "c": "sky", "lines": ["many dead, plenty live", "loss is decent", "resampling barely helps", "fix: smaller expansion factor"] },
+      "right": { "title": "silenced early (run #5)", "c": "pink", "lines": ["many dead, too few live", "loss is poor", "high LR, no L1 warmup", "fix: lower LR, warm up, resample"] },
+      "verdict": "The same dead count can need opposite fixes: read it with the loss.",
+      "cap": {
+        "1": "A high silent count can mean opposite things: you hired too many singers, or you scared them quiet on day one. How good the singing is tells you which.",
+        "2": "In ARENA's runs, #2 had many dead latents with decent loss: expansion 32 instead of 16, so d_sae was too big. #5 had a high learning rate, no L1 warmup, no resampling, and poor loss.",
+        "3": "Dead plus decent loss means an over-large d_sae: shrink the expansion factor, since resampling can't rescue latents the data doesn't need. Dead plus poor loss: lower LR, add L1 warmup, resample."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["A dead latent is a feature you never see", "Read the dead count with L0 and loss", "A spike at the floor is the dead pile-up"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Every silent singer is a feature of the model you'll never get to read. Keeping the dictionary alive is how a sparse autoencoder earns its keep.",
+        "2": "The log-sparsity histogram tells the story: healthy latents fire between about 10⁻⁵ and 10⁻³ of tokens, a spike at the floor is the dead pile-up, and a lump near the top means dense latents.",
+        "3": "SAEs are how you read features to understand and steer a model; dead latents shrink the vocabulary you can read with. Pretrained SAEs have been through this already; your own will need it."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Rows are inputs, columns are latents: a lit square means that latent fired",
+    "rows": 8,
+    "cols": 8,
+    "init": "((c == 0 && r < 6) || (c == 1 && r % 4 == 1) || (c == 3 && r == 2) || (c == 4 && (r == 3 || r == 7)) || (c == 5 && r == 5) || (c == 7 && r == 0)) ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "dead latents (empty columns)", "f": "range(8).filter(c => G.every(row => !row[c])).length" },
+      { "label": "dense latents (lit on over half the inputs)", "f": "range(8).filter(c => sum(G.map(row => row[c])) > 4).length" },
+      { "label": "L0 (latents firing per input, on average)", "f": "(sum(G.map(row => sum(row)))/8).toFixed(2)" },
+      { "label": "live latents", "f": "(8 - range(8).filter(c => G.every(row => !row[c])).length) + ' of 8'" }
+    ],
+    "caption": {
+      "1": "Two columns are empty: dead latents. Light one square in each and they come back to life. One column fires on almost everything: dense, the opposite failure.",
+      "2": "Dead latents are empty columns; L0 is the average number of lit squares per row. Resampling is you lighting a square in an empty column, on an input the others handle badly.",
+      "3": "A toy of the two failure modes: empty columns waste capacity and get no gradient; a column lit on most rows is a dense latent, uninterpretable and smuggling non-sparse computation into the SAE."
+    }
+  },
+  "where_else": [
+    "Dying ReLUs in ordinary networks: a unit whose input is always negative stops learning",
+    "Posterior collapse in VAEs, where latent dimensions go to zero one at a time",
+    "Any sparse dictionary trained with a penalty on activity, where unused entries get no signal"
+  ],
+  "hamming": {
+    "what": "A latent in a sparse autoencoder that never fires on any input, so it learns nothing and wastes a slot in the dictionary.",
+    "when": "While training SAEs, especially with an oversized expansion factor, a high learning rate or no L1 warmup.",
+    "why": "A latent that never fires gets no gradient, so it cannot recover by itself: you resample it, or stop over-provisioning the dictionary."
+  },
+  "object": {
+    "title": "The log-sparsity histogram",
+    "subtitle": "How often each latent fires, binned from never (left) to always (right).",
+    "kind": "bars",
+    "rows": 1,
+    "cols": 12,
+    "f": "0.05 + (c == 0 ? 2*dead : 0) + 1.2*exp(-((c - 6)*(c - 6))/4) + (c >= 9 ? 1.2*dense : 0)",
+    "labels": { "rows": ["latents"], "cols": ["never", "10⁻⁷", "10⁻⁶", "10⁻⁵·⁵", "10⁻⁵", "10⁻⁴·⁵", "10⁻⁴", "10⁻³·⁵", "10⁻³", "10⁻²", "10⁻¹", "always"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "dead", "label": "Dead pile-up", "min": 0, "max": 1, "step": 0.1, "value": 0.1 },
+      { "id": "dense", "label": "Dense lump", "min": 0, "max": 1, "step": 0.1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "A healthy dictionary: most latents fire now and then, somewhere between one token in 100,000 and one in 1,000.", "2": "Healthy log-sparsity: most mass between log10 frequency −5 and −3.", "3": "The canonical healthy signature: a unimodal bump around 10⁻⁴, with no spike at the floor and no lump near zero." },
+        "view": "iso",
+        "set": { "dead": 0.1, "dense": 0 }
+      },
+      {
+        "cap": { "1": "A tall spike at the far left: latents that never fired at all. That is the dead pile-up.", "2": "A spike at log10(ε) counts latents that never activated in the window: dead latents.", "3": "The floor bin collects zero-frequency latents; its height is the dead count read as a distribution." },
+        "view": "front",
+        "set": { "dead": 1, "dense": 0 }
+      },
+      {
+        "cap": { "1": "A lump at the far right: latents firing on almost everything. Dense latents: the opposite failure, and hard to interpret.", "2": "Latents firing on more than one token in a hundred are dense; they flatter reconstruction without being interpretable.", "3": "Mass above 10⁻² signals dense latents smuggling non-sparse computation into the SAE, improving loss at interpretability's expense." },
+        "view": "side",
+        "set": { "dead": 0.1, "dense": 1 }
+      },
+      {
+        "cap": { "1": "Both at once: partly silent, partly smeared. Time to read the loss curves before changing anything.", "2": "Dead and dense can coexist; decide between over-provisioning and a bad schedule using the loss, not the histogram alone.", "3": "Diagnose with dead count, L0 and explained variance together; the histogram shows the symptom, not the cause." },
+        "view": "top",
+        "set": { "dead": 0.5, "dense": 0.5 }
+      },
+      {
+        "cap": { "1": "After the fix: resampled latents rejoin the bump, and with the right expansion factor there is no pile-up left to rescue.", "2": "Resampling moves dead latents back into the live bump; a smaller dictionary avoids creating them.", "3": "Resampling plus a small learning rate and L1 warmup, or a smaller d_sae, removes the floor spike." },
+        "view": "close",
+        "set": { "dead": 0, "dense": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Why can't a dead latent recover by itself?",
+        "options": [{ "t": "It never fires, so no gradient reaches its weights", "ok": true }, { "t": "Its learning rate is too small" }],
+        "why": "A ReLU that outputs zero on every input passes zero gradient; nothing pushes the latent back."
+      },
+      {
+        "q": "Many dead latents, plenty of live ones, decent loss, and resampling barely helps. Likely cause?",
+        "options": [{ "t": "The dictionary is too big: lower the expansion factor", "ok": true }, { "t": "The learning rate is too low" }],
+        "why": "In ARENA's run #2, expansion 32 instead of 16 left latents the data simply didn't need."
+      },
+      {
+        "q": "What does resampling do?",
+        "options": [{ "t": "Re-initialises dead latents onto inputs the SAE reconstructs badly", "ok": true }, { "t": "Deletes dead latents from the dictionary" }],
+        "why": "It gives them something to fire on, so they rejoin training."
+      }
+    ],
+    "where": "Any unit that only learns while active: dying ReLUs, collapsed VAE dimensions, unused dictionary entries."
+  }
+}

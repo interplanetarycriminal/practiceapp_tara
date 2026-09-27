@@ -1,0 +1,234 @@
+{
+  "id": "attribution-patching",
+  "title": "Read the slope, skip the experiment",
+  "week": 8,
+  "need": "core",
+  "allegory": "Attribution patching is estimating what each of thousands of dimmer switches does to a lamp by measuring how touchy each switch is and multiplying by how far you would turn it, instead of turning every switch off and re-measuring the room.",
+  "map": [
+    ["turning one switch off and re-measuring the room", "true ablation or activation patching: one forward pass per component"],
+    ["how much the brightness changes per notch", "the gradient of the metric with respect to that activation"],
+    ["how many notches you would turn it", "the activation change a′ − a (for ablation, all the way to zero)"],
+    ["touchiness × notches, for every switch from one reading", "Δm ≈ (a′ − a) · ∂m/∂a for all components from one backward pass"],
+    ["a bulb already at full glare", "a saturated or strongly curved metric: the straight-line estimate misses"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Sixteen thousand switches",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "switch off every latent, one run each?",
+      "actors": [{ "pose": "slump", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.68, "y": 0.55, "w": 0.28, "h": 0.42, "label": "16k SAE latents", "color": "lav" },
+        { "kind": "card", "x": 0.68, "y": 0.18, "label": "forward passes needed: 16,000", "color": "butter" }
+      ],
+      "cap": {
+        "1": "Your SAE has about 16,000 latents. To learn which ones matter, you would switch each off and rerun the model: 16,000 runs. There has to be a shortcut.",
+        "2": "Ablating latents one at a time costs a forward pass each, which is infeasible at SAE width. You want every latent's effect from a couple of passes instead.",
+        "3": "Ablation and activation patching scale as one forward pass per component; at SAE widths (16k latents in [1.3.3]) that is prohibitive for a first sweep."
+      }
+    },
+    {
+      "name": "The dimmer wall",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "lamp", "x": 0.85, "y": 0.45, "label": "the metric", "color": "butter" },
+        { "kind": "stack", "x": 0.52, "y": 0.55, "w": 0.22, "h": 0.36, "label": "dimmer switches", "color": "sky" },
+        { "kind": "card", "x": 0.52, "y": 0.16, "label": "touchiness × how far you'd turn it", "color": "cream" }
+      ],
+      "arrows": [[0.64, 0.5, 0.8, 0.45, "each nudges the light"]],
+      "cap": {
+        "1": "Picture a wall of dimmer switches and one lamp. Instead of flicking each switch, measure how touchy each one is, then multiply by how far you would turn it.",
+        "2": "Attribution patching estimates each component's patching effect as gradient × change in activation. One backward pass gives every gradient at once, so every estimate is nearly free.",
+        "3": "A first-order Taylor expansion of the metric around the current activations: Δm ≈ ∇ₐm · (a′ − a). A forward and a backward pass (plus one forward per extra prompt) covers all components."
+      }
+    },
+    {
+      "name": "Slope times step",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "Δm", "c": "green", "note": "change in the metric" },
+        { "t": " ≈ ", "c": "ink", "note": "" },
+        { "t": "(a′ − a)", "c": "sky", "note": "how far you'd turn it" },
+        { "t": " · ", "c": "ink", "note": "" },
+        { "t": "∂m/∂a", "c": "orange", "note": "how touchy it is" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The estimate is slope times step: how touchy the switch is, times how far you would move it. For ablation, 'how far' means all the way to zero.",
+        "2": "For an SAE latent with activation a, ablation moves it to 0, so the estimate is −a × gradient. Get the metric's gradient once, then score every latent with one elementwise product.",
+        "3": "With the SAE spliced in, ∂m/∂fᵢ = ∇ₓm · W_dec[i], so latent i's ablation estimate is −fᵢ(∇ₓm · W_dec[i]), vectorised over every latent from a single backward pass."
+      }
+    },
+    {
+      "name": "Where the line bends",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "curves": [
+        { "f": "tanh(x)", "c": "sky", "label": "true effect of the patch" },
+        { "f": "x", "c": "orange", "label": "attribution's straight-line guess" }
+      ],
+      "x": [0, 3],
+      "y": [0, 2.5],
+      "dot": true,
+      "marks": [{ "x": 0.3, "label": "small nudge: they agree" }, { "x": 2, "label": "big move: guess overshoots" }],
+      "cap": {
+        "1": "For a small turn, the straight-line guess matches reality. For a big one, reality curves away: the lamp can't pass full glare, but the guess keeps climbing.",
+        "2": "Attribution patching is a tangent line. It holds for small activation changes and near-linear metrics, and drifts when the change is large or the metric saturates.",
+        "3": "The error is second order in Δa: curvature from softmax saturation, attention re-routing or LayerNorm breaks it. Prefer logit difference to probability, and check against true patching."
+      }
+    },
+    {
+      "name": "Check the shortcut",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "attribution patching", "c": "mint", "lines": ["every latent from one backward pass", "great for ranking and triage", "can miss when effects are big"] },
+      "right": { "title": "true ablation", "c": "sky", "lines": ["one forward pass per latent", "exact for what it tests", "affordable for a shortlist"] },
+      "verdict": "Triage with attribution; confirm the top hits with real patching.",
+      "cap": {
+        "1": "The shortcut is for sorting, not for final answers. Use it to shortlist the switches that seem to matter, then flick those few for real.",
+        "2": "In [1.3.3] you compare attribution estimates with true ablation, latent by latent. Where they agree, trust the shortcut; where they peel apart, spend real forward passes.",
+        "3": "Standard workflow: attribution patching ranks thousands of components, then activation patching or ablation confirms the top-k. Report both, and say where they disagree."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Every latent at once", "Gradient × change: a first-order guess", "The seed of attribution graphs"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Big models have far too many parts to test one by one. Reading slopes gives you a first map of which parts matter, fast.",
+        "2": "It is the scalable cousin of activation patching and the idea behind attribution graphs, the next node. Remember its failure mode: big changes and saturated metrics.",
+        "3": "Scalable attribution is what makes understanding and steering feasible at SAE width: it tells you which latents to inspect, ablate or steer, cheaply enough to try them all."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "The tangent line versus the real curve",
+    "params": [
+      { "id": "a0", "label": "current activation", "min": 0, "max": 4, "step": 0.1, "value": 2 },
+      { "id": "a1", "label": "patched value (0 = ablate)", "min": 0, "max": 4, "step": 0.1, "value": 0 },
+      { "id": "k", "label": "how curved the metric is", "min": 0.2, "max": 3, "step": 0.1, "value": 1.5 }
+    ],
+    "curves": [
+      { "f": "sigmoid(k*(x - 1.5))", "c": "sky", "label": "true metric as the activation changes" },
+      { "f": "sigmoid(k*(a0 - 1.5)) + k*sigmoid(k*(a0 - 1.5))*(1 - sigmoid(k*(a0 - 1.5)))*(x - a0)", "c": "orange", "label": "attribution's straight-line guess" }
+    ],
+    "x": [0, 4],
+    "y": [-0.2, 1.2],
+    "readouts": [
+      { "label": "true change from the patch", "f": "(sigmoid(k*(a1 - 1.5)) - sigmoid(k*(a0 - 1.5))).toFixed(3)" },
+      { "label": "attribution estimate", "f": "(k*sigmoid(k*(a0 - 1.5))*(1 - sigmoid(k*(a0 - 1.5)))*(a1 - a0)).toFixed(3)" },
+      { "label": "estimate ÷ truth", "f": "abs(sigmoid(k*(a1 - 1.5)) - sigmoid(k*(a0 - 1.5))) < 1e-6 ? 'no change to estimate' : ((k*sigmoid(k*(a0 - 1.5))*(1 - sigmoid(k*(a0 - 1.5)))*(a1 - a0))/(sigmoid(k*(a1 - 1.5)) - sigmoid(k*(a0 - 1.5)))).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "At the start, guess and truth roughly agree. Now set the activation to 3.5 and the curve to 3: the slope goes flat, the guess says 'harmless', truth says huge.",
+      "2": "The orange line is attribution: the tangent at the current activation. Move the patched value near the current one and they match; move it far or sharpen the curve and they split.",
+      "3": "On a saturated sigmoid the local gradient vanishes, so a first-order estimate calls a large ablation effect negligible. That false negative is why top and suspicious hits get real patching."
+    }
+  },
+  "where_else": [
+    "Saliency maps: gradient × input as a quick guess at which pixels matter",
+    "Attribution graphs: the same gradient trick, made well defined by freezing attention patterns and LayerNorm scales",
+    "Sensitivity analysis in engineering: estimate each input's effect from derivatives instead of rerunning the simulation"
+  ],
+  "hamming": {
+    "what": "A shortcut that estimates what patching or ablating each component would do, as gradient times activation change, for every component at once.",
+    "when": "When there are too many components to patch one by one, like the 16k latents of an SAE in [1.3.3].",
+    "why": "It turns thousands of experiments into one backward pass, but it is a straight-line guess, so the important or surprising hits get confirmed with real patching."
+  },
+  "object": {
+    "title": "The hillside and its flat map",
+    "subtitle": "The real metric over two activations, and the flat sheet attribution patching swaps in, touching at the clean point.",
+    "kind": "surface",
+    "f": "(1 - lin)*sigmoid(k*(x + y - 2)) + lin*(sigmoid(k) + k*sigmoid(k)*(1 - sigmoid(k))*(x + y - 3))",
+    "x": [0, 3],
+    "y": [0, 3],
+    "marks": [{ "x": 1.5, "y": 1.5, "label": "clean activations: slope read here" }, { "x": 0, "y": 0, "label": "both ablated" }],
+    "knobs": [
+      { "id": "lin", "label": "blend to attribution's flat guess", "min": 0, "max": 1, "step": 0.25, "value": 0 },
+      { "id": "k", "label": "how curved the metric is", "min": 0.5, "max": 4, "step": 0.5, "value": 1.5 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "The real landscape: how the score changes as two activations change. You are standing at the clean point.",
+          "2": "Metric as a function of two component activations; the clean run sits at (1.5, 1.5).",
+          "3": "m(a₁, a₂) = σ(k(a₁ + a₂ − 2)): a saturating, probability-like metric over two activations."
+        },
+        "view": "iso",
+        "set": { "lin": 0, "k": 1.5 }
+      },
+      {
+        "cap": {
+          "1": "Attribution swaps in a flat sheet that touches the landscape exactly where you stand. Nearby, it is a good match.",
+          "2": "The tangent plane at the clean point: attribution patching's model of the metric, exact to first order there.",
+          "3": "m ≈ m₀ + ∇m · (a − a₀): the plane attribution patching implicitly uses for every component."
+        },
+        "view": "iso",
+        "set": { "lin": 1, "k": 1.5 }
+      },
+      {
+        "cap": {
+          "1": "Walk to the far corner where both are switched off. The flat sheet and the real ground no longer agree.",
+          "2": "Ablating both is a big move, and the plane's prediction there differs from the true surface.",
+          "3": "Large Δa exposes the second-order term; the ablation corner is where first-order error is largest."
+        },
+        "view": "front",
+        "set": { "lin": 1, "k": 1.5 }
+      },
+      {
+        "cap": {
+          "1": "Sharpen the metric: the landscape becomes a cliff, and you are standing on its flat top.",
+          "2": "A sharper metric saturates: near the clean point the surface is almost level, then drops steeply.",
+          "3": "Higher k pushes the clean point into saturation, where σ′ ≈ 0 while the ablation effect stays large."
+        },
+        "view": "iso",
+        "set": { "lin": 0, "k": 4 }
+      },
+      {
+        "cap": {
+          "1": "Now the flat sheet is nearly level: attribution says nothing here matters, yet switching both off drops you off the cliff.",
+          "2": "Near-zero gradient means near-zero attribution, even though the true ablation effect is huge: a false negative.",
+          "3": "Saturation yields vanishing attribution scores for components with large true effects; verify with real patching."
+        },
+        "view": "iso",
+        "set": { "lin": 1, "k": 4 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Attribution patching estimates a patch's effect as...",
+        "options": [{ "t": "Gradient × change in activation", "ok": true }, { "t": "The activation's size alone" }, { "t": "A full rerun per component" }],
+        "why": "It is a first-order Taylor estimate: the metric's slope times how far the activation moves."
+      },
+      {
+        "q": "Where is the estimate least trustworthy?",
+        "options": [{ "t": "Big activation changes, or a saturated metric", "ok": true }, { "t": "Small nudges on a near-linear metric" }],
+        "why": "A tangent line is only good nearby; curvature such as softmax saturation makes it drift."
+      },
+      {
+        "q": "A latent sits where the metric is saturated, so its gradient is almost 0. Attribution says...",
+        "options": [{ "t": "Ablating it barely matters, possibly wrongly", "ok": true }, { "t": "Ablating it matters a lot" }],
+        "why": "A flat slope gives a near-zero estimate even if real ablation drops the metric off a cliff. Confirm with real patching."
+      }
+    ],
+    "where": "Any first-order estimate standing in for an expensive experiment: saliency maps, sensitivity analysis."
+  }
+}
