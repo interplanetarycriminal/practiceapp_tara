@@ -19,7 +19,7 @@
  *                              fail visibly rather than be masked by the worker.
  */
 
-const VERSION = '390c1b7a9c81';
+const VERSION = '0daf9600ab2a';
 const SHELL_CACHE = 'tara-shell-' + VERSION;
 const ASSET_CACHE = 'tara-assets-' + VERSION;
 
@@ -29,8 +29,8 @@ const SHELL_FILES = [
   "./",
   "index.html",
   "manifest.json",
-  "css/shell.04c2b6dbb6.css",
-  "js/app.fcdf6dd7f4.js",
+  "css/shell.ae00194998.css",
+  "js/app.3c7b72ef1d.js",
   "icons/icon-192.png",
   "icons/icon-512.png",
   "icons/icon-maskable-192.png",

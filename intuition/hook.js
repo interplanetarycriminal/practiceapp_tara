@@ -18,7 +18,7 @@
   }
   function pick() {
     if (!FILMS) return null;
-    var h = location.hash || '#today', m = h.match(/^#week-(\d\d)/), w;
+    var h = location.hash || '#today', m = h.match(/^#week-(\d\d)/) || h.match(/^#today\/week-(\d\d)/), w;
     if (m) w = Number(m[1]); else if (/^#today|^$/.test(h)) w = weekNow(); else return null;
     for (var i = 0; i < FILMS.length; i++) if (Number(FILMS[i].week) === w) return FILMS[i];
     if (!m) for (var j = 0; j < FILMS.length; j++) if (FILMS[j].id === 'north-star') return FILMS[j];
