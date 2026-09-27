@@ -111,6 +111,10 @@ KINDS.bars = (o, kid) => {
       const vals = { ...S.knobs, rows: R, cols: Cc };
       const hs = st.bars.map(({ r, c }) => { vals.r = r; vals.c = c; const v = f ? f(vals) : +(o.values?.[r]?.[c] ?? 0); return Number.isFinite(v) ? v : 0; });
       const mx = Math.max(1e-9, ...hs.map(Math.abs));
+      // Bars stand on the plinth, so a value below zero is drawn as its size in the grad colour; say so.
+      const anyNeg = hs.some((v) => v < 0);
+      if (anyNeg && !st.negLabel) st.negLabel = K.label([(Cc / 2) * size + 0.2, 0.05, -(R / 2) * size], 'red bars: below zero', { cls: 'tag', anchor: 'left' });
+      else if (!anyNeg && st.negLabel) { st.negLabel.remove(); st.negLabel = null; }
       st.bars.forEach((b, i) => {
         const h = Math.max(0.02, (Math.abs(hs[i]) / mx) * 1.7);
         b.target = h; b.neg = hs[i] < 0;
