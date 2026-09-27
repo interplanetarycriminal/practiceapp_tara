@@ -25,7 +25,9 @@
       var ready = nodes.filter(function (n) { return o.mode === 'object' ? n.object : n.film; }).length;
       var groups = {}, order = [];
       nodes.forEach(function (n) { var k = n.week ? 'Week ' + n.week : 'Alignment science and background'; if (!groups[k]) { groups[k] = []; order.push(k); } groups[k].push(n); });
-      var html = '<p class="nl-sum">' + ready + ' of ' + nodes.length + ' concepts on the map have their own ' + (o.mode === 'object' ? '3D twin' : 'film') + ' so far. Each film ends in something you can play with, and each has a 3D twin.</p>' +
+      var thing = o.mode === 'object' ? '3D twin' : 'film';
+      var html = '<p class="nl-sum">' + (ready === nodes.length ? 'Every one of the ' + nodes.length + ' concepts on the map has its own ' + thing + '.' : ready + ' of ' + nodes.length + ' concepts on the map have their own ' + thing + ' so far.') +
+        (o.mode === 'object' ? ' Each twin has a film to go with it, and each film ends in something you can play with.' : ' Each film ends in something you can play with, and each has a 3D twin.') + '</p>' +
         '<input class="nl-q" type="search" placeholder="Find a concept, e.g. softmax, LoRA, SAE" aria-label="Find a concept">';
       order.forEach(function (k) {
         var g = groups[k], got = g.filter(function (n) { return o.mode === 'object' ? n.object : n.film; }).length;

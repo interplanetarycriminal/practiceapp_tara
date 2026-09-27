@@ -1,610 +1,234 @@
 {
   "id": "othellogpt",
-  "title": "The board it was never shown",
+  "title": "Hears only moves, keeps a board",
   "week": null,
   "need": "core",
-  "allegory": "OthelloGPT is like a blindfolded player who has only ever heard moves called out: if they keep a board in their head you should be able to read it, and if you secretly nudge that mental board, their next call should change to suit it.",
+  "allegory": "OthelloGPT is like a listener who only ever hears Othello moves read out on the radio yet always knows the legal replies: she must keep a board in her head, and she keeps it relative to whose turn it is, 'this side' versus 'that side', not black versus white.",
   "map": [
-    [
-      "a blindfolded player who only hears moves called out",
-      "a GPT trained only on sequences of legal Othello moves"
-    ],
-    [
-      "the board they picture in their head",
-      "the board state encoded in the residual stream"
-    ],
-    [
-      "reading their mental board, square by square",
-      "a probe per square, trained on cached activations with the model frozen"
-    ],
-    [
-      "secretly moving a piece on the mental board",
-      "an intervention on the residual stream along a probe direction"
-    ],
-    [
-      "their next call is legal for the new board",
-      "legal-move predictions follow the edited board, even unreachable ones"
-    ]
+    ["hearing only the moves read out", "training only on sequences of legal moves, never a board"],
+    ["the board she keeps in her head", "a board state computed in the residual stream"],
+    ["asking her 'where are the black stones?'", "a black/white probe, whose target flips meaning every move, so linear probes looked weak"],
+    ["asking 'which stones are this side's, which are the other's?'", "the mine/theirs basis, in which a plain linear probe works"],
+    ["whispering 'that stone changed sides' and hearing her replies change", "editing one coordinate along mine − theirs after layer 4; the legal-move predictions follow"]
   ],
   "credit": "",
   "linked_film": null,
   "linked_object": null,
   "chapters": [
     {
-      "name": "Statistics or a world?",
+      "name": "Only the moves",
       "need": "core",
       "dur": 9,
       "type": "story",
-      "setting": "night",
-      "note": "never shown a board ... does it have one anyway?",
-      "actors": [
-        {
-          "pose": "think",
-          "x": 0.2,
-          "label": "you"
-        }
-      ],
+      "setting": "room",
+      "note": "never shown a board",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
       "props": [
-        {
-          "kind": "card",
-          "x": 0.58,
-          "y": 0.24,
-          "label": "f5 d6 c3 d3 c4 ...",
-          "color": "butter"
-        },
-        {
-          "kind": "cloud",
-          "x": 0.76,
-          "y": 0.6,
-          "w": 0.26,
-          "h": 0.2,
-          "label": "a board, somewhere?",
-          "color": "chalk"
-        }
+        { "kind": "card", "x": 0.52, "y": 0.28, "label": "a list of moves, no board", "color": "cream" },
+        { "kind": "box", "x": 0.76, "y": 0.62, "label": "OthelloGPT", "color": "lav" }
       ],
-      "arrows": [
-        [
-          0.62,
-          0.34,
-          0.72,
-          0.5,
-          "?"
-        ]
-      ],
+      "arrows": [[0.58, 0.36, 0.72, 0.54, "next move?"]],
       "cap": {
-        "1": "A model learns Othello only from lists of moves, never seeing a board. Does it memorise what tends to follow what, or quietly build the board?",
-        "2": "OthelloGPT: a GPT with a 59-move context, trained on random legal games to predict the next legal move. The question: surface statistics, or a model of the board generating the data?",
-        "3": "Trained on uniformly random legal sequences, its optimum is uniform over legal next moves, so it must somehow know what is legal. Whether it computes a board to do that is testable."
+        "1": "A model is trained on one thing: lists of legal Othello moves, predicting the next one. It never sees a board. Yet it keeps naming legal moves. How?",
+        "2": "OthelloGPT is a GPT with a 59-move context, trained on uniformly random legal games. Its loss is lowest when it spreads probability evenly over the legal next moves, and legality depends on the board.",
+        "3": "Cross-entropy on uniformly random legal sequences is minimised by the uniform distribution over legal next moves, so doing well means computing legality, a function of board state. Li et al. (2022) went looking for that state."
       }
     },
     {
-      "name": "The blindfold player",
+      "name": "The radio listener",
       "need": "core",
       "dur": 10,
       "type": "story",
-      "setting": "room",
+      "setting": "night",
       "actors": [
-        {
-          "pose": "sit",
-          "x": 0.3,
-          "label": "the model"
-        },
-        {
-          "pose": "point",
-          "x": 0.82,
-          "label": "caller"
-        }
+        { "pose": "sit", "x": 0.3, "label": "listener" },
+        { "pose": "think", "x": 0.78, "label": "you" }
       ],
       "props": [
-        {
-          "kind": "cloud",
-          "x": 0.3,
-          "y": 0.2,
-          "w": 0.26,
-          "h": 0.18,
-          "label": "board in its head?",
-          "color": "chalk"
-        },
-        {
-          "kind": "card",
-          "x": 0.62,
-          "y": 0.34,
-          "label": "'c4!'",
-          "color": "butter"
-        }
-      ],
-      "arrows": [
-        [
-          0.76,
-          0.4,
-          0.4,
-          0.5,
-          "moves called out"
-        ]
+        { "kind": "box", "x": 0.12, "y": 0.58, "label": "radio: moves only", "color": "peach" },
+        { "kind": "cloud", "x": 0.36, "y": 0.2, "label": "a board in her head", "color": "chalk" },
+        { "kind": "lamp", "x": 0.56, "y": 0.26 }
       ],
       "cap": {
-        "1": "Picture a blindfolded player who has only ever heard moves called out. If they keep a board in their head, two tests will show it: read it, then change it.",
-        "2": "Test one: probe the residual stream for each square's state. Test two: edit that state mid-forward-pass and see whether the model's legal-move predictions follow the edit.",
-        "3": "Probing shows the board is decodable; intervention shows the model uses it. Li et al. did both: the cleanest evidence that a next-token predictor models the process generating its data."
+        "1": "A listener hears only the moves read out on the radio, yet always knows the legal replies. She must be keeping a board in her head. Can we read it?",
+        "2": "Listener = OthelloGPT; radio = the move sequence; her mental board = a board computed in the residual stream. Reading it = training a probe on frozen activations; whispering a change = an intervention.",
+        "3": "Li et al. read the board with a two-layer MLP probe and edited it by gradient descent through the probe: the model then predicted legal moves for the edited board, even boards unreachable by legal play."
       }
     },
     {
-      "name": "Read the board",
-      "need": "exercise",
+      "name": "Ask the right question",
+      "need": "core",
       "dur": 10,
+      "type": "compare",
+      "left": {
+        "title": "'Where are the black stones?'",
+        "lines": [
+          "linear probe per square: mediocre",
+          "odd- and even-move directions: cos ≈ −1",
+          "looks like the board is non-linear"
+        ],
+        "c": "pink"
+      },
+      "right": {
+        "title": "'Whose side is each stone on?'",
+        "lines": [
+          "average the two flipped directions",
+          "a plain linear probe works",
+          "the non-linearity was in the question"
+        ],
+        "c": "mint"
+      },
+      "verdict": "Needing a non-linear probe is a hint you asked for the wrong feature.",
+      "cap": {
+        "1": "The model plays both sides, so 'black' keeps changing meaning for it. Ask which stones belong to which side, relative to the turn, and the board reads off cleanly.",
+        "2": "Linear black/white probes did poorly. Neel Nanda asked mine versus theirs instead, and a linear probe worked. The clue: black − white directions on odd and even moves pointed almost exactly opposite.",
+        "3": "In the black/white basis the target's sign flips every move, so it looks non-linear. Averaging the parity-flipped directions gives the mine direction: the board was linear all along, in the relative basis."
+      }
+    },
+    {
+      "name": "Two numbers per square",
+      "need": "exercise",
+      "dur": 9,
+      "type": "equation",
+      "actor": { "pose": "write", "x": 0.08, "label": "you" },
+      "parts": [
+        { "t": "mine − theirs", "c": "orange", "note": "whose stone is it?" },
+        { "t": " , ", "c": "ink", "note": "" },
+        { "t": "blank − ½(mine+theirs)", "c": "sky", "note": "is the square empty?" }
+      ],
+      "cap": {
+        "1": "For each square the probe gives two readings: whose stone it is, and whether it is empty at all. That is everything a square needs.",
+        "2": "The probe has shape [d_model, row, col, 3] for (blank, theirs, mine), trained on frozen residuals with cross-entropy. Two useful directions per square: mine − theirs, and blank − ½(mine + theirs).",
+        "3": "Softmax over three options is translation-invariant, so each square has two degrees of freedom. By about layer 4, roughly 64 of 512 residual dimensions track 'mine' and 60 track 'blank' (the centre four are never empty)."
+      }
+    },
+    {
+      "name": "Flip one stone",
+      "need": "core",
+      "dur": 11,
       "type": "grid",
-      "title": "what the probe reads: blank (·), theirs (T), mine (M)",
+      "title": "Black to move (+ = legal). Flip d4 to black?",
       "rows": 8,
       "cols": 8,
       "values": [
-        [
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·"
-        ],
-        [
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·"
-        ],
-        [
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·"
-        ],
-        [
-          "·",
-          "·",
-          "·",
-          "T",
-          "M",
-          "·",
-          "·",
-          "·"
-        ],
-        [
-          "·",
-          "·",
-          "·",
-          "M",
-          "T",
-          "·",
-          "·",
-          "·"
-        ],
-        [
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·"
-        ],
-        [
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·"
-        ],
-        [
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·",
-          "·"
-        ]
+        ["·", "·", "·", "·", "·", "·", "·", "·"],
+        ["·", "·", "+", "·", "·", "·", "·", "·"],
+        ["·", "·", "B", "W", "+", "·", "·", "·"],
+        ["·", "·", "+", "W", "B", "·", "·", "·"],
+        ["·", "·", "+", "W", "B", "B", "·", "·"],
+        ["·", "·", "+", "W", "·", "·", "·", "·"],
+        ["·", "·", "+", "·", "·", "·", "·", "·"],
+        ["·", "·", "·", "·", "·", "·", "·", "·"]
       ],
-      "labels": {
-        "rows": [
-          "1",
-          "2",
-          "3",
-          "4",
-          "5",
-          "6",
-          "7",
-          "8"
-        ],
-        "cols": [
-          "a",
-          "b",
-          "c",
-          "d",
-          "e",
-          "f",
-          "g",
-          "h"
-        ]
-      },
-      "highlight": [
-        [
-          3,
-          3
-        ],
-        [
-          3,
-          4
-        ],
-        [
-          4,
-          3
-        ],
-        [
-          4,
-          4
-        ],
-        [
-          2,
-          3
-        ],
-        [
-          0,
-          0
-        ]
-      ],
+      "labels": { "rows": ["1", "2", "3", "4", "5", "6", "7", "8"], "cols": ["a", "b", "c", "d", "e", "f", "g", "h"] },
+      "highlight": [[3, 3], [3, 2], [1, 3], [6, 3]],
       "cap": {
-        "1": "Read the player's mental board one square at a time: blank, theirs, or mine? A small reader trained on the model's insides can do it.",
-        "2": "A probe per square maps the residual stream to three options: blank, theirs, mine. The transformer stays frozen; only the probe learns, from cached activations and the true board.",
-        "3": "Probe shape [d_model, row, col, options]. Softmax is translation invariant, so each square has two degrees of freedom: blank − (mine + theirs)/2, and mine − theirs."
+        "1": "Black to move. Edit the board in the model's head so d4 becomes black. The legal moves must change: c4 drops out, d2 and d7 appear.",
+        "2": "Nanda changed one coordinate, mine − theirs, after layer 4, and OthelloGPT's legal-move predictions changed to fit the edited board. This board shows what the real rules demand for one such flip.",
+        "3": "A one-coordinate linear edit that yields coherent predictions for the new board is hard to explain unless the model reads that direction. Gradient descent through an MLP probe can push activations off-distribution."
       }
     },
     {
-      "name": "Nudge the mental board",
-      "need": "core",
-      "dur": 10,
-      "type": "story",
-      "setting": "room",
-      "actors": [
-        {
-          "pose": "sit",
-          "x": 0.3,
-          "label": "the model"
-        },
-        {
-          "pose": "reach",
-          "x": 0.55,
-          "label": "you"
-        }
-      ],
-      "props": [
-        {
-          "kind": "cloud",
-          "x": 0.3,
-          "y": 0.2,
-          "w": 0.26,
-          "h": 0.18,
-          "label": "one piece flipped",
-          "color": "chalk"
-        },
-        {
-          "kind": "card",
-          "x": 0.8,
-          "y": 0.5,
-          "label": "next call: legal for the NEW board",
-          "color": "mint"
-        }
-      ],
-      "arrows": [
-        [
-          0.52,
-          0.4,
-          0.4,
-          0.26,
-          "edit"
-        ]
-      ],
-      "cap": {
-        "1": "Now secretly flip a piece on the player's mental board. If their next call is legal for the new board, even one no real game could reach, the board is in use.",
-        "2": "Li et al. edited the residual stream by gradient descent through the probe until it read a different board. The model then predicted legal moves for that board, including unreachable ones.",
-        "3": "The causal edit turns a probing result into a claim about computation. But gradient descent through a two-layer probe can push activations far off-distribution: strong edits are weaker evidence."
-      }
-    },
-    {
-      "name": "The black-and-white wrinkle",
-      "need": "contested",
-      "dur": 11,
-      "type": "compare",
-      "left": {
-        "title": "Ask: black or white?",
-        "c": "pink",
-        "lines": [
-          "linear probe: mediocre",
-          "needs a two-layer MLP probe",
-          "model or probe doing the work?"
-        ]
-      },
-      "right": {
-        "title": "Ask: mine or theirs?",
-        "c": "mint",
-        "lines": [
-          "the model plays both sides",
-          "a plain linear probe works",
-          "odd vs even directions: cosine ≈ −1"
-        ]
-      },
-      "verdict": "Needing a clever probe hints you asked the wrong question.",
-      "cap": {
-        "1": "The first reader had to be clever, which is suspicious: maybe it did the thinking. Asking 'mine or theirs?', not 'black or white?', let a simple one work.",
-        "2": "Li et al.'s headline was a non-linear world model, since linear probes failed. Nanda's follow-up: the model plays both sides, and in the mine/theirs basis a linear probe reads the board.",
-        "3": "Odd- and even-move black − white probe directions are near antipodal because the colour label flips each move. An expressive probe can compute a feature from simpler ones, so linear readability matters."
-      }
-    },
-    {
-      "name": "The weakest nudge wins",
-      "need": "core",
-      "dur": 10,
-      "type": "plot",
-      "curves": [
-        {
-          "f": "exp(-x/3)",
-          "c": "teal",
-          "label": "what a success tells you (sketch)"
-        },
-        {
-          "f": "1 - exp(-x/3)",
-          "c": "red",
-          "label": "risk of going off-distribution (sketch)"
-        }
-      ],
-      "x": [
-        0,
-        10
-      ],
-      "y": [
-        0,
-        1
-      ],
-      "dot": true,
-      "marks": [
-        {
-          "x": 1,
-          "label": "one coordinate, after layer 4"
-        },
-        {
-          "x": 8.5,
-          "label": "gradient descent through an MLP probe"
-        }
-      ],
-      "cap": {
-        "1": "A gentle nudge that still changes the player's moves is hard to explain away. Bulldoze their mental board and you may have made a thought they never have.",
-        "2": "The weaker the intervention, the stronger the evidence. Changing one residual coordinate along mine − theirs after layer 4 flips the legal-move predictions, with no gradient descent.",
-        "3": "Gradient descent through a two-layer probe can produce off-distribution residual streams; a single-coordinate linear edit yielding coherent legal moves for the new board is hard to explain unless the model uses that direction."
-      }
-    },
-    {
-      "name": "Decodable isn't used",
+      "name": "Why it matters",
       "need": "core",
       "dur": 10,
       "type": "cards",
+      "actor": { "pose": "cheer", "x": 0.85, "label": "you" },
       "items": [
-        "Pair every probe with the cheapest causal edit",
-        "Weak probe? Relabel before concluding 'absent'",
-        "A readable board becomes a readout for circuits"
+        "Next-move training built a model of the world behind the data",
+        "Decodable is not the same as used",
+        "Try a new basis before calling it non-linear",
+        "The weaker the edit that works, the stronger the evidence"
       ],
-      "actor": {
-        "pose": "cheer",
-        "x": 0.86
-      },
       "cap": {
-        "1": "Finding a picture in a model's head isn't enough; show the model acts on it. That test sits under every claim about what AI knows, and every way to steer it.",
-        "2": "Probe accuracy measures what is decodable, not what the model uses. Follow every probe with a causal edit, and treat a failed linear probe as a hint you picked the wrong labels.",
-        "3": "By layer 4, about 64 of 512 residual dimensions encode 'my colour' and 60 encode 'blank': a readout for asking what downstream neurons read and write. Decodable versus used carries every probe-based safety argument."
+        "1": "A model trained only on moves built a board. Bigger models may build pictures of their worlds too; reading and editing them is how we understand and steer AI.",
+        "2": "Pair every probe with the cheapest causal edit. A probe can read something nothing downstream uses, or compute the feature itself if it is expressive enough; only an intervention shows use.",
+        "3": "Decodable versus used is the load-bearing distinction for every probe-based safety argument. Once the probe works it doubles as a readout for circuit analysis: you know what 64 of the 512 directions mean."
       }
     }
   ],
   "coda": {
     "type": "grid",
-    "title": "Edit the board: tap a square to cycle blank, mine, theirs",
+    "title": "Edit the board, watch the legal moves",
     "rows": 8,
     "cols": 8,
-    "init": "(r == 3 && c == 3) || (r == 4 && c == 4) ? 2 : ((r == 4 && c == 3) || (r == 3 && c == 4) ? 1 : 0)",
-    "click": "inc",
+    "init": "({B: 1, W: -1})['..................BW.......WB......WBB.....W....................'[r*8 + c]] || 0",
+    "click": "toggle",
     "readouts": [
-      {
-        "label": "legal moves for the player to move",
-        "f": "range(8).flatMap(r => range(8).filter(c => G[r][c] % 3 == 0 && [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]].some(([dr, dc]) => ((ray) => ((j) => j > 0 && ray[j] == 1)(ray.findIndex(v => v != 2)))(range(7).map(k => [r + dr*(k + 1), c + dc*(k + 1)]).filter(([y, x]) => y >= 0 && y < 8 && x >= 0 && x < 8).map(([y, x]) => G[y][x] % 3)))).map(c => 'abcdefgh'[c] + (r + 1))).join(' ') || 'none: pass'"
-      },
-      {
-        "label": "in the model's terms",
-        "f": "(sum(G.map(row => sum(row.map(v => v % 3 == 1 ? 1 : 0))))) + ' mine, ' + (sum(G.map(row => sum(row.map(v => v % 3 == 2 ? 1 : 0))))) + ' theirs'"
-      },
-      {
-        "label": "the same pieces in colours",
-        "f": "((m, t) => 'black to play: ' + m + ' black, ' + t + ' white · white to play: ' + t + ' black, ' + m + ' white')(sum(G.map(row => sum(row.map(v => v % 3 == 1 ? 1 : 0)))), sum(G.map(row => sum(row.map(v => v % 3 == 2 ? 1 : 0)))))"
-      }
+      { "label": "legal moves for black", "f": "range(64).filter(i => G[floor(i/8)][i % 8] == 0 && [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]].some(([a, b]) => range(6).some(m => (G[floor(i/8) + (m + 2)*a] || [])[i % 8 + (m + 2)*b] == 1 && range(m + 1).every(j => (G[floor(i/8) + (j + 1)*a] || [])[i % 8 + (j + 1)*b] == -1)))).map(i => 'abcdefgh'[i % 8] + (floor(i/8) + 1)).join(' ') || 'none'" },
+      { "label": "compared with the real game", "f": "(range(64).filter(i => G[floor(i/8)][i % 8] == 0 && [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]].some(([a, b]) => range(6).some(m => (G[floor(i/8) + (m + 2)*a] || [])[i % 8 + (m + 2)*b] == 1 && range(m + 1).every(j => (G[floor(i/8) + (j + 1)*a] || [])[i % 8 + (j + 1)*b] == -1)))).map(i => 'abcdefgh'[i % 8] + (floor(i/8) + 1)).join(' ') || 'none') == 'c2 e3 c4 c5 c6 c7' ? 'same legal moves as the real board' : 'different: you have edited the board'" },
+      { "label": "stones", "f": "sum(G.map(row => row.filter(v => v == 1).length)) + ' black · ' + sum(G.map(row => row.filter(v => v == -1).length)) + ' white'" }
     ],
     "caption": {
-      "1": "Tap squares to cycle blank, mine, theirs, and watch the legal moves update: the edit experiment in miniature. Mine and theirs stay put; colours swap each turn.",
-      "2": "Change the board and the set of legal next moves changes, which is what OthelloGPT's predictions did under the edit. Its code is mine versus theirs, so a piece reads 'black' one move and 'white' the next.",
-      "3": "Legal: an empty square with a run of theirs capped by mine in any of 8 directions. A black/white label flips sign each ply while mine/theirs does not: the reason odd and even colour probes point opposite ways."
+      "1": "Butter squares are black's stones (black to move), pink squares marked −1 are white's. Click a stone to lift it, click again to place a black one. Watch the legal moves.",
+      "2": "Real rules, after f5 d6 c3 d3. Try d4: lift it, then make it black; c4 stops being legal, d2 and d7 start. That is the change a model that truly uses its board must make after the edit.",
+      "3": "The ±1 per square is the kind of one-number coordinate the mine − theirs probe reads. OthelloGPT's output is near-uniform over legal moves, so a model that uses its board should move its mass to exactly this set."
     }
   },
   "where_else": [
-    "Linear probes and steering vectors: read a direction, then write along it",
-    "Deception probes: decodable is not used, so pair them with interventions",
-    "Big language models: do they track the world states behind their text?",
-    "The bracket classifier and grokking: the other toy tasks with checkable answers"
+    "Linear probes for truthfulness or deception in LLMs: the same decodable-versus-used question",
+    "Steering vectors: the same one-direction edit, used to change behaviour on purpose",
+    "Any self-play system, where 'my pieces / your pieces' is a steadier label than colour",
+    "Every probe-based safety argument: pair the probe with the cheapest causal edit"
   ],
   "hamming": {
-    "what": "A GPT trained only on legal Othello move sequences, which turns out to build and use an internal board it was never shown.",
-    "when": "Whenever you ask whether a model has learned a model of the world or just surface statistics, and want a testbed where the answer is checkable.",
-    "why": "It is the cleanest evidence that next-token prediction can produce a world model, and it teaches the probe-then-intervene discipline behind every such claim."
+    "what": "A small GPT trained only on legal Othello move sequences, whose residual stream turns out to hold the board linearly, as mine versus theirs.",
+    "when": "Whenever you want evidence that a model built a model of the world behind its data, or a clean testbed for probes and interventions.",
+    "why": "It shows how to tell a real internal representation from a probe's invention: ask in the right basis, then prove use with the smallest causal edit that works."
   },
   "object": {
-    "title": "The board in its head",
-    "subtitle": "The starting position as the model codes it: height is each square's reading along its mine-minus-theirs direction.",
-    "kind": "bars",
-    "rows": 8,
-    "cols": 8,
-    "f": "(r == 3 && c == 3 && ed > 0.5) ? 1.4 : ((s) => s == 0 ? 0.15 : 0.8 + 0.6*s*(turn > 0.5 ? -1 : 1))(((r == 4 && c == 3) || (r == 3 && c == 4)) ? 1 : (((r == 3 && c == 3) || (r == 4 && c == 4)) ? -1 : 0))",
-    "labels": {
-      "rows": [
-        "1",
-        "2",
-        "3",
-        "4",
-        "5",
-        "6",
-        "7",
-        "8"
-      ],
-      "cols": [
-        "a",
-        "b",
-        "c",
-        "d",
-        "e",
-        "f",
-        "g",
-        "h"
-      ]
-    },
-    "c": "data",
-    "knobs": [
-      {
-        "id": "turn",
-        "label": "whose turn: black (0) or white (1)",
-        "min": 0,
-        "max": 1,
-        "step": 1,
-        "value": 0
-      },
-      {
-        "id": "ed",
-        "label": "edit d4 to read 'mine' (0 off, 1 on)",
-        "min": 0,
-        "max": 1,
-        "step": 1,
-        "value": 0
-      }
+    "title": "The two-colour muddle",
+    "subtitle": "One square's states across many games, in a toy 3D slice of the residual stream.",
+    "kind": "points",
+    "clusters": [
+      { "label": "black stone, black to move", "c": "ink", "center": [1.0, -0.4, 0.55], "spread": 0.18, "n": 40 },
+      { "label": "white stone, white to move", "c": "plaster", "center": [1.0, -0.4, -0.55], "spread": 0.18, "n": 40 },
+      { "label": "white stone, black to move", "c": "plaster", "center": [-1.0, -0.4, 0.55], "spread": 0.18, "n": 40 },
+      { "label": "black stone, white to move", "c": "ink", "center": [-1.0, -0.4, -0.55], "spread": 0.18, "n": 40 },
+      { "label": "empty square", "c": "aux", "center": [0, 1.05, 0], "spread": 0.18, "n": 40 }
     ],
+    "arrows": [
+      { "from": [-1.2, -0.4, 0], "to": [1.2, -0.4, 0], "label": "mine − theirs", "c": "dir" },
+      { "from": [0, -0.4, 0], "to": [0, 1.05, 0], "label": "blank − ½(mine + theirs)", "c": "prob" }
+    ],
+    "plane": { "normal": [1, 0, 0], "label": "one flat cut: this side's vs the other side's" },
+    "knobs": [],
     "beats": [
-      {
-        "cap": {
-          "1": "The opening position: two black pieces, two white. Height is how the model reads each square. Black to play, so the black pieces stand tall: they are 'mine'.",
-          "2": "Bars show each square's projection onto its mine − theirs direction. Blank squares sit flat. Black to move, so black = mine.",
-          "3": "The per-square mine − theirs probe direction applied to the residual stream; heights are schematic (±1 around a baseline), positions are the true Othello opening."
-        },
-        "view": "iso",
-        "set": {
-          "turn": 0,
-          "ed": 0
-        }
-      },
-      {
-        "cap": {
-          "1": "Now it's white's turn. Not one piece changed colour, yet every reading flipped: the black pieces now read as 'theirs'.",
-          "2": "Same physical board, other player to move: the model's code for every piece changes sign, because it tracks mine versus theirs.",
-          "3": "The model's board code is relative to the player to move; absolute colour is (mine − theirs) times a parity sign, a product no single linear direction can read."
-        },
-        "view": "front",
-        "set": {
-          "turn": 1,
-          "ed": 0
-        }
-      },
-      {
-        "cap": {
-          "1": "So a reader asking 'black or white?' along one fixed direction is right on black's turns and exactly wrong on white's. No single straight line works.",
-          "2": "A black/white probe fitted on odd moves points one way, on even moves the opposite way. That is why the linear probe looked like it failed.",
-          "3": "Odd and even black − white probe directions come out with cosine ≈ −1; averaging them with the right sign recovers the mine direction."
-        },
-        "view": "side",
-        "set": {
-          "turn": 0,
-          "ed": 0
-        }
-      },
-      {
-        "cap": {
-          "1": "The intervention: nudge d4 so it reads 'mine'. The model now predicts legal moves for that edited board.",
-          "2": "One coordinate changed along d4's mine − theirs direction, after layer 4. The legal-move predictions shift to match the new board.",
-          "3": "A single-coordinate linear edit is the weakest useful causal test; coherent legal moves for the edited board mean the model reads this direction."
-        },
-        "view": "iso",
-        "set": {
-          "turn": 0,
-          "ed": 1
-        }
-      },
-      {
-        "cap": {
-          "1": "From above: the board in the model's own terms. It is the only frame where one straight line reads every square, on every turn.",
-          "2": "In the mine/theirs basis the representation is linear and stable across moves; that is what made cheap probing and cheap editing possible.",
-          "3": "About 64 of 512 residual dimensions encode 'my colour' and 60 encode 'blank' (the four centre squares are never blank), giving a readout for circuit analysis."
-        },
-        "view": "top",
-        "set": {
-          "turn": 1,
-          "ed": 1
-        }
-      }
+      { "cap": { "1": "Each cloud is one square's state over many games. Dark = a black stone, pale = a white stone, teal = empty. Toy picture, real logic.", "2": "Points stand for the residual stream at one square in a toy 3D slice: dark and pale clouds are black and white stones under both parities, teal is empty.", "3": "Toy geometry consistent with the case study: stone ownership lies along a mine − theirs axis, emptiness along a separate blank axis; colour is the product of ownership and turn parity." }, "view": "iso" },
+      { "cap": { "1": "Try to separate dark from pale with one flat cut. You can't: each colour sits on both sides, depending on whose turn it is.", "2": "A black/white linear probe needs one plane with all black stones on one side. Here black stones sit at both ends of the axis, split by turn parity, so the linear probe does poorly.", "3": "In the absolute basis the label is ownership × parity, an XOR-like target that no single hyperplane separates; hence mediocre linear probes and the apparent need for an MLP." }, "view": "front" },
+      { "cap": { "1": "Now cut by side instead of colour: 'this side's stones' on one half, 'the other side's' on the other. One flat cut works.", "2": "Relabel by mine versus theirs and the plane splits the clouds cleanly. Probes trained on odd and even moves had pointed opposite ways; averaging them gives this axis.", "3": "Odd-move and even-move black − white directions are near antipodal (cos ≈ −1); flipping one and averaging yields the mine − theirs direction, along which ownership is linearly decodable." }, "view": "top" },
+      { "cap": { "1": "Two arrows describe every square: one says whose stone it is, the other says whether the square is empty at all.", "2": "The violet arrow is mine − theirs; the amber arrow is blank − ½(mine + theirs). Softmax over three options leaves exactly two free directions per square.", "3": "With logits (blank, theirs, mine) under softmax, the probe is invariant to adding a constant, so two contrasts per square carry all its information; these are the natural pair." }, "view": "side" },
+      { "cap": { "1": "The test: nudge one point along the violet arrow across the cut. If the model's legal-move guesses switch to match, it really uses this board.", "2": "Nanda's intervention moved one coordinate along mine − theirs after layer 4, and the legal-move predictions changed to fit the edited board. Decoding shows it is there; editing shows it is used.", "3": "Evidence strength runs inverse to intervention strength: a single linear coordinate edit that yields coherent new predictions is far stronger evidence than gradient descent through a non-linear probe." }, "view": "close" }
     ],
     "predict": [
       {
-        "q": "OthelloGPT was never shown a board. After probing and editing it, what do we conclude?",
+        "q": "Probes for black − white on one square, trained separately on odd and even moves, point...?",
         "options": [
-          {
-            "t": "It computes the board state and uses it to predict legal moves",
-            "ok": true
-          },
-          {
-            "t": "It only memorises which moves tend to follow which"
-          }
+          { "t": "Almost exactly opposite ways (cos ≈ −1)", "ok": true },
+          { "t": "The same way" },
+          { "t": "At right angles" }
         ],
-        "why": "A probe reads the board, and editing it makes the legal-move predictions follow the edit, even for unreachable boards."
+        "why": "Ownership relative to the turn swaps colour every move, so the colour direction flips sign between odd and even moves. That flip is the clue to use mine versus theirs."
       },
       {
-        "q": "Why did a linear black/white probe struggle?",
+        "q": "A linear probe reads a feature at high accuracy, but editing along it changes nothing. Best conclusion?",
         "options": [
-          {
-            "t": "The model codes mine vs theirs, so a piece's code flips sign each move",
-            "ok": true
-          },
-          {
-            "t": "The board is stored in a genuinely non-linear way"
-          }
+          { "t": "It is decodable, but the model may not use it", "ok": true },
+          { "t": "The model must be non-linear" },
+          { "t": "The probe needs more layers" }
         ],
-        "why": "Odd- and even-move black − white directions are near opposite. In the mine/theirs basis a linear probe works."
+        "why": "Probe accuracy measures what can be read out, not what downstream components read. Only a causal edit tests use."
       },
       {
-        "q": "Which result is stronger evidence that the model uses a direction?",
+        "q": "Which is the strongest evidence that OthelloGPT uses its board?",
         "options": [
-          {
-            "t": "A one-coordinate nudge after layer 4 flips the legal moves",
-            "ok": true
-          },
-          {
-            "t": "Gradient descent through an MLP probe flips the legal moves"
-          }
+          { "t": "Changing one coordinate along a linear probe direction changes its legal moves to fit", "ok": true },
+          { "t": "Gradient descent through a two-layer probe changes its legal moves" },
+          { "t": "A two-layer probe reads the board with high accuracy" }
         ],
-        "why": "The weaker the intervention, the less it can push activations off-distribution, so its success says more."
+        "why": "The weaker the intervention that still produces coherent behaviour, the harder it is to explain except by the model actually reading that direction."
       }
     ],
-    "where": "Any claim that a network 'knows' something: probe it, then nudge it and watch the behaviour follow."
+    "where": "Anywhere a label flips with perspective: turn-relative features in self-play agents, self-versus-other features in dialogue models, relative versus absolute coordinates."
   }
 }
