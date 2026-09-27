@@ -1,0 +1,213 @@
+{
+  "id": "reinforce",
+  "title": "Reload the dice toward what worked",
+  "week": 9,
+  "need": "core",
+  "allegory": "REINFORCE is a player with loaded dice who never studies the table's physics: after each game she re-weights the dice towards every number she rolled, by how much better than usual the game went from that roll on, so rolls that led to good outcomes come up more often.",
+  "map": [
+    ["the loaded dice she rolls each turn", "the policy π_θ(a | s)"],
+    ["re-weighting the dice towards the number she rolled", "∇ log π_θ(a_t | s_t): the direction that makes that action more likely"],
+    ["how the game went from that roll on", "the reward-to-go G_t"],
+    ["judging against a typical game, not against zero", "subtracting a baseline b(s_t), so worse-than-usual actions get pushed down"],
+    ["never studying the table's physics", "no model of the environment: only the policy's own log-probs and the rewards"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "No chain rule here",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "d(score)/d(weights) through a video game?",
+      "actors": [{ "pose": "shrug", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.45, "y": 0.55, "w": 0.14, "h": 0.3, "label": "policy network", "color": "sky" },
+        { "kind": "box", "x": 0.7, "y": 0.5, "w": 0.2, "h": 0.28, "label": "game: no equations", "color": "chalk" },
+        { "kind": "card", "x": 0.88, "y": 0.22, "label": "score", "color": "butter" }
+      ],
+      "arrows": [[0.52, 0.5, 0.6, 0.5, "moves"], [0.8, 0.4, 0.86, 0.28, ""]],
+      "cap": {
+        "1": "You want a network that picks good moves. But the score comes from a game you have no equations for, and you can't take a derivative through a video game.",
+        "2": "Policy gradient methods output the policy directly. The obstacle: expected return depends on a whole trajectory through an environment you can't differentiate. There is no chain rule through the simulator.",
+        "3": "J(θ) = E_τ~π_θ[R(τ)] depends on θ only through the sampling distribution, and the dynamics are unknown and non-differentiable. The score-function estimator sidesteps both."
+      }
+    },
+    {
+      "name": "The loaded dice",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "reach", "x": 0.3, "label": "player" }],
+      "props": [
+        { "kind": "box", "x": 0.52, "y": 0.62, "w": 0.08, "h": 0.08, "label": "loaded die", "color": "cream" },
+        { "kind": "card", "x": 0.78, "y": 0.3, "label": "went well from here: more of this", "color": "mint" }
+      ],
+      "arrows": [[0.58, 0.58, 0.72, 0.36, "re-weight"]],
+      "cap": {
+        "1": "Picture a player with loaded dice. After each game she re-weights the dice towards every number she rolled, more for rolls followed by a good rest of game.",
+        "2": "Sample actions from the policy, play the episode, then raise the log-probability of each action in proportion to the return that followed it. Nothing about the environment enters the maths.",
+        "3": "Williams (1992): ∇J = E[Σ_t G_t ∇ log π_θ(a_t | s_t)]. It needs only the policy's own log-probs and sampled returns: no dynamics model, no differentiating the simulator."
+      }
+    },
+    {
+      "name": "The whole update",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "∇J ≈ Σ ", "c": "ink", "note": "" },
+        { "t": "G_t", "c": "green", "note": "how the rest went" },
+        { "t": " · ", "c": "ink", "note": "" },
+        { "t": "∇log π(a_t|s_t)", "c": "orange", "note": "make that move likelier" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "That's the whole algorithm: for every move, how well things went afterwards, times the direction that makes that move more likely. Add them up and step.",
+        "2": "<code>compute_reinforce_loss</code> is minus the mean of log-prob times weight, so gradient descent climbs the return. The weights (returns, baseline, importance weights) are detached.",
+        "3": "Loss = −mean(iw · log π(a|s) · (G_t − b(s_t))), with iw and returns detached. Reward-to-go drops the terms an action can't influence: a variance cut with zero bias."
+      }
+    },
+    {
+      "name": "Everything scored points",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "no baseline", "c": "pink", "lines": ["every CartPole return is positive", "every move gets pushed up", "one long episode dominates", "collapses to one action"] },
+      "right": { "title": "baseline + normalise", "c": "mint", "lines": ["subtract the average return", "worse-than-usual moves go down", "normalise for scale", "trains in about 15 seconds"] },
+      "verdict": "The baseline fixes the sign; normalisation fixes the scale. You need both.",
+      "cap": {
+        "1": "In CartPole every game scores points, so every roll looks good. Judge each roll against a typical game instead: better than usual goes up, worse goes down.",
+        "2": "CartPole pays +1 per surviving step, so every return is positive and every action gets pushed up. Subtracting the per-timestep mean return fixes the sign; normalising returns fixes the scale.",
+        "3": "A state-dependent baseline is unbiased: E[∇log π · b(s)] = b(s)·∇Σπ = 0. It centres the weights; (G − mean)/(std + 1e-8) keeps the effective step size stable as returns grow."
+      }
+    },
+    {
+      "name": "Test on a probe",
+      "need": "exercise",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "log(1 - 0.5*exp(-x/3))", "c": "green", "label": "correct sign: rises" },
+        { "f": "log(0.5) - x/3", "c": "red", "label": "sign flipped: falls" }
+      ],
+      "x": [0, 10],
+      "y": [-4, 0.2],
+      "dot": true,
+      "marks": [{ "x": 0, "label": "50/50 start" }],
+      "cap": {
+        "1": "Before the real game, try a tiny one where you know the right move. If your dice don't drift towards it, something is backwards.",
+        "2": "Probe environments have a known optimal action. Its log-probability must rise steadily; if it falls, your loss sign is flipped rather than a scaling problem. Check probes before CartPole.",
+        "3": "On a probe, log π(a*|s) should increase monotonically under correct ascent. A steady decrease means you are descending J: the loss has lost its minus sign."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Every policy-gradient method descends from this", "The baseline grows into a critic", "RLHF re-weights a language model's choices"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Make what worked more likely: that idea is how language models are tuned with RLHF. Everything after this week is REINFORCE with better noise control.",
+        "2": "Actor-critic learns the baseline; PPO reuses each batch several times and clips to stay safe; RLHF applies the same estimator to a language model's token choices.",
+        "3": "VPG, actor-critic, PPO and the RL in RLHF are variance-reduced descendants of Williams' estimator. Steering a model with rewards is, at bottom, re-weighting the log-probs of what it did."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Two moves, A and B, each chosen half the time: how hard does one roll push towards A?",
+    "labels": ["if you rolled A", "if you rolled B", "average push", "noise (std)"],
+    "params": [
+      { "id": "rA", "label": "return after A", "min": 0, "max": 10, "step": 0.5, "value": 8 },
+      { "id": "rB", "label": "return after B", "min": 0, "max": 10, "step": 0.5, "value": 6 },
+      { "id": "b", "label": "baseline", "min": 0, "max": 10, "step": 0.5, "value": 0 }
+    ],
+    "f": "[0.5*(rA - b), -0.5*(rB - b), 0.25*(rA - rB), sqrt(max(0, 0.125*((rA - b)*(rA - b) + (rB - b)*(rB - b)) - 0.0625*(rA - rB)*(rA - rB)))]",
+    "y": [-5, 5],
+    "readouts": [
+      { "label": "average push towards A (any baseline)", "f": "(0.25*(rA - rB)).toFixed(2)" },
+      { "label": "noise of one roll's push", "f": "sqrt(max(0, 0.125*((rA - b)*(rA - b) + (rB - b)*(rB - b)) - 0.0625*(rA - rB)*(rA - rB))).toFixed(2)" },
+      { "label": "after rolling B, B becomes", "f": "rB - b > 0 ? 'more likely' : (rB - b < 0 ? 'less likely' : 'unchanged')" }
+    ],
+    "caption": {
+      "1": "Both moves score points, so at baseline 0 even the worse move gets reinforced when rolled. Slide the baseline to the average return and watch the noise vanish.",
+      "2": "The average push is always 0.25·(rA − rB): the baseline never changes where you're heading, only how noisy each step is. At the mean return, every roll pushes the right way.",
+      "3": "E[∇log π · (G − b)] doesn't depend on b, but the variance does. For this two-action bandit at p = 0.5 the variance is zero at b = (rA + rB)/2. That is why baselines, and later critics, exist."
+    }
+  },
+  "where_else": [
+    "PPO: the same estimator, reusing each batch several times with a clip",
+    "Actor-critic: the fixed baseline becomes a learned critic",
+    "RLHF: a language model's token choices re-weighted by a reward",
+    "Score-function gradients anywhere you can sample from a distribution but not differentiate through it"
+  ],
+  "hamming": {
+    "what": "A policy-gradient update: raise the log-probability of each action you took in proportion to the return that followed it.",
+    "when": "Whenever you can sample actions from a policy and observe rewards but can't differentiate through the environment.",
+    "why": "It needs no model of the world, only your own probabilities and the rewards, and every modern policy-gradient method, PPO and RLHF included, descends from it."
+  },
+  "object": {
+    "title": "The regret landscape",
+    "subtitle": "The floor is two dice weights; height is how far the expected score falls short of the best move's.",
+    "kind": "surface",
+    "f": "3 - (exp(x) + 3*exp(y) + 2)/(exp(x) + exp(y) + 1)",
+    "x": [-3, 3],
+    "y": [-3, 3],
+    "ball": { "x": 0, "y": 0, "lr": "lr", "steps": 60 },
+    "marks": [
+      { "x": 0, "y": 0, "label": "start: all moves equally likely" },
+      { "x": -3, "y": 3, "label": "nearly always the best move" }
+    ],
+    "knobs": [{ "id": "lr", "label": "Step size", "min": 0.1, "max": 3, "step": 0.1, "value": 1 }],
+    "beats": [
+      {
+        "cap": { "1": "The floor is the dice's two weights; height is how far the expected score falls short of the best possible. The bead rolls towards better play.", "2": "Three moves worth 1, 3 and 2 under a softmax policy with logits (x, y, 0). Height is 3 − E[reward]; downhill is the policy gradient.", "3": "The surface is 3 − J(θ) for a 3-armed bandit; the bead follows the exact gradient, i.e. the expected REINFORCE update." },
+        "view": "iso",
+        "set": { "lr": 1 }
+      },
+      {
+        "cap": { "1": "From above: downhill means making the best move, worth 3, more likely and the worst, worth 1, less likely.", "2": "The gradient raises the logit of above-average moves and lowers below-average ones, weighted by how likely each is.", "3": "∂J/∂θ_a = π_a (r_a − J): the softmax policy gradient pushes each logit by its advantage over the current mean." },
+        "view": "top",
+        "set": { "lr": 1 }
+      },
+      {
+        "cap": { "1": "A bigger step: the bead races. Real REINFORCE takes noisy versions of these steps, so big ones can overshoot and collapse the policy.", "2": "Each real update is a sampled, noisy estimate of this slope; large learning rates amplify the noise.", "3": "The bead shows the mean update; the score-function estimate's variance around it is what baselines and normalisation reduce." },
+        "view": "side",
+        "set": { "lr": 3 }
+      },
+      {
+        "cap": { "1": "The baseline doesn't reshape this landscape at all. It only calms the jitter of each step around the downhill direction.", "2": "Subtracting a baseline leaves the expected gradient, and so this surface, unchanged. Only the variance of each step falls.", "3": "E[∇log π · b] = 0, so J and its gradient are baseline-invariant; the baseline acts purely on the estimator's second moment." },
+        "view": "front",
+        "set": { "lr": 1 }
+      },
+      {
+        "cap": { "1": "Near the corner the slope flattens: once the best move is nearly certain, there is little left to push.", "2": "As one action's probability approaches 1, π(1 − π) shrinks and the gradient vanishes: the policy stops changing.", "3": "Softmax saturation: gradients scale with π_a(1 − π_a), which is also why entropy bonuses are used to keep exploring." },
+        "view": "close",
+        "set": { "lr": 0.3 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "In CartPole every return is positive. Without a baseline, what happens to a below-average action you took?",
+        "options": [{ "t": "It still gets pushed up, just less", "ok": true }, { "t": "It gets pushed down" }],
+        "why": "Without a baseline every weight is positive. Subtracting the average makes worse-than-usual actions negative."
+      },
+      {
+        "q": "Does subtracting a baseline change the expected gradient?",
+        "options": [{ "t": "No: it only reduces the noise", "ok": true }, { "t": "Yes: it points the update somewhere else" }],
+        "why": "E[∇log π · b(s)] = 0, so the average push is unchanged while the variance drops."
+      },
+      {
+        "q": "On a probe environment, the known-best action's log-probability steadily falls. Most likely bug?",
+        "options": [{ "t": "The loss sign is flipped", "ok": true }, { "t": "The returns need normalising" }],
+        "why": "A falling log-prob for the known-best action means you are descending expected return, not climbing it."
+      }
+    ],
+    "where": "Anywhere you can sample but not differentiate: RL policies, RLHF on language models, discrete choices inside a network."
+  }
+}

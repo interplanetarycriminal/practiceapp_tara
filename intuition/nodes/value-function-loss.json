@@ -1,0 +1,197 @@
+{
+  "id": "value-function-loss",
+  "title": "Grade the pundit, not the player",
+  "week": 10,
+  "need": "exercise",
+  "allegory": "The value-function loss is like grading a sports pundit: at each moment the pundit predicts how much more the team will score, afterwards you mark the squared miss against what really happened, and that grade trains the pundit, never the player.",
+  "map": [
+    ["the pundit, who comments but never plays", "the critic network V_θ(s)"],
+    ["the pundit's prediction from the current position", "V_θ(s_t), the predicted return from state s_t"],
+    ["what the team really went on to score", "the return target, V_old(s_t) + Â_t"],
+    ["marking the squared miss, averaged over the games", "mean over the batch of (V_θ(s_t) − target)²"],
+    ["turning the pundit's microphone down so the player is heard", "vf_coef scaling the value loss against the policy loss"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Better than expected?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "shrug", "x": 0.3, "label": "player" }],
+      "props": [{ "kind": "card", "x": 0.68, "y": 0.3, "label": "was that move better than expected?", "color": "butter" }],
+      "cap": {
+        "1": "To learn, the player needs to know whether a move went better than expected. That needs someone who knows what 'expected' is.",
+        "2": "PPO weights each action by its advantage: how much better it went than the critic predicted. So the critic's predictions must be good, and that needs its own loss.",
+        "3": "Advantage estimates Â_t depend on V(s); a poor critic gives confidently wrong advantages. The critic is trained by regression on returns: the value-function loss."
+      }
+    },
+    {
+      "name": "The pundit",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.22, "label": "pundit (critic)" },
+        { "pose": "run", "x": 0.72, "label": "player (actor)" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.26, "y": 0.2, "label": "I predict 120 more steps", "color": "cream" },
+        { "kind": "scale", "x": 0.5, "y": 0.68, "w": 0.2, "h": 0.2, "label": "actual: 150", "color": "mint" }
+      ],
+      "cap": {
+        "1": "Hire a pundit who watches the game and predicts how much more the team will score from here. The pundit never plays; they only predict.",
+        "2": "The critic maps a state to one number, V(s): the return it expects from here. On CartPole that is roughly how many more steps the pole will stay up.",
+        "3": "V_θ: S → ℝ estimates the expected return under the current policy. In ARENA's PPO the critic emits one scalar per state, next to the actor's action logits."
+      }
+    },
+    {
+      "name": "Mark the squared miss",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "L_V = ", "c": "ink", "note": "" },
+        { "t": "c·", "c": "orange", "note": "vf_coef: the volume knob" },
+        { "t": "mean((", "c": "ink", "note": "over the batch" },
+        { "t": "V(s)", "c": "sky", "note": "the pundit's call" },
+        { "t": " − ", "c": "ink", "note": "" },
+        { "t": "target", "c": "green", "note": "what really happened" },
+        { "t": ")²)", "c": "ink", "note": "squared miss" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "After the game, mark each prediction by how far off it was, squared, and average the marks. The pundit learns to shrink that number.",
+        "2": "<code>calc_value_function_loss</code>: vf_coef × mean squared error between the critic's values and the return targets. Squaring punishes big misses far more than small ones.",
+        "3": "L_V = c₁ · E_t[(V_θ(s_t) − V_target)²] with V_target = V_θold(s_t) + Â_t, the returns. A plain regression; the targets are fixed numbers and carry no gradient."
+      }
+    },
+    {
+      "name": "Why squared?",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "x*x", "c": "orange", "label": "loss: miss²" },
+        { "f": "2*x", "c": "sky", "label": "pull on the prediction: 2 × miss" }
+      ],
+      "x": [-3, 3],
+      "y": [-6, 9],
+      "dot": true,
+      "marks": [{ "x": 0, "label": "perfect call" }],
+      "cap": {
+        "1": "Squaring means a miss twice as big costs four times as much, and the pull to correct it grows with the miss. Big blunders get fixed first.",
+        "2": "The gradient of (V − target)² is 2(V − target): the correction is proportional to the error. And the single guess that minimises average squared error is the average outcome.",
+        "3": "argmin_v E[(v − G)²] = E[G], so MSE regression makes V_θ(s) estimate E[G | s], which is exactly the value function's definition. Absolute error would give the median instead."
+      }
+    },
+    {
+      "name": "The pundit is too loud",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "value loss unscaled", "c": "pink", "lines": ["CartPole returns near 500", "squared error around 10^4", "policy loss, order 1, drowned out"] },
+      "right": { "title": "with vf_coef", "c": "mint", "lines": ["scale the value loss down, 0.5 to start", "log both losses separately", "separate networks while debugging"] },
+      "verdict": "Balance the two losses before tuning anything else.",
+      "cap": {
+        "1": "The pundit's misses are measured in hundreds of points, squared. Shout that into the same microphone as the player and nobody hears the player.",
+        "2": "CartPole returns reach about 500, so the squared value error is order 10^4 while the policy loss is order 1. vf_coef (0.5 is the usual start) rebalances; log both losses separately.",
+        "3": "One optimiser, often one shared trunk: unscaled L_V dominates the gradient and shared features serve value prediction only. Scale with vf_coef, separate the networks, detach Â."
+      }
+    },
+    {
+      "name": "Do we need a pundit?",
+      "need": "contested",
+      "dur": 11,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "think", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.52, "y": 0.58, "w": 0.22, "h": 0.36, "label": "a group of answers to one prompt", "color": "sky" },
+        { "kind": "scale", "x": 0.82, "y": 0.62, "w": 0.2, "h": 0.2, "label": "vs the group's average", "color": "butter" },
+        { "kind": "card", "x": 0.52, "y": 0.18, "label": "no pundit at all?", "color": "pink" }
+      ],
+      "cap": {
+        "1": "Some teams now skip the pundit: they ask the same question several times and judge each answer against the group's average. Less to train, more answers to generate.",
+        "2": "Current method: PPO trains a critic with this loss (ARENA, and RLHF's value head). Emerging: GRPO drops the critic and baselines on a group of sampled answers. You need both ideas.",
+        "3": "GRPO (DeepSeekMath, 2024) sets Â = (r − mean r)/std r over a group per prompt: no GAE, no value loss, no critic parameters, at the cost of more rollouts. It suits verifiable rewards."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A good pundit sharpens every lesson", "vf_coef keeps both voices heard", "RLHF's value head is this critic"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "The pundit decides what counts as 'better than expected', so a sloppy pundit teaches the player the wrong lessons. When you steer models with RL, this quiet part matters.",
+        "2": "The critic's accuracy sets the quality of every advantage. In RLHF the critic is a value head reading the residual stream, trained with this same loss alongside PPO.",
+        "3": "Critic error propagates into Â and so into the policy update. PPO-based RLHF puts a value head on the LM's residual stream, so one forward pass serves actor and critic."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Place the pundit's prediction and watch the value loss",
+    "params": [
+      { "id": "v", "label": "the pundit's prediction V(s)", "min": 0, "max": 500, "step": 5, "value": 100 },
+      { "id": "out", "label": "one surprising episode's return", "min": 0, "max": 500, "step": 5, "value": 150 },
+      { "id": "c", "label": "vf_coef", "min": 0.05, "max": 1, "step": 0.05, "value": 0.5 }
+    ],
+    "curves": [
+      { "f": "c * mean([120, 140, 150, 160, out].map(g => (x - g) * (x - g)))", "c": "orange", "label": "value loss if the pundit says x" }
+    ],
+    "x": [0, 500],
+    "y": [0, 60000],
+    "readouts": [
+      { "label": "value loss at your prediction (× vf_coef)", "f": "Math.round(c * mean([120, 140, 150, 160, out].map(g => (v - g) * (v - g))))" },
+      { "label": "best prediction under squared error (the mean)", "f": "mean([120, 140, 150, 160, out]).toFixed(1)" },
+      { "label": "best under absolute error (the median)", "f": "[120, 140, 150, 160, out].sort((p, q) => p - q)[2]" }
+    ],
+    "caption": {
+      "1": "Slide the prediction and watch the loss: it bottoms out at the average return. Drag the surprise episode to 500 and the best prediction chases it.",
+      "2": "Squared error is minimised by the mean, which is what V(s) should estimate. Note the size: misses in the hundreds, squared, run to thousands. That is why vf_coef turns it down.",
+      "3": "argmin_v mean((v − Gᵢ)²) = mean(G), while the L1 optimum is the median. MSE is outlier-sensitive, and at CartPole-scale returns L_V dwarfs L_CLIP unless scaled by c₁."
+    }
+  },
+  "where_else": [
+    "The value head in RLHF, a critic reading the language model's residual stream",
+    "Actor-critic methods generally, where every advantage depends on this critic",
+    "GAE, which uses the critic's values to build both the advantages and the targets",
+    "Any squared-error regression, whose best single guess is the mean"
+  ],
+  "hamming": {
+    "what": "The critic's training loss: the squared gap between its predicted value V(s) and the return that actually followed, scaled by vf_coef.",
+    "when": "Whenever you train an actor-critic method such as PPO, including PPO-based RLHF with a value head.",
+    "why": "The actor learns from 'better than expected', so the critic must predict well, and squared error makes its predictions the average return."
+  },
+  "object": {
+    "title": "The pundit's scoreboard",
+    "subtitle": "One row per moment of an eight-step episode: the pundit's guess, what really happened, and the squared miss.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 3,
+    "f": "((act, pred) => c === 0 ? 0.05 + pred / 5 : c === 1 ? 0.05 + act / 5 : 0.05 + (pred - act) * (pred - act) / 10)(8 - r, (1 - k) * 4 + k * (8 - r))",
+    "labels": { "rows": ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7"], "cols": ["prediction", "actual", "squared miss"] },
+    "c": "aux",
+    "knobs": [{ "id": "k", "label": "how trained the pundit is", "min": 0, "max": 1, "step": 0.25, "value": 0 }],
+    "beats": [
+      { "cap": { "1": "An eight-step episode, one row per moment. The pundit's guess of steps left, what really happened, and the squared miss.", "2": "An untrained critic predicts 4 everywhere; the true returns-to-go fall from 8 to 1.", "3": "Toy episode with reward 1 per step and γ = 1, so G_t = 8 − t. A constant V = 4 misses by up to 4, squared up to 16." }, "view": "iso", "set": { "k": 0 } },
+      { "cap": { "1": "The worst misses are at the start and the end, where the flat guess is furthest off. Squaring makes those count most.", "2": "Squared error weights big misses heavily: the first and last steps dominate the loss.", "3": "The gradient 2(V − G) is largest where |V − G| is, so MSE spends its effort on the biggest residuals." }, "view": "front", "set": { "k": 0 } },
+      { "cap": { "1": "Halfway through training the guesses tilt towards the truth and the misses shrink fast.", "2": "Regression pulls V(s_t) towards its targets, and squared misses fall quadratically.", "3": "With V = (1 − k)·4 + k·G_t, each residual scales by (1 − k) and the loss by (1 − k)²." }, "view": "iso", "set": { "k": 0.5 } },
+      { "cap": { "1": "Fully trained: the guesses match what happened and the miss bars vanish. Now 'better than expected' means something.", "2": "A fitted critic gives meaningful advantages: what happened minus what was predicted.", "3": "V ≈ E[G | s] makes Â_t = G_t − V(s_t) a correctly centred, lower-variance weight for the policy gradient." }, "view": "iso", "set": { "k": 1 } },
+      { "cap": { "1": "In a real run the actual bars wobble from episode to episode, so the pundit learns the average, never a single game.", "2": "Real returns are noisy, and MSE makes the critic predict their mean.", "3": "With stochastic targets the MSE fixed point is the conditional mean: V_θ(s) → E[G_t | s_t] under the policy." }, "view": "top", "set": { "k": 1 } }
+    ],
+    "predict": [
+      { "q": "Trained with squared error on noisy returns, what does the critic learn to predict?", "options": [{ "t": "The average return from that state", "ok": true }, { "t": "The best return ever seen from that state" }], "why": "Squared error is minimised by the mean, which is exactly what a value function is." },
+      { "q": "On CartPole your value loss is about 10,000 and your policy loss about 1. What do you do?", "options": [{ "t": "Scale the value loss with vf_coef and log both separately", "ok": true }, { "t": "Nothing: a bigger loss means more learning" }], "why": "Unscaled, the critic's gradients drown the actor's; vf_coef, 0.5 to start, rebalances them." },
+      { "q": "Which method trains with no value-function loss at all?", "options": [{ "t": "GRPO", "ok": true }, { "t": "PPO" }], "why": "GRPO baselines each answer against a group of answers to the same prompt, so it needs no critic." }
+    ],
+    "where": "Any learned predictor graded by squared error: actor-critic critics, RLHF value heads, regression everywhere."
+  }
+}

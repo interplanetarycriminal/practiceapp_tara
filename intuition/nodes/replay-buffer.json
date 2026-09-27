@@ -1,0 +1,226 @@
+{
+  "id": "replay-buffer",
+  "title": "Shuffle the diary before you study",
+  "week": 9,
+  "need": "core",
+  "allegory": "A replay buffer is a shoebox of diary cards: instead of studying only the last few pages, which all say nearly the same thing, you drop every moment's card in the box and study random handfuls, mixing last week with this morning.",
+  "map": [
+    ["one diary card: what I saw, did, got, and saw next", "a transition (s, a, r, terminated, s′)"],
+    ["reading the diary page by page", "training on consecutive, highly correlated frames"],
+    ["pulling a random handful from the box", "sampling a minibatch uniformly, with replacement"],
+    ["the box holds N cards and the oldest get thrown out", "a FIFO buffer of size buffer_size"],
+    ["a box holding only good days", "catastrophic forgetting: failure states evicted, recovery unlearned"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Déjà vu frames",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "frame 1041, frame 1042, frame 1043 ... all the same?",
+      "actors": [{ "pose": "shrug", "x": 0.22, "label": "agent" }],
+      "props": [
+        { "kind": "card", "x": 0.55, "y": 0.35, "label": "frame t", "color": "sky" },
+        { "kind": "card", "x": 0.67, "y": 0.4, "label": "frame t+1", "color": "sky" },
+        { "kind": "card", "x": 0.79, "y": 0.45, "label": "frame t+2", "color": "sky" },
+        { "kind": "card", "x": 0.67, "y": 0.72, "label": "learns only the last 30 seconds", "color": "pink" }
+      ],
+      "cap": {
+        "1": "An RL agent's experience arrives as a stream of moments, each almost identical to the last. Learn from them in order and it only remembers the last thirty seconds.",
+        "2": "Supervised learning assumes shuffled, unrelated examples. RL hands you consecutive, correlated transitions from a distribution that moves as the policy improves. Training on the raw stream chases it.",
+        "3": "Online Q-learning on the raw stream breaks the i.i.d. assumption: minibatches are temporally correlated and non-stationary, so SGD fits recent trajectories rather than the Bellman backup in general."
+      }
+    },
+    {
+      "name": "The shoebox",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "carry", "x": 0.2, "to": 0.4, "label": "agent" }],
+      "props": [
+        { "kind": "crate", "x": 0.62, "y": 0.6, "w": 0.26, "h": 0.26, "label": "replay buffer", "color": "butter" },
+        { "kind": "card", "x": 0.62, "y": 0.2, "label": "study: a random handful", "color": "mint" },
+        { "kind": "card", "x": 0.9, "y": 0.5, "label": "last week", "color": "cream" },
+        { "kind": "card", "x": 0.9, "y": 0.66, "label": "this morning", "color": "cream" }
+      ],
+      "arrows": [[0.45, 0.55, 0.55, 0.58, "drop in"], [0.72, 0.5, 0.86, 0.55, "draw at random"]],
+      "cap": {
+        "1": "Write each moment on a card and drop it in a shoebox. To study, pull out a random handful: last week mixed with this morning.",
+        "2": "Store each transition (s, a, r, terminated, s′) and train on random minibatches from the store. Random draws scramble the order and blend old behaviour with new.",
+        "3": "Uniform sampling from a store of recent transitions approximates i.i.d. minibatches. Lin (1992) proposed replay to reuse costly robot experience; in DQN (2015) it became load-bearing."
+      }
+    },
+    {
+      "name": "Why old cards count",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "target = ", "c": "ink", "note": "" },
+        { "t": "r", "c": "green", "note": "what you got" },
+        { "t": " + γ·", "c": "ink", "note": "" },
+        { "t": "maxₐ′ Q(s′,a′)", "c": "orange", "note": "best from here, whoever chose a" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "Why can you learn from cards a clumsier past you wrote? Because each card's lesson only asks 'what is the best from here?', not 'what did I use to do?'",
+        "2": "The Q-learning target takes the max over next actions, not whatever the old policy would do, so transitions from earlier, worse policies are still valid training data.",
+        "3": "Replay is legal because the target is off-policy: r + γ maxₐ′ Q(s′, a′) never references the behaviour policy. On-policy methods (VPG, PPO) cannot reuse stale data like this."
+      }
+    },
+    {
+      "name": "Out of time, not fallen",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "store terminated", "c": "mint", "lines": ["falling over ends the future", "the time limit is not failure", "agent keeps balancing"] },
+      "right": { "title": "store terminated | truncated", "c": "pink", "lines": ["the 500-step limit looks like failure", "no reason to last forever", "happy to fall at step 499"] },
+      "verdict": "Only a real ending should zero the future.",
+      "cap": {
+        "1": "Careful what goes on the card. 'The game ended because time ran out' is not 'I fell over'. Mix them up and the agent stops caring about lasting.",
+        "2": "Store d = <code>terminated</code>, not <code>terminated | truncated</code>. CartPole's 500-step limit is not failure; stored as one, the agent has no reason to prefer balancing forever.",
+        "3": "Truncation cuts the bootstrap at an artificial horizon, so surviving to the limit looks as final as falling. Under auto-reset, also take s′ from infos['final_observation']."
+      }
+    },
+    {
+      "name": "The saw-tooth",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "curves": [
+        { "f": "min(500, 200*(x % 4))", "c": "green", "label": "episode return (schematic)" },
+        { "f": "400*max(0.03, 1 - (x % 4)/2.5)", "c": "red", "label": "failures left in the buffer (schematic)" }
+      ],
+      "x": [0, 12],
+      "y": [0, 520],
+      "marks": [{ "x": 3.9, "label": "collapse" }, { "x": 7.9, "label": "and again" }],
+      "cap": {
+        "1": "Once the agent is good, the box fills with only good days. It forgets what falling looks like, falls over, relearns, and round it goes: a saw-tooth.",
+        "2": "FIFO eviction throws out failure states once the agent is competent; its Q-values there decay, it falls, it relearns. Log the share of sampled transitions with done set: heading to 0 means trouble.",
+        "3": "A FIFO buffer is a sliding window over recent behaviour, so competence evicts failures and their Q-estimates drift: catastrophic forgetting. ARENA suggests keeping ~10% of each batch from older data."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Makes RL data look like a dataset", "Pairs with the target network in DQN", "Off-policy only: PPO throws its data away"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Without the shoebox, DeepMind's Atari agent fell apart. With it, reinforcement learning began to behave like ordinary, stable training.",
+        "2": "DeepMind's 2015 ablation: removing replay caused severe deterioration on Atari. Replay fixes correlated data; the target network fixes the moving target. DQN needs both.",
+        "3": "The same question, what is still in the batch, decides what a model forgets when it is later fine-tuned, which matters whenever you try to understand or steer what it keeps."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "How long until the box forgets failure? (toy model)",
+    "params": [
+      { "id": "N", "label": "buffer size (thousands of transitions)", "min": 1, "max": 50, "step": 1, "value": 10 },
+      { "id": "rho", "label": "share of each batch reserved for old experience", "min": 0, "max": 0.3, "step": 0.01, "value": 0 }
+    ],
+    "curves": [
+      { "f": "(0.3*max(0, N - x) + 0.01*min(x, N))/N", "c": "red", "label": "failure share, plain FIFO" },
+      { "f": "(1 - rho)*(0.3*max(0, N - x) + 0.01*min(x, N))/N + rho*0.3", "c": "green", "label": "failure share, with your reserve" }
+    ],
+    "x": [0, 60],
+    "y": [0, 0.35],
+    "readouts": [
+      { "label": "failure share per batch, 20k steps after getting good", "f": "((1 - rho)*(0.3*max(0, N - 20) + 0.01*min(20, N))/N + rho*0.3).toFixed(3)" },
+      { "label": "plain FIFO drops below 5% failures after", "f": "(0.25*N/0.29).toFixed(1) + 'k steps'" },
+      { "label": "long-run failure share with your reserve", "f": "((1 - rho)*0.01 + rho*0.3).toFixed(3)" }
+    ],
+    "caption": {
+      "1": "The x-axis is time since the agent got good. A bigger box remembers failure longer, but still forgets. Now reserve 0.1 of each batch for old experience: failure never vanishes.",
+      "2": "Toy numbers: failures are 30% of transitions before competence, 1% after. A FIFO buffer of N thousand forgets in about 0.86·N thousand steps; a reserved share keeps a floor under it.",
+      "3": "Failure share ≈ (1−ρ)·FIFO(t) + ρ·p_old. Buffer size only delays eviction; a reserved slice of older experience is what keeps failure states in the training distribution."
+    }
+  },
+  "where_else": [
+    "Continual learning: rehearse a sample of old data so new training does not erase old skills",
+    "Shuffled data loaders in supervised learning: the same fight against correlated batches",
+    "Other off-policy RL methods: any target that ignores who collected the data can reuse it"
+  ],
+  "hamming": {
+    "what": "A store of recent transitions that the agent trains on by random sampling, instead of learning only from the moment that just happened.",
+    "when": "In off-policy RL like DQN ([2.2.1]), whenever consecutive experience is correlated or expensive to collect.",
+    "why": "Random draws make RL data behave like a shuffled dataset so training is stable, and each costly experience gets reused many times."
+  },
+  "object": {
+    "title": "The forgetting shoebox",
+    "subtitle": "A FIFO row of cards (tall = a failure, short = a success) plus an optional archive; turn time forward and watch failures slide out.",
+    "kind": "bars",
+    "rows": 2,
+    "cols": 10,
+    "f": "r == 0 ? (res > 0.5 ? ((c % 3) == 0 ? 1.4 : 0.4) : 0.02) : (c < 10 - 2*t ? ((c % 3) == 0 ? 1.4 : 0.4) : 0.4)",
+    "labels": { "rows": ["archive (old experience)", "FIFO buffer"], "cols": ["1 (oldest)", "2", "3", "4", "5", "6", "7", "8", "9", "10 (newest)"] },
+    "c": "data",
+    "knobs": [
+      { "id": "t", "label": "time since the agent got good", "min": 0, "max": 5, "step": 1, "value": 0 },
+      { "id": "res", "label": "keep an archive of old experience (0 no, 1 yes)", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "The shoebox while the agent is still learning: tall cards are failures, short ones successes. Plenty of both.",
+          "2": "A FIFO buffer early in training: failure transitions are well represented across the window.",
+          "3": "Early on the buffer's failure share is high, so Q-estimates over failure states are well trained."
+        },
+        "view": "iso",
+        "set": { "t": 0, "res": 0 }
+      },
+      {
+        "cap": {
+          "1": "The agent gets good. New cards are all successes, and the old failure cards slide out of the far end.",
+          "2": "Competence means new transitions are successes; FIFO eviction removes the old failures first.",
+          "3": "The sampling distribution drifts with the policy: failure states lose support as the window advances."
+        },
+        "view": "front",
+        "set": { "t": 3, "res": 0 }
+      },
+      {
+        "cap": {
+          "1": "Now the box holds no failures at all. The agent is about to forget how to recover, and fall.",
+          "2": "No failures left to sample: Q-values over near-failure states decay from disuse, and returns will crash.",
+          "3": "Zero support on failure states lets their estimates drift arbitrarily: the collapse half of the saw-tooth."
+        },
+        "view": "front",
+        "set": { "t": 5, "res": 0 }
+      },
+      {
+        "cap": {
+          "1": "Keep a small archive of old experience and mix a little into every batch. The failure cards never vanish.",
+          "2": "Reserving part of each batch (ARENA suggests about 10%) for older experience keeps failures in training.",
+          "3": "A mixture of FIFO and archival sampling bounds the failure share away from zero and damps the saw-tooth."
+        },
+        "view": "iso",
+        "set": { "t": 5, "res": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Why sample random handfuls instead of training on the latest transitions?",
+        "options": [{ "t": "Consecutive transitions are nearly identical, so random draws decorrelate batches", "ok": true }, { "t": "Random samples have higher reward" }],
+        "why": "Stable training wants roughly independent examples; the raw RL stream is highly correlated."
+      },
+      {
+        "q": "Why can DQN learn from transitions an older, worse policy produced?",
+        "options": [{ "t": "Its target takes the max over next actions, so it is off-policy", "ok": true }, { "t": "Old transitions get relabelled with new actions" }],
+        "why": "r + γ maxₐ′ Q(s′, a′) never refers to the policy that collected the data."
+      },
+      {
+        "q": "Your CartPole agent balances perfectly, then collapses, over and over. What do you log first?",
+        "options": [{ "t": "The share of sampled transitions that end in failure", "ok": true }, { "t": "The learning rate" }],
+        "why": "If failures vanish from the buffer as returns rise, the saw-tooth of catastrophic forgetting is coming."
+      }
+    ],
+    "where": "Anywhere a learner must not overfit to recent experience: rehearsal in continual learning, shuffled data loaders."
+  }
+}

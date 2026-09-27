@@ -1,0 +1,235 @@
+{
+  "id": "epsilon-greedy",
+  "title": "Mostly the favourite, sometimes a gamble",
+  "week": 9,
+  "need": "core",
+  "allegory": "Epsilon-greedy is like eating at your favourite restaurant most nights but rolling a ten-sided die first: on a 1 you try somewhere at random, so a better place can still turn up.",
+  "map": [
+    ["your current favourite restaurant", "the greedy action, argmax over a of Q(s, a)"],
+    ["the die you roll every night", "a uniform random number checked against ε"],
+    ["on a 1 in 10, eat somewhere at random", "with probability ε, take a uniformly random action"],
+    ["updating your ratings after each meal", "the Q-value update from the observed reward"],
+    ["rolling less often as you settle in", "decaying ε over training, as DQN's linear schedule does"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Stuck on a favourite",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "door A paid once ... so I never opened door B",
+      "actors": [{ "pose": "sit", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "door", "x": 0.52, "y": 0.52, "label": "tried: +1", "color": "mint" },
+        { "kind": "door", "x": 0.8, "y": 0.52, "label": "never tried: ?", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "If you always pick whatever has looked best so far, you never find out whether something untried is better. One lucky early result can trap you for good.",
+        "2": "A purely greedy agent acts on its current Q estimates. Actions it undervalued early are never tried again, so their estimates are never corrected.",
+        "3": "Q-learning's guarantee needs coverage: every state-action pair keeps being visited. A deterministic greedy behaviour policy can lock onto a worse action permanently."
+      }
+    },
+    {
+      "name": "Dice at dinner",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "walk", "x": 0.15, "to": 0.3, "label": "you" }],
+      "props": [
+        { "kind": "circle", "x": 0.32, "y": 0.3, "w": 0.08, "h": 0.08, "label": "d10", "color": "red" },
+        { "kind": "door", "x": 0.55, "y": 0.55, "label": "favourite: 9 nights in 10", "color": "peach" },
+        { "kind": "door", "x": 0.72, "y": 0.55, "label": "random", "color": "lav" },
+        { "kind": "door", "x": 0.88, "y": 0.55, "label": "random", "color": "sky" }
+      ],
+      "arrows": [[0.36, 0.34, 0.5, 0.45, "mostly"], [0.36, 0.3, 0.8, 0.42, "on a 1"]],
+      "cap": {
+        "1": "Most nights you eat at your favourite place. But first you roll a ten-sided die, and on a 1 you try somewhere at random. Now and then you find a new favourite.",
+        "2": "Epsilon-greedy: with probability ε take a uniformly random action, otherwise the action with the highest Q-value. ε = 0.1 means about one random move in ten.",
+        "3": "π(a|s) = 1 - ε + ε/|A| for the argmax action and ε/|A| for each other action. Every action keeps non-zero probability, which gives learning the coverage it needs."
+      }
+    },
+    {
+      "name": "The rule itself",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "a = ", "c": "ink", "note": "" },
+        { "t": "random", "c": "orange", "note": "with chance ε" },
+        { "t": " or ", "c": "ink", "note": "" },
+        { "t": "argmax Q(s,·)", "c": "green", "note": "otherwise: the favourite" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Roll the die. If it says explore, pick any option at random. Otherwise pick the one with the best rating so far. That is the whole rule.",
+        "2": "With probability ε, <code>env.action_space.sample()</code>; otherwise <code>argmax(Q[s])</code>. The random branch can pick the greedy action too, which is fine.",
+        "3": "Break ties randomly: with Q initialised to zeros, np.argmax returns action 0 every time, so 'greedy' silently means 'always the first action' until values separate."
+      }
+    },
+    {
+      "name": "Explore early, less later",
+      "need": "core",
+      "dur": 9,
+      "type": "plot",
+      "curves": [{ "f": "max(0.1, 1 - 0.9*x/0.5)", "c": "orange", "label": "ε on a linear schedule (example values)" }],
+      "x": [0, 1],
+      "y": [0, 1.05],
+      "dot": true,
+      "marks": [
+        { "x": 0, "label": "explore everything" },
+        { "x": 0.5, "label": "settle at a small floor" }
+      ],
+      "cap": {
+        "1": "At first you know nothing, so explore a lot. As your ratings become trustworthy, roll the die less often. Many setups shrink ε in a straight line, then hold it.",
+        "2": "In DQN the replay buffer fills with ε-greedy experience while a linear scheduler decays ε: high at the start, a small floor later. The numbers here are examples.",
+        "3": "Annealing ε trades early coverage for later exploitation; the floor keeps some coverage so estimates for rarely chosen actions can still be corrected."
+      }
+    },
+    {
+      "name": "The cliff edge",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "SARSA (on-policy)", "c": "mint", "lines": ["counts its own random slips", "takes the safe detour", "greedy return about -17"] },
+      "right": { "title": "Q-learning (off-policy)", "c": "peach", "lines": ["learns the ideal edge path", "its random slips drop it off", "greedy return about -13"] },
+      "verdict": "Exploration has a price. Whether your values include it is a choice.",
+      "cap": {
+        "1": "Walking beside a cliff, a 1-in-10 random step can be fatal. One learner plans around its own clumsiness; the other plans as if it will never slip.",
+        "2": "On CliffWalking-v0 with ε = 0.1, SARSA prices its random slips into its values and detours (about -17). Q-learning learns the edge path (about -13) but keeps falling in while training.",
+        "3": "SARSA converges to Q_π for the ε-greedy π it runs; Q-learning to Q*. Prefer SARSA-style values when you will still be exploring at deployment, i.e. when safety matters."
+      }
+    },
+    {
+      "name": "Does ε matter here?",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Plateau? Ask if exploration is the bottleneck", "UCB: explore where you're least sure", "Language models explore by sampling"],
+      "actor": { "pose": "think", "x": 0.85 },
+      "cap": {
+        "1": "Some worlds reward almost any poking around; in others, one hidden path decides everything. If your learner stalls, first ask which kind of world it is in.",
+        "2": "If an agent plateaus, whether ε is the cause depends on the environment's structure, not the algorithm. Its sibling UCB explores where it is most uncertain, not uniformly.",
+        "3": "Exploration decides which behaviours a learner ever gets to reinforce. In RL fine-tuning of language models, sampling does this job: what is never sampled is never rewarded."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "One option is a hidden gem you have never tried: how long until the dice send you there?",
+    "params": [
+      { "id": "eps", "label": "ε, chance of a random pick", "min": 0.01, "max": 0.5, "step": 0.01, "value": 0.1 },
+      { "id": "n", "label": "number of options", "min": 2, "max": 20, "step": 1, "value": 10 }
+    ],
+    "curves": [
+      { "f": "1 - pow(1 - eps/n, x)", "c": "teal", "label": "chance you have tried the gem by night x" },
+      { "f": "eps", "c": "orange", "label": "share of nights spent on random picks" }
+    ],
+    "x": [0, 500],
+    "y": [0, 1.05],
+    "readouts": [
+      { "label": "expected nights until the first visit", "f": "(n/eps).toFixed(0)" },
+      { "label": "chance of trying it within 100 nights", "f": "(100*(1 - pow(1 - eps/n, 100))).toFixed(0) + '%'" },
+      { "label": "nights per 100 spent exploring", "f": "(100*eps).toFixed(0)" }
+    ],
+    "caption": {
+      "1": "Slide ε and the number of options. Watch how long it takes before a dice roll sends you to the gem, and how many nights exploring costs you.",
+      "2": "A particular untried action is picked with probability ε/n per step, so first contact takes about n/ε steps on average. More options or a smaller ε means slower discovery.",
+      "3": "P(tried by step t) = 1 - (1 - ε/n)ᵗ. Uniform exploration scales badly with |A|; UCB and optimistic initialisation aim at under-tried actions instead of waiting on luck."
+    }
+  },
+  "where_else": [
+    "DQN's replay buffer, filled with ε-greedy experience while ε decays on a linear schedule",
+    "Multi-armed bandits, where UCB and Thompson sampling are smarter alternatives",
+    "A/B tests and recommender systems that reserve a slice of traffic for trying new options",
+    "RL fine-tuning of language models, where sampling decides which behaviours ever get rewarded"
+  ],
+  "hamming": {
+    "what": "A behaviour policy that takes the best-looking action most of the time and a uniformly random one with probability ε.",
+    "when": "In value-based RL (SARSA, Q-learning, DQN), whenever the agent must keep trying actions its current estimates undervalue.",
+    "why": "Without exploration, early mistakes in the value estimates are never corrected; ε-greedy is the simplest way to keep every action in play."
+  },
+  "object": {
+    "title": "The peg tray",
+    "subtitle": "Four situations down the side, five moves across: each peg's height is how often that move gets picked.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 5,
+    "f": "0.02 + 1.6*((c === (zeroQ > 0.5 ? 0 : (2*r + 1) % 5) ? 1 - eps : 0) + eps/5)",
+    "labels": { "rows": ["state 1", "state 2", "state 3", "state 4"], "cols": ["move 1", "move 2", "move 3", "move 4", "move 5"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "eps", "label": "ε, chance of a random move", "min": 0, "max": 1, "step": 0.05, "value": 0.1 },
+      { "id": "zeroQ", "label": "All values start at zero (tie bug)", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "A tray of pegs: four situations down the side, five moves across. One tall peg per row is the current favourite; the short pegs are the dice rolls.",
+          "2": "π(a|s) for ε-greedy with ε = 0.1 and five actions: 0.92 on the greedy action, 0.02 on each of the others.",
+          "3": "Greedy action: 1 - ε + ε/|A|. Others: ε/|A|. Every action keeps positive probability."
+        },
+        "view": "iso",
+        "set": { "eps": 0.1, "zeroQ": 0 }
+      },
+      {
+        "cap": {
+          "1": "Set ε to zero and the short pegs vanish: pure greed. Anything not already the favourite is never tried again.",
+          "2": "ε = 0 is a deterministic greedy policy: no coverage, so undervalued actions are never corrected.",
+          "3": "Without exploration the coverage condition fails, and learning can lock in early estimation errors."
+        },
+        "view": "front",
+        "set": { "eps": 0, "zeroQ": 0 }
+      },
+      {
+        "cap": {
+          "1": "Set ε to one and every peg is the same height: pure exploration. You learn about everything but never cash in.",
+          "2": "ε = 1 is the uniform random policy: maximal coverage, no exploitation.",
+          "3": "Q-learning can still learn Q* from such data because it is off-policy, but the behaviour itself earns poor return."
+        },
+        "view": "iso",
+        "set": { "eps": 1, "zeroQ": 0 }
+      },
+      {
+        "cap": {
+          "1": "A classic bug: every value starts at zero, so 'pick the best' quietly means 'pick the first'. The tall pegs all line up in the first column.",
+          "2": "np.argmax on an all-zero Q returns action 0 every time. Break ties randomly.",
+          "3": "Deterministic tie-breaking biases early behaviour toward low-index actions until Q separates."
+        },
+        "view": "top",
+        "set": { "eps": 0.1, "zeroQ": 1 }
+      },
+      {
+        "cap": {
+          "1": "In between is the working setting: mostly favourites, enough surprises to keep learning. How much you need depends on the world, not the algorithm.",
+          "2": "The right ε depends on the environment's structure; decaying schedules start high and settle low.",
+          "3": "Sparse or deceptive rewards need far more exploration than dense, forgiving ones."
+        },
+        "view": "side",
+        "set": { "eps": 0.3, "zeroQ": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "ε = 0.1 with 5 actions. How often is the greedy action picked?",
+        "options": [{ "t": "92% of the time", "ok": true }, { "t": "90% of the time" }, { "t": "10% of the time" }],
+        "why": "90% greedy, plus its share of the random 10%: 0.9 + 0.1/5 = 0.92."
+      },
+      {
+        "q": "Q starts at all zeros and you use np.argmax. What does 'greedy' do at first?",
+        "options": [{ "t": "Always picks action 0", "ok": true }, { "t": "Picks randomly among the ties" }],
+        "why": "np.argmax returns the first maximum, so break ties randomly yourself."
+      },
+      {
+        "q": "Your agent plateaus. Is a higher ε the fix?",
+        "options": [{ "t": "It depends on the environment's structure", "ok": true }, { "t": "Always: more exploration is better" }],
+        "why": "In some environments any exploration works; in others it decides everything. Diagnose before tuning."
+      }
+    ],
+    "where": "Any repeated choice under uncertainty: restaurants, A/B tests, recommenders, and sampling in RL fine-tuning."
+  }
+}

@@ -1,0 +1,244 @@
+{
+  "id": "multi-armed-bandit",
+  "title": "Favourite restaurant or a new one?",
+  "week": 9,
+  "need": "exercise",
+  "allegory": "A multi-armed bandit is like choosing where to eat every night in a new town: each restaurant's quality is unknown and meals vary by luck, so you must balance returning to your favourite against trying places that might be better.",
+  "map": [
+    ["a restaurant in the new town", "an arm"],
+    ["tonight's meal, good or bad partly by luck", "a noisy reward"],
+    ["your running average rating for each place", "Q_a, the sample-mean estimate (with visit count N_a)"],
+    ["benefit of the doubt for barely-tried places", "the UCB bonus c·√(ln t / N_a)"],
+    ["meals missed by not knowing the best place from day one", "regret"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Ten restaurants, one dinner",
+      "need": "exercise",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "note": "bonus section: nothing later depends on it",
+      "actors": [{ "pose": "think", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "door", "x": 0.42, "y": 0.52, "w": 0.1, "h": 0.32, "label": "7/10?", "color": "mint" },
+        { "kind": "door", "x": 0.58, "y": 0.52, "w": 0.1, "h": 0.32, "label": "?", "color": "peach" },
+        { "kind": "door", "x": 0.74, "y": 0.52, "w": 0.1, "h": 0.32, "label": "?", "color": "lav" },
+        { "kind": "door", "x": 0.9, "y": 0.52, "w": 0.1, "h": 0.32, "label": "?", "color": "sky" }
+      ],
+      "cap": {
+        "1": "New town, ten restaurants, one dinner a night. Go back to the best so far, or risk a new place that might be better? That's the whole problem.",
+        "2": "A multi-armed bandit: k arms, each paying out at an unknown average. Every pull spent testing one arm is a pull not spent on the best known one: exploration versus exploitation.",
+        "3": "A bandit is an MDP with a single state: no transitions, no credit assignment, just regret minimisation. It isolates exploration from everything else in RL."
+      }
+    },
+    {
+      "name": "Keep a running average",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "Q", "c": "green", "note": "your rating" },
+        { "t": " ← ", "c": "ink", "note": "" },
+        { "t": "Q + ", "c": "green", "note": "" },
+        { "t": "(R − Q)", "c": "orange", "note": "tonight's surprise" },
+        { "t": "/N", "c": "sky", "note": "smaller with each visit" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Keep one number per restaurant: its average so far. After each dinner, nudge it toward tonight's meal, by less and less the more often you've been.",
+        "2": "Reward averaging: track N (visits) and Q (mean reward) per arm. Q ← Q + (R − Q)/N is the running mean without storing every reward (Sutton & Barto section 2.4).",
+        "3": "Incremental sample mean: Q_{n+1} = Q_n + (R_n − Q_n)/n, the pattern estimate += step × error. A constant step instead weights recent rewards more, which suits arms that drift."
+      }
+    },
+    {
+      "name": "Mostly the favourite",
+      "need": "exercise",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "actors": [
+        { "pose": "walk", "x": 0.2, "to": 0.42, "label": "9 nights in 10" },
+        { "pose": "run", "x": 0.3, "to": 0.8, "label": "1 in 10" }
+      ],
+      "props": [
+        { "kind": "door", "x": 0.5, "y": 0.52, "w": 0.12, "h": 0.34, "label": "favourite", "color": "mint" },
+        { "kind": "door", "x": 0.86, "y": 0.52, "w": 0.1, "h": 0.34, "label": "random pick", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A simple rule: most nights, go to your current favourite. One night in ten, pick anywhere at random, just to check you're not missing something.",
+        "2": "ε-greedy: with probability ε pick a random arm, otherwise the arm with the highest Q. Optimistic initialisation is another trick: start every Q too high so even a greedy agent tries everything.",
+        "3": "ε-greedy explores uniformly forever unless ε decays; optimistic init explores early and implicitly. Neither uses how uncertain each estimate is, which is what UCB adds."
+      }
+    },
+    {
+      "name": "Benefit of the doubt",
+      "need": "exercise",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "sqrt(log(100)/x)", "c": "orange", "label": "bonus on night 100 (c = 1)" },
+        { "f": "sqrt(log(1000)/x)", "c": "sky", "label": "bonus on night 1000 (c = 1)" }
+      ],
+      "x": [1, 50],
+      "y": [0, 3],
+      "dot": true,
+      "marks": [{ "x": 2, "label": "barely tried: big bonus" }, { "x": 40, "label": "well known" }],
+      "cap": {
+        "1": "Smarter: give places you've barely tried the benefit of the doubt. Score each one as its average plus a bonus that shrinks the more you've visited.",
+        "2": "UCB picks the arm with the highest Q_a + c·√(ln t / N_a). Rarely-tried arms get a big bonus, so they get tested; as N_a grows the bonus fades, and ln t slowly re-opens old doubts.",
+        "3": "The bonus is an upper confidence bound on the arm's mean; UCB1 has logarithmic regret guarantees (Auer, Cesa-Bianchi & Fischer, 2002). Guard N_a = 0 with a tiny epsilon, not a large one."
+      }
+    },
+    {
+      "name": "When feedback is late",
+      "need": "contested",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "UCB (deterministic)", "c": "peach", "lines": ["always picks the top score", "under delay, re-picks one arm", "226,220 regret"] },
+      "right": { "title": "Thompson sampling (random)", "c": "mint", "lines": ["draws a plausible mean per arm", "spreads choices while evidence travels", "59,256 regret"] },
+      "verdict": "With feedback an hour late, randomised exploration held up far better.",
+      "cap": {
+        "1": "Real life adds a twist: reviews arrive an hour late. Always picking the top score means picking the same place while the verdicts are still in the post.",
+        "2": "Chapelle and Li (NIPS 2011) tested on real Yahoo traffic. With a one-hour feedback delay, Thompson sampling accumulated 59,256 regret against UCB's 226,220: its randomness kept choices spread out.",
+        "3": "Textbook rule: UCB, with regret guarantees. Production evidence: posterior sampling is robust to delay, since a deterministic index repeats itself within the delay window. What you need: UCB, because tree search builds on it."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "exercise",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Bonus: nothing later depends on it", "Explore vs exploit returns in DQN", "UCB returns inside tree search"],
+      "actor": { "pose": "wave", "x": 0.86 },
+      "cap": {
+        "1": "Honest note: this is a bonus. Nothing later needs it. But 'try new things or use what works' shows up again whenever an agent learns by acting.",
+        "2": "ε-greedy with a decay schedule returns in DQN; UCB's bonus returns as the selection rule in Monte Carlo tree search. Exploration also decides which behaviours an RL-trained model ever discovers.",
+        "3": "Regret minimisation is exploration in its purest form. It matters for steering AI because RL fine-tuning can only reinforce behaviours the policy actually samples: exploration bounds what training finds."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Who gets tonight's visit under UCB?",
+    "labels": ["favourite (avg 0.70)", "newcomer (avg 0.55)", "the dud (avg 0.40, 5 visits)"],
+    "params": [
+      { "id": "nA", "label": "visits to the favourite", "min": 1, "max": 100, "step": 1, "value": 40 },
+      { "id": "nB", "label": "visits to the newcomer", "min": 1, "max": 100, "step": 1, "value": 3 },
+      { "id": "c", "label": "c: how much benefit of the doubt", "min": 0, "max": 2, "step": 0.1, "value": 1 }
+    ],
+    "f": "[0.7 + c*sqrt(log(nA + nB + 5)/nA), 0.55 + c*sqrt(log(nA + nB + 5)/nB), 0.4 + c*sqrt(log(nA + nB + 5)/5)]",
+    "y": [0, 5],
+    "readouts": [
+      { "label": "UCB visits tonight", "f": "(0.7 + c*sqrt(log(nA + nB + 5)/nA) >= max(0.55 + c*sqrt(log(nA + nB + 5)/nB), 0.4 + c*sqrt(log(nA + nB + 5)/5))) ? 'the favourite' : (0.55 + c*sqrt(log(nA + nB + 5)/nB) >= 0.4 + c*sqrt(log(nA + nB + 5)/5) ? 'the newcomer' : 'the dud')" },
+      { "label": "bonus on the newcomer", "f": "(c*sqrt(log(nA + nB + 5)/nB)).toFixed(2)" },
+      { "label": "nights so far, t", "f": "nA + nB + 5" }
+    ],
+    "caption": {
+      "1": "Set c to 0: pure greed, always the favourite. Raise c: the barely-tried newcomer gets the benefit of the doubt. Give it more visits: the doubt fades.",
+      "2": "Score = average + c·√(ln t / N). With few visits the bonus dominates; with many, the average does. Even the dud gets revisited now and then, because ln t keeps growing.",
+      "3": "UCB1's bonus is a confidence radius: it shrinks like 1/√N and grows like √(ln t), so every arm keeps being tried, but a suboptimal one only O(log t) times."
+    }
+  },
+  "where_else": [
+    "Monte Carlo tree search: a UCB-style bonus picks which move to explore next (PUCT adds a learned prior)",
+    "Hyperband-style hyperparameter search, which rations trials among configurations",
+    "Ad and news recommendation, where Chapelle and Li tested these rules on real traffic"
+  ],
+  "hamming": {
+    "what": "A one-state decision problem: repeatedly pick among options with unknown average payoffs, balancing trying new ones against using the best so far.",
+    "when": "When each choice gives noisy feedback and there is no state to navigate: ads, recommendations, experiment allocation.",
+    "why": "It isolates exploration versus exploitation, and its UCB rule returns inside tree search; in this course it is a bonus you can safely skip."
+  },
+  "object": {
+    "title": "The doubt ramp",
+    "subtitle": "A ramp of benefit-of-the-doubt: tall where a place is barely tried, flat where it is well known.",
+    "kind": "surface",
+    "f": "c*sqrt(log(y)/x)",
+    "x": [1, 50],
+    "y": [2, 1000],
+    "marks": [
+      { "x": 2, "y": 900, "label": "barely tried, long stay" },
+      { "x": 45, "y": 50, "label": "well known" }
+    ],
+    "knobs": [{ "id": "c", "label": "c: benefit of the doubt", "min": 0, "max": 2, "step": 0.1, "value": 1 }],
+    "beats": [
+      {
+        "cap": {
+          "1": "Across: how often you've visited a place. Deep: how many nights you've been in town. Height: the benefit of the doubt it gets.",
+          "2": "The UCB bonus c·√(ln t / N) over visits N and total pulls t.",
+          "3": "A confidence radius: proportional to N^(−1/2), growing as √(ln t)."
+        },
+        "view": "iso",
+        "set": { "c": 1 }
+      },
+      {
+        "cap": {
+          "1": "Along the visits edge the ramp falls fast: the first few visits settle most of the doubt.",
+          "2": "Doubling N divides the bonus by √2, so after a handful of pulls the average dominates the score.",
+          "3": "The 1/√N decay mirrors the standard error of a sample mean."
+        },
+        "view": "front",
+        "set": { "c": 1 }
+      },
+      {
+        "cap": {
+          "1": "Along the nights edge it barely rises: old doubts re-open slowly, so even a dud gets an occasional retry.",
+          "2": "The √(ln t) growth guarantees every arm is revisited eventually, but rarely.",
+          "3": "Logarithmic growth gives each suboptimal arm O(log t) pulls: logarithmic regret."
+        },
+        "view": "side",
+        "set": { "c": 1 }
+      },
+      {
+        "cap": {
+          "1": "Set the doubt to zero: the ramp goes flat. With no benefit of the doubt you're pure greed, stuck with the first place that seemed fine.",
+          "2": "c = 0 is greedy selection on Q: one unlucky first meal can lock a great restaurant out forever.",
+          "3": "Without an exploration term, greedy selection can settle on a suboptimal arm with positive probability."
+        },
+        "view": "iso",
+        "set": { "c": 0 }
+      },
+      {
+        "cap": {
+          "1": "Double the doubt and the ramp steepens: you'll explore much more before settling down.",
+          "2": "A larger c trades short-term reward for more testing: it is the exploration dial.",
+          "3": "c scales the confidence radius; UCB1's classic form, x̄ + √(2 ln t / N), corresponds to c = √2 for rewards in [0, 1]."
+        },
+        "view": "top",
+        "set": { "c": 2 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Two restaurants both average 7/10. One has had 50 visits, the other 2. Which does UCB pick next?",
+        "options": [
+          { "t": "The one with 2 visits", "ok": true },
+          { "t": "The one with 50 visits" },
+          { "t": "Either: it's a tie" }
+        ],
+        "why": "Same average, but the rarely-visited one has a much bigger bonus: more doubt, more reason to check."
+      },
+      {
+        "q": "Your UCB agent throws divide-by-zero warnings on step one. Best fix?",
+        "options": [
+          { "t": "Add a tiny epsilon like 1e-6 to N, so untried arms get a huge bonus", "ok": true },
+          { "t": "Add a large epsilon like 1.0, to be safe" }
+        ],
+        "why": "A large epsilon shrinks the bonus to almost nothing and UCB quietly collapses into greed."
+      },
+      {
+        "q": "Feedback arrives an hour late. Which rule coped better in Chapelle and Li's test?",
+        "options": [
+          { "t": "Thompson sampling: its randomness spreads the choices", "ok": true },
+          { "t": "UCB: it's deterministic and optimistic" }
+        ],
+        "why": "UCB re-picks the same arm until the delayed evidence lands; posterior sampling keeps its choices spread out."
+      }
+    ],
+    "where": "Anywhere you ration tries under uncertainty: ad allocation, hyperparameter search, the selection step in tree search."
+  }
+}

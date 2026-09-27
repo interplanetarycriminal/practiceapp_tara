@@ -4,7 +4,7 @@
    the concept map plus the node scripts, grouped by Saturday in course order. */
 (function () {
   'use strict';
-  var NEED = { core: 'core', exercise: 'this week', library: 'library call', contested: 'open question' };
+  var NEED = { core: 'core', exercise: 'exercise', library: 'library call', contested: 'open question' };
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   var CSS = '.nl{margin:8px 0 28px}.nl h3{margin:18px 0 6px;font-size:19px}.nl h3 small{font:400 13px system-ui,sans-serif;opacity:.7;margin-left:6px}' +
     '.nl ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:6px}' +

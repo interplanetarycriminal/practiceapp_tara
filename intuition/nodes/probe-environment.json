@@ -1,0 +1,228 @@
+{
+  "id": "probe-environment",
+  "title": "Calibration weights for RL code",
+  "week": 9,
+  "need": "core",
+  "allegory": "Probe environments are calibration weights for your RL code: a weight known to be exactly 1 kg must read 1 kg, and a ladder of weights that each test one more part of the scale tells you which part is broken.",
+  "map": [
+    ["a weight known to be exactly 1 kg", "Probe1: one action, constant observation [0.0], one step, reward +1"],
+    ["the reading it must show", "the known correct value, V = 1.0"],
+    ["weights that each test one more part of the scale", "the ladder: observation-dependent reward, then discounting, then action-dependent reward"],
+    ["the first weight that reads wrong", "the first failing probe, which localises the buggy component"],
+    ["weighing the real parcel only after calibrating", "running CartPole only once the probes pass"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "A flat reward curve",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "reward: flat. buffer? target? γ? loss sign?",
+      "actors": [{ "pose": "slump", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.55, "y": 0.5, "label": "CartPole reward: flat", "color": "pink" },
+        { "kind": "cloud", "x": 0.82, "y": 0.26, "label": "the bug is ... somewhere?", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "Your learning agent isn't learning, and the reward chart is flat. The bug could be anywhere, and a real environment gives no clue which part is broken.",
+        "2": "RL code fails silently: a wrong discount, a frozen target network or a flipped loss sign can all produce the same flat CartPole curve.",
+        "3": "In a real environment the correct value function is unknown, so there is no reference to diff against. Errors in different components look identical from outside."
+      }
+    },
+    {
+      "name": "Calibration weights",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "carry", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "scale", "x": 0.55, "y": 0.6, "label": "your RL code", "color": "butter" },
+        { "kind": "box", "x": 0.55, "y": 0.36, "w": 0.08, "h": 0.08, "label": "exactly 1 kg", "color": "ink" },
+        { "kind": "card", "x": 0.84, "y": 0.4, "label": "must read: 1.0", "color": "mint" }
+      ],
+      "cap": {
+        "1": "A shopkeeper checks a scale with a weight known to be exactly 1 kg. If it doesn't read 1 kg, the scale is broken, whatever you meant to weigh.",
+        "2": "A probe environment is so tiny you know the right answer in advance. Probe 1: one action, a constant observation, one step, reward +1, so the value must be exactly 1.0.",
+        "3": "Probe1's correct value function is a single number, V = 1.0. Any deviation localises the bug to the update rule rather than the environment or exploration."
+      }
+    },
+    {
+      "name": "The ladder",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "p1", "label": "one state, one reward", "x": 0.08, "y": 0.7, "c": "mint" },
+        { "id": "p2", "label": "observation matters", "x": 0.3, "y": 0.58, "c": "mint" },
+        { "id": "p3", "label": "reward arrives later: γ", "x": 0.52, "y": 0.46, "c": "mint" },
+        { "id": "p4", "label": "action matters", "x": 0.72, "y": 0.34, "c": "mint" },
+        { "id": "cp", "label": "then CartPole", "x": 0.92, "y": 0.2, "c": "sky" }
+      ],
+      "edges": [["p1", "p2", "add one thing"], ["p2", "p3"], ["p3", "p4"], ["p4", "cp", "all pass?"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Each rung adds one new ingredient. Climb until something reads wrong: the rung that fails names the broken part.",
+        "2": "ARENA gives a ladder of five probes: one state and one reward, then observation-dependent reward, then discounting, then action-dependent reward. The first probe to fail points at the bug.",
+        "3": "Each probe isolates a mechanism: value regression, conditioning on observations, bootstrapped targets with γ, and action selection. Only then run CartPole."
+      }
+    },
+    {
+      "name": "The number to hit",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "target = ", "c": "ink", "note": "" },
+        { "t": "r", "c": "green", "note": "+1 in Probe 1" },
+        { "t": " + γ·(1-done)", "c": "orange", "note": "zero: episode over" },
+        { "t": "·max Q(s')", "c": "sky", "note": "never used here" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "In the simplest probe the game ends right after the reward, so the right answer is just the reward: 1. No guessing about the future is involved.",
+        "2": "DQN's target is r + γ(1 - done)·max Q(s'). In Probe 1, done is true after one step, so the target is exactly 1.0 and the estimate should reach it within a few hundred steps.",
+        "3": "Ignore the done mask and the target bootstraps off an identical next observation: Q = 1 + γQ, so it converges to 1/(1-γ) instead of 1. A subtle masking bug becomes a wrong number."
+      }
+    },
+    {
+      "name": "Reading the failure",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "a probe fails", "c": "pink", "lines": ["loss near 0, value flat and wrong: frozen target", "value 1/(1-γ), not 1: done mask", "best action's log-prob falls: loss sign"] },
+      "right": { "title": "probes pass, CartPole fails", "c": "lav", "lines": ["the core update is fine", "look at what probes skip", "often terminated vs truncated"] },
+      "verdict": "Each symptom points at one part. That is the whole point of the ladder.",
+      "cap": {
+        "1": "Each way of failing points at a different broken part, like a mechanic who knows which rattle means which loose bolt.",
+        "2": "Loss near zero but the value stuck and wrong: the target network never syncs. The known-best action's log-probability falling: your policy-gradient loss sign is flipped.",
+        "3": "Probes pass but CartPole fails: suspect terminated-versus-truncated handling in the buffer. A probe value of 1/(1-γ) instead of 1 means the done mask is ignored."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Test on a known answer first", "Add one ingredient at a time", "Plant a known answer for interp and evals"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "The single most useful RL debugging habit: check your code on problems whose answers you already know, before trusting it on ones you don't.",
+        "2": "Build the probes once and run them after every change. They take seconds, while a CartPole run can hide a bug for an hour.",
+        "3": "The principle transfers to interpretability and evals: validate a method on a planted, known answer before believing what it tells you about a real model."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Probe 1 must learn a value of exactly 1: tune the learning rate, then plant the done-mask bug",
+    "params": [
+      { "id": "alpha", "label": "learning rate", "min": 0.002, "max": 0.1, "step": 0.002, "value": 0.02 },
+      { "id": "bug", "label": "ignore the done mask (0 = no, 1 = yes)", "min": 0, "max": 1, "step": 1, "value": 0 },
+      { "id": "gamma", "label": "discount γ", "min": 0.5, "max": 0.9, "step": 0.05, "value": 0.9 }
+    ],
+    "curves": [
+      { "f": "bug > 0.5 ? (1/(1 - gamma))*(1 - pow(1 - alpha*(1 - gamma), x)) : 1 - pow(1 - alpha, x)", "c": "orange", "label": "your value estimate" },
+      { "f": "1", "c": "green", "label": "the right answer: 1.0" }
+    ],
+    "x": [0, 1000],
+    "y": [0, 11],
+    "readouts": [
+      { "label": "estimate after 300 updates", "f": "(bug > 0.5 ? (1/(1 - gamma))*(1 - pow(1 - alpha*(1 - gamma), 300)) : 1 - pow(1 - alpha, 300)).toFixed(3)" },
+      { "label": "heads towards", "f": "bug > 0.5 ? (1/(1 - gamma)).toFixed(2) : '1.00'" },
+      { "label": "verdict", "f": "bug > 0.5 ? 'FAIL: heading to 1/(1-γ), check the done mask' : (1 - pow(1 - alpha, 300) > 0.95 ? 'PASS: within 5% of 1.0 by 300 updates' : 'slow: raise the learning rate')" }
+    ],
+    "caption": {
+      "1": "Probe 1 must learn a value of exactly 1. Slide the learning rate and watch the estimate climb to 1. Then switch on the bug and watch it sail past.",
+      "2": "With the done mask ignored, the target bootstraps off the identical next observation, so the estimate heads to 1/(1-γ) instead of 1. A known answer turns the bug into a wrong number.",
+      "3": "Correct: Q_n = 1 - (1-α)ⁿ. Done ignored: Q = 1 + γQ has fixed point 1/(1-γ), approached at rate α(1-γ). A toy tabular update, no target network."
+    }
+  },
+  "where_else": [
+    "Unit tests with known outputs, in any codebase",
+    "Checking a policy-gradient loss sign: the known-best action's log-probability must rise",
+    "Interpretability methods validated on planted features or toy models before real ones",
+    "Evals checked against a case with a known answer before being trusted on new ones"
+  ],
+  "hamming": {
+    "what": "Tiny hand-made environments whose correct value function you know in advance, run before the real task.",
+    "when": "Before training on a real environment, and again after every change to your RL code.",
+    "why": "RL bugs fail silently; a known answer turns 'the reward curve is flat' into 'this component is wrong'."
+  },
+  "object": {
+    "title": "The calibration ladder",
+    "subtitle": "Tiny test worlds from simplest to real, with one tube for your one codebase running through them all.",
+    "kind": "blocks",
+    "items": [
+      { "label": "one state, one reward", "h": 0.3, "c": "good" },
+      { "label": "observation matters", "h": 0.5, "c": "good" },
+      { "label": "reward arrives later", "h": 0.7, "c": "good" },
+      { "label": "action matters", "h": 0.9, "c": "good" },
+      { "label": "CartPole", "h": 1.8, "c": "data" }
+    ],
+    "axis": "x",
+    "stream": true,
+    "gap": 0.35,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "A ladder of tiny test worlds, smallest first, with the real task at the end. The tube is your one codebase, run through every rung.",
+          "2": "Probes ordered by how many mechanisms they exercise, then the real environment.",
+          "3": "Each block adds exactly one mechanism, so a failure is attributable to the newest one."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The first rung: one state, one action, one step, +1. The right value is exactly 1.0, so any other number means a bug in the update.",
+          "2": "Probe1's value must converge to 1.0 within a few hundred steps.",
+          "3": "No bootstrapping and no exploration: only the regression towards r is exercised."
+        },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Each rung adds one ingredient: then the observation matters, then the reward arrives later, then the action matters.",
+          "2": "Observation-dependent reward tests conditioning; delayed reward tests γ and bootstrapping; action-dependent reward tests action selection.",
+          "3": "A delayed-reward probe is where a frozen target network or a wrong γ first shows up as a wrong number."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Climb until a rung fails; that rung names the broken part. Only when every rung passes is CartPole worth your time.",
+          "2": "If all probes pass and CartPole fails, the core update is fine: look at environment-specific plumbing.",
+          "3": "A passing ladder moves suspicion to what probes do not exercise, such as terminated-versus-truncated handling."
+        },
+        "view": "side",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Probe 1 pays +1 and ends after one step. What must the learned value be?",
+        "options": [{ "t": "Exactly 1.0", "ok": true }, { "t": "1/(1-γ)" }, { "t": "0" }],
+        "why": "The episode ends, so nothing is bootstrapped: the value is the single reward."
+      },
+      {
+        "q": "Probe 1's value settles near 1/(1-γ). Most likely bug?",
+        "options": [{ "t": "The done mask is ignored, so it bootstraps", "ok": true }, { "t": "The learning rate is too high" }],
+        "why": "Ignoring done makes the target 1 + γQ on an identical next state, whose fixed point is 1/(1-γ)."
+      },
+      {
+        "q": "Every probe passes but CartPole still fails. Where next?",
+        "options": [{ "t": "What probes don't test, like terminated vs truncated", "ok": true }, { "t": "The probes must be wrong" }],
+        "why": "Probes exercise the core update; a passing ladder moves suspicion to environment-specific plumbing."
+      }
+    ],
+    "where": "Any system tested against a planted, known answer before it is trusted on unknowns."
+  }
+}

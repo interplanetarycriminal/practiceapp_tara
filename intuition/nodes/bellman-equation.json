@@ -1,0 +1,218 @@
+{
+  "id": "bellman-equation",
+  "title": "Coins now, plus where you land",
+  "week": 9,
+  "need": "core",
+  "allegory": "On a board game with a fixed plan, a square is worth the coins you grab leaving it plus a slightly shrunk share of what the square you land on is worth, so every square's worth is written in terms of its neighbours' and the numbers settle by passing guesses back and forth.",
+  "map": [
+    ["what standing on a square is worth", "V(s), the value of state s under the policy"],
+    ["the coins you grab leaving the square", "the immediate reward r"],
+    ["the next square's worth, shrunk a little", "γ·V(s′), the discounted value of where you land (averaged if moves can slip)"],
+    ["squares re-asking their neighbours until no number changes", "iterative policy evaluation converging to the fixed point"],
+    ["writing every square's rule down and solving them all at once", "the exact solve v = (I − γP)⁻¹ r"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "How good is here?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "day",
+      "note": "every prize from here on, forever?",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.55, "y": 0.6, "w": 0.3, "h": 0.2, "label": "the board", "color": "mint" },
+        { "kind": "flag", "x": 0.85, "y": 0.45, "label": "prize", "color": "red" },
+        { "kind": "card", "x": 0.55, "y": 0.18, "label": "follow the plan: always go right", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You follow a fixed plan around a board with prizes on it. How good is it to stand on this square? Adding up every future prize, forever, sounds impossible.",
+        "2": "A state's value is the expected discounted sum of all future rewards under a fixed policy. Summing the infinite future directly is hopeless; the Bellman equation avoids it.",
+        "3": "V_π(s) = E[Σ γᵗ r_t | s₀ = s]. Rather than summing the series, write V at s in terms of V at the successor states: a one-step recursion."
+      }
+    },
+    {
+      "name": "Coins plus next square",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.4, "y": 0.6, "w": 0.16, "h": 0.16, "label": "this square", "color": "sky" },
+        { "kind": "circle", "x": 0.4, "y": 0.35, "w": 0.06, "label": "coins now", "color": "butter" },
+        { "kind": "box", "x": 0.72, "y": 0.6, "w": 0.16, "h": 0.16, "label": "next square", "color": "mint" }
+      ],
+      "arrows": [[0.49, 0.6, 0.63, 0.6, "step"], [0.64, 0.5, 0.48, 0.5, "worth × 0.9"]],
+      "cap": {
+        "1": "The trick: a square is worth the coins you grab leaving it, plus a slightly shrunk share of what the next square is worth. That is the whole idea.",
+        "2": "Value = immediate reward + γ × value of where you land. If moves can slip, average over landing squares by their probabilities. One step of lookahead replaces the infinite sum.",
+        "3": "Bellman expectation equation: V(s) = Σ_s′ T(s′|s, π(s)) [R(s, π(s), s′) + γV(s′)]. It defines values self-consistently; unrolling it recovers the full discounted sum."
+      }
+    },
+    {
+      "name": "The recursion",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "V(s)", "c": "sky", "note": "worth of this square" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "r", "c": "orange", "note": "coins now" },
+        { "t": " + ", "c": "ink", "note": "" },
+        { "t": "γ", "c": "pink", "note": "the shrink" },
+        { "t": " · V(s′)", "c": "mint", "note": "worth of where you land" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "This square's worth equals the coins now, plus a shrunk copy of the next square's worth. γ says how much less the next step counts.",
+        "2": "γ below 1 does two jobs: later rewards count less, and the infinite sum stays finite. With random moves, V(s′) is averaged over where you might land.",
+        "3": "Shorthand for the expectation form. γ < 1 makes the Bellman operator a γ-contraction in the sup norm, so it has exactly one fixed point, and that fixed point is V_π."
+      }
+    },
+    {
+      "name": "Ripples from the prize",
+      "need": "exercise",
+      "dur": 11,
+      "type": "grid",
+      "title": "γ = 0.9, always step right, +1 for reaching the prize",
+      "rows": 5,
+      "cols": 6,
+      "values": [
+        ["0", "0", "0", "0", "1", "★"],
+        ["0", "0", "0", ".9", "1", "★"],
+        ["0", "0", ".81", ".9", "1", "★"],
+        ["0", ".73", ".81", ".9", "1", "★"],
+        [".66", ".73", ".81", ".9", "1", "★"]
+      ],
+      "labels": { "rows": ["sweep 1", "sweep 2", "sweep 3", "sweep 4", "sweep 5"], "cols": ["A", "B", "C", "D", "E", "prize"] },
+      "highlight": [[0, 4], [1, 3], [2, 2], [3, 1], [4, 0]],
+      "cap": {
+        "1": "Start every square at zero and let each re-ask its neighbour, over and over. Worth ripples back from the prize one square per sweep, shrinking each step.",
+        "2": "policy_eval_numerical sweeps the Bellman update over all states until the biggest change is below eps. With γ = 0.9, each square back is worth 0.9 times the next.",
+        "3": "Synchronous sweeps of the Bellman operator from V = 0. Convergence is geometric at rate γ; the rule max_s |ΔV| < eps is a cheap proxy for distance to the fixed point."
+      }
+    },
+    {
+      "name": "Two roads, one answer",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Sweep until still", "c": "sky", "lines": ["repeat the update", "stop when changes < eps", "scales to big problems", "approximate"] },
+      "right": { "title": "Solve at once", "c": "mint", "lines": ["v = (I − γP)⁻¹ r", "one linear solve", "exact: your ground truth", "small, fully known worlds"] },
+      "verdict": "Check the sweep against the exact solve before trusting either.",
+      "cap": {
+        "1": "With the plan fixed, the square rules are just simultaneous equations. Solve them all at once and check that your rippling answer matches.",
+        "2": "With π fixed the Bellman equation is linear, v = r + γPv, so v = (I − γP)⁻¹r. ARENA has you do both and compare; the exact one is your ground truth.",
+        "3": "Howard (1960): exact evaluation by one linear solve, invertible for γ < 1. The Neumann series (I − γP)⁻¹ = Σ(γP)ᵏ reads as the discounted sum over every horizon at once."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["TD learning: nudge V(s) towards r + γV(s′)", "Q-learning and DQN: the same recursion with a max", "Keep a ground truth to check against"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Nearly every way a machine learns to plan is a way of solving this one equation. Learn to read it and the rest of RL becomes variations on it.",
+        "2": "TD error, Q-learning and DQN all estimate this recursion from samples. The exact-versus-iterative check is the pattern for debugging every later value estimate.",
+        "3": "Value estimates sit inside the RL used to fine-tune language models; knowing which fixed point a critic approximates tells you what the model is actually being pushed towards."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "A corridor to a prize. How much is each square worth?",
+    "params": [
+      { "id": "g", "label": "γ (how much the next step counts)", "min": 0.5, "max": 0.99, "step": 0.01, "value": 0.9 },
+      { "id": "R", "label": "prize", "min": 0.5, "max": 2, "step": 0.1, "value": 1 },
+      { "id": "c", "label": "cost of each step", "min": 0, "max": 0.3, "step": 0.01, "value": 0 }
+    ],
+    "curves": [
+      { "f": "(R + c / (1 - g)) * pow(g, x - 1) - c / (1 - g)", "c": "orange", "label": "worth of a square x steps from the prize" }
+    ],
+    "x": [1, 12],
+    "y": [-3, 2],
+    "readouts": [
+      { "label": "worth 5 squares away", "f": "round(100 * ((R + c / (1 - g)) * pow(g, 4) - c / (1 - g))) / 100" },
+      { "label": "sweeps to shrink errors 100x", "f": "floor(log(0.01) / log(g)) + 1" },
+      { "label": "rough look-ahead", "f": "round(1 / (1 - g)) + ' steps'" }
+    ],
+    "caption": {
+      "1": "Drag γ towards 1: far squares keep more of the prize's worth, but settling takes far more sweeps. Add a step cost and far squares turn negative.",
+      "2": "γ sets how fast worth fades with distance and how many sweeps evaluation needs, since errors shrink by a factor γ per sweep. At γ = 1 they would not shrink at all.",
+      "3": "V(x) = (R + c/(1−γ))γ^(x−1) − c/(1−γ) on this corridor. Contraction rate γ means about log(0.01)/log γ sweeps per 100x error cut; γ = 1 makes I − γP singular."
+    }
+  },
+  "where_else": [
+    "TD learning: nudge V(s) towards r + γV(s′) from sampled steps",
+    "Q-learning and DQN: the same recursion with a max over next actions",
+    "Shortest paths (Bellman-Ford): each node's distance is one step plus its best neighbour's",
+    "Finance: a bond is worth this year's coupon plus next year's discounted price"
+  ],
+  "hamming": {
+    "what": "The rule that a state's value is its immediate reward plus the discounted value of where you land, averaged over where you might land.",
+    "when": "Whenever you need to score states or actions over long futures: planning, value learning, every critic in RL.",
+    "why": "It swaps an impossible infinite sum for a one-step recursion you can iterate or solve exactly, and every RL value method is a way of solving it."
+  },
+  "object": {
+    "title": "The worth funnel",
+    "subtitle": "Depth is worth: the prize sits at the bottom and every spot's depth fades by γ per step away.",
+    "kind": "surface",
+    "f": "-pow(g, sqrt((x - 3) * (x - 3) + (y - 3) * (y - 3)))",
+    "x": [0, 4],
+    "y": [0, 4],
+    "ball": { "x": 0.4, "y": 0.6, "lr": 3, "steps": 60 },
+    "marks": [{ "x": 3, "y": 3, "label": "the prize" }],
+    "knobs": [{ "id": "g", "label": "γ (how fast worth fades)", "min": 0.5, "max": 0.99, "step": 0.01, "value": 0.9 }],
+    "beats": [
+      {
+        "cap": { "1": "Depth here means worth: the deeper a spot, the more it is worth to stand there. The prize sits at the very bottom.", "2": "Height = −V(s) for a policy that heads to the prize, with γ = 0.9. Worth fades with every step of distance.", "3": "−V over a continuous stand-in for a gridworld: under a goal-directed policy, V decays as γ^distance." },
+        "view": "iso",
+        "set": { "g": 0.9 }
+      },
+      {
+        "cap": { "1": "Lower γ and the funnel becomes a narrow spike: only spots right beside the prize are worth much.", "2": "Small γ means the future barely counts, so value is local to the prize.", "3": "Effective horizon is roughly 1/(1−γ): about two steps of look-ahead at γ = 0.5." },
+        "view": "side",
+        "set": { "g": 0.5 }
+      },
+      {
+        "cap": { "1": "Push γ close to 1 and the funnel flattens: the prize is felt from far away, but the slope towards it is gentle.", "2": "Large γ gives long look-ahead, but evaluation converges slowly: errors shrink by only γ per sweep.", "3": "As γ → 1 the contraction weakens and I − γP approaches singular; at γ = 1 the unique fixed point is no longer guaranteed." },
+        "view": "side",
+        "set": { "g": 0.99 }
+      },
+      {
+        "cap": { "1": "Drop the bead anywhere and it rolls to the prize. Following the slope of worth is exactly choosing the best next step.", "2": "Greedy policy improvement picks the action whose landing spot is worth most: downhill on this surface.", "3": "Policy improvement is greedy with respect to the Bellman right-hand side; here that is steepest descent on −V." },
+        "view": "top",
+        "set": { "g": 0.9 }
+      },
+      {
+        "cap": { "1": "Every spot's depth is its coins now plus a shrunk copy of its neighbour's depth. That one rule shapes the whole funnel.", "2": "The funnel is the fixed point of the Bellman update: the one surface consistent with its own recursion everywhere.", "3": "V_π is the unique fixed point of the Bellman expectation operator; iterative and exact evaluation are two routes to this same surface." },
+        "view": "close",
+        "set": { "g": 0.9 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A square pays 0 now and the next square is worth 10. With γ = 0.9, what is this square worth?",
+        "options": [{ "t": "9", "ok": true }, { "t": "10" }, { "t": "0" }],
+        "why": "Coins now (0) plus 0.9 times the next square's 10."
+      },
+      {
+        "q": "You set γ = 1 and evaluation never settles. Why?",
+        "options": [{ "t": "Without discounting, sweeps stop shrinking the error, so no unique fixed point is guaranteed", "ok": true }, { "t": "γ = 1 turns all the rewards negative" }],
+        "why": "γ < 1 is what makes each sweep shrink the error; at γ = 1, I − γP is singular and the exact solve fails too."
+      },
+      {
+        "q": "How do you know your swept values are right?",
+        "options": [{ "t": "Compare them with the exact solve v = (I − γP)⁻¹ r", "ok": true }, { "t": "Just run more sweeps" }],
+        "why": "On a small, known world the exact solve is ground truth. If they disagree, one of the two evaluators has a bug."
+      }
+    ],
+    "where": "Anywhere worth is defined by the next step's worth: value learning, shortest paths, discounted prices."
+  }
+}

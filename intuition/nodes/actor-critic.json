@@ -1,0 +1,179 @@
+{
+  "id": "actor-critic",
+  "title": "The walker and the spotter",
+  "week": 10,
+  "need": "core",
+  "allegory": "Actor-critic is like a tightrope walker with a spotter below: the walker chooses each step, the spotter keeps calling out how much trouble the walker is in, and the walker learns from whether each step went better or worse than the spotter expected instead of waiting for the fall.",
+  "map": [
+    ["the walker who chooses each step", "the actor: state → action probabilities π(a|s)"],
+    ["the spotter calling out how much trouble you are in", "the critic: state → one number, V(s)"],
+    ["the fall at the end, far too late to say which step was wrong", "a sparse return: noisy, slow credit assignment"],
+    ["'that step went better (or worse) than I expected'", "the advantage estimate, e.g. the TD residual r + γV(s') − V(s)"],
+    ["the spotter learns to call more accurately; the walker leans towards pleasant surprises", "the critic regresses on V_target; the actor ascends Â·∇log π"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Too late to learn",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "200 pushes... then it fell. which push was wrong?",
+      "actors": [{ "pose": "fall", "x": 0.35, "label": "you" }],
+      "props": [
+        { "kind": "crate", "x": 0.65, "y": 0.72, "w": 0.18, "h": 0.1, "label": "cart", "color": "peach" },
+        { "kind": "flag", "x": 0.72, "y": 0.5, "label": "pole: down", "color": "red" }
+      ],
+      "cap": {
+        "1": "Balance a pole on a cart. The only real feedback is the crash, two hundred pushes later. Which of those pushes was the mistake?",
+        "2": "With plain policy gradients, every action in an episode is weighted by the whole return: noisy, slow, and blind to which step actually helped.",
+        "3": "REINFORCE weights ∇log π(aₜ|sₜ) by the return: unbiased but high-variance, since every later reward is pooled into each action's coefficient."
+      }
+    },
+    {
+      "name": "Walker and spotter",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "walk", "x": 0.38, "to": 0.5, "label": "actor" },
+        { "pose": "point", "x": 0.78, "label": "critic" }
+      ],
+      "props": [
+        { "kind": "bridge", "x": 0.45, "y": 0.42, "w": 0.6, "h": 0.04, "label": "tightrope", "color": "chalk" },
+        { "kind": "card", "x": 0.8, "y": 0.18, "label": "'a bit worse than I expected!'", "color": "butter" }
+      ],
+      "cap": {
+        "1": "Split the job: a walker picks each step; a spotter below calls out how much trouble they're in. Now every step gets feedback: better or worse than expected?",
+        "2": "The actor outputs action probabilities; the critic outputs one number, V(s), how good this state is. The actor learns from the critic's verdict at every step, not just at the crash.",
+        "3": "Barto, Sutton and Anderson (1983) balanced a pole with this split: a second element learned to predict trouble, turning a sparse failure signal into a dense per-step one."
+      }
+    },
+    {
+      "name": "Better than expected",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "Â", "c": "orange", "note": "better than expected?" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "r + γV(s')", "c": "green", "note": "what you got + the new call" },
+        { "t": " − V(s)", "c": "sky", "note": "the old call" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Surprise = what this step earned, plus the spotter's new call, minus the spotter's old call. Positive: do that more. Negative: do it less.",
+        "2": "The TD residual is a one-step advantage estimate. The actor's loss weights log π(a|s) by Â; the critic's loss pulls V(s) towards the observed target.",
+        "3": "Actor: maximise E[Â·log π(a|s)] with Â detached. Critic: minimise (V(s) − V_target)² with V_target = V_old(s) + Â. There is no max over actions: the critic is SARSA-shaped."
+      }
+    },
+    {
+      "name": "Two heads",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "s", "label": "state", "x": 0.08, "y": 0.5, "c": "sky" },
+        { "id": "actor", "label": "actor net", "x": 0.34, "y": 0.28, "c": "orange" },
+        { "id": "logits", "label": "action logits", "x": 0.6, "y": 0.28, "c": "orange" },
+        { "id": "critic", "label": "critic net", "x": 0.34, "y": 0.72, "c": "teal" },
+        { "id": "v", "label": "V(s)", "x": 0.6, "y": 0.72, "c": "teal" },
+        { "id": "adv", "label": "advantage Â", "x": 0.86, "y": 0.5, "c": "green" }
+      ],
+      "edges": [["s", "actor"], ["actor", "logits"], ["s", "critic"], ["critic", "v"], ["v", "adv", "detached"], ["adv", "logits", "weights the update"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Two heads read the same situation: one picks the move, one scores the situation. The score becomes the teaching signal for the mover.",
+        "2": "<code>get_actor_and_critic</code>: the actor maps a state to action logits, the critic maps it to a single number. Separate networks on CartPole make debugging easier.",
+        "3": "Actor π_θ(a|s), critic V_φ(s); the critic's advantages enter the policy loss as detached coefficients. For continuous actions the actor can output distribution parameters instead."
+      }
+    },
+    {
+      "name": "The loud spotter",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Losses added raw", "c": "pink", "lines": ["value loss around 10⁴", "policy loss around 1", "the actor's gradient is drowned out"] },
+      "right": { "title": "vf_coef, logged apart", "c": "mint", "lines": ["value loss weighted down", "both losses visible", "the actor keeps learning"] },
+      "verdict": "Log the two losses separately. Orders of magnitude apart is the bug.",
+      "cap": {
+        "1": "The spotter shouts in big numbers while the walker's lessons are whispers. Mix them in one ear and the walker stops learning. Turn the spotter down.",
+        "2": "CartPole returns near 500 give a squared value error around 10⁴ against a policy loss of order 1. Scale the value loss with <code>vf_coef</code> (0.5 is usual) and log both.",
+        "3": "One optimiser, often one shared trunk, couples the objectives. A mis-scaled critic also emits confidently wrong advantages, so actor and critic chase each other and returns oscillate."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A critic turns late rewards into per-step lessons", "PPO is actor-critic with a clipped step", "In RLHF, a value head is the critic"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Almost every modern RL method has a mover and a judge, including the way chat models are fine-tuned with human feedback.",
+        "2": "PPO is actor-critic that clips the probability ratio so each update stays small. In RLHF, a value head bolted onto the language model plays the critic.",
+        "3": "Knowing which part chooses and which part scores tells you where to look when RL-trained behaviour goes wrong: a badly fitted critic misdirects the very policy you are trying to steer."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Two moves pay 1.0 and 0.8: set the spotter's call",
+    "labels": ["lesson if A was taken (pays 1.0)", "lesson if B was taken (pays 0.8)"],
+    "params": [
+      { "id": "b", "label": "the spotter's call b (baseline)", "min": 0, "max": 1.5, "step": 0.05, "value": 0 },
+      { "id": "pA", "label": "how often the walker picks A", "min": 0.05, "max": 0.95, "step": 0.05, "value": 0.5 }
+    ],
+    "f": "[1.0 - b, 0.8 - b]",
+    "y": [-1.5, 1.5],
+    "readouts": [
+      { "label": "who gets praised", "f": "(1.0 - b > 0 ? 'A praised' : 'A scolded') + ', ' + (0.8 - b > 0 ? 'B praised' : 'B scolded')" },
+      { "label": "the spotter's honest call V (average pay)", "f": "(pA*1.0 + (1 - pA)*0.8).toFixed(2)" },
+      { "label": "average push towards A (same for any b)", "f": "(pA*(1 - pA)*0.2).toFixed(4)" },
+      { "label": "noise in that push (std)", "f": "sqrt(max(0, pA*pow(1 - b, 2)*pow(1 - pA, 2) + (1 - pA)*pow(0.8 - b, 2)*pA*pA - pow(pA*(1 - pA)*0.2, 2))).toFixed(4)" }
+    ],
+    "caption": {
+      "1": "At b = 0 both moves get praised, by different amounts. Slide the call up to the average pay: now the better move is praised and the worse one scolded.",
+      "2": "Subtracting a baseline never changes the average push, only its noise. The noise is smallest for a baseline near the average pay, which is what the critic learns to supply.",
+      "3": "E[(r − b)∇log π] is independent of b, so the baseline adds no bias; the variance depends on b and is lowest near E[r] = V(s) (exactly there at pA = 0.5). The critic learns that baseline."
+    }
+  },
+  "where_else": [
+    "PPO and RLHF: the value head on a language model is the critic",
+    "AlphaZero: one network with a policy head and a value head, guiding tree search",
+    "Neuroscience's reward-prediction-error account of dopamine, the same 'better than expected' signal"
+  ],
+  "hamming": {
+    "what": "Two learners trained together: an actor that picks actions and a critic that predicts how good each situation is, whose per-step surprise teaches the actor.",
+    "when": "Whenever rewards are delayed or noisy and you need to know which actions actually helped, which covers most modern policy-gradient methods, PPO included.",
+    "why": "Comparing each outcome with the critic's expectation gives denser, lower-variance credit than waiting for the final result."
+  },
+  "object": {
+    "title": "The spotter's ledger",
+    "subtitle": "Twelve pushes before a fall: the world's signal, the spotter's trouble call, and each push's share of the blame (bar height grows with its size).",
+    "kind": "bars",
+    "rows": 12,
+    "cols": 3,
+    "f": "0.05 + (c == 0 ? (r == 11 ? 1.6 : 0) : c == 1 ? 1.6 * k * pow(r / 11, 2) : 1.6 * sqrt(abs(r < 11 ? k * (2 * r + 1) / 121 : 1 - k)))",
+    "labels": { "rows": ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11 fall"], "cols": ["world's signal", "spotter's trouble call", "this push's lesson"] },
+    "c": "grad",
+    "knobs": [
+      { "id": "k", "label": "how well the spotter has learned", "min": 0, "max": 1, "step": 0.1, "value": 0 }
+    ],
+    "beats": [
+      { "cap": { "1": "Twelve pushes, then the pole falls. The world's only signal is the crash at the very end.", "2": "Reward is −1 at the final step and 0 elsewhere. With no critic, all the blame lands on the last step.", "3": "Sparse terminal reward: with V = 0 the TD residual is zero until the terminal step, which carries all of the error." }, "view": "iso", "set": { "k": 0 } },
+      { "cap": { "1": "A trained spotter calls rising trouble as the pole tips, so every push now gets its own share of the blame.", "2": "With V predicting trouble, each step's residual is the change in the spotter's call: small early, larger as the pole tips.", "3": "δₜ = rₜ + V(sₜ₊₁) − V(sₜ) telescopes: the residuals still sum to the total return error, now spread over the steps that led to it." }, "view": "iso", "set": { "k": 1 } },
+      { "cap": { "1": "Read down the lesson column: the pushes just before the fall carry the most blame, the early ones very little.", "2": "Credit arrives step by step, without waiting for the episode to end.", "3": "Denser, lower-variance credit than weighting every action by the full return; bias enters only through the critic's errors." }, "view": "front", "set": { "k": 1 } },
+      { "cap": { "1": "A half-trained spotter spreads half the blame over the pushes and leaves the rest at the crash.", "2": "As the critic improves, blame moves off the final step and onto the steps that caused the trouble.", "3": "With V = k·V*, a fraction k of the return error is spread over earlier steps and 1 − k stays on the terminal one." }, "view": "side", "set": { "k": 0.5 } }
+    ],
+    "predict": [
+      { "q": "The spotter predicts trouble perfectly. How much blame is left for the crash step itself?", "options": [{ "t": "None: it was expected, and the earlier steps took the blame", "ok": true }, { "t": "All of it" }], "why": "The last residual is the crash minus what the critic already predicted. Fully predicted, it is zero." },
+      { "q": "The value loss is 10,000 times bigger than the policy loss. What happens?", "options": [{ "t": "The critic's gradients drown out the actor's, and the policy stalls", "ok": true }, { "t": "The actor learns faster" }], "why": "Both losses share one optimiser. Scale the value loss with vf_coef and log the two separately." }
+    ],
+    "where": "Anywhere a slow final verdict is replaced by a running forecast: a chess engine's evaluation bar, a coach's live feedback."
+  }
+}

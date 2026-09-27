@@ -1,0 +1,238 @@
+{
+  "id": "td-error",
+  "title": "Update the guess at every landmark",
+  "week": 9,
+  "need": "core",
+  "allegory": "TD error is the surprise on a drive home: at each landmark you add the minutes the last leg took to your fresh guess of the minutes left, compare that with your old guess, and correct the old guess straight away instead of waiting until you are home.",
+  "map": [
+    ["your guess of minutes left at each landmark", "V(s): the value estimate for each state"],
+    ["the minutes the last leg actually took", "the reward r_{t+1}"],
+    ["your fresh guess at the next landmark", "γV(s_{t+1}): the bootstrap"],
+    ["the surprise: leg time plus fresh guess, minus old guess", "δ_t = r_{t+1} + γV(s_{t+1}) − V(s_t)"],
+    ["fixing the old guess now, not once you are home", "V(s_t) ← V(s_t) + α·δ_t: learning every step, not at episode end"]
+  ],
+  "credit": "The commute framing follows Sutton and Barto's 'Driving Home' example in Reinforcement Learning: An Introduction (chapter 6).",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Wait until home?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "note": "guess: 30 minutes home",
+      "actors": [{ "pose": "walk", "x": 0.12, "to": 0.3, "label": "you" }],
+      "props": [
+        { "kind": "door", "x": 0.08, "y": 0.5, "label": "office", "color": "chalk" },
+        { "kind": "flag", "x": 0.92, "y": 0.55, "label": "home", "color": "green" },
+        { "kind": "cloud", "x": 0.55, "y": 0.18, "w": 0.3, "label": "traffic?", "color": "lav" }
+      ],
+      "cap": {
+        "1": "Leaving work, you guess the trip home takes 30 minutes. Do you have to wait until you are home to learn anything? No: the traffic already tells you.",
+        "2": "Monte Carlo methods wait for the episode to end and learn from the actual total. TD methods learn after every single step, using the next estimate as a stand-in.",
+        "3": "TD(0) updates V(s_t) from (r_{t+1}, s_{t+1}) alone, bootstrapping on V(s_{t+1}) instead of the full return, so it can learn mid-episode and in tasks that never end."
+      }
+    },
+    {
+      "name": "Rain at the car",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "think", "x": 0.4, "label": "you" }],
+      "props": [
+        { "kind": "flag", "x": 0.15, "y": 0.55, "label": "office: 30 left", "color": "sky" },
+        { "kind": "flag", "x": 0.4, "y": 0.35, "label": "car park, 5 min on: 35 left", "color": "orange" },
+        { "kind": "flag", "x": 0.68, "y": 0.55, "label": "exit", "color": "chalk" },
+        { "kind": "flag", "x": 0.92, "y": 0.55, "label": "home", "color": "green" },
+        { "kind": "cloud", "x": 0.4, "y": 0.12, "w": 0.2, "label": "rain", "color": "sky" }
+      ],
+      "arrows": [[0.4, 0.3, 0.17, 0.48, "that first guess was 10 short"]],
+      "cap": {
+        "1": "At the car park it is raining. Five minutes gone, and now you guess 35 more. Your first guess of 30 was 10 too hopeful, and you know it already.",
+        "2": "The surprise is (time just spent + new guess) minus old guess: 5 + 35 − 30 = 10. Nudge the office guess up toward 40 now, not when you reach home.",
+        "3": "δ_t = r_{t+1} + γV(s_{t+1}) − V(s_t), with γ = 1 here: 5 + 35 − 30 = +10. Then V(s_t) ← V(s_t) + αδ_t moves the old estimate toward the one-step target."
+      }
+    },
+    {
+      "name": "The surprise signal",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "δ = ", "c": "ink", "note": "the surprise" },
+        { "t": "r", "c": "green", "note": "what just happened" },
+        { "t": " + γV(s')", "c": "sky", "note": "your fresh guess" },
+        { "t": " − V(s)", "c": "orange", "note": "your old guess" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The surprise is what just happened plus your fresh guess, minus your old guess. Zero means the old guess was already right. Big means learn a lot.",
+        "2": "δ is the learning signal. Positive: better than predicted, so raise V(s). Negative: worse, so lower it. γ just below 1 counts the future guess slightly less.",
+        "3": "If V = V_π then E[δ_t | s_t] = 0 by the Bellman equation, so TD learning is stochastic approximation driving V toward the Bellman fixed point."
+      }
+    },
+    {
+      "name": "One signal, many learners",
+      "need": "core",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "td", "label": "TD error δ", "x": 0.5, "y": 0.5, "c": "orange" },
+        { "id": "sarsa", "label": "SARSA: r + γQ(s',a')", "x": 0.15, "y": 0.2, "c": "mint" },
+        { "id": "ql", "label": "Q-learning: r + γ max Q(s',·)", "x": 0.85, "y": 0.2, "c": "sky" },
+        { "id": "dqn", "label": "DQN: drive δ² to 0", "x": 0.88, "y": 0.75, "c": "lav" },
+        { "id": "critic", "label": "critic in PPO: TD residual loss", "x": 0.5, "y": 0.88, "c": "peach" },
+        { "id": "gae", "label": "GAE: Σ (γλ)ˡ δ", "x": 0.12, "y": 0.75, "c": "butter" }
+      ],
+      "edges": [["td", "sarsa"], ["td", "ql"], ["td", "dqn"], ["td", "critic"], ["td", "gae"]],
+      "flow": "forward",
+      "cap": {
+        "1": "The same surprise signal drives a whole family of learners: table-based ones, deep networks that play Atari, and the critic inside PPO.",
+        "2": "SARSA bootstraps from the action actually taken next; Q-learning from the best next action; DQN minimises squared TD error; PPO's critic regresses on it; GAE sums discounted δs.",
+        "3": "SARSA's fixed point is Q_π (on-policy); Q-learning's is Q* via the optimality backup, with max-induced optimism. GAE: A_t = Σ_l (γλ)^l δ_{t+l}; λ = 0 is δ_t, λ = 1 is Monte Carlo."
+      }
+    },
+    {
+      "name": "Trusting a guess",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "TD: bootstrap", "c": "mint", "lines": ["learns every step", "one random reward: low noise", "biased while guesses are wrong"] },
+      "right": { "title": "Monte Carlo: wait", "c": "sky", "lines": ["learns at the end", "real total: unbiased", "every step's luck adds up"] },
+      "verdict": "TD trades a little bias for much less noise. GAE's λ picks the blend.",
+      "cap": {
+        "1": "Learning from your own next guess is fast and steady, but if that guess is off, you learn its error too. Waiting for the real total is honest but noisy.",
+        "2": "TD targets hold one random reward plus an estimate: low variance, but biased. Monte Carlo returns are unbiased but carry every step's randomness. GAE's λ blends them.",
+        "3": "λ = 0 gives δ_t, unbiased only if V is exact; λ = 1 gives the discounted return minus V, unbiased for any V but high variance. Bootstrapping also recycles errors, as with Q-learning's max bias."
+      }
+    },
+    {
+      "name": "No guess after home",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "actors": [{ "pose": "point", "x": 0.3, "label": "you" }],
+      "props": [
+        { "kind": "flag", "x": 0.62, "y": 0.55, "label": "home: episode over", "color": "green" },
+        { "kind": "card", "x": 0.62, "y": 0.2, "label": "target = r only", "color": "butter" },
+        { "kind": "door", "x": 0.88, "y": 0.5, "label": "time limit is not home", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "Once you are home there is no next guess. Keep adding one for a trip that has ended and you invent minutes that never happen.",
+        "2": "At a terminal state the target is just r: multiply the bootstrap by (1 − terminated). Use terminated, not truncated: hitting a time limit is not reaching home.",
+        "3": "Gate γV(s') with the termination flag only; bootstrapping at truncation is correct, since that state still has future value. Otherwise the agent learns that surviving to the time limit is failure."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Every value learner in chapter 2", "The critic that steadies PPO", "A readout of what the agent expected"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Surprise-driven learning powers every game-playing agent in chapter 2, and the same idea trains the critic in PPO, which RLHF builds on.",
+        "2": "Q-learning, SARSA, DQN, actor-critic and GAE all compute δ. When training misbehaves, plotting δ shows where the agent's predictions are wrong.",
+        "3": "δ is an agent's prediction error about its own future reward. Reading it shows what the agent expected, a first step to understanding and steering what it values."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Thirty trips home: TD learns at every landmark, Monte Carlo waits for the total",
+    "params": [
+      { "id": "alpha", "label": "learning rate α", "min": 0.05, "max": 1, "step": 0.05, "value": 0.5 },
+      { "id": "noise", "label": "traffic noise (± minutes per leg)", "min": 0, "max": 10, "step": 1, "value": 5 }
+    ],
+    "curves": [
+      { "f": "((n) => { const leg = [5, 20, 10, 3]; const V = [30, 30, 30, 30, 0]; for (let e = 0; e < n; e++) { for (let s = 0; s < 4; s++) { const r = leg[s] + noise*(((e*37 + s*101) % 17)/8 - 1); V[s] += alpha*(r + V[s + 1] - V[s]); } } return V[0]; })(round(x))", "c": "orange", "label": "TD guess at the office" },
+      { "f": "((n) => { const leg = [5, 20, 10, 3]; const V = [30, 30, 30, 30]; for (let e = 0; e < n; e++) { const r = leg.map((l, s) => l + noise*(((e*37 + s*101) % 17)/8 - 1)); for (let s = 0; s < 4; s++) { const G = r.slice(s).reduce((a, b) => a + b, 0); V[s] += alpha*(G - V[s]); } } return V[0]; })(round(x))", "c": "sky", "label": "Monte Carlo guess" },
+      { "f": "38", "c": "ink", "label": "true average: 38 min" }
+    ],
+    "x": [0, 30],
+    "y": [10, 70],
+    "readouts": [
+      { "label": "TD guess after 30 trips", "f": "((n) => { const leg = [5, 20, 10, 3]; const V = [30, 30, 30, 30, 0]; for (let e = 0; e < n; e++) { for (let s = 0; s < 4; s++) { const r = leg[s] + noise*(((e*37 + s*101) % 17)/8 - 1); V[s] += alpha*(r + V[s + 1] - V[s]); } } return V[0]; })(30).toFixed(1)" },
+      { "label": "Monte Carlo guess after 30 trips", "f": "((n) => { const leg = [5, 20, 10, 3]; const V = [30, 30, 30, 30]; for (let e = 0; e < n; e++) { const r = leg.map((l, s) => l + noise*(((e*37 + s*101) % 17)/8 - 1)); for (let s = 0; s < 4; s++) { const G = r.slice(s).reduce((a, b) => a + b, 0); V[s] += alpha*(G - V[s]); } } return V[0]; })(30).toFixed(1)" },
+      { "label": "wobble over trips 20 to 30", "f": "((hist) => { const t = hist(0).slice(20), m = hist(1).slice(20); const spread = a => ((a.reduce((p, q) => q > p ? q : p, -1e9) - a.reduce((p, q) => q < p ? q : p, 1e9))/2).toFixed(1); return 'TD ±' + spread(t) + ', MC ±' + spread(m); })((mode) => { const leg = [5, 20, 10, 3]; const V = [30, 30, 30, 30, 0]; const out = []; for (let e = 0; e <= 30; e++) { out.push(V[0]); const r = leg.map((l, s) => l + noise*(((e*37 + s*101) % 17)/8 - 1)); for (let s = 0; s < 4; s++) { if (mode) { const G = r.slice(s).reduce((a, b) => a + b, 0); V[s] += alpha*(G - V[s]); } else { V[s] += alpha*(r[s] + V[s + 1] - V[s]); } } } return out; })" }
+    ],
+    "caption": {
+      "1": "Thirty trips home. Orange corrects at every landmark from its own next guess; blue waits for each real total. Turn up the traffic and compare the wobble.",
+      "2": "TD overshoots at first, because its targets lean on the naive 30-minute guesses further along the road, then settles. Monte Carlo chases each noisy total, so it shakes more.",
+      "3": "Toy TD(0) vs constant-α Monte Carlo on a 4-leg chain, γ = 1, V initialised to 30. TD's target has one noisy leg plus a smoothed estimate (bias early); MC sums four noisy legs (variance throughout)."
+    }
+  },
+  "where_else": [
+    "Q-learning and SARSA: tables updated by δ",
+    "DQN: a network trained to drive the squared TD error to zero",
+    "The critic in actor-critic and PPO, and GAE's sum of discounted δs",
+    "Any forecaster that corrects today's forecast from tomorrow's"
+  ],
+  "hamming": {
+    "what": "The gap between what you predicted from here and what you predict after one real step: r + γV(s') − V(s).",
+    "when": "In every update of every bootstrapping RL method: SARSA, Q-learning, DQN, the critic in actor-critic and PPO, and GAE.",
+    "why": "It lets an agent learn after each step instead of waiting for the end, trading a little bias for far less noise."
+  },
+  "object": {
+    "title": "The learning staircase",
+    "subtitle": "Rows are successive trips home, columns are landmarks, height is the current guess of minutes left.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 4,
+    "f": "((n, s) => { const leg = [5, 20, 10, 3]; const V = [30, 30, 30, 30, 0]; for (let e = 0; e < n; e++) { if (mc > 0.5) { for (let k = 0; k < 4; k++) { const G = leg.slice(k).reduce((a, b) => a + b, 0); V[k] += alpha*(G - V[k]); } } else { for (let k = 0; k < 4; k++) { V[k] += alpha*(leg[k] + V[k + 1] - V[k]); } } } return V[s]/30; })(r, c)",
+    "labels": { "rows": ["trip 0", "trip 1", "trip 2", "trip 3", "trip 4", "trip 5", "trip 6", "trip 7"], "cols": ["office", "car park", "exit", "street"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "alpha", "label": "learning rate α", "min": 0.1, "max": 1, "step": 0.1, "value": 1 },
+      { "id": "mc", "label": "TD (0) or Monte Carlo (1)", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "Each row is a later trip home; each bar is your guess of minutes left at that landmark. Row 0 is the naive guess: 30 everywhere.", "2": "TD(0) with α = 1 on a four-leg commute (5, 20, 10, 3 minutes). Heights are value estimates after each trip.", "3": "V(s) after n episodes of V(s) ← V(s) + α[r + V(s') − V(s)], γ = 1, V initialised to 30." },
+        "view": "iso",
+        "set": { "alpha": 1, "mc": 0 }
+      },
+      {
+        "cap": { "1": "Watch the right answers start at the street and step back one landmark per trip until they reach the office.", "2": "With α = 1 each landmark copies (leg time + next guess), so the truth travels backward one step per trip.", "3": "Bootstrapping propagates information backward one state per episode; the start state is exact (38) after four trips." },
+        "view": "front",
+        "set": { "alpha": 1, "mc": 0 }
+      },
+      {
+        "cap": { "1": "Now wait for the real total each time instead. Every landmark jumps straight to the truth after one trip.", "2": "Monte Carlo targets the actual return, so on a noise-free road it is right everywhere immediately.", "3": "MC with α = 1 sets V(s) = G(s) in one episode; with noisy returns, that directness becomes variance." },
+        "view": "side",
+        "set": { "alpha": 1, "mc": 1 }
+      },
+      {
+        "cap": { "1": "Back to TD with a smaller learning rate: gentler corrections, a slower and smoother climb.", "2": "α scales each correction. Smaller α averages over more trips, which matters when trips are noisy.", "3": "Constant-α TD tracks an exponentially weighted average of its targets; α trades speed against noise." },
+        "view": "top",
+        "set": { "alpha": 0.3, "mc": 0 }
+      },
+      {
+        "cap": { "1": "The tall early bars at the office are TD learning from wrong guesses: its targets were built on the naive 30s further along.", "2": "Bootstrapping copies the error in the next estimate into this one. That is TD's bias, and it fades as the guesses improve.", "3": "Early targets r + V(s') inherit V's initialisation error: a bias that vanishes as V converges, unlike Monte Carlo's variance." },
+        "view": "close",
+        "set": { "alpha": 1, "mc": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your old guess was 30, the leg took 5 and your new guess is 35. What is the TD error?",
+        "options": [{ "t": "+10", "ok": true }, { "t": "+5" }, { "t": "−10" }],
+        "why": "δ = 5 + 35 − 30 = +10: the trip is running longer than predicted, so raise the old guess."
+      },
+      {
+        "q": "At a terminal state, what replaces γV(s') in the target?",
+        "options": [{ "t": "Zero: there is no next state", "ok": true }, { "t": "The last value estimate" }],
+        "why": "Nothing comes after the end, so the target is just r. Gate it with terminated, not truncated."
+      },
+      {
+        "q": "TD or Monte Carlo: which has the lower-variance target?",
+        "options": [{ "t": "TD: one random reward plus an estimate", "ok": true }, { "t": "Monte Carlo: it uses real returns" }],
+        "why": "Monte Carlo sums every step's randomness; TD swaps most of it for an estimate, at the cost of some bias."
+      }
+    ],
+    "where": "Any predictor that corrects itself from its own next prediction: value critics, Q-networks, GAE."
+  }
+}

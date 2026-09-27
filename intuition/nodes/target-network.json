@@ -1,0 +1,216 @@
+{
+  "id": "target-network",
+  "title": "Aim at the photocopy, not yourself",
+  "week": 9,
+  "need": "core",
+  "allegory": "A target network is a photocopy of your map pinned to the wall: while you redraw your working map, you read every target off the photocopy, so the goal holds still, and only now and then do you run off a fresh copy.",
+  "map": [
+    ["your working map of how good each move is", "the live Q-network Q_θ"],
+    ["a photocopy pinned to the wall", "the target network θ⁻, a frozen copy"],
+    ["reading next-town values off the photocopy", "y = r + γ max_a Q_θ⁻(s', a), computed without gradients"],
+    ["a fresh photocopy every so often", "syncing θ⁻ ← θ every C steps (10,000 in the 2015 Nature DQN)"],
+    ["reading targets off the wet ink you are redrawing", "no target network: the target moves with every update and chases its own tail"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Chasing its tail",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "Q-values: 10 ... 100 ... 1000. Score: flat.",
+      "actors": [{ "pose": "shrug", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "cat", "x": 0.6, "y": 0.62, "w": 0.16, "label": "the agent", "color": "peach" },
+        { "kind": "card", "x": 0.82, "y": 0.22, "label": "Q-values up, reward flat", "color": "butter" }
+      ],
+      "arrows": [[0.66, 0.5, 0.56, 0.5, "chasing itself"]],
+      "cap": {
+        "1": "Your game-playing agent says every move is worth more and more, but its score never improves. It is chasing its own tail.",
+        "2": "In DQN the target r + γ max Q(s', a) comes from the network you are training. Each update moves the target too, so Q-values can grow without bound while reward stays flat.",
+        "3": "Function approximation, bootstrapping and off-policy data together (the deadly triad) carry no convergence guarantee. A target that shifts with every gradient step feeds errors back into itself."
+      }
+    },
+    {
+      "name": "The photocopy",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "write", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.42, "y": 0.6, "w": 0.2, "label": "working map (wet ink)", "color": "sky" },
+        { "kind": "card", "x": 0.78, "y": 0.24, "w": 0.2, "label": "photocopy on the wall", "color": "chalk" }
+      ],
+      "arrows": [[0.72, 0.32, 0.5, 0.52, "read targets here"]],
+      "cap": {
+        "1": "The fix: photocopy your map and pin it up. Read every target off the photocopy while you redraw the working copy. Refresh the photocopy only now and then.",
+        "2": "The target network is a frozen copy of the Q-network. It supplies r + γ max Q_target(s', a) and is synced to the live network every C steps.",
+        "3": "θ⁻ ← θ every C steps (C = 10,000 in the 2015 Nature DQN). Between syncs the regression target is stationary, so each stretch is ordinary supervised regression."
+      }
+    },
+    {
+      "name": "The frozen target",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "y = r + γ max ", "c": "ink", "note": "the target" },
+        { "t": "Q_θ⁻", "c": "sky", "note": "read off the photocopy" },
+        { "t": "(s', a)", "c": "ink", "note": "next state, best move" },
+        { "t": "·(1 − d)", "c": "red", "note": "nothing after the end" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "The target is the reward plus the best next value, read off the photocopy. You train the working map toward it; the photocopy stays put.",
+        "2": "Loss = (Q_θ(s, a) − y)², with y computed by the target network without gradients. Only the live network's weights get updated.",
+        "3": "y is a constant for the step: no gradient flows through θ⁻. The (1 − terminated) factor cuts the bootstrap at true episode ends, not at time-limit truncations."
+      }
+    },
+    {
+      "name": "Hold, then jump",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "floor(x/2.5)*2.5", "c": "sky", "label": "target network (photocopy)" },
+        { "f": "x", "c": "orange", "label": "live network" }
+      ],
+      "x": [0, 10],
+      "y": [0, 10],
+      "dot": true,
+      "marks": [{ "x": 2.5, "label": "sync" }, { "x": 5, "label": "sync" }, { "x": 7.5, "label": "sync" }],
+      "cap": {
+        "1": "The photocopy holds still, then jumps to catch up whenever you refresh it. Between jumps, your redrawing has a fixed goal to aim at.",
+        "2": "Between syncs the target is a fixed function, so each stretch looks like supervised regression. Sync too rarely and targets go stale; too often and they chase you again.",
+        "3": "C trades stationarity against staleness. A common alternative is a soft update, θ⁻ ← τθ + (1 − τ)θ⁻ every step: a target that drifts slowly instead of jumping."
+      }
+    },
+    {
+      "name": "Copied once, never again",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "synced every C steps", "c": "mint", "lines": ["sync count ticks up", "targets improve in steps", "episode length climbs"] },
+      "right": { "title": "never synced (wrong counter)", "c": "pink", "lines": ["photocopy from step 0 forever", "TD loss falls smoothly to zero", "episode length stuck near 20"] },
+      "verdict": "A perfect loss curve can mean you memorised your own stale predictions.",
+      "cap": {
+        "1": "Never refresh the photocopy and you get very good at copying an old, wrong map. Your error drops to zero while your play never improves.",
+        "2": "A modulo check on the wrong step counter copies the target once and never again. TD loss falls smoothly to zero while CartPole episodes stay near 20 steps.",
+        "3": "With θ⁻ frozen forever the target is a fixed function of the state, and gradient descent fits it perfectly. Log how many times load_state_dict actually ran, next to the loss."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Any learner that aims at itself", "Probe environments catch it early", "Stable targets, meaningful values"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Whenever a learner's goal is built from its own guesses, it needs something that holds still. Freezing a copy is the simplest way.",
+        "2": "ARENA's probe environments catch a frozen or chasing target in seconds: Probe1 has one action, one step and reward +1, so its value must reach exactly 1.0.",
+        "3": "Stable targets are what make learned values mean anything. Before you read an agent's values to understand what it wants, check they were not fitted to its own stale guesses."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "A one-weight Q-learner: let states share weights, then try the photocopy",
+    "params": [
+      { "id": "k", "label": "how much the next state shares your weights", "min": 0.5, "max": 1.3, "step": 0.01, "value": 1 },
+      { "id": "C", "label": "sync every C steps (1 = no target network)", "min": 1, "max": 100, "step": 1, "value": 20 },
+      { "id": "alpha", "label": "learning rate α", "min": 0.1, "max": 1, "step": 0.05, "value": 0.5 }
+    ],
+    "curves": [
+      { "f": "((n) => { let w = 0, wt = 0; for (let t = 0; t < n; t++) { if (t % C == 0) wt = w; w += alpha*(1 + 0.9*k*wt - w); } return w; })(round(x))", "c": "sky", "label": "with the photocopy" },
+      { "f": "((n) => { let w = 0; for (let t = 0; t < n; t++) { w += alpha*(1 + 0.9*k*w - w); } return w; })(round(x))", "c": "orange", "label": "no photocopy" },
+      { "f": "0.9*k < 1 ? 1/(1 - 0.9*k) : -100", "c": "ink", "label": "true value (when one exists)" }
+    ],
+    "x": [0, 200],
+    "y": [0, 40],
+    "readouts": [
+      { "label": "value after 200 steps, with the photocopy", "f": "(v => abs(v) < 1e4 ? v.toFixed(1) : v.toExponential(1))(((n) => { let w = 0, wt = 0; for (let t = 0; t < n; t++) { if (t % C == 0) wt = w; w += alpha*(1 + 0.9*k*wt - w); } return w; })(200))" },
+      { "label": "value after 200 steps, no photocopy", "f": "(v => abs(v) < 1e4 ? v.toFixed(1) : v.toExponential(1))(((n) => { let w = 0; for (let t = 0; t < n; t++) { w += alpha*(1 + 0.9*k*w - w); } return w; })(200))" },
+      { "label": "true value", "f": "0.9*k < 1 ? (1/(1 - 0.9*k)).toFixed(1) : 'none: the estimates run away'" }
+    ],
+    "caption": {
+      "1": "Push the sharing slider past about 1.1 and the no-photocopy value runs away. The photocopy slows the runaway hugely, but it cannot cure it.",
+      "2": "When states share weights, updating one moves the target too: tail-chasing. A target network makes each stretch fixed regression: slower when all is well, far steadier when not.",
+      "3": "Toy: V(s) = w, V(s') = k·w, r = 1, γ = 0.9. A moving target scales the error by 1 + α(γk − 1) per step; a frozen one by roughly γk per sync. For γk > 1 both diverge: a patch, not a proof."
+    }
+  },
+  "where_else": [
+    "DQN on Atari, synced every 10,000 steps in the 2015 Nature paper",
+    "Soft target updates: a slowly averaged copy instead of periodic jumps",
+    "PPO's critic, regressed onto targets computed with the old, frozen parameters",
+    "The RLHF reference model: another frozen copy, kept for a different job"
+  ],
+  "hamming": {
+    "what": "A frozen copy of the Q-network that computes the bootstrap target and is refreshed only every C steps.",
+    "when": "In DQN and other bootstrapping methods with function approximation, where updating the network would otherwise move its own target.",
+    "why": "Holding the target still turns each stretch of training into ordinary regression, which stops value estimates chasing themselves off to infinity."
+  },
+  "object": {
+    "title": "The photocopy staircase",
+    "subtitle": "Back row: the photocopy (target). Front row: your working map (live). Time runs left to right.",
+    "kind": "bars",
+    "rows": 2,
+    "cols": 12,
+    "f": "((t) => { let w = 0, wt = 0; for (let s = 0; s < t; s++) { if (s % C == 0) wt = w; w += 0.5*(1 + 0.9*k*wt - w); } return min(3, max(0.02, (r == 0 ? wt : w)/4)); })(10*(c + 1))",
+    "labels": { "rows": ["photocopy", "working map"], "cols": ["10", "20", "30", "40", "50", "60", "70", "80", "90", "100", "110", "120"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "C", "label": "sync every C steps", "min": 1, "max": 200, "step": 1, "value": 20 },
+      { "id": "k", "label": "weight sharing with the next state", "min": 0.8, "max": 1.2, "step": 0.05, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "Back row: the photocopy. Front row: your working map. The photocopy holds still, then jumps to match at each refresh.", "2": "The target (row 0) syncs every 20 steps; the live estimate (row 1) chases each fixed target in between.", "3": "Toy V(s) = w, V(s') = k·w, r = 1, γ = 0.9, α = 0.5; heights are values / 4, sampled every 10 steps." },
+        "view": "iso",
+        "set": { "C": 20, "k": 1 }
+      },
+      {
+        "cap": { "1": "Refresh every single step and the two rows become one: no photocopy any more, just you chasing yourself.", "2": "C = 1 is the same as having no target network: the target moves with every update.", "3": "With C = 1, θ⁻ = θ at every step, so the bootstrap target is never stationary." },
+        "view": "front",
+        "set": { "C": 1, "k": 1 }
+      },
+      {
+        "cap": { "1": "Now let the next state share more of your weights. With nothing held still, the values climb off the top.", "2": "Q-values growing without bound while reward stays flat: the classic symptom.", "3": "Moving target with γk = 1.08 > 1: the per-step multiplier 1 + α(γk − 1) exceeds 1, so the estimate diverges." },
+        "view": "side",
+        "set": { "C": 1, "k": 1.2 }
+      },
+      {
+        "cap": { "1": "Put the photocopy back. It still drifts upward, because it is a patch and not a cure, but far more slowly.", "2": "Target networks slow runaway feedback enormously; they do not guarantee convergence.", "3": "With a frozen target the growth is roughly γk per sync instead of per step: engineering, not theory." },
+        "view": "top",
+        "set": { "C": 20, "k": 1.2 }
+      },
+      {
+        "cap": { "1": "Never refresh at all and the working map settles perfectly on a stale, wrong answer. Zero error, nothing learned.", "2": "Copied once, never synced: the fit is perfect and the values stay wrong (here stuck at 1, not the true 10).", "3": "θ⁻ frozen at initialisation makes y a fixed function, which the network fits exactly. Log the sync count." },
+        "view": "close",
+        "set": { "C": 200, "k": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Your DQN's TD loss drops smoothly to almost zero, but CartPole episodes stay about 20 steps long. First suspect?",
+        "options": [{ "t": "The target network is never being synced", "ok": true }, { "t": "Training is going perfectly" }],
+        "why": "A target frozen forever is easy to fit exactly. Check the sync really runs, on the right step counter."
+      },
+      {
+        "q": "What does syncing the target network every single step amount to?",
+        "options": [{ "t": "Having no target network at all", "ok": true }, { "t": "Maximum stability" }],
+        "why": "If the copy always equals the live network, the target moves with every update again."
+      },
+      {
+        "q": "Does a target network guarantee that DQN converges?",
+        "options": [{ "t": "No: it is a stabilising patch", "ok": true }, { "t": "Yes: it solves the deadly triad" }],
+        "why": "Function approximation, bootstrapping and off-policy data still carry no guarantee; the copy just holds the goal still for C steps."
+      }
+    ],
+    "where": "Any learner whose goal is built from its own guesses: DQN, critics, and slowly averaged copies elsewhere in RL."
+  }
+}

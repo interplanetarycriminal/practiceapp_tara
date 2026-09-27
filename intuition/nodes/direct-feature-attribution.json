@@ -1,0 +1,183 @@
+{
+  "id": "direct-feature-attribution",
+  "title": "Which pot made it spicy?",
+  "week": 8,
+  "need": "exercise",
+  "allegory": "Direct feature attribution is tracing a flavour in a bowl back to its pots: the cook ladled from pots along the counter (attention), a taster scores the bowl for one flavour (the latent), and because tasting is fair, the score splits exactly into each ladle's size times its pot's flavour.",
+  "map": [
+    ["pots along the counter", "source positions, each with its value vector"],
+    ["how big a ladle comes from each pot", "the attention weight from the destination to that source"],
+    ["the bowl you mix", "the attention output at the destination: a weighted sum of values"],
+    ["a taster scoring one flavour, before rounding down to 'none'", "the SAE latent's encoder direction, a linear score before the ReLU"],
+    ["each pot's share of the flavour", "DFA: attention weight × (value · encoder direction) for that source"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Where from, exactly?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "which earlier word woke this feature?",
+      "actors": [{ "pose": "think", "x": 0.1, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.26, "y": 0.62, "label": "src 0", "color": "cream" },
+        { "kind": "card", "x": 0.4, "y": 0.62, "label": "src 1", "color": "cream" },
+        { "kind": "card", "x": 0.54, "y": 0.62, "label": "src 2", "color": "cream" },
+        { "kind": "card", "x": 0.68, "y": 0.62, "label": "src 3", "color": "cream" },
+        { "kind": "card", "x": 0.86, "y": 0.62, "label": "dest", "color": "butter" },
+        { "kind": "lamp", "x": 0.86, "y": 0.26, "label": "latent fires", "color": "orange" }
+      ],
+      "arrows": [[0.3, 0.55, 0.82, 0.55], [0.44, 0.52, 0.82, 0.54], [0.58, 0.5, 0.82, 0.53], [0.72, 0.48, 0.82, 0.52, "attention mixes them"]],
+      "cap": {
+        "1": "A feature detector lights up on one word. But attention blended in bits of many earlier words to get there. Which earlier word is the reason?",
+        "2": "An SAE latent trained on an attention layer's output fires at a destination token. That output mixes many source positions. DFA asks which sources caused the activation.",
+        "3": "For an SAE on attention output, the latent's activation at destination d depends on values from every source s the heads attended to. DFA decomposes it by source position."
+      }
+    },
+    {
+      "name": "The soup kitchen",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "carry", "x": 0.6, "label": "attention" }, { "pose": "think", "x": 0.88, "label": "latent" }],
+      "props": [
+        { "kind": "box", "x": 0.1, "y": 0.64, "w": 0.08, "h": 0.1, "label": "pot 0", "color": "cream" },
+        { "kind": "box", "x": 0.22, "y": 0.64, "w": 0.08, "h": 0.1, "label": "pot 1", "color": "orange" },
+        { "kind": "box", "x": 0.34, "y": 0.64, "w": 0.08, "h": 0.1, "label": "pot 2", "color": "cream" },
+        { "kind": "box", "x": 0.46, "y": 0.64, "w": 0.08, "h": 0.1, "label": "pot 3", "color": "cream" },
+        { "kind": "circle", "x": 0.74, "y": 0.46, "w": 0.07, "h": 0.05, "label": "bowl", "color": "peach" },
+        { "kind": "flag", "x": 0.88, "y": 0.18, "label": "one flavour", "color": "butter" }
+      ],
+      "arrows": [[0.24, 0.56, 0.7, 0.46, "big ladle"], [0.36, 0.58, 0.7, 0.48, "a drop"]],
+      "cap": {
+        "1": "Picture a cook filling one bowl with ladles from pots along the counter: a big ladle from some, a drop from others. A taster scores the bowl for one flavour.",
+        "2": "Attention output at a position = sum over sources of (attention weight × value). The SAE latent scores that output with its encoder direction, like a taster scoring one flavour.",
+        "3": "z_d = Σ_s A[d, s] v_s per head. The latent's pre-activation is w_enc · (z_d − b_dec) + b_enc, which is linear in z_d."
+      }
+    },
+    {
+      "name": "Split the score",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "score = ", "c": "ink", "note": "latent, before ReLU" },
+        { "t": "Σₛ", "c": "ink", "note": "over every pot" },
+        { "t": " A[d,s]", "c": "orange", "note": "ladle size" },
+        { "t": " · v_s·w_enc", "c": "sky", "note": "that pot's flavour" },
+        { "t": " + const", "c": "ink", "note": "biases: nobody's share" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Tasting is fair: the bowl's score is exactly each ladle's size times its pot's flavour, added up. So you can read off each pot's share. That is DFA.",
+        "2": "The latent's pre-activation is linear in the attention output, and that output is a weighted sum of values, so the score splits into one term per source position, and per head.",
+        "3": "DFA_s = Σ_h A_h[d, s] (v_{s,h} · w_enc,h) for fixed patterns; the terms sum exactly to the pre-activation minus the bias constant. The exercise is deriving this."
+      }
+    },
+    {
+      "name": "Each pot's share",
+      "need": "exercise",
+      "dur": 11,
+      "type": "grid",
+      "title": "toy DFA: share = ladle × flavour; the shares sum to 1.25",
+      "rows": 4,
+      "cols": 3,
+      "values": [[0.1, 0.5, 0.05], [0.6, 2.0, 1.2], [0.1, -1.0, -0.1], [0.2, 0.5, 0.1]],
+      "labels": { "rows": ["src 0", "src 1", "src 2", "src 3"], "cols": ["attention A", "v · w_enc", "DFA share"] },
+      "highlight": [[1, 0], [1, 1], [1, 2], [2, 2]],
+      "cap": {
+        "1": "Four pots. Share = ladle × flavour. Pot 1 gives a big ladle of strong flavour: 0.6 × 2 = 1.2 of the 1.25 total. Pot 2 even pulls the score down.",
+        "2": "DFA shares add up exactly to the latent's pre-activation, minus biases. Here source 1 supplies 1.2 of 1.25; source 2 is negative: attention that works against the latent.",
+        "3": "Signed, additive attributions: like DLA's negative heads, a source can oppose the latent. Check your derivation by asserting the shares sum to the pre-activation minus the bias terms."
+      }
+    },
+    {
+      "name": "Before the ReLU",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "pre-activation", "c": "mint", "lines": ["linear in the bowl", "shares add up exactly", "attribute this"] },
+      "right": { "title": "after the ReLU", "c": "pink", "lines": ["clipped at zero", "shares don't add up", "a negative total reads 0"] },
+      "verdict": "Split the linear score; the ReLU is not fair.",
+      "cap": {
+        "1": "The taster's final verdict stops at zero: 'not spicy' covers everything from mild to minus. Split the raw score, before that cut, or the shares won't add up.",
+        "2": "Attribute the latent's pre-activation, not its post-ReLU value. The ReLU isn't linear, so shares of the clipped value don't sum. The bias terms belong to no source.",
+        "3": "Linearity holds for w_enc · (z − b_dec) + b_enc only, and its constant part is unattributable. Like DLA, DFA is direct: it credits the source read, not how that value was built."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Which earlier word woke this feature?", "DLA's trick, pointed at a feature", "Direct only: pair it with patching"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Knowing which earlier words switched a feature on tells you what the model was paying attention to, which is what you need before you try to steer it.",
+        "2": "DFA reuses DLA's trick (a linear score of a sum splits into parts) with a latent's encoder direction in place of the logit direction. Reach for patching when you need causes beyond the direct path.",
+        "3": "Signed, additive latent-to-source attributions make SAE features on attention layers legible; paired with causal checks they support circuit-level understanding and targeted steering."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Move the attention between three sources and watch each source's share of the latent",
+    "labels": ["src A (flavour +2)", "src B (flavour −1)", "src C (flavour +0.5)"],
+    "params": [
+      { "id": "sa", "label": "attention score for A", "min": -3, "max": 3, "step": 0.1, "value": 1 },
+      { "id": "sb", "label": "attention score for B", "min": -3, "max": 3, "step": 0.1, "value": 1 },
+      { "id": "sc", "label": "attention score for C", "min": -3, "max": 3, "step": 0.1, "value": 1 }
+    ],
+    "f": "(A => [2, -1, 0.5].map((v, i) => A[i]*v))(softmax([sa, sb, sc]))",
+    "y": [-1, 2],
+    "readouts": [
+      { "label": "attention pattern (A, B, C)", "f": "softmax([sa, sb, sc]).map(p => p.toFixed(2)).join(', ')" },
+      { "label": "latent pre-activation (shares + bias −0.3)", "f": "(sum((A => [2, -1, 0.5].map((v, i) => A[i]*v))(softmax([sa, sb, sc]))) - 0.3).toFixed(2)" },
+      { "label": "latent after ReLU", "f": "relu(sum((A => [2, -1, 0.5].map((v, i) => A[i]*v))(softmax([sa, sb, sc]))) - 0.3).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Give source A more attention and the latent lights up. Pile attention onto B and it switches off, because B's flavour works against it. Watch the shares move.",
+      "2": "Each bar is attention weight × (value · encoder direction). The bars plus the bias give the pre-activation exactly; the ReLU readout shows what the latent actually outputs.",
+      "3": "DFA_s = A[d,s](v_s · w_enc). Moving attention redistributes shares; a negative-flavour source can push the pre-activation below 0, where the ReLU hides every share."
+    }
+  },
+  "where_else": [
+    "Direct logit attribution: the same split, with the logit direction instead of a latent's",
+    "Attention analysis: weighting sources by what was read, not only where the head looked",
+    "SAE feature dashboards: finding which earlier tokens drive a latent",
+    "Accounting: splitting a total into each contributor's share, like a bill or a portfolio's return"
+  ],
+  "hamming": {
+    "what": "Splitting an SAE latent's activation on an attention output into one signed share per source position (and head) that attention read from.",
+    "when": "When a feature fires on an attention layer's output and you want to know which earlier tokens switched it on.",
+    "why": "Attention hides where information came from; because the latent's score is linear before the ReLU, DFA recovers each source's share exactly."
+  },
+  "object": {
+    "title": "The ladle rack",
+    "subtitle": "One cup per (earlier word, head); each cup is as tall as the share of the feature's score that it poured in.",
+    "kind": "bars",
+    "rows": 6,
+    "cols": 4,
+    "f": "((r == [1, 4, 4, 0][c] ? exp(k) : 1)/(5 + exp(k))) * [[0.2, 0.1, 0.3, 0.2], [0.4, 0.2, 0.1, 0.3], [0.1, 0.3, 0.2, 0.1], [0.3, 0.1, 0.4, 0.2], [0.2, 1.8, 0.5, 0.1], [0.1, 0.2, 0.2, 0.3]][r][c] * 1.2",
+    "labels": { "rows": ["src 0", "src 1", "src 2", "src 3", "src 4", "src 5"], "cols": ["head 0", "head 1", "head 2", "head 3"] },
+    "c": "aux",
+    "knobs": [{ "id": "k", "label": "How focused the heads' attention is", "min": 0, "max": 4, "step": 0.25, "value": 0 }],
+    "beats": [
+      { "cap": { "1": "A rack of cups, one per earlier word and head. Each cup's height is how much of the feature's score it poured in.", "2": "Bar (s, h) = head h's attention to source s × (value · encoder direction). All bars sum to the latent's pre-activation, minus biases.", "3": "The attention-DFA tensor over (source, head); its entries sum to w_enc · z_d minus the bias constant." }, "view": "iso", "set": { "k": 0 } },
+      { "cap": { "1": "With attention spread evenly, every cup gets a little, and the shares simply follow each pot's flavour.", "2": "Uniform attention: shares follow v · w_enc, so well-aligned values stand out a little, but nothing dominates.", "3": "With A ≈ 1/n, DFA reduces to each source's projected value divided evenly: a flat, flavour-shaped profile." }, "view": "front", "set": { "k": 0 } },
+      { "cap": { "1": "Sharpen the heads' focus and one cup towers: head 1 reading word 4 poured most of the score.", "2": "Peaked attention concentrates the attribution: here head 1's read of source 4 supplies most of the pre-activation.", "3": "DFA factorises into pattern × projected value; confident patterns localise the attribution to a few (source, head) pairs." }, "view": "iso", "set": { "k": 4 } },
+      { "cap": { "1": "From above you can read the answer straight off: which earlier word, through which head, woke this feature.", "2": "Sum over heads for a per-source attribution; sum over sources for a per-head one.", "3": "Both marginals of the DFA tensor are direct-path attributions; how source 4's value was built needs a separate, causal analysis." }, "view": "top", "set": { "k": 4 } }
+    ],
+    "predict": [
+      { "q": "Why attribute the latent's pre-activation rather than its value after the ReLU?", "options": [{ "t": "The pre-activation is linear, so the shares add up exactly", "ok": true }, { "t": "The post-ReLU value is usually bigger" }], "why": "Before the ReLU the score is a linear function of the attention output, a weighted sum over sources. The ReLU breaks that." },
+      { "q": "A source's share comes out negative. What does that mean?", "options": [{ "t": "Attending to it pushed the latent down", "ok": true }, { "t": "A bug: shares must be positive" }], "why": "Shares are signed: attention weight × (value · encoder direction). A value pointing against the latent's direction lowers its score." },
+      { "q": "DFA says source 4 supplied most of the score. Does that prove source 4's word caused the feature?", "options": [{ "t": "No: DFA is direct only; earlier layers built that value", "ok": true }, { "t": "Yes: DFA is a full causal account" }], "why": "Like DLA, DFA credits the position whose value was read. How that value got there needs patching or a further decomposition." }
+    ],
+    "where": "Any total that is a weighted sum you can split: DLA on logits, a shared bill, a portfolio's return by holding."
+  }
+}

@@ -1,0 +1,221 @@
+{
+  "id": "policy-iteration",
+  "title": "Repaint the signposts until none change",
+  "week": 9,
+  "need": "core",
+  "allegory": "Policy iteration is improving a park's signposts: walk the park following the current signs and write down what each square is worth, then repaint every sign toward its best-looking neighbour, and repeat until no sign wants repainting.",
+  "map": [
+    ["a signpost on every square of the park", "the policy π: one action per state, an integer array"],
+    ["walking the park by the signs, tallying what each square is worth", "policy evaluation: V_π(s) for every state"],
+    ["repainting each sign toward the best-looking next square", "policy improvement: π′(s) = argmaxₐ Σ T·(R + γV_π)"],
+    ["no sign wants repainting", "the policy is stable, and therefore optimal"],
+    ["a coin toss between two equally good signs, every round", "random tie-breaking: equally optimal policies swap forever"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "A park of signposts",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "note": "are these the best signs? how would I fix them?",
+      "actors": [{ "pose": "think", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "flag", "x": 0.42, "y": 0.6, "label": "←", "color": "sky" },
+        { "kind": "flag", "x": 0.56, "y": 0.6, "label": "←", "color": "sky" },
+        { "kind": "flag", "x": 0.7, "y": 0.6, "label": "←", "color": "sky" },
+        { "kind": "card", "x": 0.86, "y": 0.4, "label": "goal +1", "color": "mint" },
+        { "kind": "card", "x": 0.86, "y": 0.7, "label": "trap −1", "color": "pink" }
+      ],
+      "cap": {
+        "1": "You have the full map of a small park: every square, every move, every reward. Each square has a signpost. Are these the best signs? How would you fix them?",
+        "2": "In [2.1] the gridworld's dynamics come as arrays, T[s, a, s′] and R[s, a, s′]. A deterministic policy is just an integer array: one action per state.",
+        "3": "Tabular planning in a known MDP: T and R given, π deterministic. Goal: an optimal policy, found by alternating exact evaluation with greedy improvement (Howard, 1960)."
+      }
+    },
+    {
+      "name": "Walk, then repaint",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "walk", "x": 0.12, "to": 0.42, "label": "evaluate" },
+        { "pose": "write", "x": 0.78, "label": "improve" }
+      ],
+      "props": [
+        { "kind": "flag", "x": 0.55, "y": 0.62, "label": "→", "color": "mint" },
+        { "kind": "flag", "x": 0.66, "y": 0.62, "label": "←", "color": "sky" },
+        { "kind": "card", "x": 0.5, "y": 0.18, "label": "score every square, then repaint", "color": "butter" }
+      ],
+      "arrows": [[0.42, 0.45, 0.72, 0.45, "then"]],
+      "cap": {
+        "1": "First walk the park by the signs and write down what each square is worth. Then repaint every sign toward the best-looking neighbour. Repeat.",
+        "2": "Evaluate the current policy (its value in every state), then improve it by choosing, in each state, the action with the best one-step lookahead. Alternate until nothing changes.",
+        "3": "Policy iteration: compute V_π from the Bellman expectation equation, set π′ = greedy(V_π), repeat. The policy improvement theorem gives V_π′ ≥ V_π in every state."
+      }
+    },
+    {
+      "name": "Score, then pick",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "π′(s) = ", "c": "ink", "note": "" },
+        { "t": "argmaxₐ", "c": "orange", "note": "point the sign at the winner" },
+        { "t": " Σ T·(", "c": "ink", "note": "" },
+        { "t": "R", "c": "green", "note": "reward for the step" },
+        { "t": " + γV", "c": "sky", "note": "worth of where you land" },
+        { "t": ")", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "At each square, try every direction in your head: the reward for the step, plus what the landing square is worth. Point the sign at the winner.",
+        "2": "Improvement is one line: per state, the action maximising expected reward plus γ × the next state's value, using the V you just computed. np.argmax does it per state.",
+        "3": "π′(s) = argmaxₐ Σₛ′ T(s′|s,a)[R(s,a,s′) + γV_π(s′)], greedy w.r.t. Q_π. Evaluation can be exact: V_π = (I − γP_π)⁻¹ r_π, one linear solve."
+      }
+    },
+    {
+      "name": "Good news spreads",
+      "need": "core",
+      "dur": 11,
+      "type": "grid",
+      "title": "toy grid: all signs began ←; lit in the order repainted",
+      "rows": 3,
+      "cols": 4,
+      "values": [["→", "→", "→", "+1"], ["↑", "■", "↑", "−1"], ["↑", "→", "↑", "←"]],
+      "labels": { "rows": ["top", "middle", "bottom"], "cols": ["c0", "c1", "c2", "c3"] },
+      "highlight": [[0, 2], [0, 1], [1, 2], [0, 0], [2, 2], [1, 0], [2, 1], [2, 0]],
+      "cap": {
+        "1": "All signs start pointing left. Each round, good news spreads one square further back from the goal and those signs get repainted. After five rounds: no change.",
+        "2": "On this toy grid (step cost −0.04, γ = 0.9), rounds repaint 1, 2, 2, 2, then 1 signs, then none. The start square's value rises from −0.40 to 0.49.",
+        "3": "From π₀ = all-left, each greedy step extends the goal-reaching path by one state; round 6 changes nothing, so π is optimal. The bottom-right ← correctly avoids the −1."
+      }
+    },
+    {
+      "name": "The endless flip",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "ties broken the same way", "c": "mint", "lines": ["np.argmax: first best action", "policy settles", "loop ends"] },
+      "right": { "title": "ties broken at random", "c": "pink", "lines": ["two equally good signs", "they swap every round", "'unchanged' never fires"] },
+      "verdict": "Break ties deterministically; compare whole policy arrays.",
+      "cap": {
+        "1": "On our grid, going up or right from the start is exactly as good. Toss a coin each round and that sign keeps flipping, so the plan never 'stops changing'.",
+        "2": "Ties in the argmax can make two optimal policies swap forever. Break ties deterministically (np.argmax takes the first) and stop when <code>(pi_new == pi_old).all()</code>. Keep γ < 1.",
+        "3": "Termination needs strict improvement or exact repetition; stochastic tie-breaking cycles among equally optimal policies. With γ = 1 the update is no contraction and I − γP_π can be singular."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Evaluate, then improve: the RL skeleton", "SARSA, Q-learning, DQN: same loop, no map", "Actor-critic and RLHF keep the rhythm"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Nearly every RL method you will meet is this loop with the map taken away: judge the plan, nudge it towards better, repeat.",
+        "2": "SARSA, Q-learning and DQN swap the known T and R for samples but keep the rhythm: estimate values, then act more greedily on them. Policy iteration is the clean version.",
+        "3": "Actor-critic methods, including the PPO used in RLHF to steer language models, keep the evaluate-improve rhythm; the exact loop shows what their approximations give up."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Set the signposts: each tap turns a sign a quarter-turn clockwise",
+    "rows": 3,
+    "cols": 4,
+    "init": "3",
+    "click": "inc",
+    "readouts": [
+      { "label": "your signs (+1 goal, −1 trap, ■ wall)", "f": "G.map((row, r) => row.map((v, c) => r*4 + c == 3 ? '+1' : (r*4 + c == 7 ? '−1' : (r*4 + c == 5 ? '■' : '↑→↓←'[v % 4]))).join(' ')).join('  /  ')" },
+      { "label": "value of the start square (bottom-left)", "f": "[[(s, a) => [[[floor(s/4) - 1, s % 4], [floor(s/4), s % 4 + 1], [floor(s/4) + 1, s % 4], [floor(s/4), s % 4 - 1]][a]].map(p => p[0] >= 0 && p[0] < 3 && p[1] >= 0 && p[1] < 4 && p[0]*4 + p[1] != 5 ? p[0]*4 + p[1] : s)[0], t => -0.04 + (t == 3 ? 1 : 0) - (t == 7 ? 1 : 0), s => G[floor(s/4)][s % 4] % 4]].map(([step, rew, pol]) => range(80).reduce(V => range(12).map(s => s == 3 || s == 5 || s == 7 ? 0 : rew(step(s, pol(s))) + 0.9*V[step(s, pol(s))]), range(12).map(i => 0))[8].toFixed(3))[0]" },
+      { "label": "squares where a strictly better sign exists", "f": "[[(s, a) => [[[floor(s/4) - 1, s % 4], [floor(s/4), s % 4 + 1], [floor(s/4) + 1, s % 4], [floor(s/4), s % 4 - 1]][a]].map(p => p[0] >= 0 && p[0] < 3 && p[1] >= 0 && p[1] < 4 && p[0]*4 + p[1] != 5 ? p[0]*4 + p[1] : s)[0], t => -0.04 + (t == 3 ? 1 : 0) - (t == 7 ? 1 : 0), s => G[floor(s/4)][s % 4] % 4]].map(([step, rew, pol]) => [range(80).reduce(V => range(12).map(s => s == 3 || s == 5 || s == 7 ? 0 : rew(step(s, pol(s))) + 0.9*V[step(s, pol(s))]), range(12).map(i => 0))].map(V => range(12).filter(s => !(s == 3 || s == 5 || s == 7)).filter(s => max(...range(4).map(b => rew(step(s, b)) + 0.9*V[step(s, b)])) > rew(step(s, pol(s))) + 0.9*V[step(s, pol(s))] + 1e-9).map(s => '(' + floor(s/4) + ',' + (s % 4) + ')').join(' ') || 'none: stable, so this plan is optimal')[0])[0]" }
+    ],
+    "caption": {
+      "1": "Every sign starts pointing left. Tap squares to turn their signs. Watch the start square's value climb, and keep going until no square can do better.",
+      "2": "Readouts evaluate your signs (γ = 0.9, step −0.04, 80 sweeps) and run the improvement check: squares with a strictly better sign. None left means optimal. +1, −1 and ■ ignore taps.",
+      "3": "Iterative policy evaluation plus a greedy check with strict improvement, so ties count as stable: the same rule that stops the real loop flip-flopping. Optimal V(start) here is 0.492."
+    }
+  },
+  "where_else": [
+    "SARSA and Q-learning: the same loop, with sampled experience instead of a known map",
+    "Actor-critic methods, including the PPO used in RLHF: a critic evaluates, the actor improves",
+    "k-means clustering: assign, re-centre, repeat until nothing changes"
+  ],
+  "hamming": {
+    "what": "Alternating two steps, scoring the current plan in every state and then switching each state to its best-looking action, until the plan stops changing.",
+    "when": "Whenever you know the full rules of a small world (transition and reward tables), as in the [2.1] gridworld exercises.",
+    "why": "Each round can only help and there are finitely many plans, so it must stop, and it stops at an optimal one; later RL methods are this loop with the map removed."
+  },
+  "object": {
+    "title": "The rising park",
+    "subtitle": "Each square's tower is its value under the current signs; turn the knob to run the rounds and watch value flow back from the goal.",
+    "kind": "bars",
+    "rows": 3,
+    "cols": 4,
+    "f": "[[0.1,0.1,0.1,1.6,0.1,0.02,0.1,0.05,0.1,0.1,0.1,0.1],[0.1,0.1,1.46,1.6,0.1,0.02,0.1,0.05,0.1,0.1,0.1,0.1],[0.1,1.32,1.46,1.6,0.1,0.02,1.32,0.05,0.1,0.1,0.1,0.1],[1.2,1.32,1.46,1.6,0.1,0.02,1.32,0.05,0.1,0.1,1.2,1.09],[1.2,1.32,1.46,1.6,1.09,0.02,1.32,0.05,0.1,1.09,1.2,1.09],[1.2,1.32,1.46,1.6,1.09,0.02,1.32,0.05,0.99,1.09,1.2,1.09]][k][r*4 + c]",
+    "labels": { "rows": ["top", "middle", "bottom"], "cols": ["c0", "c1", "c2", "c3"] },
+    "c": "good",
+    "knobs": [{ "id": "k", "label": "round of policy iteration", "min": 0, "max": 5, "step": 1, "value": 0 }],
+    "beats": [
+      {
+        "cap": {
+          "1": "All signs point left, so every square just bumps into walls forever: a flat, low plateau. The tall tower is the goal.",
+          "2": "Under all-left every non-terminal square is worth −0.04/(1 − 0.9) = −0.40. Height = 0.5 + value.",
+          "3": "V_π₀ ≡ −0.4 off the terminals: an endless −0.04 per step, discounted by γ = 0.9."
+        },
+        "view": "iso",
+        "set": { "k": 0 }
+      },
+      {
+        "cap": {
+          "1": "One repaint: the square beside the goal now points at it, and its tower shoots up.",
+          "2": "After round 1 the square left of +1 points right; its value jumps to 0.96.",
+          "3": "Greedy improvement first changes the only state whose lookahead reaches the reward."
+        },
+        "view": "iso",
+        "set": { "k": 1 }
+      },
+      {
+        "cap": {
+          "1": "Round by round, good news flows back from the goal, one square further each time.",
+          "2": "Each round connects one more ring of squares to the goal path, so their values rise in turn.",
+          "3": "Each evaluate-improve cycle propagates value one step further back along the path to the goal."
+        },
+        "view": "front",
+        "set": { "k": 3 }
+      },
+      {
+        "cap": {
+          "1": "Final round: every tower is as tall as it can get, and no sign wants repainting. The plan is the best one.",
+          "2": "At round 5 the policy is stable: V(start) = 0.49 and improvement changes nothing, so it is optimal.",
+          "3": "Stability means π is greedy w.r.t. its own V_π, which then satisfies the Bellman optimality equation."
+        },
+        "view": "top",
+        "set": { "k": 5 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "What does policy iteration alternate between?",
+        "options": [{ "t": "Scoring the current plan, then greedily improving it", "ok": true }, { "t": "Random exploration, then exploitation" }],
+        "why": "Evaluate V_π, then set each state's action to the best one-step lookahead; repeat until stable."
+      },
+      {
+        "q": "Your loop never stops: two policies keep swapping. Likely cause?",
+        "options": [{ "t": "Ties in the argmax broken at random", "ok": true }, { "t": "γ is too small" }],
+        "why": "Equally good actions can flip each round. Break ties deterministically; np.argmax takes the first."
+      },
+      {
+        "q": "When the policy stops changing, it is...",
+        "options": [{ "t": "Optimal", "ok": true }, { "t": "Only a local optimum" }],
+        "why": "A policy greedy with respect to its own values satisfies the Bellman optimality equation, so nothing beats it."
+      }
+    ],
+    "where": "Any measure-then-adjust loop that ends when nothing changes: k-means, actor-critic training."
+  }
+}

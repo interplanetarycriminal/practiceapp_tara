@@ -1,0 +1,216 @@
+{
+  "id": "sarsa",
+  "title": "Price in your own stumbles",
+  "week": 9,
+  "need": "exercise",
+  "allegory": "SARSA is a hiker who knows she stumbles one step in ten: she rates each move by the step she actually took next, slip included, so the ground beside a cliff earns a bad reputation and she learns a safer path away from the edge.",
+  "map": [
+    ["the spot you stand on and the step you choose", "the state s and the action a"],
+    ["your rating of that step", "the value estimate Q(s, a)"],
+    ["one step in ten is a random stumble", "the ε-greedy behaviour policy, ε = 0.1"],
+    ["rating a step by the step you actually took next, slip included", "the SARSA target r + γ·Q(s′, a′), with a′ the action really taken"],
+    ["the optimist who rates by his best possible next step", "Q-learning's target r + γ·max Q(s′, ·)"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The cliff walk",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "walk", "x": 0.08, "to": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.52, "y": 0.86, "w": 0.62, "h": 0.1, "label": "cliff: −100", "color": "red" },
+        { "kind": "flag", "x": 0.92, "y": 0.68, "label": "goal", "color": "green" }
+      ],
+      "arrows": [[0.2, 0.7, 0.86, 0.7, "short, by the edge"], [0.2, 0.35, 0.86, 0.35, "long, away from it"]],
+      "cap": {
+        "1": "Walk from one corner of a grid to the other. The bottom edge is a cliff: step off, lose 100 points, start again. The short way runs right along the edge.",
+        "2": "CliffWalking-v0: every step costs 1 point, falling costs 100. The shortest path hugs the cliff; a safer one keeps its distance and takes a few more steps. Which does an agent learn?",
+        "3": "Sutton and Barto's Example 6.6 as gymnasium's CliffWalking-v0, trained with γ = 1, ε = 0.1, lr = 0.1 and no optimistic initialisation."
+      }
+    },
+    {
+      "name": "The clumsy hiker",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "walk", "x": 0.3, "label": "hiker" },
+        { "pose": "fall", "x": 0.55, "label": "one step in ten" }
+      ],
+      "props": [
+        { "kind": "box", "x": 0.55, "y": 0.88, "w": 0.7, "h": 0.08, "label": "cliff", "color": "red" },
+        { "kind": "card", "x": 0.82, "y": 0.28, "label": "edge: bad reputation", "color": "butter" }
+      ],
+      "cap": {
+        "1": "Now the hiker stumbles one step in ten. If she rates each move by the step she actually takes next, stumbles included, the cliff edge earns a bad reputation.",
+        "2": "SARSA learns from the action it actually takes next, chosen by its own ε-greedy policy. When a random step tips it off the edge, that −100 flows back into the value of standing near the edge.",
+        "3": "SARSA's target samples the behaviour policy at s′, so its fixed point is Q_π for the ε-greedy π, not Q*. The exploration's cliff risk is priced into the edge-adjacent states."
+      }
+    },
+    {
+      "name": "Five little values",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "Q(s,a)", "c": "ink", "note": "your rating" },
+        { "t": " ← ", "c": "ink", "note": "nudge towards" },
+        { "t": "r", "c": "green", "note": "what the step paid" },
+        { "t": " + γ·", "c": "ink", "note": "" },
+        { "t": "Q(s′,a′)", "c": "orange", "note": "the step you really took next" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The update uses five things: where you stood, what you did, what you got, where you landed, and what you did next. That's where the name comes from.",
+        "2": "Nudge Q(s, a) towards r + γ·Q(s′, a′), where a′ is the action the agent really takes next. State, action, reward, state, action: S-A-R-S-A.",
+        "3": "Q(s,a) ← Q(s,a) + α[r + γQ(s′,a′) − Q(s,a)]: on-policy TD(0) control. Rummery and Niranjan proposed it in 1994 as 'modified Q-learning'; Sutton later renamed it SARSA."
+      }
+    },
+    {
+      "name": "Safe or short?",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "SARSA", "c": "mint", "lines": ["rates by the step actually taken", "learns the detour", "greedy return about −17", "earns more while exploring"] },
+      "right": { "title": "Q-learning", "c": "peach", "lines": ["rates by the best next step", "hugs the cliff edge", "greedy return about −13", "keeps falling in while training"] },
+      "verdict": "Which is better depends on whether you'll still be stumbling when it counts.",
+      "cap": {
+        "1": "The optimist rates each move by his best next step, so he hugs the edge and keeps falling off while learning. Without stumbles, though, his route is shorter.",
+        "2": "Q-learning bootstraps off max Q(s′, ·) and learns the cliff-edge path; SARSA learns the detour. During training SARSA earns more; greedy rollouts give Q-learning about −13 and SARSA about −17.",
+        "3": "SARSA optimises the policy you will run, exploration included; Q-learning optimises the one you would run if you stopped exploring. Online return favours SARSA, greedy return favours Q-learning."
+      }
+    },
+    {
+      "name": "Decide only once",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "s", "label": "land in s′", "x": 0.12, "y": 0.5, "c": "sky" },
+        { "id": "a", "label": "pick a′ once (ε-greedy)", "x": 0.44, "y": 0.5, "c": "orange" },
+        { "id": "u", "label": "update uses a′", "x": 0.82, "y": 0.28, "c": "green" },
+        { "id": "e", "label": "env.step(a′)", "x": 0.82, "y": 0.72, "c": "green" }
+      ],
+      "edges": [["s", "a"], ["a", "u", "same a′"], ["a", "e", "same a′"]],
+      "flow": "forward",
+      "cap": {
+        "1": "The easiest way to break SARSA: decide your next step twice, once for the rating and once for the walk. Then the stumbles never reach the rating.",
+        "2": "If you compute a′ with an argmax inside the update, or sample a fresh action when you step the env, the random branch vanishes from the update. You've written Q-learning with extra bookkeeping.",
+        "3": "Thread one sampled a′ into both the TD target and the next env.step. Test it: train both at ε = 0.1, roll out greedily; SARSA near −17, Q-learning near −13. Equal numbers mean the bug."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["On-policy: learn the policy you actually run", "The same TD residual becomes a critic", "Price in your own mistakes"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "SARSA is the careful learner that counts on its own clumsiness. Judging a policy by how it will really behave matters most when mistakes are costly.",
+        "2": "On-policy versus off-policy is the split between SARSA and Q-learning. SARSA's one-step TD residual comes back as the critic's loss in actor-critic.",
+        "3": "When you evaluate an agent, say which policy you mean: the one it runs, exploration included, or the greedy one. Getting that wrong misjudges how safe it is, a core question in steering AI."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Edge or detour? A toy of the cliff walk under stumbling",
+    "params": [
+      { "id": "e", "label": "stumble rate ε", "min": 0, "max": 0.3, "step": 0.005, "value": 0.1 },
+      { "id": "P", "label": "cost of falling off", "min": 10, "max": 200, "step": 10, "value": 100 }
+    ],
+    "curves": [
+      { "f": "-13 - 11*(x/4)*P", "c": "peach", "label": "edge route (toy expected return)" },
+      { "f": "-17 - (x/4)*P", "c": "mint", "label": "detour (toy expected return)" }
+    ],
+    "x": [0, 0.3],
+    "y": [-100, 0],
+    "readouts": [
+      { "label": "edge route at your ε", "f": "(-13 - 11*(e/4)*P).toFixed(1)" },
+      { "label": "detour at your ε", "f": "(-17 - (e/4)*P).toFixed(1)" },
+      { "label": "better route at this stumble rate", "f": "(-13 - 11*(e/4)*P) > (-17 - (e/4)*P) ? 'the edge (what Q-learning learns)' : 'the detour (what SARSA learns)'" },
+      { "label": "break-even stumble rate", "f": "(1.6/P).toFixed(3)" }
+    ],
+    "caption": {
+      "1": "Slide the stumble rate. With no stumbling the edge route is shorter. At about one stumble in sixty the detour starts winning, and ARENA uses one in ten.",
+      "2": "Toy expected returns for each route under ε-greedy. The edge route makes 11 moves where one random action drops you off; the detour makes 1. SARSA's values price this in; Q-learning's max target leaves it out.",
+      "3": "Toy: each risky move has chance ε/4 of the fatal action at cost P; path lengths 13 and 17; harmless random moves ignored. Break-even ε = 1.6/P. At ε = 0.1, P = 100 the detour wins easily."
+    }
+  },
+  "where_else": [
+    "Q-learning, its off-policy sibling: the same update with a max in place of the next action",
+    "Actor-critic, where the same one-step TD residual becomes the critic's loss",
+    "Any evaluation of an agent that must say whether it means the policy as run or the greedy one"
+  ],
+  "hamming": {
+    "what": "An RL update that nudges Q(s, a) towards the reward plus the value of the action the agent actually takes next.",
+    "when": "When you learn values from your own experience and will still be exploring, or making mistakes, when it counts.",
+    "why": "It learns the value of the policy it actually runs, so it prices in its own exploration and learns cautious routes where mistakes are costly."
+  },
+  "object": {
+    "title": "The dread map",
+    "subtitle": "CliffWalking's 4 × 12 grid: tower height is how badly the learner expects things to go from each square.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 12,
+    "f": "(r == 3 && c >= 1 && c <= 10) ? 0.05 : 0.2 + 0.06*((11 - c) + (3 - r)) + ((r == 2 && c >= 1 && c <= 10) ? who*eps*6 : 0)",
+    "labels": { "rows": ["top row", "row 2", "beside the cliff", "cliff row"], "cols": ["start", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "goal"] },
+    "c": "grad",
+    "knobs": [
+      { "id": "eps", "label": "Stumble rate ε", "min": 0, "max": 0.3, "step": 0.05, "value": 0.1 },
+      { "id": "who", "label": "Learner: 0 = Q-learning, 1 = SARSA", "min": 0, "max": 1, "step": 1, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "The cliff walk's grid. The row of stubs is the cliff. Tower height is how badly SARSA expects things to go from each square.", "2": "A stylised cost-to-go map: taller means a worse expected future from that square, under SARSA with ε = 0.1.", "3": "Height ≈ −V_π(s): steps remaining plus, for SARSA, the expected cliff penalty from ε-random moves." },
+        "view": "iso",
+        "set": { "eps": 0.1, "who": 1 }
+      },
+      {
+        "cap": { "1": "The row beside the cliff towers over its neighbours. SARSA remembers that a stumble there can be fatal, so it keeps its distance.", "2": "Edge-adjacent squares carry the expected −100 from random 'down' moves, so SARSA's greedy route avoids them.", "3": "Q_π of edge-adjacent states includes P(random down)·(−100) ≈ (ε/4)·(−100) per visit, enough to flip the argmax." },
+        "view": "front",
+        "set": { "eps": 0.1, "who": 1 }
+      },
+      {
+        "cap": { "1": "Switch to Q-learning and the dread beside the cliff vanishes. It rates each square by its best next step, so the edge looks perfectly safe.", "2": "Q-learning's max target ignores its own exploration, so the edge row looks as good as any other.", "3": "Off-policy targets estimate Q*, which excludes behaviour-policy noise; the greedy path is the edge." },
+        "view": "side",
+        "set": { "eps": 0.1, "who": 0 }
+      },
+      {
+        "cap": { "1": "SARSA with no stumbling: the dread vanishes here too. When nobody stumbles, the step you take next is the best one.", "2": "At ε = 0 the action actually taken is the greedy one, so the SARSA and Q-learning targets coincide.", "3": "As ε → 0 the ε-greedy π approaches greedy and Q_π approaches Q*: the two algorithms meet." },
+        "view": "top",
+        "set": { "eps": 0, "who": 1 }
+      },
+      {
+        "cap": { "1": "Stumble more and the dread grows: the more random the walk, the more SARSA wants to stay away from the edge.", "2": "Higher ε means a higher chance of a fatal random move, so SARSA's values push its route further from the edge.", "3": "The priced-in penalty scales with ε; SARSA's learned route depends on its own exploration rate." },
+        "view": "close",
+        "set": { "eps": 0.3, "who": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "With ε = 0.1 on CliffWalking, which learner ends up hugging the cliff edge?",
+        "options": [{ "t": "Q-learning", "ok": true }, { "t": "SARSA" }],
+        "why": "Q-learning's max target ignores its own random steps, so the edge looks safe. SARSA prices them in."
+      },
+      {
+        "q": "Rolled out greedily after training, which route scores better?",
+        "options": [{ "t": "Q-learning's edge route, about −13 against −17", "ok": true }, { "t": "SARSA's detour" }],
+        "why": "With exploration switched off nobody stumbles, so the shorter edge path wins."
+      },
+      {
+        "q": "Your SARSA agent behaves exactly like Q-learning. Most likely bug?",
+        "options": [{ "t": "The a′ in the update isn't the action actually taken next", "ok": true }, { "t": "The learning rate is too high" }],
+        "why": "An argmax, or a re-sampled action, removes the random branch and turns SARSA into Q-learning."
+      }
+    ],
+    "where": "Any learner judged by the policy it actually runs: on-policy methods, actor-critic's critic, safe exploration."
+  }
+}

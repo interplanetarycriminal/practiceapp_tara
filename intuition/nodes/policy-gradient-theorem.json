@@ -1,0 +1,207 @@
+{
+  "id": "policy-gradient-theorem",
+  "title": "Do more of what worked",
+  "week": 9,
+  "need": "core",
+  "allegory": "The policy gradient theorem is like a coach replaying game tape: for every move the player made, the coach says 'more of that' in proportion to how well the play turned out, and never needs to model the weather or the other team, because the coach can only change the player's habits.",
+  "map": [
+    ["the player's habits: how likely each move is in each situation", "the policy π_θ(a | s)"],
+    ["marking each move the player actually made on the tape", "the sampled actions a_t in states s_t"],
+    ["'more of that', scaled by how the play turned out", "∇θ log π_θ(a_t | s_t) × G, the return"],
+    ["the weather and the other team, which the coach cannot change", "environment dynamics μ(s′ | s, a): no θ, so their gradient is zero"],
+    ["crediting each move only with what happened after it", "reward-to-go G_t instead of the whole return"]
+  ],
+  "credit": "The 'treat the sampled action as if it were the correct label, then weight it by how good the outcome was' framing is borrowed from Andrej Karpathy, 'Deep Reinforcement Learning: Pong from Pixels' (2016).",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "No world map",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "actors": [{ "pose": "shrug", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "cloud", "x": 0.66, "y": 0.22, "label": "how will the world respond?", "color": "chalk" },
+        { "kind": "card", "x": 0.66, "y": 0.58, "label": "reward = ?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You want to tweak your agent so it earns more reward. But reward depends on how the world responds to each move, and you have no formula for the world.",
+        "2": "Gradient ascent needs the gradient of expected return, but the return depends on environment dynamics you cannot differentiate or even write down. It looks like a dead end.",
+        "3": "J(θ) = E_{τ~π_θ}[G(τ)]. The sampling distribution itself depends on θ, and Pr(τ | θ) contains unknown dynamics μ, so naive differentiation is impossible."
+      }
+    },
+    {
+      "name": "The coach's tape",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.26, "label": "coach" },
+        { "pose": "idle", "x": 0.76, "label": "player" }
+      ],
+      "props": [
+        { "kind": "box", "x": 0.5, "y": 0.4, "w": 0.24, "h": 0.2, "label": "game tape", "color": "sky" },
+        { "kind": "card", "x": 0.5, "y": 0.72, "label": "play scored +10", "color": "mint" }
+      ],
+      "cap": {
+        "1": "A coach replays the game tape. For every move the player made, the coach says 'more of that' if the play went well, and 'less of that' if it went badly.",
+        "2": "Sample episodes with the current policy. Treat each action you took like a training label, then scale its log-probability gradient by the return that followed. Bad returns push it down.",
+        "3": "The estimator Σ_t ∇θ log π_θ(a_t | s_t)·G weights each sampled action's score function by the return: a Monte Carlo estimate of ∇J, which is REINFORCE."
+      }
+    },
+    {
+      "name": "The theorem",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "∇J", "c": "ink", "note": "which way is better" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "E[Σ ", "c": "ink", "note": "average over tapes" },
+        { "t": "∇log π(a|s)", "c": "orange", "note": "'more of that move'" },
+        { "t": " · ", "c": "ink", "note": "" },
+        { "t": "G", "c": "green", "note": "how the play went" },
+        { "t": "]", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Which way to change the player equals, on average over many tapes, 'more of each move you made' times how well that play turned out.",
+        "2": "The gradient of expected return is the average of each action's log-probability gradient, weighted by the return. Everything in it comes from your own network and your own rollouts.",
+        "3": "∇θ J = E_τ[Σ_t ∇θ log π_θ(a_t|s_t) · G(τ)], via ∇p = p ∇log p. Sutton, McAllester, Singh and Mansour (NIPS 1999) extended it to function approximation."
+      }
+    },
+    {
+      "name": "The world cancels",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "s0", "label": "s₀", "x": 0.07, "y": 0.62, "c": "sky" },
+        { "id": "a0", "label": "a₀", "x": 0.23, "y": 0.3, "c": "orange" },
+        { "id": "s1", "label": "s₁", "x": 0.39, "y": 0.62, "c": "sky" },
+        { "id": "a1", "label": "a₁", "x": 0.55, "y": 0.3, "c": "orange" },
+        { "id": "s2", "label": "s₂", "x": 0.71, "y": 0.62, "c": "sky" },
+        { "id": "G", "label": "return G", "x": 0.9, "y": 0.45, "c": "green" }
+      ],
+      "edges": [
+        ["s0", "a0", "π_θ"],
+        ["a0", "s1", "world μ, no θ"],
+        ["s1", "a1", "π_θ"],
+        ["a1", "s2", "world μ, no θ"],
+        ["s2", "G", ""]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "A play alternates: the player picks a move, then the world responds. Only the player's picks depend on the coach's adjustments; the world's responses do not.",
+        "2": "Pr(trajectory) multiplies policy terms and world terms. Take the log and it becomes a sum; the world's terms contain no θ, so their gradient is zero. No world model needed.",
+        "3": "log Pr(τ|θ) = Σ log π_θ(a_t|s_t) + Σ log μ(s_{t+1}|s_t,a_t), and ∇θ kills the μ sum exactly. That is what model-free means: dynamics enter only through samples."
+      }
+    },
+    {
+      "name": "Not really a loss",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "what people expect", "c": "pink", "lines": ["loss going down = learning", "minimise it", "let autograd see everything"] },
+      "right": { "title": "what it really is", "c": "mint", "lines": ["a surrogate: only its gradient matters", "ascend J: loss = −(log π · A).mean()", "detach the returns and baseline"] },
+      "verdict": "Its gradient is the policy gradient; its value means nothing.",
+      "cap": {
+        "1": "The number you code as a 'loss' is only a device for delivering the coach's nudges; its value means nothing. Watch the reward, not the loss.",
+        "2": "The surrogate −Σ log π(a|s)·A has the right gradient but a meaningless value. Optimisers descend, so negate it, and detach A or autograd differentiates through the returns.",
+        "3": "Canonical form: −(logprobs * advantages.detach()).mean(). Check the sign on a probe environment: the optimal action's log-probability must rise."
+      }
+    },
+    {
+      "name": "Credit the future only",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.14, "label": "coach" }],
+      "props": [
+        { "kind": "card", "x": 0.4, "y": 0.32, "label": "before my move: not my doing", "color": "cream" },
+        { "kind": "card", "x": 0.76, "y": 0.32, "label": "after my move: my share", "color": "mint" },
+        { "kind": "scale", "x": 0.6, "y": 0.68, "w": 0.24, "h": 0.2, "label": "vs a typical play", "color": "butter" }
+      ],
+      "arrows": [[0.5, 0.5, 0.88, 0.5, "credit flows forward only"]],
+      "cap": {
+        "1": "A move cannot cause what already happened, so judge each move only by what came after it. And compare with a typical play, so 'good' means better than usual.",
+        "2": "Replace the whole return with the reward-to-go G_t, and subtract a baseline b(s). The average gradient is unchanged, and the noise drops a lot.",
+        "3": "Reward-to-go removes acausal terms, and E[∇log π · b(s)] = 0, so baselines are unbiased. A learned critic plus GAE trades a little bias for much lower variance."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["No model of the world needed", "The engine under PPO and RLHF", "Watch returns and log-probs, not the loss"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "This is how chat models are tuned with human feedback: nudge the model towards replies that scored well. To steer AI, you need to know this engine.",
+        "2": "PPO and RLHF are policy gradients with safety rails. The cancellation is why they work on language models, where 'the world' is a person or a reward model.",
+        "3": "Policy gradients converge to local optima under function approximation, where off-policy TD can diverge; that is why RLHF is built on them. Actor-critic and GAE are variance reduction on top."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "One REINFORCE step: pick the move you made and how the play went",
+    "labels": ["move 0", "move 1", "move 2"],
+    "params": [
+      { "id": "a", "label": "the move you made", "min": 0, "max": 2, "step": 1, "value": 1 },
+      { "id": "G", "label": "how the play went, G", "min": -3, "max": 3, "step": 0.1, "value": 2 },
+      { "id": "b", "label": "a typical play, baseline b", "min": -3, "max": 3, "step": 0.1, "value": 0 }
+    ],
+    "f": "(() => { const th = [0.5, 0, -0.5]; const p = softmax(th); const g = p.map((q, i) => (i === a ? 1 : 0) - q); return softmax(th.map((t, i) => t + 0.8 * (G - b) * g[i])); })()",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "habits before the step", "f": "softmax([0.5, 0, -0.5]).map(q => Math.round(100 * q) + '%').join(' / ')" },
+      { "label": "advantage G − b", "f": "(G - b).toFixed(1)" },
+      { "label": "chance of the move you made, before → after", "f": "(() => { const th = [0.5, 0, -0.5]; const p = softmax(th); const g = p.map((q, i) => (i === a ? 1 : 0) - q); const n = softmax(th.map((t, i) => t + 0.8 * (G - b) * g[i])); return Math.round(100 * p[a]) + '% → ' + Math.round(100 * n[a]) + '%'; })()" }
+    ],
+    "caption": {
+      "1": "Choose the move and how the play went, then watch that move's chance rise or fall. Now raise the baseline: a win that is only average barely changes anything.",
+      "2": "One REINFORCE step on a softmax policy: θ += lr·(G − b)·∇log π(a). A positive advantage makes the move likelier, a negative one rarer; the other moves share the change.",
+      "3": "∇θ log softmax(θ)_a = e_a − π, so the step lifts a and lowers the rest in proportion to their probability. The baseline changes each sample's size and sign, not the expectation."
+    }
+  },
+  "where_else": [
+    "REINFORCE and VPG, the direct implementations in [2.2.2]",
+    "PPO and RLHF, which fine-tune language models with this gradient",
+    "Actor-critic methods, which replace the return with a learned critic",
+    "Score-function gradient estimators anywhere you sample a discrete choice"
+  ],
+  "hamming": {
+    "what": "A formula for changing a policy's parameters to raise expected reward, using only the log-probabilities of the actions taken and the returns that followed.",
+    "when": "Whenever you train a policy directly, from REINFORCE on CartPole to PPO fine-tuning a language model.",
+    "why": "The environment's unknown dynamics cancel out of the gradient, so you can improve behaviour without ever modelling the world."
+  },
+  "object": {
+    "title": "The reward basin",
+    "subtitle": "Every point is one set of habits for a three-move player; the deeper the point, the more those habits earn.",
+    "kind": "surface",
+    "f": "-(exp(x) * 1 + exp(y) * r1) / (exp(x) + exp(y) + 1)",
+    "x": [-3, 3],
+    "y": [-3, 3],
+    "ball": { "x": 0, "y": 0, "lr": 2, "steps": 60 },
+    "marks": [{ "x": 0, "y": 0, "label": "even habits" }],
+    "knobs": [{ "id": "r1", "label": "what the world pays for move 1", "min": 0, "max": 1.5, "step": 0.1, "value": 0.3 }],
+    "beats": [
+      { "cap": { "1": "A basin of rewards: the deeper a point, the more the player earns there. Each point is one setting of the player's habits.", "2": "Depth = expected return J(θ) for a three-move softmax policy with two free preferences.", "3": "J(θ) = Σ π_θ(a) r(a) with π = softmax(θ₁, θ₂, 0); plotted as −J so rolling downhill is ascent." }, "view": "iso", "set": { "r1": 0.3 } },
+      { "cap": { "1": "The marble rolls towards habits that favour move 0, the best-paying move.", "2": "Following ∇J pushes up the preference for the highest-reward action.", "3": "Exact gradient ascent on J; REINFORCE follows a noisy, unbiased estimate of this slope from sampled moves." }, "view": "top", "set": { "r1": 0.3 } },
+      { "cap": { "1": "Change what the world pays for move 1 and the basin tilts the other way. The player never needed a map of the world, only feedback.", "2": "The landscape depends on the environment, but the gradient estimate needs only log-probs and sampled returns.", "3": "Dynamics and rewards shape J, yet ∇J is estimable model-free: the environment enters only through samples." }, "view": "iso", "set": { "r1": 1.5 } },
+      { "cap": { "1": "Near the rim the slope flattens: once a habit is nearly certain there is little left to push.", "2": "Softmax saturation: gradients fade as the policy becomes nearly deterministic, one reason for entropy bonuses.", "3": "∇ log π = e_a − π tends to 0 as π approaches e_a, so near-deterministic policies learn slowly; PPO adds an entropy bonus." }, "view": "side", "set": { "r1": 1.5 } },
+      { "cap": { "1": "Real training feels the slope only through noisy tapes, so steps wobble. Baselines and reward-to-go calm the wobble without changing the average direction.", "2": "Reward-to-go, baselines and critics keep the expected step the same and shrink the noise.", "3": "Unbiased variance reduction leaves E[ĝ] = ∇J; critics and GAE add a little bias for large variance cuts." }, "view": "close", "set": { "r1": 0.3 } }
+    ],
+    "predict": [
+      { "q": "Why don't you need a model of the environment to compute the policy gradient?", "options": [{ "t": "The environment's terms contain no θ, so their gradient is zero", "ok": true }, { "t": "Because the environment is deterministic" }], "why": "log Pr(τ) splits into policy terms plus world terms, and only the policy terms depend on θ." },
+      { "q": "Your REINFORCE 'loss' keeps falling while the returns fall too. Most likely?", "options": [{ "t": "The sign is flipped: you are minimising reward", "ok": true }, { "t": "All fine: a falling loss means learning" }], "why": "Optimisers descend, so the loss must be −Σ log π · A. The surrogate's value is meaningless anyway; watch the returns." },
+      { "q": "Subtracting a baseline b(s) from the return changes the expected gradient how?", "options": [{ "t": "Not at all; it only reduces the noise", "ok": true }, { "t": "It biases the gradient towards the baseline" }], "why": "E[∇log π · b(s)] = 0, so baselines are unbiased." }
+    ],
+    "where": "Anywhere you optimise through a random choice you cannot differentiate: REINFORCE, PPO, RLHF."
+  }
+}

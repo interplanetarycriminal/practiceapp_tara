@@ -1,0 +1,228 @@
+{
+  "id": "markov-decision-process",
+  "title": "Squares, moves, dice and coins",
+  "week": 9,
+  "need": "core",
+  "allegory": "A Markov decision process is a board game: squares, the moves allowed on each, dice that decide where you land using only your square and your move, coins you pick up, and coins that lose a little value for every turn you wait.",
+  "map": [
+    ["squares on the board", "states S"],
+    ["the moves allowed on each square", "actions A"],
+    ["dice that look only at your square and your move", "transitions T(s' | s, a): the Markov property"],
+    ["coins picked up as you move", "rewards R(s, a, s')"],
+    ["coins lose value for each turn you wait", "discount γ: a reward t steps away counts γᵗ"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "What is the game?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "reward curve flat ... is the agent wrong, or my setup?",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.55, "y": 0.58, "w": 0.18, "h": 0.26, "label": "agent", "color": "sky" },
+        { "kind": "cloud", "x": 0.8, "y": 0.25, "label": "what would 'right' even be?", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "Before teaching anything to play, say exactly what the game is. Otherwise, when the learner fails, you can't tell a bad learner from a bad game.",
+        "2": "Every RL algorithm in this chapter optimises inside the same formal object. Writing it down tells you what a correct answer looks like before you train anything.",
+        "3": "An MDP (S, A, T, R, γ) specifies the problem; policies, value functions and every algorithm from Q-learning to PPO are defined relative to it."
+      }
+    },
+    {
+      "name": "The board game",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "walk", "x": 0.2, "to": 0.4, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.3, "y": 0.72, "w": 0.1, "h": 0.1, "label": "square", "color": "cream" },
+        { "kind": "box", "x": 0.52, "y": 0.72, "w": 0.1, "h": 0.1, "label": "square", "color": "cream" },
+        { "kind": "circle", "x": 0.62, "y": 0.35, "w": 0.08, "h": 0.08, "label": "dice", "color": "red" },
+        { "kind": "stack", "x": 0.84, "y": 0.62, "w": 0.1, "h": 0.2, "label": "coins", "color": "butter" }
+      ],
+      "arrows": [[0.35, 0.68, 0.47, 0.68, "move"]],
+      "cap": {
+        "1": "Think of a board game: squares, the moves you may make, dice that decide where you land, and coins to collect. The dice care only about your square and move.",
+        "2": "States, actions, a transition rule and a reward. 'Markov' means the next state depends only on the current state and action, not on the path that got you there.",
+        "3": "Markov property: P(s_{t+1} | s_t, a_t, history) = T(s_{t+1} | s_t, a_t). If the observation hides relevant history, the problem is not Markov in that observation."
+      }
+    },
+    {
+      "name": "Worth of a square",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "V(s)", "c": "orange", "note": "worth of this square" },
+        { "t": " = Σ ", "c": "ink", "note": "average over the dice" },
+        { "t": "T", "c": "sky", "note": "chance of landing" },
+        { "t": "·(R", "c": "green", "note": "coins now" },
+        { "t": " + γ·V(s'))", "c": "lav", "note": "next square, shrunk" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "A square's worth is the coins you expect on the next move, plus the worth of where you land, shrunk a little because it is one turn later.",
+        "2": "The Bellman equation for a fixed policy: value = expected reward plus γ times expected next value. When the rules are known, you can solve it exactly.",
+        "3": "With π fixed it is linear: v = r + γPv, so v = (I - γP)⁻¹r (Howard, 1960). The inverse is guaranteed for γ below 1; at γ = 1 the system can be singular."
+      }
+    },
+    {
+      "name": "Now or later?",
+      "need": "exercise",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "1/(1 - x*x)", "c": "orange", "label": "left: 1 coin now, every other turn" },
+        { "f": "2*x/(1 - x*x)", "c": "teal", "label": "right: 2 coins, one turn later" }
+      ],
+      "x": [0, 0.95],
+      "y": [0, 20],
+      "dot": true,
+      "marks": [{ "x": 0.5, "label": "tie at γ = 0.5" }],
+      "cap": {
+        "1": "A toy: go left for 1 coin now and every other turn, or right for 2 coins, each one turn later. Which is better depends on how fast coins shrink.",
+        "2": "Left is worth 1/(1-γ²), right 2γ/(1-γ²). Below γ = 0.5 left wins; above it right wins. Same board, different discount, different best policy.",
+        "3": "The optimal policy is a property of the whole MDP, γ included. Solving a tiny case by hand, as [2.1] asks, gives ground truth to test an agent against."
+      }
+    },
+    {
+      "name": "When it isn't Markov",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Markov observation", "c": "mint", "lines": ["position and velocity", "next state predictable", "value well defined"] },
+      "right": { "title": "not Markov", "c": "pink", "lines": ["one frame: position only", "rising or falling?", "fix: add the missing history"] },
+      "verdict": "The rules must depend only on what the agent can see now.",
+      "cap": {
+        "1": "If the board hides something that matters, the game breaks the rule. One snapshot of a ball can't tell you whether it is rising or falling.",
+        "2": "Markov is a property of what the agent observes. If the observation leaves out something the future depends on, add it, for example by stacking recent frames.",
+        "3": "Partial observability breaks the Bellman recursion on raw observations. Remedies: augment the state (frame stacks, velocities) or give the policy memory."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Bandit: a board with one square", "Q-learning and DQN: hidden dice, sampled", "RLHF: tokens as moves, a judge's coins"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Every RL method you'll meet plays inside this frame. Training a chatbot from feedback is one too: the moves are words and the coins come from a judge.",
+        "2": "A bandit is an MDP with one state. SARSA, Q-learning and DQN solve MDPs when the rules are hidden and must be sampled. RLHF frames text generation as an MDP.",
+        "3": "Framing a behaviour as an MDP states exactly what is optimised; reward misspecification and reward hacking are claims about R, where steering by RL succeeds or fails."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Left pays now, right pays later: find where the best choice flips",
+    "params": [
+      { "id": "L", "label": "left coins (paid now)", "min": 0.5, "max": 2, "step": 0.1, "value": 1 },
+      { "id": "R", "label": "right coins (paid one turn later)", "min": 0.5, "max": 4, "step": 0.1, "value": 2 },
+      { "id": "g", "label": "your agent's γ", "min": 0, "max": 0.95, "step": 0.01, "value": 0.7 }
+    ],
+    "curves": [
+      { "f": "L/(1 - x*x)", "c": "orange", "label": "value of always going left" },
+      { "f": "R*x/(1 - x*x)", "c": "teal", "label": "value of always going right" }
+    ],
+    "x": [0, 0.95],
+    "y": [0, 40],
+    "readouts": [
+      { "label": "left, at your γ", "f": "(L/(1 - g*g)).toFixed(2)" },
+      { "label": "right, at your γ", "f": "(R*g/(1 - g*g)).toFixed(2)" },
+      { "label": "best policy", "f": "R*g > L ? 'go right' : (R*g < L ? 'go left' : 'tie')" },
+      { "label": "choice flips at γ =", "f": "L/R <= 0.95 ? (L/R).toFixed(2) : 'not below 0.95: left wins'" }
+    ],
+    "caption": {
+      "1": "Left pays its coins now and every other turn; right pays its coins one turn later. Slide your agent's patience and find where the best choice flips.",
+      "2": "The curves cross where L = R·γ. Raise the right-hand prize and even fairly impatient agents go right. Do this sum before training, so you know what 'right' looks like.",
+      "3": "V_L = L/(1-γ²), V_R = Rγ/(1-γ²), so the optimal policy switches at γ* = L/R. The blow-up as γ → 1 is why the tabular exercises keep γ below 1."
+    }
+  },
+  "where_else": [
+    "Multi-armed bandits: the MDP with a single state",
+    "SARSA, Q-learning and DQN: solving an MDP when the rules are hidden and must be sampled",
+    "RLHF: text generation as an MDP, with tokens as actions and a reward model's score at the end",
+    "Planning by search, as in MCTS, inside a known MDP"
+  ],
+  "hamming": {
+    "what": "The formal game RL optimises inside: states, actions, transitions that depend only on the current state and action, rewards, and a discount.",
+    "when": "Before writing any RL code: define the MDP, and solve a tiny one by hand so you know what right looks like.",
+    "why": "Every algorithm from Q-learning to PPO and RLHF is defined relative to it, and many failures trace back to a mis-specified state, reward or discount."
+  },
+  "object": {
+    "title": "The game board",
+    "subtitle": "The whole now-or-later toy as a board: a home square and two side squares, with coins paid on the moves.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "home", "label": "home: choose left or right", "pos": [0, 0, 0], "c": "data" },
+      { "id": "left", "label": "left: +1 on the way in", "pos": [-1.2, 0.4, 0], "c": "good" },
+      { "id": "right", "label": "right: +2 on the way back", "pos": [1.2, 0.4, 0], "c": "prob" }
+    ],
+    "edges": [["home", "left"], ["left", "home"], ["home", "right"], ["right", "home"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "The whole game on one board: a home square and two side squares. From home you choose left or right; from a side square you always walk home.",
+          "2": "Three states, two actions at home, one forced action elsewhere. Deterministic transitions.",
+          "3": "S = {home, left, right}; A(home) = {L, R}; T is deterministic, so the policy choice lives entirely at home."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Left pays 1 coin on the way in. Right pays nothing going in, but 2 coins on the way back, one turn later.",
+          "2": "Rewards sit on moves: R(home, L) = 1, R(right, back) = 2, the rest 0.",
+          "3": "Reward timing is the whole contrast: equal cycle lengths, different delays."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Here the dice are simple: every move lands where it says. In general they can scatter you, but they only ever look at your square and your move.",
+          "2": "Deterministic here; in general T(s' | s, a) is a distribution, conditioned only on the current state and action.",
+          "3": "The Markov property is what lets the Bellman equation recurse on states alone."
+        },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Loop forever and add up the coins, shrinking each by γ per turn. Patient players, above γ = 0.5, should go right; impatient ones left.",
+          "2": "V_L = 1/(1-γ²), V_R = 2γ/(1-γ²): the optimal policy flips at γ = 0.5.",
+          "3": "Same S, A, T, R; the optimal policy still changes with γ, so γ is part of the problem, not a training detail."
+        },
+        "view": "side",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "A multi-armed bandit is an MDP with how many states?",
+        "options": [{ "t": "One", "ok": true }, { "t": "Two" }, { "t": "It is not an MDP" }],
+        "why": "With one state there are no transitions to learn, only which arm pays best."
+      },
+      {
+        "q": "In the toy, γ = 0.9. Left or right?",
+        "options": [{ "t": "Right", "ok": true }, { "t": "Left" }],
+        "why": "Right wins when 2γ > 1, i.e. γ > 0.5. At 0.9, right is worth 1.8 times left."
+      },
+      {
+        "q": "Your observation is one video frame of a moving ball. Is it Markov?",
+        "options": [{ "t": "No, it hides the velocity", "ok": true }, { "t": "Yes, any observation is" }],
+        "why": "The next frame depends on speed and direction, which one frame cannot show; stacking frames restores it."
+      }
+    ],
+    "where": "Any sequential decision under fixed rules: board games, robots, and a language model choosing tokens for a reward."
+  }
+}

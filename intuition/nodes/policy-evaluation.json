@@ -1,0 +1,200 @@
+{
+  "id": "policy-evaluation",
+  "title": "Rewrite the notes until they settle",
+  "week": 9,
+  "need": "core",
+  "allegory": "Policy evaluation is like a board game where every square keeps a sticky note saying 'what I will collect from here if I follow the plan': each round every note is rewritten from the notes one step ahead, so news of each prize spreads outward a square per round, shrinking a little each step, until no note changes.",
+  "map": [
+    ["a sticky note on each square: what I will collect from here", "the value estimate V(s)"],
+    ["the plan pinned to each square", "the fixed policy π(s)"],
+    ["rewrite: this step's prize plus a shrunk copy of the note where you land", "the Bellman update V(s) ← Σ T(s'|s,π(s))·[R + γV(s')]"],
+    ["news of a prize spreading one square per round, shrinking by γ", "each sweep propagates value one more step back, discounted"],
+    ["stop when no note moves by more than a hair", "stop when max |V_new − V_old| < eps: the fixed point V_π"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Is this plan good?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "note": "from every square: which way to step. but how good is that?",
+      "actors": [{ "pose": "think", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.5, "y": 0.6, "w": 0.1, "h": 0.1, "label": "→", "color": "cream" },
+        { "kind": "box", "x": 0.62, "y": 0.6, "w": 0.1, "h": 0.1, "label": "→", "color": "cream" },
+        { "kind": "box", "x": 0.74, "y": 0.6, "w": 0.1, "h": 0.1, "label": "→", "color": "cream" },
+        { "kind": "flag", "x": 0.88, "y": 0.58, "label": "prize +1", "color": "green" }
+      ],
+      "cap": {
+        "1": "You have a plan: from each square of a little world, which way to step. Before changing it, you need to know how good it is from every square.",
+        "2": "A policy fixes one action per state. Its value V(s) is the expected discounted reward from s onwards, averaged over the random slips in where each move lands.",
+        "3": "Given π and a known model T(s,a,s'), R(s,a,s'), compute V_π(s) = E[Σ γᵗ rₜ | s₀ = s, π]. Policy evaluation is the prediction half of policy iteration."
+      }
+    },
+    {
+      "name": "Notes on squares",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "write", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.46, "y": 0.62, "w": 0.12, "h": 0.12, "label": "0.81", "color": "cream" },
+        { "kind": "box", "x": 0.6, "y": 0.62, "w": 0.12, "h": 0.12, "label": "0.9", "color": "cream" },
+        { "kind": "box", "x": 0.74, "y": 0.62, "w": 0.12, "h": 0.12, "label": "1", "color": "cream" },
+        { "kind": "flag", "x": 0.88, "y": 0.6, "label": "prize +1", "color": "green" }
+      ],
+      "arrows": [[0.72, 0.48, 0.63, 0.48, "copy × γ"], [0.58, 0.48, 0.49, 0.48, "copy × γ"]],
+      "cap": {
+        "1": "Give each square a sticky note: 'what I'll collect from here'. Each round, rewrite it as this step's prize plus a shrunk copy of the note where you land.",
+        "2": "Start every note at 0. One sweep rewrites all squares from the old notes. A prize's news spreads one square further per sweep, shrinking by γ each step: 1, 0.9, 0.81.",
+        "3": "Iterative evaluation applies the Bellman expectation operator to an arbitrary V₀. With γ = 0.9 and deterministic moves, value decays geometrically with distance to the reward."
+      }
+    },
+    {
+      "name": "The rewrite rule",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "V(s)", "c": "sky", "note": "this square's note" },
+        { "t": " ← ", "c": "ink", "note": "rewrite as" },
+        { "t": "Σ T(s'|s,π(s))", "c": "lav", "note": "average over landings" },
+        { "t": "·[R", "c": "green", "note": "this step's prize" },
+        { "t": " + γV(s')]", "c": "orange", "note": "shrunk note ahead" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "New note = the average, over where your step might land, of (prize for this step + γ × the note there). γ, a bit under 1, shrinks faraway prizes.",
+        "2": "<code>policy_eval_numerical</code>: repeat this for all states until <code>max |V_new - V_old| < eps</code>. T and R arrive as arrays: <code>env.T[s, a, s']</code>, <code>env.R[s, a, s']</code>.",
+        "3": "V ← r^π + γP^πV. For γ < 1 this operator is a γ-contraction in the sup norm, so the iterates converge geometrically to its unique fixed point, V_π."
+      }
+    },
+    {
+      "name": "Settling down",
+      "need": "core",
+      "dur": 9,
+      "type": "plot",
+      "curves": [
+        { "f": "pow(0.5, x)", "c": "green", "label": "γ = 0.5" },
+        { "f": "pow(0.9, x)", "c": "orange", "label": "γ = 0.9" },
+        { "f": "pow(0.99, x)", "c": "red", "label": "γ = 0.99" }
+      ],
+      "x": [0, 50],
+      "y": [0, 1],
+      "dot": true,
+      "cap": {
+        "1": "Each round, the notes get closer to their true values by at least a factor of γ. With γ = 0.9 the error shrinks fast; with 0.99 it takes many more rounds.",
+        "2": "The worst-case error after k sweeps is at most γᵏ times the starting error. Far-sighted agents, γ near 1, need many more sweeps to settle.",
+        "3": "‖V_k − V_π‖∞ ≤ γᵏ‖V₀ − V_π‖∞. To shrink the bound a thousandfold takes about 66 sweeps at γ = 0.9 and about 690 at γ = 0.99."
+      }
+    },
+    {
+      "name": "Solve it once",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Sweep until settled", "c": "sky", "lines": ["policy_eval_numerical", "repeat the rewrite", "stop below eps"] },
+      "right": { "title": "Solve in one go", "c": "mint", "lines": ["policy_eval_exact", "v = (I − γP)⁻¹ r", "same numbers, no loop"] },
+      "verdict": "With the plan fixed, the notes are just simultaneous equations.",
+      "cap": {
+        "1": "With the plan fixed, all the notes' rules together are ordinary simultaneous equations, so you can solve them in one go. Both ways give the same numbers.",
+        "2": "Howard (1960): v = (I − γP^π)⁻¹ r^π. ARENA has you write both and check they agree on the same gridworld before trusting either.",
+        "3": "(I − γP)⁻¹ = Σ γᵏPᵏ, the discounted sum over every horizon; each sweep from V₀ = 0 adds one more term. The exact solve is cubic in states, fine for small tabular worlds."
+      }
+    },
+    {
+      "name": "The endless rewrite",
+      "need": "exercise",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "γ = 1 ... still rewriting ...",
+      "actors": [{ "pose": "slump", "x": 0.3, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.65, "y": 0.55, "w": 0.18, "h": 0.45, "label": "notes, still growing", "color": "peach" }
+      ],
+      "cap": {
+        "1": "Set γ to exactly 1 and far prizes stop shrinking. In a world where you can wander forever, the notes can keep growing and never settle.",
+        "2": "With γ = 1 the update is no longer a contraction: <code>policy_eval_numerical</code> can creep upward forever, and <code>I - γP</code> can be singular, so the exact solve fails too.",
+        "3": "γ < 1 keeps the spectral radius of γP^π below 1, giving both invertibility and convergence. Keep γ < 1 in the tabular exercises and assert the two evaluators agree within eps."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Evaluate, then improve: policy iteration", "Every RL method estimates values", "Critics are learned evaluators"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Scoring a fixed plan is half of getting better: score it, change the choices that scored badly, repeat. Every later RL method does a version of this.",
+        "2": "SARSA, Q-learning and DQN run this loop with the map taken away: sampled transitions instead of T and R arrays. The critic in actor-critic methods is a learned policy evaluator.",
+        "3": "Value estimation underlies the critics used to RL-train language models, such as PPO's value head in RLHF, so knowing what a value means is part of understanding and steering trained behaviour."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "A 30-square corridor with a prize at the left end",
+    "params": [
+      { "id": "g", "label": "discount γ", "min": 0.5, "max": 0.99, "step": 0.01, "value": 0.9 },
+      { "id": "k", "label": "sweeps so far", "min": 0, "max": 30, "step": 1, "value": 5 }
+    ],
+    "curves": [
+      { "f": "pow(g, floor(x))", "c": "green", "label": "true value (the fixed point)" },
+      { "f": "floor(x) < k ? pow(g, floor(x)) : 0", "c": "orange", "label": "notes after k sweeps" }
+    ],
+    "x": [0, 30],
+    "y": [0, 1.05],
+    "readouts": [
+      { "label": "true value 10 squares away (γ¹⁰)", "f": "pow(g, 10).toFixed(3)" },
+      { "label": "its note after k sweeps", "f": "(k > 10 ? pow(g, 10) : 0).toFixed(3)" },
+      { "label": "worst error left on the corridor", "f": "(k < 30 ? pow(g, k) : 0).toFixed(3)" }
+    ],
+    "caption": {
+      "1": "Add sweeps and watch news of the prize spread one square per sweep. Raise γ and far squares care more about the prize, so there is more left to learn.",
+      "2": "After k sweeps from zero, only squares within k steps know about the prize. The worst error left is γᵏ: the contraction at work, slow when γ is near 1.",
+      "3": "From V₀ = 0, V_k is the Neumann series truncated after k terms. On this deterministic corridor the sup-norm error is exactly γᵏ until news reaches the far end."
+    }
+  },
+  "where_else": [
+    "Q-learning and DQN: the same Bellman backup, with samples instead of the full map",
+    "The critic in actor-critic and PPO: a network trained to do policy evaluation",
+    "PageRank and heat diffusion: values that settle by repeatedly averaging their neighbours"
+  ],
+  "hamming": {
+    "what": "Working out how much reward a fixed plan collects from each state, by applying the Bellman equation repeatedly until the numbers stop changing.",
+    "when": "Before improving a policy, and inside every RL method that learns a value function or a critic.",
+    "why": "You cannot improve a plan you cannot score, and the Bellman rewrite turns 'sum over all futures' into a local rule that provably settles."
+  },
+  "object": {
+    "title": "The value staircase",
+    "subtitle": "A 7 by 7 board whose squares rise towards the prize corner, built one step per sweep.",
+    "kind": "surface",
+    "f": "(d => d < k ? pow(g, d) : 0)(floor(x) + floor(y))",
+    "x": [0, 6.99],
+    "y": [0, 6.99],
+    "marks": [{ "x": 0.5, "y": 0.5, "label": "prize corner" }],
+    "knobs": [
+      { "id": "g", "label": "discount γ", "min": 0.5, "max": 0.99, "step": 0.01, "value": 0.9 },
+      { "id": "k", "label": "sweeps so far", "min": 0, "max": 14, "step": 1, "value": 14 }
+    ],
+    "beats": [
+      { "cap": { "1": "Every note starts at 0: a flat board, with the prize waiting in one corner.", "2": "V₀ = 0 everywhere. The plan walks straight towards the prize corner.", "3": "Arbitrary initialisation; the contraction pulls any starting V towards V_π." }, "view": "iso", "set": { "k": 0, "g": 0.9 } },
+      { "cap": { "1": "After 3 rounds, news of the prize has reached only the squares within 3 steps of it.", "2": "Each sweep propagates value one more step back: a staircase grows out from the prize.", "3": "V_k equals V_π on states within k steps of the reward and is still 0 beyond." }, "view": "iso", "set": { "k": 3, "g": 0.9 } },
+      { "cap": { "1": "After enough rounds every square knows: a staircase that drops by a factor γ with each step away.", "2": "The fixed point: V(s) = γ^distance for this deterministic plan towards the prize.", "3": "V_π for a deterministic shortest-path policy with a single terminal reward is γᵈ." }, "view": "iso", "set": { "k": 14, "g": 0.9 } },
+      { "cap": { "1": "With a short-sighted γ = 0.5 the staircase is steep: faraway squares barely care about the prize.", "2": "Small γ discounts the future heavily, so values fall fast with distance.", "3": "The effective horizon is roughly 1/(1 − γ): about 2 steps at γ = 0.5, about 100 at γ = 0.99." }, "view": "front", "set": { "k": 14, "g": 0.5 } },
+      { "cap": { "1": "With γ = 0.99 the staircase is nearly flat: every square values the prize almost fully.", "2": "Large γ makes values far-sighted; in worlds with loops and slips it also means many more sweeps to settle.", "3": "The contraction factor is γ, so worst-case sweeps to a tolerance ε scale like log(1/ε)/(1 − γ)." }, "view": "side", "set": { "k": 14, "g": 0.99 } }
+    ],
+    "predict": [
+      { "q": "After 4 sweeps from all-zero notes, which squares know about the prize?", "options": [{ "t": "Only those within 4 steps of it", "ok": true }, { "t": "All of them, a little" }], "why": "Each sweep copies news one step further back. Squares further away still read 0." },
+      { "q": "You set γ = 1 in a world where the agent can wander forever. What happens?", "options": [{ "t": "The notes may never settle, and the exact solve can fail", "ok": true }, { "t": "It settles faster" }], "why": "Without discounting the update is no longer a contraction, and I − γP can be singular." }
+    ],
+    "where": "Anything that settles by repeatedly averaging neighbours: heat spreading across a plate, PageRank, gossip reaching everyone."
+  }
+}

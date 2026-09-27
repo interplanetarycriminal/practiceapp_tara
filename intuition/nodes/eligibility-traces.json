@@ -1,0 +1,184 @@
+{
+  "id": "eligibility-traces",
+  "title": "Glowing footprints share the credit",
+  "week": 9,
+  "need": "exercise",
+  "allegory": "Eligibility traces are like footprints that glow when you step on them and fade with every step after, so when a surprise comes, every footprint is credited in proportion to how brightly it still glows.",
+  "map": [
+    ["a footprint you leave", "a visited state-action pair"],
+    ["how brightly that footprint still glows", "its eligibility trace e(s, a)"],
+    ["every glow fading a little with each step", "e ← γλ·e after every step"],
+    ["a surprise, better or worse than expected", "the TD error δ = r + γQ(s′, a′) − Q(s, a)"],
+    ["every footprint credited by its glow", "Q(s, a) += α·δ·e(s, a) for all pairs at once"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Blame the last step?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "actors": [{ "pose": "walk", "x": 0.15, "to": 0.7, "label": "you" }],
+      "props": [
+        { "kind": "flag", "x": 0.25, "y": 0.78, "color": "chalk" },
+        { "kind": "flag", "x": 0.45, "y": 0.78, "color": "chalk" },
+        { "kind": "flag", "x": 0.65, "y": 0.78, "color": "butter" },
+        { "kind": "crate", "x": 0.87, "y": 0.66, "w": 0.1, "h": 0.12, "label": "treasure", "color": "peach" }
+      ],
+      "cap": {
+        "1": "You walk a long path and find treasure at the end. Who deserves credit? Plain SARSA only credits the very last step, so the news creeps back slowly.",
+        "2": "One-step SARSA updates only the state-action just before a reward. Credit for a long path takes many episodes to flow back, one step per visit.",
+        "3": "One-step TD backups move information one transition per update, so long-horizon credit assignment is slow; Monte Carlo returns propagate fast but are high-variance."
+      }
+    },
+    {
+      "name": "Glowing footprints",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "cheer", "x": 0.82, "label": "you" }],
+      "props": [
+        { "kind": "circle", "x": 0.18, "y": 0.8, "w": 0.04, "h": 0.03, "label": "faint", "color": "chalk" },
+        { "kind": "circle", "x": 0.34, "y": 0.8, "w": 0.05, "h": 0.035, "color": "butter" },
+        { "kind": "circle", "x": 0.5, "y": 0.8, "w": 0.06, "h": 0.04, "color": "orange" },
+        { "kind": "circle", "x": 0.66, "y": 0.8, "w": 0.07, "h": 0.045, "label": "bright", "color": "red" },
+        { "kind": "crate", "x": 0.9, "y": 0.66, "w": 0.08, "h": 0.1, "label": "surprise!", "color": "peach" }
+      ],
+      "arrows": [[0.78, 0.55, 0.22, 0.7, "credit, by glow"]],
+      "cap": {
+        "1": "Picture every footprint glowing as you step on it, then fading. When a surprise comes, every footprint gets credit in proportion to how brightly it still glows.",
+        "2": "Each state-action pair gets an eligibility trace: bumped when visited, decaying every step. A TD error then updates every pair at once, scaled by its trace.",
+        "3": "The backward view of TD(λ): traces record recency-weighted visitation, and each TD error δ is broadcast to all pairs with weight e(s, a). Recent and frequent pairs get most credit."
+      }
+    },
+    {
+      "name": "The fade rule",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "Q += ", "c": "ink", "note": "" },
+        { "t": "α·δ", "c": "orange", "note": "step size × surprise" },
+        { "t": "·e", "c": "sky", "note": "how bright this footprint is" },
+        { "t": "    e ← ", "c": "ink", "note": "" },
+        { "t": "γλ", "c": "pink", "note": "fade per step" },
+        { "t": "·e", "c": "sky", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Each step: every footprint moves by the surprise times its glow. Then every glow dims by the same factor. λ sets how slowly footprints fade.",
+        "2": "δ = r + γQ(s′, a′) − Q(s, a), exactly as in SARSA. Every pair updates by α·δ·e, then all traces shrink by γλ. The current pair's trace is bumped before the update.",
+        "3": "SARSA(λ): increment e(s_t, a_t) (accumulating) or set it to 1 (replacing); Q ← Q + αδe over all pairs; e ← γλe. Traces reset to zero at the start of each episode."
+      }
+    },
+    {
+      "name": "Short or long memory",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "pow(0.9, x)", "c": "orange", "label": "λ = 0.9" },
+        { "f": "pow(0.3, x)", "c": "sky", "label": "λ = 0.3" },
+        { "f": "pow(0, x)", "c": "ink", "label": "λ = 0: plain SARSA" }
+      ],
+      "x": [0, 10],
+      "y": [0, 1],
+      "dot": true,
+      "marks": [{ "x": 0, "label": "the step just taken" }],
+      "cap": {
+        "1": "How much credit a footprint k steps back gets. Small λ: only the last few steps. Big λ: a long trail. λ = 0 is plain SARSA: the last step alone.",
+        "2": "Trace weight decays as (γλ)^k with k steps back (here γ = 1). λ = 0 recovers one-step SARSA; λ near 1 approaches Monte Carlo, crediting the whole episode.",
+        "3": "λ interpolates TD(0) and Monte Carlo: the λ-return weights n-step returns by (1 − λ)λ^(n−1). Small λ: more bootstrap bias, less variance; large λ: the reverse."
+      }
+    },
+    {
+      "name": "Trust guesses or outcomes?",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "small λ", "c": "sky", "lines": ["trust your own estimates", "steady, but can be wrong", "more bias, less variance"] },
+      "right": { "title": "large λ", "c": "orange", "lines": ["trust what actually happened", "right on average, but noisy", "less bias, more variance"] },
+      "verdict": "GAE's λ in PPO is the same dial.",
+      "cap": {
+        "1": "Small λ trusts your own guesses about the future: steady but possibly wrong. Large λ trusts what actually happened: honest but noisy. You pick the balance.",
+        "2": "Low λ leans on bootstrapped estimates (biased, low variance); high λ leans on observed returns (unbiased, high variance). GAE's λ plays the same role in policy gradients.",
+        "3": "The trace decay sets an explicit bias/variance trade-off in the target. GAE weights k-step advantage estimates by the same geometric scheme, which is why PPO has a λ setting too."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Faster credit along long paths", "The same λ returns in GAE and PPO", "Credit assignment shapes what gets learned"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Deciding which past choices earned a reward is the core puzzle of learning from experience. Fading trails are one elegant answer.",
+        "2": "You'll meet λ again in GAE, which PPO uses to estimate advantages. Understanding the trace here makes that λ obvious later.",
+        "3": "Credit assignment decides which behaviour RL reinforces. When you study RL-trained models, γ and λ shaped which earlier actions got credit, and so what the model learned to do."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Treasure at step 8: how far back does the credit reach?",
+    "labels": ["step 1", "step 2", "step 3", "step 4", "step 5", "step 6", "step 7", "step 8"],
+    "params": [
+      { "id": "lam", "label": "λ (how slowly footprints fade)", "min": 0, "max": 1, "step": 0.05, "value": 0.8 },
+      { "id": "g", "label": "γ (discount)", "min": 0.8, "max": 1, "step": 0.01, "value": 1 }
+    ],
+    "f": "range(8).map(k => pow(g*lam, 7 - k))",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "steps getting at least 10% credit", "f": "range(8).filter(k => pow(g*lam, 7 - k) >= 0.1).length" },
+      { "label": "total trace (sum of glows)", "f": "sum(range(8).map(k => pow(g*lam, 7 - k))).toFixed(2)" },
+      { "label": "which algorithm this is", "f": "lam < 0.01 ? 'one-step SARSA' : ((lam > 0.99 && g > 0.99) ? 'Monte Carlo-like' : 'SARSA(λ)')" }
+    ],
+    "caption": {
+      "1": "Drag λ and watch how far back the credit reaches when the treasure appears at step 8. At λ = 0 only the last step learns anything.",
+      "2": "Bars are the traces when the reward arrives: (γλ)^k for a step k moves back. λ = 0 is one-step SARSA; λ = 1 with γ = 1 credits the whole trail equally, like Monte Carlo.",
+      "3": "With no revisits, e = (γλ)^k at k steps back, so the effective trace length is about 1/(1 − γλ): the same horizon arithmetic as discounting, applied to credit."
+    }
+  },
+  "where_else": [
+    "GAE's λ in PPO: the same bias/variance dial, applied to advantages",
+    "TD(λ) value learning for critics",
+    "Exponential moving averages, such as momentum in Adam: the same fading weights on the past"
+  ],
+  "hamming": {
+    "what": "A decaying record of recently visited state-action pairs, so each TD error updates a whole trail of past choices rather than just the last.",
+    "when": "When rewards arrive long after the actions that earned them and one-step updates pass credit back too slowly.",
+    "why": "λ dials between one-step TD (steady, biased) and Monte Carlo (unbiased, noisy), and the same dial reappears as GAE's λ in PPO."
+  },
+  "object": {
+    "title": "The fading-trail landscape",
+    "subtitle": "Credit left on a footprint, by how many steps back it is and by λ.",
+    "kind": "surface",
+    "f": "pow(g*y, x)",
+    "x": [0, 10],
+    "y": [0, 1],
+    "marks": [
+      { "x": 0, "y": 0, "label": "SARSA: last step only" },
+      { "x": 5, "y": 1, "label": "Monte Carlo: every step" },
+      { "x": 3, "y": 0.8, "label": "SARSA(λ)" }
+    ],
+    "knobs": [{ "id": "g", "label": "Discount γ", "min": 0.8, "max": 1, "step": 0.01, "value": 1 }],
+    "beats": [
+      { "cap": { "1": "A landscape of fading credit: left to right is how many steps back a footprint is, front to back is λ, and height is how much credit it still gets.", "2": "Surface of trace weight (γλ)^k over steps back k and λ.", "3": "e(k; λ) = (γλ)^k: the whole SARSA(λ) family in one surface." }, "view": "iso", "set": { "g": 1 } },
+      { "cap": { "1": "Along the λ = 0 edge there's a single spike: only the newest step gets credit. That edge is plain SARSA.", "2": "λ = 0: traces vanish after one step, recovering one-step SARSA.", "3": "At λ = 0 the backward view reduces to the TD(0) update on the current pair." }, "view": "front", "set": { "g": 1 } },
+      { "cap": { "1": "Along the λ = 1 edge, with no discount, the ridge stays flat: every step in the episode gets full credit, like Monte Carlo.", "2": "λ = 1 and γ = 1: no decay, the whole trail is updated equally.", "3": "λ → 1 approaches Monte Carlo targets: unbiased but high variance." }, "view": "side", "set": { "g": 1 } },
+      { "cap": { "1": "Add discounting and even the λ = 1 edge fades: traces shrink by γλ every step.", "2": "With γ = 0.9 every row decays, including λ = 1.", "3": "The per-step decay is the product γλ, so discounting shortens the trace even at λ = 1." }, "view": "iso", "set": { "g": 0.9 } },
+      { "cap": { "1": "From above, every λ in between makes its own exponential slope. Choosing λ is choosing how long your memory is.", "2": "Intermediate λ values trade bias against variance by trace length.", "3": "Effective trace length ≈ 1/(1 − γλ) steps: the dial between bootstrapping and full returns." }, "view": "top", "set": { "g": 1 } }
+    ],
+    "predict": [
+      { "q": "λ = 0.5, γ = 1. How much trace does a footprint 3 steps back have, visited once?", "options": [{ "t": "0.125", "ok": true }, { "t": "0.5" }, { "t": "1.5" }], "why": "(γλ)³ = 0.5³ = 0.125." },
+      { "q": "Which λ turns SARSA(λ) back into plain one-step SARSA?", "options": [{ "t": "λ = 0", "ok": true }, { "t": "λ = 1" }], "why": "Traces vanish after one step, so only the current pair is updated." },
+      { "q": "Raising λ usually trades what for what?", "options": [{ "t": "Less bias for more variance", "ok": true }, { "t": "Less variance for more bias" }], "why": "High λ leans on actual returns (unbiased, noisy); low λ leans on bootstrapped estimates (biased, steady)." }
+    ],
+    "where": "Anywhere credit must reach back in time: GAE in PPO, TD(λ) critics, any exponentially fading average."
+  }
+}

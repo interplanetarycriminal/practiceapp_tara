@@ -1,0 +1,203 @@
+{
+  "id": "value-function",
+  "title": "Every square wears a points forecast",
+  "week": 9,
+  "need": "core",
+  "allegory": "A value function is like a sticky note on every square of a board game saying how many points you will collect from there on, on average, if you keep playing your usual way, with points later counting a little less.",
+  "map": [
+    ["a square on the board", "a state s"],
+    ["your usual way of choosing moves", "the policy π"],
+    ["the note: points still to come from here, on average", "V_π(s) = E[Σ γᵗ rₜ | s₀ = s]"],
+    ["a point next turn is worth 0.9 of a point now", "the discount factor γ"],
+    ["each note = this turn's points + 0.9 × the next squares' notes, averaged", "the Bellman equation V(s) = E[r + γV(s′)]"]
+  ],
+  "credit": "The one-dimensional corridor of states with discounted returns echoes Andrew Ng's Mars rover example in the Machine Learning Specialization's reinforcement learning week.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "How good is here?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "think", "x": 0.4, "label": "you" }],
+      "props": [
+        { "kind": "crate", "x": 0.85, "y": 0.62, "w": 0.12, "h": 0.14, "label": "treasure +1", "color": "butter" },
+        { "kind": "flag", "x": 0.15, "y": 0.66, "label": "trap", "color": "red" },
+        { "kind": "card", "x": 0.4, "y": 0.18, "label": "how good is it to stand here?", "color": "cream" }
+      ],
+      "cap": {
+        "1": "Standing on one square of a game board, how good is it to be here? It depends on the points still to come, and on how you tend to play.",
+        "2": "A value function scores each state by the reward you can expect from there onwards, following a given policy. It's how an RL agent judges situations, not just moves.",
+        "3": "V_π(s) = E_π[Σ γᵗ rₜ | s₀ = s]: the expected discounted return from s under π. It depends on both the environment's dynamics and the policy."
+      }
+    },
+    {
+      "name": "Sticky notes",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "write", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.4, "y": 0.6, "label": "0.73", "color": "butter" },
+        { "kind": "card", "x": 0.55, "y": 0.6, "label": "0.81", "color": "butter" },
+        { "kind": "card", "x": 0.7, "y": 0.6, "label": "0.9", "color": "butter" },
+        { "kind": "crate", "x": 0.87, "y": 0.6, "w": 0.1, "h": 0.12, "label": "+1", "color": "peach" }
+      ],
+      "arrows": [[0.44, 0.45, 0.83, 0.45, "walk right"]],
+      "cap": {
+        "1": "Put a sticky note on every square: the points you'll collect from here on, on average, playing your usual way. Points later count a bit less.",
+        "2": "V(s) is that note. The policy is your usual way of playing; the average is over dice rolls and your own random choices; the discount γ makes later points count less.",
+        "3": "The expectation runs over the policy's action distribution and the environment's transitions; γ in [0, 1) keeps the infinite sum finite and encodes a preference for sooner reward."
+      }
+    },
+    {
+      "name": "Notes from neighbours",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "V(s)", "c": "sky", "note": "this square's note" },
+        { "t": " = E[", "c": "ink", "note": "average over rolls" },
+        { "t": "r", "c": "orange", "note": "this turn's points" },
+        { "t": " + γ·", "c": "pink", "note": "later counts less" },
+        { "t": "V(s′)", "c": "sky", "note": "the next square's note" },
+        { "t": "]", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "Each note equals this turn's points plus a discounted average of the notes where you might land next. Every note is pinned down by its neighbours' notes.",
+        "2": "That self-consistency is the Bellman equation. Sweep it as an update from all zeros and the notes settle; with γ < 1 they always converge to the true values.",
+        "3": "The Bellman operator is a γ-contraction in the sup norm, so sweeps converge to the unique fixed point V_π. With π fixed it's linear: v = (I − γP)⁻¹r in one solve (Howard, 1960)."
+      }
+    },
+    {
+      "name": "Good news spreads back",
+      "need": "exercise",
+      "dur": 11,
+      "type": "grid",
+      "title": "corridor, policy 'walk right', γ = 0.9",
+      "rows": 5,
+      "cols": 5,
+      "values": [
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0],
+        [0, 0, 0.9, 1, 0],
+        [0, 0.81, 0.9, 1, 0],
+        [0.73, 0.81, 0.9, 1, 0]
+      ],
+      "labels": { "rows": ["sweep 0", "sweep 1", "sweep 2", "sweep 3", "sweep 4"], "cols": ["sq 0", "sq 1", "sq 2", "sq 3", "treasure"] },
+      "highlight": [[1, 3], [2, 2], [3, 1], [4, 0]],
+      "cap": {
+        "1": "A corridor with treasure at the end. Sweep the notes again and again: the good news spreads backwards one square per sweep, shrinking by 0.9 each step.",
+        "2": "Synchronous Bellman sweeps from zeros. Walking right earns +1 on reaching the treasure, so values settle at 1, 0.9, 0.81, 0.73: the discount compounding once per step.",
+        "3": "Each sweep applies the Bellman operator once, so information travels one transition per sweep. Fixed point: V = γ^(k−1) at k steps from the goal, matching the exact linear solve."
+      }
+    },
+    {
+      "name": "Square or exit?",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "V(s)", "c": "sky", "lines": ["how good is this square", "assumes your usual play", "to act on it you need the map"] },
+      "right": { "title": "Q(s, a)", "c": "orange", "lines": ["how good is leaving this way", "then your usual play", "pick the best exit: argmax"] },
+      "verdict": "V judges situations; Q judges moves, which is what lets you act greedily.",
+      "cap": {
+        "1": "A note on the square says how good it is to stand here. A note on each exit says how good it is to leave that way. Only exit notes tell you which way to go.",
+        "2": "V is the value of a state under the policy; Q is the value of a state-action pair. Choosing greedily needs Q, or V plus a model of where each action leads.",
+        "3": "Policy improvement sets π'(s) = argmax_a Σ T(s′|s,a)(R + γV(s′)), which is greedy in Q_π. Model-free methods learn Q directly because they have no T for that lookahead."
+      }
+    },
+    {
+      "name": "Forever notes",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "actors": [{ "pose": "shrug", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.6, "y": 0.6, "w": 0.16, "h": 0.5, "label": "notes keep climbing", "color": "pink" },
+        { "kind": "card", "x": 0.8, "y": 0.22, "label": "γ = 1", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "If later points count fully, notes around a loop can grow forever and never settle. A little discount is what keeps the forecast finite.",
+        "2": "With γ = 1 the Bellman update stops being a contraction: no guaranteed fixed point, and (I − γP) is singular. Keep γ < 1 in the tabular exercises.",
+        "3": "γ < 1 bounds returns by r_max/(1 − γ) and makes the operator a contraction. Also break argmax ties deterministically, or policy iteration can flip between equally good policies forever."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["The critic in actor-critic is a learned V", "PPO judges actions against V", "RLHF gives a language model a value head"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Nearly every modern RL method keeps a forecaster like this beside the decision-maker, including the methods used to fine-tune chatbots.",
+        "2": "Actor-critic methods learn V as the critic, PPO uses it to judge whether an action beat expectations, and RLHF adds a value head to a language model for the same job.",
+        "3": "Advantages (Q − V, estimated from V via GAE) are how policy gradients assign credit. Understanding and steering RL-trained models means knowing what their value estimates reward."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "How far does the treasure's pull reach?",
+    "params": [
+      { "id": "g", "label": "discount γ", "min": 0.5, "max": 0.99, "step": 0.01, "value": 0.9 },
+      { "id": "c", "label": "cost of each step", "min": 0, "max": 0.2, "step": 0.01, "value": 0 }
+    ],
+    "curves": [
+      { "f": "-c*(1 - pow(g, x))/(1 - g) + pow(g, x - 1)", "c": "orange", "label": "V at x steps from the treasure" },
+      { "f": "0*x", "c": "ink", "label": "zero" }
+    ],
+    "x": [1, 10],
+    "y": [-1, 1],
+    "readouts": [
+      { "label": "V next to the treasure", "f": "(1 - c).toFixed(3)" },
+      { "label": "V five steps away", "f": "(-c*(1 - pow(g, 5))/(1 - g) + pow(g, 4)).toFixed(3)" },
+      { "label": "effective horizon 1/(1 − γ), in steps", "f": "(1/(1 - g)).toFixed(1)" }
+    ],
+    "caption": {
+      "1": "Drag the discount and watch how fast the treasure's pull fades with distance. Add a cost per step and far squares can be worth less than nothing.",
+      "2": "V shrinks by a factor γ per step from the goal: γ near 1 means patient, far-sighted values; small γ means only nearby reward registers. Step costs pile up with distance.",
+      "3": "Closed form here: V(d) = γ^(d−1) − c(1 − γ^d)/(1 − γ). The effective horizon 1/(1 − γ) sets how far credit propagates, so γ decides what an agent learns to care about."
+    }
+  },
+  "where_else": [
+    "The critic in actor-critic and the value head in PPO",
+    "RLHF's value head on a language model",
+    "Pricing anything that pays out over time: future payments discounted back to today",
+    "Q-values, the state-action version that lets an agent choose greedily"
+  ],
+  "hamming": {
+    "what": "A number for every state: the expected discounted reward from there onwards if you keep following a given policy.",
+    "when": "Whenever an agent must judge situations rather than single moves: planning, actor-critic, PPO and RLHF all keep one.",
+    "why": "It compresses a long, uncertain future into one number per state, which lets credit flow backwards and lets you compare plans."
+  },
+  "object": {
+    "title": "The forecast board",
+    "subtitle": "A 6×6 board with treasure in one corner; each tower is that square's value under 'walk straight to the treasure'.",
+    "kind": "bars",
+    "rows": 6,
+    "cols": 6,
+    "f": "(r === 0 && c === 5) ? 1.2 : 0.05 + pow(g, r + (5 - c) - 1)",
+    "labels": { "rows": ["row 0", "row 1", "row 2", "row 3", "row 4", "row 5"], "cols": ["col 0", "col 1", "col 2", "col 3", "col 4", "col 5"] },
+    "c": "good",
+    "knobs": [{ "id": "g", "label": "Discount γ", "min": 0.5, "max": 0.99, "step": 0.01, "value": 0.9 }],
+    "beats": [
+      { "cap": { "1": "A 6×6 board with treasure in the corner. Each tower's height is that square's forecast if you walk straight to the treasure.", "2": "V_π for a deterministic shortest-path policy with +1 on arrival, γ = 0.9.", "3": "V(s) = γ^(k−1) where k is the Manhattan distance to the goal." }, "view": "iso", "set": { "g": 0.9 } },
+      { "cap": { "1": "From above, the forecast forms diamond rings: every square the same number of steps away gets the same value.", "2": "Level sets of V are the squares at equal step-distance from the goal.", "3": "Under a shortest-path policy, V depends on s only through k(s), so contours follow the Manhattan metric." }, "view": "top", "set": { "g": 0.9 } },
+      { "cap": { "1": "Make later points worth much less and the forecast drops to almost nothing a few steps out. A short-sighted agent.", "2": "γ = 0.5: value halves with every step of distance.", "3": "Small γ gives an effective horizon of about 2 steps; distant reward barely registers in V." }, "view": "iso", "set": { "g": 0.5 } },
+      { "cap": { "1": "Make later points worth nearly as much as now and the whole board glows. A patient agent.", "2": "γ = 0.99: even the far corner keeps most of the treasure's value.", "3": "As γ → 1 the effective horizon 1/(1 − γ) grows to 100 steps and V flattens." }, "view": "iso", "set": { "g": 0.99 } },
+      { "cap": { "1": "From the side, each step away multiplies the height by γ. That's the Bellman equation built in towers.", "2": "Each tower is γ times its neighbour one step nearer the treasure.", "3": "V(s) = r + γV(s′) with r = 0 off the goal: consecutive towers along the path differ by a factor γ." }, "view": "side", "set": { "g": 0.9 } }
+    ],
+    "predict": [
+      { "q": "γ = 0.9. The treasure is 3 steps away and pays +1 on arrival, nothing else. What is V?", "options": [{ "t": "0.81", "ok": true }, { "t": "0.9" }, { "t": "0.729" }], "why": "The reward arrives on the third step, discounted twice: γ² = 0.81." },
+      { "q": "What can change V(s) without changing the board at all?", "options": [{ "t": "Changing the policy", "ok": true }, { "t": "Nothing: V is a property of the board" }], "why": "V_π is the value under a given policy. Play differently and the forecast changes." },
+      { "q": "Why keep γ < 1 in the tabular exercises?", "options": [{ "t": "It makes the Bellman update a contraction, so values converge", "ok": true }, { "t": "It makes rewards bigger" }], "why": "With γ = 1, returns can be unbounded and (I − γP) is singular." }
+    ],
+    "where": "Any discounted forecast: present value in finance, critics in actor-critic, value heads in RLHF."
+  }
+}

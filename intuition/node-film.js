@@ -539,6 +539,11 @@
     if (spec._case) links.push({ label: 'Case study', href: '../index.html#cases/' + spec._case });
     var film = F.play({ title: spec.title || node.label, back: 'index.html#concepts', chapters: chapters, coda: coda, links: links });
     var st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
+    // opened from the app (the concept map's node panel): the back link returns to that node on the map
+    try {
+      var ref = document.referrer ? new URL(document.referrer) : null, bk = film.root.querySelector('.top a.back');
+      if (bk && ref && ref.origin === location.origin && !/\/(intuition|objects)\//.test(ref.pathname)) { bk.href = '../index.html#map/node=' + encodeURIComponent(id); bk.innerHTML = '&larr; map'; }
+    } catch (e) {}
     // 2D | 3D pill
     if (objHref) {
       var top = film.root.querySelector('.top'), pill = document.createElement('div'); pill.className = 'dimp'; pill.setAttribute('role', 'group'); pill.setAttribute('aria-label', 'View in 2D or 3D');
