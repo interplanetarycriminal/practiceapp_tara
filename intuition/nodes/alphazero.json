@@ -1,0 +1,298 @@
+{
+  "id": "alphazero",
+  "title": "Teach the hunch what thinking found",
+  "week": 10,
+  "need": "exercise",
+  "allegory": "AlphaZero is a player who plays against herself, thinks a handful of lines ahead before every move, and afterwards drills her quick hunch to pick what the thinking picked and to call who won; a sharper hunch makes the next round of thinking sharper.",
+  "map": [
+    ["her quick hunch at a glance: which moves look good, who is winning", "the network f_θ(s) = (p, v): a prior over moves and a value in [−1, 1] for the player about to move"],
+    ["thinking a handful of lines ahead, guided by the hunch", "MCTS with PUCT selection, using p as the prior and v at the leaves (16 simulations per move in ARENA's fast recipe)"],
+    ["how often her thinking kept returning to each move", "normalised root visit counts π(a|s): the target policy, stronger than the raw prior p"],
+    ["who won in the end, told from the side of whoever was about to move", "the value target z, which flips sign every ply and resets between games"],
+    ["drilling the hunch to agree with the thinking and the result", "L = (z − v)² − Σₐ π(a|s) log p_θ(a|s) + c‖θ‖²"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "A free teacher",
+      "need": "exercise",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "the teacher is the student, plus thinking",
+      "actors": [{"pose": "think", "x": 0.22, "label": "you"}],
+      "props": [
+        {"kind": "box", "x": 0.52, "y": 0.58, "w": 0.2, "h": 0.2, "label": "the board"},
+        {"kind": "card", "x": 0.84, "y": 0.3, "label": "glance: okay move"},
+        {"kind": "card", "x": 0.84, "y": 0.72, "label": "glance + lookahead: better"}
+      ],
+      "arrows": [[0.62, 0.5, 0.76, 0.33, ""], [0.62, 0.64, 0.76, 0.7, ""]],
+      "cap": {
+        "1": "A quick glance at a board picks an okay move. The same glance plus a little looking ahead picks a better one. That gap is a free teacher.",
+        "2": "A network that maps a board straight to a move guess is mediocre. The same network guiding a few dozen tree-search simulations plays noticeably better. So train the network to output what the search chose.",
+        "3": "Policy iteration with search as the improvement operator: MCTS guided by f_θ yields visit counts π that beat the raw prior p_θ, even when p_θ is random at initialisation."
+      }
+    },
+    {
+      "name": "Playing herself",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        {"pose": "sit", "x": 0.2, "label": "her, as first player"},
+        {"pose": "think", "x": 0.8, "label": "her, as second"}
+      ],
+      "props": [
+        {"kind": "box", "x": 0.5, "y": 0.64, "w": 0.2, "h": 0.18, "label": "Connect 4"},
+        {"kind": "cloud", "x": 0.5, "y": 0.2, "w": 0.3, "h": 0.14, "label": "a handful of lines ahead"},
+        {"kind": "stack", "x": 0.5, "y": 0.42, "w": 0.14, "h": 0.1, "label": "tally: 9, 4, 2, 1"}
+      ],
+      "arrows": [[0.5, 0.28, 0.5, 0.37, "count"], [0.5, 0.48, 0.5, 0.56, "move"]],
+      "cap": {
+        "1": "She plays both sides. Before every move she thinks through a handful of lines and keeps a tally of the moves her thinking kept returning to.",
+        "2": "Self-play: the current network plays itself, running MCTS at every move (16 simulations in ARENA's fast recipe). The normalised visit counts at the root are recorded as π for that position.",
+        "3": "Dirichlet noise goes into the root prior only (ARENA: eps = 0.25, alpha = 10/7), so exploration changes which lines get tried without corrupting the search's internal value estimates."
+      }
+    },
+    {
+      "name": "The tally tree",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        {"id": "root", "label": "board now", "x": 0.5, "y": 0.12, "c": "ink"},
+        {"id": "A", "label": "move A · 9", "x": 0.14, "y": 0.45, "c": "orange"},
+        {"id": "B", "label": "move B · 4", "x": 0.38, "y": 0.45, "c": "peach"},
+        {"id": "C", "label": "move C · 2", "x": 0.62, "y": 0.45, "c": "butter"},
+        {"id": "D", "label": "move D · 1", "x": 0.86, "y": 0.45, "c": "cream"},
+        {"id": "leaf", "label": "leaf: ask the hunch for v", "x": 0.18, "y": 0.84, "c": "teal"},
+        {"id": "pi", "label": "π = 9/16, 4/16, 2/16, 1/16", "x": 0.66, "y": 0.84, "c": "green"}
+      ],
+      "edges": [
+        ["root", "A", "PUCT"], ["root", "B"], ["root", "C"], ["root", "D"],
+        ["A", "leaf", "expand"],
+        ["A", "pi"], ["B", "pi"], ["C", "pi"], ["D", "pi"]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "Each walk down the tree stops somewhere new and asks the hunch who is winning there. Sixteen walks leave a tally: A 9, B 4, C 2, D 1.",
+        "2": "Select by PUCT, expand a leaf, take its value from the network's value head (no random playout), back it up. The root's visit counts, normalised, become π. The 9, 4, 2, 1 split is illustrative.",
+        "3": "π(a|s) = N(s,a)^(1/τ) / Σ N(s,a′)^(1/τ). Visit counts beat p_θ because search keeps spending simulations where backed-up values hold up, not just where the prior first pointed."
+      }
+    },
+    {
+      "name": "One loss, two drills",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        {"t": "L = ", "c": "ink", "note": ""},
+        {"t": "(z − v)²", "c": "red", "note": "call the winner"},
+        {"t": " − Σ π·log p", "c": "orange", "note": "pick what the search picked"},
+        {"t": " + c‖θ‖²", "c": "ink", "note": "weight decay"}
+      ],
+      "cap": {
+        "1": "Two drills in one score: guess who will win, and put your odds on the moves the thinking kept visiting.",
+        "2": "compute_az_loss: squared error pulls v toward the game result z; cross-entropy pulls p toward the search's visit counts π. That is distillation, not a policy gradient: no advantage, no ratio, no clip.",
+        "3": "L(θ) = E[(z − v(s))² − Σₐ π(a|s) log p_θ(a|s)] + c‖θ‖². The teacher π is the student composed with MCTS, so each generation's gain is the search's planning advantage amortised into θ."
+      }
+    },
+    {
+      "name": "Flip every ply",
+      "need": "exercise",
+      "dur": 9,
+      "type": "grid",
+      "title": "z, from the side of the player about to move",
+      "rows": 2,
+      "cols": 8,
+      "values": [
+        ["+1", "−1", "+1", "−1", "+1", "−1", "+1", ""],
+        ["−1", "+1", "−1", "+1", "−1", "+1", "−1", "+1"]
+      ],
+      "labels": {
+        "rows": ["game A: first player wins", "game B: second player wins"],
+        "cols": ["ply 1", "2", "3", "4", "5", "6", "7", "8"]
+      },
+      "highlight": [[0, 6], [0, 5], [0, 4], [1, 7], [1, 6], [1, 5]],
+      "cap": {
+        "1": "When a game ends, every move gets a label: did the player who made it go on to win? Players take turns, so the labels flip every move.",
+        "2": "The z targets come from a backward scan: the final move gets the game's reward, and each earlier ply gets the negation of the next one, resetting at every game boundary. Miss one negation and half the targets are backwards.",
+        "3": "It is PPO's compute_returns with alternating signs and no discount. Test it on ARENA's worked example before trusting anything; MCTS backup must use the same negamax convention."
+      }
+    },
+    {
+      "name": "The backwards judge",
+      "need": "exercise",
+      "dur": 9,
+      "type": "compare",
+      "left": {
+        "title": "Sign bug in z",
+        "lines": ["value loss falls smoothly", "policy loss looks fine", "solver agreement near chance", "calls won positions lost"],
+        "c": "red"
+      },
+      "right": {
+        "title": "Signs right, still weak",
+        "lines": ["look at the teacher instead", "too few simulations: noisy π", "stale replay: π from an older net", "ARENA: 4 generations beat 8"],
+        "c": "green"
+      },
+      "verdict": "A backwards value head poisons every leaf of the search; once signs are right, fresher self-play data is what helps.",
+      "cap": {
+        "1": "The sneakiest bug: the hunch learns perfectly, but learns backwards, calling winning boards lost. Everything it thinks through inherits the mistake.",
+        "2": "Unit-test z on ARENA's worked example, then assert single-game and batched MCTS agree on the same position. If play is still weak, check the simulation budget and how fresh the replay buffer is.",
+        "3": "A sign error gives an internally consistent, inverted evaluation, and every MCTS leaf reads it. ARENA's sweep found buffer_gens = 4 beat 8 purely on data freshness, not capacity or regularisation."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "exercise",
+      "dur": 8,
+      "type": "cards",
+      "items": [
+        "Search is a free teacher: the student plus thinking",
+        "Distil the search into the weights, then search again",
+        "Rules only, no human games: it beat world-champion programs at chess, shogi and Go",
+        "What it learns comes from the win signal and the search, so that is where you steer"
+      ],
+      "cap": {
+        "1": "The quick hunch ends up holding what slow thinking found. To understand or steer a system like this, look at what its search is rewarded for.",
+        "2": "ARENA's Connect 4 run: 4096 self-play games a generation, 12 generations, about 85% agreement with a perfect solver in four or five minutes on a GPU.",
+        "3": "Silver et al. (Science, 2018) ran one recipe unchanged at chess, shogi and Go, generalising AlphaGo Zero (Nature, 2017), which did Go alone: search plus self-play plus distillation is general, not a Go trick."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Pick a move from the tally",
+    "labels": ["move A (9 visits)", "move B (4)", "move C (2)", "move D (1)"],
+    "params": [
+      {"id": "tau", "label": "temperature τ", "min": 0.05, "max": 2, "step": 0.05, "value": 1}
+    ],
+    "f": "[9, 4, 2, 1].map(n => pow(n, 1 / tau) / sum([9, 4, 2, 1].map(m => pow(m, 1 / tau))))",
+    "y": [0, 1],
+    "readouts": [
+      {"label": "chance of move A", "f": "pow(9, 1 / tau) / sum([9, 4, 2, 1].map(m => pow(m, 1 / tau)))"},
+      {"label": "chance of a surprise (not A)", "f": "1 - pow(9, 1 / tau) / sum([9, 4, 2, 1].map(m => pow(m, 1 / tau)))"}
+    ],
+    "caption": {
+      "1": "Drag τ toward 0: the most-visited move takes everything, which is how it plays for real. At 1 it picks in proportion to visits, so openings vary.",
+      "2": "π(a|s) = N^(1/τ) / Σ N^(1/τ) over a 16-simulation tally of 9, 4, 2, 1. ARENA samples at τ = 1 for the first 12 plies of each self-play game, then plays greedily.",
+      "3": "τ decides which moves get played, and so which positions become training data. AlphaZero's exploration lives outside the loss: τ here, and Dirichlet noise on the root prior."
+    }
+  },
+  "where_else": [
+    "Distillation anywhere: a small, fast model trained to match a slower, stronger teacher's outputs",
+    "Policy iteration: alternate between evaluating a policy and improving it; here the improving step is search",
+    "AlphaGo Zero (Nature, 2017): the same algorithm for Go alone, before AlphaZero carried it to chess and shogi",
+    "Self-play: the opposition is the current network, so it improves exactly as fast as you do"
+  ],
+  "hamming": {
+    "what": "A training loop where a network guides a tree search, the search's visit counts and the game results become targets, and the network is trained to match them, so each generation searches better than the last.",
+    "when": "When you have a perfect simulator of the environment, such as a board game's rules, and can afford a search at every move.",
+    "why": "Search turns the student into its own better teacher; from only the rules this beat a world-champion program at chess, shogi and Go, the clearest evidence that search plus self-play plus distillation is general."
+  },
+  "object": {
+    "title": "The thinking loop",
+    "subtitle": "A network, the tree it guides, and the tally that teaches it back",
+    "kind": "graph",
+    "nodes": [
+      {"id": "net", "label": "network f_θ → (p, v)", "pos": [-1.3, 0.1, 0], "c": "brass"},
+      {"id": "root", "label": "board now", "pos": [0.1, 1.2, 0], "c": "ink"},
+      {"id": "A", "label": "move A · 9", "pos": [-0.6, 0.35, 0.45], "c": "data"},
+      {"id": "B", "label": "move B · 4", "pos": [-0.05, 0.35, -0.6], "c": "data"},
+      {"id": "C", "label": "move C · 2", "pos": [0.55, 0.35, 0.5], "c": "data"},
+      {"id": "D", "label": "move D · 1", "pos": [0.95, 0.35, -0.35], "c": "data"},
+      {"id": "leaf", "label": "leaf: v from the value head", "pos": [-0.85, -0.5, 0.75], "c": "aux"},
+      {"id": "pi", "label": "π: visit shares", "pos": [0.6, -0.65, 0], "c": "prob"},
+      {"id": "z", "label": "z: who won, per ply", "pos": [-0.1, -1.2, -0.6], "c": "good"},
+      {"id": "loss", "label": "(z − v)² − Σ π log p", "pos": [-0.8, -1.2, 0], "c": "grad"}
+    ],
+    "edges": [
+      ["net", "root"], ["root", "A"], ["root", "B"], ["root", "C"], ["root", "D"],
+      ["A", "leaf"], ["leaf", "net"],
+      ["A", "pi"], ["B", "pi"], ["C", "pi"], ["D", "pi"],
+      ["pi", "loss"], ["z", "loss"], ["loss", "net"]
+    ],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "The whole loop as one object: the network guesses, the tree thinks, and the tree's tally teaches the network. Follow the pulses round.",
+          "2": "Brass is f_θ, giving a move prior p and a value v. Blue nodes are the root's moves with their visit counts. Amber π and green z are the two targets; red is the loss that feeds back into the network.",
+          "3": "One lap is one generation: self-play with search, record (s, π, z), minimise cross-entropy plus MSE over a buffer of recent generations, then self-play again with the new weights."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Sixteen walks down from 'board now'. Move A got 9 visits, B 4, C 2, D 1. The tally is the thinking's verdict.",
+          "2": "PUCT picks each step down, weighing a move's measured value against the network's prior, so p shapes where the search looks and the counts record where it ended up.",
+          "3": "Both outputs are used: p becomes the PUCT prior for a newly expanded node's moves, v its leaf estimate. A better network improves both, which is why the teacher sharpens with the student."
+        },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Where a walk stops, nobody plays the game out at random. The network is simply asked who is winning, and that answer is carried back up.",
+          "2": "The leaf value is exactly the value head's output. That is why a sign error in z is so costly: every leaf of every search reads the inverted evaluation.",
+          "3": "Backup must use the same negamax convention as the z targets: the value flips sign at each level because the player to move alternates."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The tally becomes π, the finished game gives z, and one loss pulls the network toward both. The better network then makes a better tree.",
+          "2": "No advantage, no probability ratio, no clip: cross-entropy toward π and squared error toward z. The improvement comes from the search, and the loss just stores it in the weights.",
+          "3": "π is a search-improved policy; distilling it is policy improvement, and fitting v to z is policy evaluation. Fresh data matters: π from an older network is a staler teacher."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "No human games anywhere in this loop, only the rules and who won. To understand or steer a system like this, you study what its search rewards.",
+          "2": "From random play, this loop reached about 85% agreement with a perfect Connect 4 solver in ARENA's run, and beat world-champion programs at chess, shogi and Go at DeepMind's scale.",
+          "3": "The loop is the whole method: MCTS as the improvement operator, the network as the amortised search. Swap the rules, keep the algorithm: that is the Science (2018) result, with no game knowledge beyond the rules."
+        },
+        "view": "top",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Why is the tree search a useful teacher for the network that guides it?",
+        "options": [
+          {"t": "It is the same network plus lookahead, so it catches what the raw guess misses", "ok": true},
+          {"t": "It was trained on grandmaster games"},
+          {"t": "It plays every game out at random, which is always right"}
+        ],
+        "why": "π comes from the network composed with MCTS, and that search is stronger than the raw prior. AlphaZero used no human games, and its leaves use the value head instead of random playouts."
+      },
+      {
+        "q": "Value loss falls smoothly, but the agent plays badly and calls won positions lost. Most likely cause?",
+        "options": [
+          {"t": "A missing sign flip in the z targets", "ok": true},
+          {"t": "Too few layers in the network"},
+          {"t": "The learning rate is too low"}
+        ],
+        "why": "z flips every ply and resets between games. Miss a negation and half the targets carry the wrong sign; the network learns a consistent, inverted evaluation that poisons every leaf."
+      },
+      {
+        "q": "Which part of AlphaZero's loss is a policy gradient?",
+        "options": [
+          {"t": "None: it is cross-entropy plus squared error", "ok": true},
+          {"t": "The cross-entropy term"},
+          {"t": "The value term"}
+        ],
+        "why": "It is a distillation loss with no advantage, no importance ratio and no clipping. The search supplies the improvement; the loss only copies it into the network."
+      }
+    ],
+    "where": "Any slow, careful process that can teach a fast model: distillation in general, or a tutor's worked answers turning into a student's instinct."
+  }
+}

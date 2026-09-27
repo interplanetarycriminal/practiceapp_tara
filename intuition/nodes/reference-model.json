@@ -1,0 +1,256 @@
+{
+  "id": "reference-model",
+  "title": "A twin frozen on day one",
+  "week": 10,
+  "need": "core",
+  "allegory": "The reference model is the trainee's twin, frozen on the day RL training began: it never writes a word, it only reads each word the trainee writes and says how likely it would have been to write it, and every word it would never have said costs the trainee a fine.",
+  "map": [
+    ["the twin, copied on day one and frozen in ice", "π_ref: a copy of the pre-RLHF model, eval mode, no gradients"],
+    ["the twin reads each word the trainee writes", "a forward pass of π_ref on the policy's generated tokens, giving ref_logits"],
+    ["the twin's shock at a word it would never say", "log π − log π_ref, large where π_ref is near 0"],
+    ["the fine for every shocking word, set by how tight the leash is", "kl_coef · D_KL(π‖π_ref), subtracted from the objective"],
+    ["a twin who keeps learning alongside the trainee is never shocked", "a reference aliased to (or refreshed from) the policy: KL reads 0, no anchor"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Far from what?",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "note": "too far... from where?",
+      "actors": [{ "pose": "walk", "x": 0.2, "to": 0.66, "label": "model in training" }],
+      "props": [
+        { "kind": "flag", "x": 0.14, "y": 0.62, "label": "where it started", "color": "mint" },
+        { "kind": "card", "x": 0.8, "y": 0.2, "label": "reward: climbing!", "color": "butter" },
+        { "kind": "card", "x": 0.5, "y": 0.2, "label": "samples: 'great great great!!!'", "color": "pink" }
+      ],
+      "arrows": [[0.3, 0.72, 0.62, 0.72, "drifting"]],
+      "cap": {
+        "1": "RL pushes a language model toward whatever the scorer loves. To stop it wandering too far, you first need a fixed spot to measure 'too far' from.",
+        "2": "The reward model is a proxy with errors, and RL is a search pointed straight at them. A KL penalty charges for drift, but drift is a distance, and a distance needs a starting point that stays put.",
+        "3": "D_KL(π_θ‖π_ref) only means something if π_ref is fixed. Gao, Schulman and Hilton indexed overoptimisation by KL from initialisation: proxy reward rises monotonically, gold reward peaks and falls along that axis."
+      }
+    },
+    {
+      "name": "The day-one twin",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "write", "x": 0.28, "label": "trainee" },
+        { "pose": "sit", "x": 0.72, "label": "twin (frozen)" }
+      ],
+      "props": [
+        { "kind": "box", "x": 0.72, "y": 0.6, "w": 0.22, "h": 0.36, "label": "ice: no gradients", "color": "sky" },
+        { "kind": "card", "x": 0.28, "y": 0.2, "label": "copied on day one", "color": "cream" }
+      ],
+      "arrows": [[0.38, 0.5, 0.6, 0.5, "reads every word"]],
+      "cap": {
+        "1": "Before training starts, copy the model and freeze the copy. The trainee writes; the frozen twin only reads each word and says how likely it was to write it.",
+        "2": "The reference model is that frozen copy: the policy's own weights on day one, no gradients, eval mode. It never samples. It runs a forward pass on the policy's tokens to give ref_logits.",
+        "3": "π_ref is the pre-RLHF model held fixed. For each rollout it scores the generated tokens only, logits[:, -gen_len-1:-1], so the prefix the model did not choose is never charged."
+      }
+    },
+    {
+      "name": "Two opinions, one word",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "Σᵥ", "c": "ink", "note": "every word in the vocab" },
+        { "t": " π·", "c": "orange", "note": "weighted by the trainee" },
+        { "t": "(log π", "c": "orange", "note": "trainee's opinion" },
+        { "t": " − ", "c": "ink", "note": "" },
+        { "t": "log π_ref)", "c": "sky", "note": "the frozen twin's opinion" }
+      ],
+      "actor": { "pose": "think", "x": 0.1 },
+      "cap": {
+        "1": "For every word the trainee might say next, compare two opinions: the trainee's and the twin's. Words the twin would almost never say cost the most.",
+        "2": "Per position: sum over the vocabulary of P·(log P − log Q), P from the policy, Q from the reference. Average over batch and position, multiply by kl_coef, subtract from the objective.",
+        "3": "Take log_softmax of both logits, then exp for P; never softmax then log. Direction D_KL(π‖π_ref) blows up where π_ref ≈ 0 but π is not, so gibberish is expensive and dropping old habits is cheap."
+      }
+    },
+    {
+      "name": "The moving twin",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "twin frozen on day one", "c": "mint", "lines": ["separate copy, no gradients", "drift shows up as KL", "the leash can pull back"] },
+      "right": { "title": "twin that moves with you", "c": "pink", "lines": ["the policy object itself, or a copy that trains", "KL reads 0 at every step", "leash gone: reward up, text rots"] },
+      "verdict": "A reference that can move is not a reference: copy it, freeze it, check it.",
+      "cap": {
+        "1": "If the twin learns alongside the trainee, it agrees with every word, so the drift reads zero forever. The leash is still there, tied to nothing.",
+        "2": "Hand the trainer the policy object itself instead of a copy and log π − log π_ref is 0 at every token. No error, no NaN: it looks exactly like running with kl_coef = 0.",
+        "3": "A broken penalty and a small one look identical on the reward curve. Audit it: reference in eval mode with no grad, generated-token slice only, P the policy and Q the reference. Then plot mean KL beside mean reward."
+      }
+    },
+    {
+      "name": "Where the twin sits",
+      "need": "core",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "prompt", "label": "prompt", "x": 0.07, "y": 0.45, "c": "cream" },
+        { "id": "policy", "label": "policy π_θ (trains)", "x": 0.27, "y": 0.45, "c": "orange" },
+        { "id": "tokens", "label": "generated tokens", "x": 0.48, "y": 0.45, "c": "butter" },
+        { "id": "rm", "label": "reward model", "x": 0.7, "y": 0.15, "c": "lav" },
+        { "id": "ref", "label": "reference π_ref (frozen)", "x": 0.68, "y": 0.8, "c": "sky" },
+        { "id": "kl", "label": "KL penalty", "x": 0.9, "y": 0.8, "c": "peach" },
+        { "id": "obj", "label": "objective", "x": 0.92, "y": 0.35, "c": "mint" }
+      ],
+      "edges": [
+        ["prompt", "policy"],
+        ["policy", "tokens", "sample"],
+        ["tokens", "rm", "score"],
+        ["tokens", "ref", "read only"],
+        ["ref", "kl", "ref_logits"],
+        ["policy", "kl", "logits"],
+        ["rm", "obj", "+ reward"],
+        ["kl", "obj", "− kl_coef·KL"]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "The trainee writes, the scorer grades, and the frozen twin reads the very same words. Its opinions feed the fine that keeps the trainee from wandering off.",
+        "2": "Rollout: sample from the policy, score with the reward, run the reference on the same tokens. Since the twin never changes, its opinion of a given sample never changes: compute it once per batch.",
+        "3": "Cost: a second full copy of the weights in memory and a forward pass per batch, never a backward pass. In ARENA it is a separate frozen HookedTransformer beside the HookedTransformerWithValueHead."
+      }
+    },
+    {
+      "name": "Anchor, then steer",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A frozen copy of the pre-RLHF model", "It scores the trainee's words, never writes", "Move it and the leash is gone", "KL from it = how far training moved you"],
+      "actor": { "pose": "point", "x": 0.86 },
+      "cap": {
+        "1": "The frozen twin measures how far training moved a model, and holds the rope that stops it moving too far. That is steering you can check.",
+        "2": "For any model fine-tuned with RL you can ask: how far from its reference is it now? KL from π_ref is that distance, and plotting it beside reward is how you catch reward hacking early.",
+        "3": "For understanding and steering AI, KL from the reference is the budget you spend to buy reward: the x-axis of Gao et al.'s gold-versus-proxy curves. GRPO keeps the same β·D_KL(π_θ‖π_ref) anchor."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Frozen twin or moving twin: drift from day one (toy)",
+    "params": [
+      { "id": "N", "label": "refresh the twin every N steps (300 = frozen)", "min": 1, "max": 300, "step": 1, "value": 300 },
+      { "id": "kl", "label": "kl_coef (leash strength)", "min": 0.5, "max": 5, "step": 0.5, "value": 2.5 }
+    ],
+    "curves": [
+      { "f": "(1/(2*kl))*(1 - pow(1 - 0.02*kl, x))", "c": "mint", "label": "twin frozen on day one" },
+      { "f": "floor(x/N)*(1/(2*kl))*(1 - pow(1 - 0.02*kl, N)) + (1/(2*kl))*(1 - pow(1 - 0.02*kl, x - floor(x/N)*N))", "c": "red", "label": "twin refreshed every N steps" }
+    ],
+    "x": [0, 300],
+    "y": [0, 2],
+    "readouts": [
+      { "label": "drift after 300 steps, frozen twin", "f": "((1/(2*kl))*(1 - pow(1 - 0.02*kl, 300))).toFixed(2)" },
+      { "label": "drift after 300 steps, your twin", "f": "(floor(300/N)*(1/(2*kl))*(1 - pow(1 - 0.02*kl, N)) + (1/(2*kl))*(1 - pow(1 - 0.02*kl, 300 - floor(300/N)*N))).toFixed(2)" },
+      { "label": "what the leash is doing", "f": "N == 1 ? 'twin = trainee: KL reads 0, no leash at all' : (N >= 300 ? 'frozen: drift levels off where the pulls balance' : 'refreshed: each reset forgives the drift so far')" }
+    ],
+    "caption": {
+      "1": "Start frozen (N = 300) and watch the drift level off. Now drag N down: each refresh forgives the drift so far, and at N = 1 the leash does nothing at all.",
+      "2": "Toy: a steady reward pull against a KL leash tied to the twin. Frozen, the trainee settles where the pulls balance. Refreshed, every window adds more drift, so the total keeps growing.",
+      "3": "Locally KL is quadratic and reward linear, so a frozen π_ref gives equilibrium drift g/(2·kl_coef). Re-anchoring every step zeroes the penalty's gradient: plain reward ascent. Moving anchors bound steps, not journeys."
+    }
+  },
+  "where_else": [
+    "GRPO: the same β·D_KL(π_θ‖π_ref) term against a frozen reference",
+    "PPO and TRPO: a moving reference (last iteration's policy) that bounds each step, not the journey",
+    "Model diffing: compare a fine-tuned model with its base to see what training changed",
+    "Golden-file tests: compare each new output with a recording that is never silently updated"
+  ],
+  "hamming": {
+    "what": "A frozen copy of the model from the moment RL fine-tuning began, used only to score the trainee's tokens so the KL penalty has a fixed point to measure drift from.",
+    "when": "Whenever you fine-tune with RL against a learned or hand-written reward (RLHF, and GRPO's β·KL term), because any reward has errors that unchecked optimisation will find.",
+    "why": "Without a fixed anchor there is no distance to penalise: a reference that moves with the policy reads zero drift forever, and the model walks off into text only the reward model loves."
+  },
+  "object": {
+    "title": "The anchored bowl",
+    "subtitle": "The objective as a bowl centred on the frozen twin and tipped by the reward. The bead is the model in training.",
+    "kind": "surface",
+    "f": "-x + kl*((x - a)*(x - a) + y*y)",
+    "x": [-1, 3],
+    "y": [-1.5, 1.5],
+    "ball": { "x": 0, "y": 0, "lr": 0.05, "steps": 60 },
+    "marks": [
+      { "x": 0, "y": 0, "label": "day one: where training started" }
+    ],
+    "knobs": [
+      { "id": "kl", "label": "kl_coef (leash strength)", "min": 0.25, "max": 2, "step": 0.25, "value": 1 },
+      { "id": "a", "label": "where the twin stands (refresh it)", "min": 0, "max": 1, "step": 0.5, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "The objective is a bowl centred on the frozen twin, tipped by the reward. The bead is the model in training: it rolls out a little, then the bowl holds it.",
+          "2": "Bowl = kl_coef × KL from the reference; tilt = the reward pulling one way. The bead settles where the two pulls balance, a short walk from day one.",
+          "3": "Near π_ref, KL is roughly quadratic in the parameter change (the Fisher metric) and reward roughly linear, so the optimum sits at the anchor plus the reward gradient shrunk by kl_coef."
+        },
+        "view": "iso",
+        "set": { "kl": 1, "a": 0 }
+      },
+      {
+        "cap": {
+          "1": "Pull the leash tight: steep walls, and the bead barely leaves the twin. Safe, but the model hardly improves.",
+          "2": "High kl_coef: the penalty dominates and the policy stays close to π_ref, so reward barely moves. That is the 'too high and it barely changes' failure.",
+          "3": "In this picture equilibrium drift scales as 1/kl_coef. ARENA defaults to kl_coef = 2.5, and its bonus adaptive controller retunes the coefficient to hold KL in a target band."
+        },
+        "view": "side",
+        "set": { "kl": 2, "a": 0 }
+      },
+      {
+        "cap": {
+          "1": "Loosen the leash: the bowl flattens, the tilt wins, and the bead rolls far from the twin, toward text only the scorer loves.",
+          "2": "Low kl_coef: nothing holds the policy near the reference, so it follows the reward model into its errors. Mean reward keeps climbing while the samples get worse.",
+          "3": "The overoptimisation regime: as KL from initialisation grows, proxy reward keeps rising while gold reward peaks and falls (Gao, Schulman and Hilton, 2022)."
+        },
+        "view": "iso",
+        "set": { "kl": 0.25, "a": 0 }
+      },
+      {
+        "cap": {
+          "1": "Now move the twin out to where the bead stopped. The bowl follows and the bead rolls on. Keep doing that and the leash never holds.",
+          "2": "Refreshing the reference re-centres the penalty on the current policy and forgives all drift so far. Aliasing it to the policy does this every step: KL always 0.",
+          "3": "A moving anchor bounds each step, not the journey: that is PPO's clip and TRPO's constraint against the last policy. RLHF's penalty works because π_ref never moves."
+        },
+        "view": "top",
+        "set": { "kl": 1, "a": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "You pass the policy object itself as the reference, with no copy. What does the KL penalty read?",
+        "options": [
+          { "t": "0 at every step, so the leash does nothing", "ok": true },
+          { "t": "Infinity, and training crashes" },
+          { "t": "The right value, only noisier" }
+        ],
+        "why": "Both opinions come from the same weights, so log π − log π_ref is 0 everywhere. Nothing errors: it looks exactly like kl_coef = 0."
+      },
+      {
+        "q": "What does the reference model do during a rollout?",
+        "options": [
+          { "t": "Scores the trainee's own generated tokens", "ok": true },
+          { "t": "Writes its own answer to compare against" },
+          { "t": "Scores the prompt tokens as well" }
+        ],
+        "why": "The penalty compares two opinions of the same words, so the reference runs one forward pass on the sampled sequence, sliced to the generated tokens: the model did not choose the prefix."
+      },
+      {
+        "q": "PPO already clips every update. Why keep a frozen reference as well?",
+        "options": [
+          { "t": "The clip limits each step; the reference limits the whole journey", "ok": true },
+          { "t": "RLHF switches the clip off" },
+          { "t": "The reference replaces the critic" }
+        ],
+        "why": "The clip compares with last iteration's policy, so it resets every batch. The frozen reference never moves, so drift adds up against it and the leash never resets."
+      }
+    ],
+    "where": "Any fine-tune held to its starting point: GRPO's β·KL term, and golden-file tests that never auto-update the recording."
+  }
+}

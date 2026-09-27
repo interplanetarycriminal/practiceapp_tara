@@ -1,0 +1,259 @@
+{
+  "id": "self-play",
+  "title": "Your own opponent, your own coach",
+  "week": 10,
+  "need": "core",
+  "allegory": "Self-play is like a board-game player with no one to learn from who plays both sides of the board, thinks each move through before playing it, writes down what that careful thinking chose and who finally won, then drills her snap instinct to match the notes, so her opponent and her coach both improve exactly as fast as she does.",
+  "map": [
+    ["your snap instinct: a glance suggests a move and a feel for who is winning", "the network f_θ(s) = (p, v): a move prior and a value in [−1, 1]"],
+    ["thinking a move through, guided by that instinct", "MCTS: a few dozen simulations steered by p and v, giving visit counts π"],
+    ["the opponent across the board, who is also you", "self-play: both sides are the current network plus search, so the opposition improves as you do"],
+    ["a notebook of what careful thinking chose and who finally won, from the mover's side", "training data (s, π, z), with z flipping sign every ply"],
+    ["drilling your instinct on the notebook", "the loss (z − v)² − Σ π·log p: squared error towards z, cross-entropy towards π"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "No one to copy",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "just the rules. no games to copy.",
+      "actors": [{ "pose": "think", "x": 0.28, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.6, "y": 0.62, "w": 0.26, "h": 0.2, "label": "Connect 4 board", "color": "sky" },
+        { "kind": "card", "x": 0.6, "y": 0.24, "label": "the rules", "color": "butter" },
+        { "kind": "stack", "x": 0.88, "y": 0.6, "label": "expert games: none", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "You want to master a game, but there are no expert games to copy and no stronger player to learn from. Only the rules. Where do lessons come from?",
+        "2": "Supervised learning needs examples of good play. AlphaZero had none: it started from random play with only the rules, and made every training example itself.",
+        "3": "Silver et al. (Science, 2018) trained from random play with no human games and no game knowledge beyond the rules, at chess, shogi and Go, and beat a world-champion program at each."
+      }
+    },
+    {
+      "name": "Glance, then think",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "think", "x": 0.26, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.6, "y": 0.64, "w": 0.26, "h": 0.2, "label": "board", "color": "sky" },
+        { "kind": "card", "x": 0.44, "y": 0.22, "label": "glance: column 3?", "color": "peach" },
+        { "kind": "card", "x": 0.8, "y": 0.22, "label": "thought through: column 4!", "color": "mint" },
+        { "kind": "lamp", "x": 0.1, "y": 0.4, "label": "thinking time", "color": "butter" }
+      ],
+      "arrows": [[0.53, 0.22, 0.68, 0.22, "better"]],
+      "cap": {
+        "1": "A glance at the board suggests a move. Thinking it through, guided by that glance, finds a better one. So your slow thinking can coach your glance.",
+        "2": "The network is the glance: board in, move prior p and value v out. The search is the slow thinking: a few dozen simulations steered by p and v, stronger than p alone.",
+        "3": "Search is the policy-improvement operator: MCTS visit counts π(a|s) beat the raw prior p_θ, even at random initialisation. That gap is a teacher you get for free."
+      }
+    },
+    {
+      "name": "Across the board",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "sit", "x": 0.26, "label": "you" },
+        { "pose": "sit", "x": 0.74, "label": "also you" }
+      ],
+      "props": [
+        { "kind": "box", "x": 0.5, "y": 0.62, "w": 0.22, "h": 0.16, "label": "board", "color": "sky" },
+        { "kind": "card", "x": 0.5, "y": 0.22, "label": "notebook: board, what thinking chose, who won", "color": "cream" }
+      ],
+      "cap": {
+        "1": "Now play both sides. Your opponent is always exactly as strong as you, and improves as you do. Every game fills a notebook of lessons.",
+        "2": "Both players are the current network plus search. Each move logs the board and the search's visit counts; when the game ends, each move is labelled with who won.",
+        "3": "Self-play makes the data track the current policy. ARENA plays 4096 Connect 4 games in parallel per generation, with Dirichlet noise on the root prior for exploration."
+      }
+    },
+    {
+      "name": "The drilling rule",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "loss = ", "c": "ink", "note": "" },
+        { "t": "(z − v)²", "c": "sky", "note": "guess who wins" },
+        { "t": " − ", "c": "ink", "note": "" },
+        { "t": "Σ π·log p", "c": "orange", "note": "favour what thinking chose" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Drill the glance two ways: make its feel for who is winning match who actually won, and make it favour the moves slow thinking chose.",
+        "2": "Value head: squared error against the result z. Policy head: cross-entropy against the visit counts π. One loss trains both heads, plus weight decay.",
+        "3": "L = (z − v)² − Σₐ π(a|s) log p_θ(a|s) + c‖θ‖². A distillation loss, not a policy gradient: no advantage, no probability ratio, no clipping."
+      }
+    },
+    {
+      "name": "Whose win is it?",
+      "need": "exercise",
+      "dur": 11,
+      "type": "grid",
+      "title": "one game, labelled from each mover's side",
+      "rows": 3,
+      "cols": 5,
+      "values": [
+        ["A", "B", "A", "B", "A wins"],
+        ["+1", "−1", "+1", "−1", "+1"],
+        ["+1", "+1", "+1", "+1", "+1"]
+      ],
+      "labels": { "rows": ["who moves", "z: right", "z: sign forgotten"], "cols": ["ply 1", "ply 2", "ply 3", "ply 4", "ply 5"] },
+      "highlight": [[1, 4], [1, 3], [1, 2], [1, 1], [1, 0], [2, 3], [2, 1]],
+      "cap": {
+        "1": "Label every move with who won, from the side of whoever moved. A's moves get +1, B's get −1. Forget to flip, and half the labels are wrong.",
+        "2": "<code>compute_z_targets</code> scans backwards: at the final move z is the reward; before that, negate the next ply's value. Reset at each game boundary.",
+        "3": "Miss the negation and the value loss still falls smoothly while v learns an inverted evaluation. Every MCTS leaf reads v, so the search is poisoned too. Check the sign in backup as well."
+      }
+    },
+    {
+      "name": "Fresh notes teach",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Keep 8 generations", "c": "pink", "lines": ["more games in the notebook", "but older, weaker teachers", "lost in ARENA's sweep"] },
+      "right": { "title": "Keep 4 generations", "c": "mint", "lines": ["fewer games", "fresher, stronger teachers", "won in ARENA's sweep"] },
+      "verdict": "Notes are only as good as the player who wrote them. Keep them fresh.",
+      "cap": {
+        "1": "Old notebook pages were written by a weaker you. Keeping more of them sounds safer, but it means learning from a worse coach.",
+        "2": "The replay buffer holds recent generations of self-play. ARENA's sweep found keeping 4 generations beat 8, purely because the data was fresher.",
+        "3": "Old π targets come from an older network's search, so stale data is a weaker teacher. The sweep credits every gain to fresher self-play data, not capacity or regularisation."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A free teacher: yourself plus thinking time", "An opponent that grows with you", "One recipe for chess, shogi and Go"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "The trick is general: let a system think harder, then train it to reach that answer at a glance. Its opponent and its teacher both grow with it.",
+        "2": "Silver's team ran the same loop unchanged at chess, shogi and Go. When you study a model trained on its own improved outputs, ask what its teacher could actually see.",
+        "3": "For understanding and steering AI: a teacher built from the student can inherit its blind spots, as a wrong value head poisons every search leaf. Audit the teacher, not only the student."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "The search visited the 7 columns 1, 2, 3, 6, 2, 1, 1 times: which move gets played?",
+    "labels": ["col 1", "col 2", "col 3", "col 4", "col 5", "col 6", "col 7"],
+    "params": [
+      { "id": "tau", "label": "temperature τ", "min": 0.05, "max": 3, "step": 0.05, "value": 1 }
+    ],
+    "f": "(w => w.map(v => v / sum(w)))([1, 2, 3, 6, 2, 1, 1].map(n => pow(n, 1 / tau)))",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "chance the favourite (col 4) is played", "f": "(pow(6, 1 / tau) / sum([1, 2, 3, 6, 2, 1, 1].map(n => pow(n, 1 / tau)))).toFixed(2)" },
+      { "label": "chance two games pick the same move here", "f": "(w => sum(w.map(v => v * v)) / pow(sum(w), 2))([1, 2, 3, 6, 2, 1, 1].map(n => pow(n, 1 / tau))).toFixed(2)" },
+      { "label": "what this τ does", "f": "tau < 0.3 ? 'nearly greedy: always the favourite' : abs(tau - 1) < 0.03 ? 'τ = 1: exactly the visit shares (ARENA opening)' : tau < 1 ? 'sharper than the visit shares' : 'flatter: long shots boosted'" }
+    ],
+    "caption": {
+      "1": "Slide τ towards 0: the favourite column is always played, and self-play games start to look alike. At 1, each column is played in proportion to its visits.",
+      "2": "Moves are sampled with π ∝ N^(1/τ). ARENA uses τ = 1 for the first 12 plies of a game, so openings vary, then plays greedily. Watch 'same move' climb as τ falls.",
+      "3": "π(a|s) = N(s,a)^(1/τ) / Σ N(s,a')^(1/τ). Exploration also enters through Dirichlet noise on the root prior only (ε = 0.25, α = 10/7), outside the loss."
+    }
+  },
+  "where_else": [
+    "Policy iteration from classic RL: evaluate, improve, repeat; here search does the improving",
+    "Distilling slow reasoning into a fast model: produce better answers with extra thinking, then train the model to give them directly",
+    "GANs: two networks that improve against each other, so each always meets an opponent at its own level"
+  ],
+  "hamming": {
+    "what": "A training loop in which a network plays games against itself, uses look-ahead search as its teacher, and learns to predict the search's choices and the games' results.",
+    "when": "When you have the rules, so a simulator you can search, but no expert data, especially in two-player games where the best sparring partner is one at your own level.",
+    "why": "Search on top of the network plays better than the network alone, so imitating it improves the network, which improves the next search, while the opponent keeps pace."
+  },
+  "object": {
+    "title": "The self-play wheel",
+    "subtitle": "One generation of AlphaZero as a loop: network, search, self-play games, notebook, loss and back, with a solver off to the side that only keeps score.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "net", "label": "network: the glance (p, v)", "pos": [-1.2, 0, 0], "c": "prob" },
+      { "id": "search", "label": "search: visit counts π", "pos": [-0.3, 1.0, 0.2], "c": "good" },
+      { "id": "games", "label": "self-play: you vs you", "pos": [0.9, 0.6, 0], "c": "data" },
+      { "id": "notes", "label": "notebook: (s, π, z)", "pos": [0.9, -0.6, 0], "c": "data" },
+      { "id": "loss", "label": "loss: (z − v)² − Σ π·log p", "pos": [-0.3, -1.0, 0.2], "c": "grad" },
+      { "id": "solver", "label": "perfect solver: keeps score only", "pos": [1.3, 1.3, -0.9], "c": "aux" }
+    ],
+    "edges": [["net", "search"], ["search", "games"], ["games", "notes"], ["notes", "loss"], ["loss", "net"], ["net", "solver"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "The whole loop: the network guides a search, the search picks the moves, games fill a notebook, and the notebook trains the network.",
+          "2": "One generation: self-play with MCTS at every move, record (state, visit counts, result), train, repeat. ARENA runs 12 generations on Connect 4.",
+          "3": "Policy iteration with search as the improvement operator: MCTS on f_θ yields π, training distils π into p and z into v, and the better f_θ improves the next search."
+        },
+        "view": "iso"
+      },
+      {
+        "cap": {
+          "1": "The search is the teacher: the network's glance plus some thinking time. Even on top of a random network, the search plays better than the network alone.",
+          "2": "ARENA runs 16 simulations per move. The normalised visit counts π are the policy target, stronger than the raw prior p.",
+          "3": "The teacher is the student composed with MCTS, so each generation's gain is the search's planning advantage being amortised into the weights."
+        },
+        "view": "close"
+      },
+      {
+        "cap": {
+          "1": "Both sides of every game are the same network, so the opponent is always exactly your current level.",
+          "2": "4096 parallel Connect 4 games per generation. Each move is labelled with the eventual result from the mover's side, flipping sign every ply.",
+          "3": "z comes from one backward scan with negamax signs, reset at game boundaries. A missed negation inverts half the targets and reaches every search leaf through v."
+        },
+        "view": "side"
+      },
+      {
+        "cap": {
+          "1": "Only recent games stay in the notebook. Older games came from a weaker player, so they make a weaker teacher.",
+          "2": "The replay buffer keeps the last 4 generations. ARENA's sweep found 4 beat 8 purely because the data was fresher.",
+          "3": "Stale π targets are an older network's search. The sweep credits every gain to fresher self-play data rather than capacity or regularisation."
+        },
+        "view": "top"
+      },
+      {
+        "cap": {
+          "1": "Off to the side, a perfect Connect 4 solver never teaches. It only keeps score: after 12 generations, about 85% agreement.",
+          "2": "Scoring uses Pascal Pons' perfect solver. ARENA's recipe reaches roughly 85% agreement in four or five minutes on a GPU.",
+          "3": "The solver is evaluation only. Every training signal comes from self-play results and the search: π for the policy head, z for the value head."
+        },
+        "view": "front"
+      }
+    ],
+    "predict": [
+      {
+        "q": "The network starts completely random. Can search on top of it still teach it anything?",
+        "options": [
+          { "t": "Yes: search plus a random network still beats the random network alone", "ok": true },
+          { "t": "No: a random teacher teaches nothing" }
+        ],
+        "why": "The search's visit counts are measurably stronger than the raw prior even at random initialisation, so there is always a better teacher to chase."
+      },
+      {
+        "q": "You forget to flip z's sign each ply. What happens to the value loss?",
+        "options": [
+          { "t": "It still falls smoothly, while the value head learns backwards", "ok": true },
+          { "t": "It refuses to fall, so you notice at once" }
+        ],
+        "why": "Half the targets carry the wrong sign, and the network learns a consistent, inverted evaluation. Unit-test z before trusting anything."
+      },
+      {
+        "q": "Replay buffer: keep the last 4 generations of games, or the last 8?",
+        "options": [
+          { "t": "4: fresher games from a stronger teacher", "ok": true },
+          { "t": "8: more data always wins" }
+        ],
+        "why": "ARENA's sweep found 4 beat 8 purely because the data was fresher."
+      }
+    ],
+    "where": "Anywhere a model improves by training on its own improved outputs: slow, careful thinking distilled into a fast instinct."
+  }
+}

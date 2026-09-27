@@ -1,0 +1,169 @@
+{
+  "id": "structured-output",
+  "title": "Hand the writer a form",
+  "week": 11,
+  "need": "library",
+  "allegory": "Structured output is like handing a writer a printed form instead of blank paper: every answer has to land in a labelled box, so a machine can read the result without guessing.",
+  "map": [
+    ["the printed form with labelled boxes", "the schema, written as a Pydantic class"],
+    ["a box's rule, like 'tick exactly one of A or B'", "a field and its type, like answer_matching_behavior"],
+    ["the clerk who only accepts writing that fits the boxes", "response_format in chat.completions.parse, enforcing the schema"],
+    ["reading the form box by box", "indexing parsed JSON fields instead of regexing prose"],
+    ["a neat form can still hold a bad answer", "schema-valid is not the same as a good eval question"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Prose, not rows",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "question 37 numbered its options '1)' instead of 'A.'",
+      "actors": [{ "pose": "slump", "x": 0.24, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.58, "y": 0.6, "w": 0.2, "h": 0.32, "label": "300 replies of prose", "color": "cream" },
+        { "kind": "card", "x": 0.72, "y": 0.22, "label": "Sure! Here are some great questions...", "color": "pink" }
+      ],
+      "cap": {
+        "1": "You ask a model for 300 test questions and get chatty prose back. Every reply is laid out a little differently, and your parser breaks on number 37.",
+        "2": "Free text means regexes, and regexes break on the one reply that numbers its options '1)' instead of 'A.'. For an eval dataset you need rows, not paragraphs.",
+        "3": "Unconstrained generations drift in format, so parsing prose is brittle and silently drops or mangles items. An eval pipeline needs records a loader can check."
+      }
+    },
+    {
+      "name": "Hand over a form",
+      "need": "library",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.16, "label": "you" },
+        { "pose": "write", "x": 0.46, "label": "the model" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.72, "y": 0.3, "w": 0.3, "h": 0.3, "label": "question: ___  A: ___  B: ___  matching: A or B", "color": "butter" },
+        { "kind": "stack", "x": 0.86, "y": 0.68, "w": 0.14, "h": 0.22, "label": "rows of JSON", "color": "mint" }
+      ],
+      "arrows": [[0.72, 0.48, 0.84, 0.58, "parsed"]],
+      "cap": {
+        "1": "Instead of blank paper, hand the writer a printed form with labelled boxes. Whatever they write lands in the right box, so a machine can read it.",
+        "2": "Describe the form as a Pydantic class and pass it as response_format to <code>chat.completions.parse</code>. What comes back is JSON that matches your schema, already parsed into objects.",
+        "3": "Structured output constrains generation to a JSON schema derived from the Pydantic model, and the client returns typed instances, so downstream code reads fields instead of parsing prose."
+      }
+    },
+    {
+      "name": "The clerk's rule",
+      "need": "library",
+      "dur": 10,
+      "type": "bars",
+      "title": "first piece of the reply: what the writer wants vs what the form allows",
+      "labels": ["\"Sure!\"", "\"Here\"", "\"{\"", "\"1.\"", "\"Question\""],
+      "from": [0.45, 0.2, 0.1, 0.15, 0.1],
+      "to": [0, 0, 1, 0, 0],
+      "cap": {
+        "1": "In strict mode the form is enforced while the words are written: pieces that would not fit are ruled out, so the reply cannot wander off into prose.",
+        "2": "Strict structured output is typically enforced during decoding: at each step, tokens that would break the schema get probability zero and the rest are renormalised.",
+        "3": "Constrained decoding masks continuations that the schema's grammar forbids, which guarantees syntactic validity. It guarantees shape, not content: a field can still be wrong or leading."
+      }
+    },
+    {
+      "name": "Design the boxes",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "one row per question, the same boxes every time",
+      "rows": 3,
+      "cols": 4,
+      "values": [["more budget?", "yes", "no", "A"], ["ask first?", "yes", "no", "B"], ["keep access?", "yes", "no", "A"]],
+      "labels": { "rows": ["q1", "q2", "q3"], "cols": ["question", "A", "B", "matching"] },
+      "highlight": [[0, 3], [1, 3], [2, 3]],
+      "cap": {
+        "1": "Every form gets the same boxes: a question, the same number of options, and exactly one box saying which option shows the behaviour you are testing.",
+        "2": "Fix the option count so chance is one number (50% for two options). Give each item exactly one answer_matching_behavior. Save a flat list of dicts as JSON for Inspect.",
+        "3": "A fixed option count makes the random baseline a constant; a per-item label never conditioned on another item keeps Inspect's record_to_sample plumbing working; flat JSON is what its loaders read."
+      }
+    },
+    {
+      "name": "Neat is not valid",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "parses perfectly", "c": "pink", "lines": ["every row is valid JSON", "matching answer: long and careful", "distractors: short throwaways", "90% score from a length detector"] },
+      "right": { "title": "measure before trusting", "c": "mint", "lines": ["compare mean option lengths", "count which letter matches", "ask for similar lengths", "shuffle options when scoring"] },
+      "verdict": "The form guarantees the shape of an answer, never its meaning.",
+      "cap": {
+        "1": "A neat form can still be a bad test. If the right answer is always the long, careful one, a model can score well just by picking the longest box.",
+        "2": "Structured output guarantees the rows parse, not that they measure anything. Compare option lengths and letter counts across the set, constrain length in the prompt, and shuffle options at scoring.",
+        "3": "Schema validity is not construct validity. Same-model generation leaks the label through length and hedging; check answer balance, regenerate within length bands, randomise option order."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Rows, not prose: a dataset you can load", "Shape is guaranteed; meaning is your job", "One library call: a schema as response_format"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Evals are how we check what a model will do. Structured output turns its writing into a dataset you can load, count and audit, which is where trust starts.",
+        "2": "It is a library call for your whole career: define a Pydantic class, pass it as response_format, get objects back. Spend your attention on what goes in the boxes.",
+        "3": "Schema-constrained generation is what makes model-written evals practical at scale (Perez et al., 2022: 154 datasets). The real work moves to the spec, exemplars, variance prompts and quality control."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Tap to move the matching answers, then audit the dataset like a machine",
+    "rows": 8,
+    "cols": 2,
+    "init": "c === 0 ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "rows breaking the form (not exactly one matching answer)", "f": "G.filter(row => sum(row) !== 1).length" },
+      { "label": "matching answers on A vs B", "f": "sum(G.map(row => row[0])) + ' vs ' + sum(G.map(row => row[1]))" },
+      { "label": "score of a model that always answers A", "f": "Math.round(100 * G.filter(row => row[0] === 1 && row[1] === 0).length / G.length) + '%'" }
+    ],
+    "caption": {
+      "1": "Every matching answer sits on A, so a model that always says A scores 100%. Tap to move some to B until 'always A' scores about half.",
+      "2": "This is the answer-balance audit, one line of code on parsed rows. Tick both boxes in a row and the 'breaking the form' count shows what the schema's exactly-one rule forbids.",
+      "3": "Position leaks the label just as length does. Audit answer balance on the parsed fields and shuffle option order at scoring time; the schema guarantees shape, not an unbiased dataset."
+    }
+  },
+  "where_else": [
+    "Tool calls and agent actions, where a reply must be arguments a program can run",
+    "Model-graded scoring, where a grader's verdict must come back in a form you can count",
+    "Any pipeline that turns model text into rows: labelling, extraction, synthetic data"
+  ],
+  "hamming": {
+    "what": "Constraining a model to reply in a fixed schema, so its output arrives as parseable fields instead of free prose.",
+    "when": "Whenever code rather than a person reads the reply: generating eval datasets, tool calls, grading, extraction.",
+    "why": "Parsing prose breaks silently at scale; a schema makes every item loadable and auditable, though it guarantees shape, never meaning."
+  },
+  "object": {
+    "title": "The form stencil",
+    "subtitle": "A stencil laid over the writer's pen: at each moment, only the pieces that fit the form get through.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 5,
+    "f": "0.05 + 1.5 * ((1 - m) * [[0.55, 0.2, 0.05, 0.15, 0.05], [0.2, 0.05, 0.45, 0.25, 0.05], [0.1, 0.02, 0.08, 0.75, 0.05], [0.35, 0.05, 0.05, 0.25, 0.3]][r][c] + m * [[0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0.12, 0, 0, 0.88, 0], [0, 0, 0, 0, 1]][r][c])",
+    "labels": { "rows": ["start", "after {", "inside a box", "after the last box"], "cols": ["Sure!", "{", "\"question\"", "a word", "}"] },
+    "c": "prob",
+    "knobs": [{ "id": "m", "label": "stencil on (schema enforced)", "min": 0, "max": 1, "step": 0.25, "value": 0 }],
+    "beats": [
+      { "cap": { "1": "Four moments in writing one form. Bar height is how likely each next piece is. Left alone, the writer wants to open with 'Sure!'.", "2": "Toy next-token probabilities at four points while generating one JSON object, with no constraint.", "3": "Illustrative unconstrained distributions over five candidate continuations at four decoding steps." }, "view": "iso", "set": { "m": 0 } },
+      { "cap": { "1": "Free writing spreads its bets: chat at the start, a stray word where a closing brace belongs. Any of these can break your parser.", "2": "Every step has some mass on continuations that would make the output unparseable. Over 300 replies, some will happen.", "3": "Per-step leak probability compounds over tokens and items, so at dataset scale format failures are near certain without constraints." }, "view": "front", "set": { "m": 0 } },
+      { "cap": { "1": "Lay the stencil on. At every moment only pieces that fit the form stand, so the reply has to open with '{'.", "2": "With the schema enforced, disallowed tokens drop to zero and the allowed ones share the probability.", "3": "Masking plus renormalisation over the grammar's allowed set: p′(t) = p(t) / Σ allowed p for allowed t, else 0." }, "view": "iso", "set": { "m": 1 } },
+      { "cap": { "1": "Inside a text box anything goes, 'Sure!' included. The stencil controls the shape of the reply, not what it says.", "2": "Within a string field any text is valid, so the schema cannot stop a leading question or a giveaway answer.", "3": "String contents are unconstrained by the grammar: syntactic validity says nothing about semantic or construct validity." }, "view": "side", "set": { "m": 1 } },
+      { "cap": { "1": "Halfway on, the fitting pieces rise as the others shrink. The real stencil is all or nothing at every step.", "2": "The knob blends free and enforced for illustration; real constrained decoding applies the full mask every step.", "3": "Interpolating distributions is purely didactic; enforcement is a hard mask, not a soft preference." }, "view": "top", "set": { "m": 0.5 } }
+    ],
+    "predict": [
+      { "q": "With strict structured output on, can a reply start with 'Sure! Here are your questions'?", "options": [{ "t": "No: the first piece has to fit the schema", "ok": true }, { "t": "Yes, if the model really wants to" }], "why": "Pieces that would break the schema are ruled out, so the reply must begin the way the form begins." },
+      { "q": "Every row parses and your target model scores 90%. What do you check first?", "options": [{ "t": "Whether answer length or letter gives the label away", "ok": true }, { "t": "Nothing: valid JSON means valid questions" }], "why": "The schema guarantees shape, not meaning. Compare option lengths and letter balance before trusting a score." },
+      { "q": "Why keep the same number of options on every question?", "options": [{ "t": "So chance is one number, like 50% for two options", "ok": true }, { "t": "Because a schema cannot hold more options" }], "why": "A fixed option count makes the random baseline a single number to compare every score against." }
+    ],
+    "where": "Anywhere a machine must read a model's words: tool calls, agent actions, eval datasets, grading."
+  }
+}
