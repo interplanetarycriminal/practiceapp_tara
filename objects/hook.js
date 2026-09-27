@@ -33,7 +33,8 @@
   }
   function target() {
     var h = location.hash || '#today', m, o;
-    if ((m = h.match(/^#week-(\d\d)/))) return 'objects/index.html#week-' + m[1];
+    if ((m = h.match(/^#(?:today\/)?week-(\d\d)/))) return 'objects/index.html#week-' + m[1];
+    if ((m = h.match(/^#plan\/w(?:eek)?-?0?(\d{1,2})$/))) return 'objects/index.html#week-' + (m[1].length < 2 ? '0' : '') + m[1];
     if (/^#capstone-weeks-12-14/.test(h)) return 'objects/index.html#week-12';
     if ((m = h.match(/^#demo\/([\w-]+)/))) o = find(function (x) { return x.demo === m[1]; });
     else if ((m = h.match(/^#cases\/([\w-]+)/))) o = find(function (x) { return (x.concepts || []).indexOf(m[1]) >= 0; });

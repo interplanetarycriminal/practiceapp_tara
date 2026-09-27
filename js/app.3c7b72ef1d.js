@@ -815,7 +815,9 @@ setTimeout(function () {
 /* ===== src/shell/today.js ===== */
 ;(function(){
 /* app/src/shell/today.js — SPEC §9. The default view: what to do right now.
-   Six fixed row slots, built once, then text-swapped in place. Owner: Worker A. */
+   Fixed row slots, built once, then text-swapped in place. Owner: Worker A.
+   A strip of the fourteen weeks sits above the rows: #today is the current
+   week, #today/week-NN shows the same rows for any other week, earlier or later. */
 
 'use strict';
 
@@ -828,19 +830,26 @@ function pretty(iso) {
   if (isNaN(d)) return iso;
   return DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON[d.getMonth()];
 }
+function dayMonth(iso) {
+  var d = new Date(iso + 'T00:00:00');
+  return isNaN(d) ? '' : d.getDate() + ' ' + MON[d.getMonth()];
+}
+function pad2(n) { return String(n).padStart(2, '0'); }
 
 function titleCaseSlug(slug) {
   return String(slug || '').replace(/-/g, ' ').replace(/\b([a-z])/g, function (m, c) { return c.toUpperCase(); });
 }
 
-/* Six slots. The order is the order; nothing is ever inserted or moved. */
+/* The slots. The order is the order; nothing is ever inserted or moved.
+   Plan came last (27 Sep 2026) so the first six kept their places. */
 var SLOTS = [
   { key: 'now',    label: 'Right now' },
   { key: 'pack',   label: 'Pack' },
   { key: 'demo',   label: 'Demo' },
   { key: 'drill',  label: 'Drill' },
   { key: 'review', label: 'Review' },
-  { key: 'sprint', label: 'Sprint' }
+  { key: 'sprint', label: 'Sprint' },
+  { key: 'plan',   label: 'Plan' }
 ];
 
 function buildOnce(el) {
@@ -849,7 +858,20 @@ function buildOnce(el) {
   el.textContent = '';
 
   var pad = APP.el('div', { 'class': 'app-sec-pad app-today' });
-  var line = APP.el('p', { 'class': 'app-todayline', id: 'app-todayline' });
+  var bar = APP.el('nav', { 'class': 'app-wkbar', id: 'app-wkbar', 'aria-label': 'Any week, earlier or later' });
+  var s = APP.schedule();
+  ((s && s.weeks) || []).forEach(function (w) {
+    var a = APP.el('a', {
+      'class': 'app-wk', href: '#today/week-' + pad2(w.n), 'data-wk': String(w.n),
+      title: 'Week ' + w.n + ' · ' + pretty(w.saturday) + ' · ' + w.chapter
+    });
+    a.appendChild(APP.el('b', { text: 'W' + w.n }));
+    a.appendChild(APP.el('span', { text: dayMonth(w.saturday) }));
+    bar.appendChild(a);
+  });
+  var line = APP.el('p', { 'class': 'app-todayline' });
+  line.appendChild(APP.el('span', { id: 'app-todayline' }));
+  line.appendChild(APP.el('a', { 'class': 'app-wkback', id: 'app-wkback', href: '#today', hidden: 'hidden' }));
   var rows = APP.el('div', { 'class': 'app-rows', id: 'app-todayrows' });
 
   SLOTS.forEach(function (s) {
@@ -863,9 +885,118 @@ function buildOnce(el) {
     rows.appendChild(a);
   });
 
+  if (bar.firstChild) pad.appendChild(bar);
   pad.appendChild(line);
   pad.appendChild(rows);
   el.appendChild(pad);
+}
+
+/* Mark the current week and the one on show. The strip scrolls sideways on a
+   phone; bring the shown week into view there without moving the page. */
+function paintWeeks(el, shown, current, upcoming) {
+  var bar = el.querySelector('#app-wkbar');
+  if (!bar) return;
+  var links = bar.querySelectorAll('.app-wk');
+  for (var i = 0; i < links.length; i++) {
+    var a = links[i], n = Number(a.getAttribute('data-wk'));
+    if (n === current) {
+      a.setAttribute('data-now', '1');
+      a.setAttribute('href', '#today');
+      a.querySelector('span').textContent = upcoming ? 'next' : 'now';
+    } else if (a.hasAttribute('data-now')) {        /* the calendar moved on while open */
+      var w = weekByN(n);
+      a.removeAttribute('data-now');
+      a.setAttribute('href', '#today/week-' + pad2(n));
+      a.querySelector('span').textContent = w ? dayMonth(w.saturday) : '';
+    }
+    if (n === shown) a.setAttribute('aria-current', 'true'); else a.removeAttribute('aria-current');
+    if (n === shown) {
+      var l = a.offsetLeft - bar.offsetLeft, r = l + a.offsetWidth;
+      if (l < bar.scrollLeft || r > bar.scrollLeft + bar.clientWidth) {
+        bar.scrollLeft = Math.max(0, l - (bar.clientWidth - a.offsetWidth) / 2);
+      }
+    }
+  }
+}
+
+function weekByN(n) {
+  var s = APP.schedule();
+  var weeks = (s && s.weeks) || [];
+  for (var i = 0; i < weeks.length; i++) if (weeks[i].n === n) return weeks[i];
+  return null;
+}
+
+/* #today/week-03 (also week-3, w3) -> 3; plain #today -> 0 */
+function shownWeek(route) {
+  var raw = route && route.raw ? String(route.raw) : '';
+  var m = /^today\/w(?:eek)?-?0?(\d{1,2})$/i.exec(raw);
+  return m ? Number(m[1]) : 0;
+}
+
+function packTitle(slug) {
+  var K = window.__TARA_FK;
+  var p = K && K.PACK_BY ? K.PACK_BY[slug] : null;
+  return p ? p.title : titleCaseSlug(slug);
+}
+
+/* Ticks the plan keeps for a week (tara.fourteen.v1: w<N>p<k>, w<N>e<k>). */
+function planTicks(n) {
+  var st = {};
+  try { st = JSON.parse(localStorage.getItem('tara.fourteen.v1') || '{}') || {}; } catch (e) { st = {}; }
+  var rx = new RegExp('^w' + n + '[pe]\\d+$'), c = 0;
+  for (var k in st) if (Object.prototype.hasOwnProperty.call(st, k) && rx.test(k) && st[k]) c++;
+  return c;
+}
+
+/* Pack, drill, demo and plan rows for one week. `mine` is true for the week the
+   calendar says you are in, which keeps the wording the page always had. */
+function weekRows(w, mine) {
+  var rows = {};
+  if (!w) return rows;
+  if (w.packSlug) {
+    rows.pack = {
+      title: 'Study pack — ' + titleCaseSlug(w.packSlug),
+      sub: w.arena || w.chapter, hash: w.packSlug
+    };
+    rows.drill = {
+      title: 'Drill week ' + w.n,
+      sub: 'Eight questions from ' + (mine ? 'this week’s' : 'week ' + w.n + '’s') + ' bank', hash: 'drill/' + w.packSlug
+    };
+  }
+  var demos = w.demoSlugs || [];
+  if (demos.length === 1) {
+    rows.demo = { title: 'Demo — ' + titleCaseSlug(demos[0]), sub: 'Interactive, one idea', hash: 'demo/' + demos[0] };
+  } else if (demos.length > 1) {
+    rows.demo = {
+      title: demos.length + (mine ? ' demos this week' : ' demos for week ' + w.n),
+      sub: demos.map(titleCaseSlug).join(' · '),
+      hash: 'demo-week-' + pad2(w.n)
+    };
+  }
+  var ticks = planTicks(w.n);
+  rows.plan = {
+    title: 'Week ' + w.n + ' checklist in the plan',
+    sub: 'Pre-read and exercises' + (ticks ? ' · ' + ticks + ' ticked so far' : ' to tick off'),
+    hash: 'plan/week-' + w.n
+  };
+  return rows;
+}
+
+/* Any week other than the current one: the same rows, pointed at that week. */
+function describeWeek(t, w) {
+  var s = APP.schedule();
+  var cur = t.week ? t.week.n : 0;
+  var past = !cur || w.n < cur;
+  var rows = weekRows(w, false);
+  rows.now = {
+    title: (past ? 'Back to week ' : 'Get ahead on week ') + w.n + ' — ' + packTitle(w.packSlug),
+    sub: w.arena || w.chapter, hash: w.packSlug || 'packs', primary: true
+  };
+  rows.sprint = { title: 'Crash sprint', sub: 'Seven prerequisite evenings · ' + pretty(s.sprint.start) + ' – ' + pretty(s.sprint.end), hash: 'sprint' };
+  return {
+    line: 'Week ' + w.n + ' · ' + w.chapter + ' · ' + pretty(w.saturday) + (past ? ' · an earlier week' : ' · a later week'),
+    rows: rows
+  };
 }
 
 function setRow(el, key, spec) {
@@ -913,27 +1044,8 @@ function describe(t) {
     rows.sprint = { title: 'Crash sprint', sub: pretty(s.sprint.start) + ' – ' + pretty(s.sprint.end), hash: 'sprint' };
   }
 
-  if (w && w.packSlug) {
-    rows.pack = {
-      title: 'Study pack — ' + titleCaseSlug(w.packSlug),
-      sub: w.arena || w.chapter, hash: w.packSlug
-    };
-    rows.drill = {
-      title: 'Drill week ' + w.n,
-      sub: 'Eight questions from this week’s bank', hash: 'drill/' + w.packSlug
-    };
-  }
-
-  var demos = (w && w.demoSlugs) || [];
-  if (demos.length === 1) {
-    rows.demo = { title: 'Demo — ' + titleCaseSlug(demos[0]), sub: 'Interactive, one idea', hash: 'demo/' + demos[0] };
-  } else if (demos.length > 1) {
-    rows.demo = {
-      title: demos.length + ' demos this week',
-      sub: demos.map(titleCaseSlug).join(' · '),
-      hash: 'demo-week-' + String(w.n).padStart(2, '0')
-    };
-  }
+  var own = weekRows(w, true);
+  for (var k in own) rows[k] = own[k];
 
   return { line: line, rows: rows };
 }
@@ -951,12 +1063,21 @@ function reviewRow() {
   };
 }
 
-function render(el) {
+function render(el, route) {
   buildOnce(el);
   var t = APP.today();
-  var d = describe(t);
+  var cur = t.week ? t.week.n : 0;
+  var w = weekByN(shownWeek(route || APP.route()));
+  if (w && w.n === cur) w = null;          /* the current week is plain #today */
+  var d = w ? describeWeek(t, w) : describe(t);
   var line = el.querySelector('#app-todayline');
   if (line) line.textContent = d.line;
+  var back = el.querySelector('#app-wkback');
+  if (back) {
+    back.hidden = !(w && cur);
+    back.textContent = 'Back to this week (W' + cur + ')';
+  }
+  paintWeeks(el, w ? w.n : cur, cur, !!t.upcoming);
   SLOTS.forEach(function (s) {
     setRow(el, s.key, s.key === 'review' ? reviewRow() : d.rows[s.key]);
   });
@@ -966,7 +1087,7 @@ APP.registerSection({
   id: 'today',
   title: 'Now',
   navOrder: 0,
-  mount: async function (el) { render(el); },
+  mount: async function (el, route) { render(el, route); },
   onTier: function () { /* the today panel has no tiered prose */ }
 });
 
@@ -2359,6 +2480,8 @@ APP._initReview = function () {
    sections/plan.js — the master plan (tara-plan.current.html) in a frame.
    Routes: #plan, #plan/<anchor>  where anchor is one of
    now sprint loop calendar retention demos capstone risk failure  (SPEC §7)
+   and #plan/week-N, which picks week N in the plan's week picker and opens
+   its row, for any week, earlier or later than the current one.
    ========================================================================== */
 /* global APP */
 (function () {
@@ -2377,6 +2500,36 @@ APP._initReview = function () {
   var openFrame = null;
   var cache = {};
 
+  /* week-3, week-03, w3, w-3 -> 3; anything else -> 0 */
+  function weekOf(anchor) {
+    var m = /^w(?:eek)?-?0?(\d{1,2})$/i.exec(String(anchor || ''));
+    var n = m ? Number(m[1]) : 0;
+    return n >= 1 && n <= 14 ? n : 0;
+  }
+
+  /* The plan defines window.__planWeek(n, opts) in its own script. Wait for it
+     the way K.scrollTo waits for an anchor, then give it one more pass after
+     layout settles (web fonts, the reading layer). */
+  function pickWeek(f, n) {
+    var K = fk();
+    return K.ready(f).then(function () {
+      return new Promise(function (res) {
+        var tries = 0;
+        (function tick() {
+          var w = null;
+          try { w = f.contentWindow; } catch (e) { return res(false); }
+          if (w && typeof w.__planWeek === 'function') {
+            w.__planWeek(n, { scroll: true });
+            try { w.requestAnimationFrame(function () { w.__planWeek(n, { scroll: true }); }); } catch (e) {}
+            return res(true);
+          }
+          if (++tries > 200) return res(false);
+          setTimeout(tick, 20);
+        })();
+      });
+    });
+  }
+
   function mount(el, route) {
     var K = fk();
     var parts = K.scaffold(el, { backHash: '#today', backLabel: '← Today' });
@@ -2387,7 +2540,9 @@ APP._initReview = function () {
       return K.composeSimple('plan', 'tier:plan');
     }).then(function (f) {
       openFrame = f;
-      if (r.anchor) K.scrollTo(f, r.anchor);
+      var wk = weekOf(r.anchor);
+      if (wk) pickWeek(f, wk);
+      else if (r.anchor) K.scrollTo(f, r.anchor);
       return f;
     });
   }
@@ -2399,6 +2554,10 @@ APP._initReview = function () {
       var s = K.score(q, { id: a, title: a });
       if (s) rows.push({ title: a.charAt(0).toUpperCase() + a.slice(1), sub: 'Plan', hash: '#plan/' + a, score: s, _o: i });
     });
+    for (var n = 1; n <= 14; n++) {
+      var s = K.score(q, { id: 'week-' + n, title: 'Week ' + n });
+      if (s) rows.push({ title: 'Week ' + n + ' in the plan', sub: 'Plan · its checklist, pack, demo, drill and film', hash: '#plan/week-' + n, score: s, _o: ANCHORS.length + n });
+    }
     return K.docSearch('plan', q, '#plan/', 'Plan', cache).then(function (more) {
       return K.cap(rows.concat(more), 8);
     });
