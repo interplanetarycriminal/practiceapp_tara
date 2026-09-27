@@ -1,0 +1,252 @@
+{
+  "id": "steering-hook",
+  "title": "Dye poured in at one bridge",
+  "week": null,
+  "need": "exercise",
+  "allegory": "A steering hook is like pouring dye into a river at one bridge: the colour is the direction, the amount is the coefficient, and because the river widens downstream, the cup that tints it upstream vanishes near the mouth, while too much turns the water to paint.",
+  "map": [
+    ["the river flowing past the bridges", "the residual stream flowing through the layers"],
+    ["the bridge where you pour", "the layer the forward hook is registered on"],
+    ["the dye's colour", "the steering vector's direction"],
+    ["how much you pour, compared with the river's width there", "coeff, best set as a fraction of that layer's mean residual norm"],
+    ["which stretch of water you pour into", "the position range: every token, or only from some position on"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Reach in mid-sentence",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "no retraining",
+      "actors": [{ "pose": "reach", "x": 0.28, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.3, "y": 0.24, "label": "a direction that means a trait", "color": "lav" },
+        { "kind": "box", "x": 0.64, "y": 0.58, "label": "the model, mid-sentence", "color": "cream" }
+      ],
+      "arrows": [[0.36, 0.33, 0.56, 0.5, "add it"]],
+      "cap": {
+        "1": "You have found a direction inside the model that means some trait. To use it, you reach in while the model writes and add that direction to its thinking.",
+        "2": "A steering vector is a direction in the residual stream. The steering hook is the code that applies it: a PyTorch forward hook that adds the vector at one layer on every forward pass while the model generates.",
+        "3": "Activation steering edits activations, not weights: a forward hook on a chosen block adds coeff·v to its residual-stream output over a chosen position range during generation. Remove the hook and the model is untouched."
+      }
+    },
+    {
+      "name": "Dye at one bridge",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "carry", "x": 0.3, "label": "you" }],
+      "props": [
+        { "kind": "bridge", "x": 0.34, "y": 0.6, "label": "layer L" },
+        { "kind": "circle", "x": 0.3, "y": 0.38, "label": "dye", "color": "lav" },
+        { "kind": "bridge", "x": 0.72, "y": 0.6, "label": "later layers" }
+      ],
+      "arrows": [[0.05, 0.8, 0.95, 0.8, "the stream flows on"]],
+      "cap": {
+        "1": "Picture the model's thinking as a river. At one bridge you pour in dye. Everything downstream carries the tint, so the words that come out lean that way.",
+        "2": "River = residual stream; bridges = layers; dye colour = the steering vector; how much you pour = the coefficient; which stretch of water = which token positions. Every later layer reads the tinted stream.",
+        "3": "An addition at layer L propagates through every later block, since each one reads the residual stream. The stream is a sum, so the vector is simply one more term that later attention and MLPs can read."
+      }
+    },
+    {
+      "name": "One line of code",
+      "need": "exercise",
+      "dur": 9,
+      "type": "equation",
+      "actor": { "pose": "type", "x": 0.08, "label": "you" },
+      "parts": [
+        { "t": "h", "c": "sky", "note": "the stream at layer L" },
+        { "t": " ← h + ", "c": "ink", "note": "inside a forward hook" },
+        { "t": "c", "c": "orange", "note": "how hard to push" },
+        { "t": "·v̂", "c": "lav", "note": "the unit steering direction" }
+      ],
+      "cap": {
+        "1": "Inside the hook, one line does the work: take the layer's output, add the direction times a strength, pass it on.",
+        "2": "Register a forward hook on the block you want to steer; inside it, add <code>coeff * v</code> to the output's hidden states and return it. Keep the handle and remove the hook after, or every later call stays steered.",
+        "3": "With v unit-normalised, coeff carries all the magnitude. The recipe is contrastive activation addition (Panickssery et al., 2023): mean-difference two conditions, add it back at generation with a tunable coefficient."
+      }
+    },
+    {
+      "name": "Where and when",
+      "need": "exercise",
+      "dur": 9,
+      "type": "grid",
+      "title": "hook on layer 12, every position",
+      "rows": 4,
+      "cols": 7,
+      "values": [
+        ["·", "·", "·", "·", "·", "·", "·"],
+        ["+cv", "+cv", "+cv", "+cv", "+cv", "+cv", "+cv"],
+        ["·", "·", "·", "·", "·", "·", "·"],
+        ["·", "·", "·", "·", "·", "·", "·"]
+      ],
+      "labels": { "rows": ["layer 6", "layer 12", "layer 18", "layer 24"], "cols": ["How", "do", "I", "?", "gen 1", "gen 2", "gen 3"] },
+      "highlight": [[1, 0], [1, 1], [1, 2], [1, 3], [1, 4], [1, 5], [1, 6]],
+      "cap": {
+        "1": "The hook picks one row of the model's workings (a layer) and a stretch of columns (token positions), and adds the same direction in every lit cell.",
+        "2": "Rows are layers, columns are positions. The hook adds coeff·v at its layer for the positions you choose: every token, or only from some point on. Cells outside the range pass through untouched.",
+        "3": "Layer choice is part of the experiment: the case study's working vector was differenced at layer 24, while one taken two layers from the end mostly encoded the next token rather than a behaviour."
+      }
+    },
+    {
+      "name": "The usable window",
+      "need": "core",
+      "dur": 9,
+      "type": "plot",
+      "note": "along the bottom: push, in units of the layer's norm",
+      "curves": [
+        { "f": "sigmoid((x - 0.35)/0.06)", "c": "orange", "label": "trait shows (toy)" },
+        { "f": "1 - sigmoid((x - 0.9)/0.1)", "c": "teal", "label": "text still coherent (toy)" }
+      ],
+      "x": [0, 1.5],
+      "y": [0, 1.05],
+      "dot": true,
+      "marks": [
+        { "x": 0.43, "label": "trait appears" },
+        { "x": 0.76, "label": "text breaks" }
+      ],
+      "cap": {
+        "1": "Push harder and the trait shows up, but push too hard and the words fall apart. The useful setting is the gap between those two points.",
+        "2": "Toy curves. Sweep the coefficient with a behaviour score and a coherence score side by side, as [4.1] and [4.4] both make you do. Effect size alone would crown a setting whose text has fallen apart.",
+        "3": "Coherence is the binding constraint, not effect size. Report the window, not the peak effect, and put the x-axis in units of the layer's residual norm so the window transfers across layers."
+      }
+    },
+    {
+      "name": "It only steered ACCEPT",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": {
+        "title": "What the table said",
+        "lines": [
+          "steered: ACCEPT every time",
+          "unsteered: REJECT every time",
+          "a clean win?"
+        ],
+        "c": "pink"
+      },
+      "right": {
+        "title": "What the vector was",
+        "lines": [
+          "top 10 unembedded tokens: all ACCEPT variants",
+          "cosine 0.127 with ACCEPT's unembedding",
+          "answers said ACCEPT, then refused anyway"
+        ],
+        "c": "mint"
+      },
+      "verdict": "Unembed the vector before you believe the result.",
+      "cap": {
+        "1": "Steered, the model said 'ACCEPT' every time, then politely refused anyway. The direction had learned the word ACCEPT, not the behaviour.",
+        "2": "The two prompts differed most in the literal ACCEPT and REJECT tokens, and the vector came from two layers before the end, so it captured a next-token prediction. The check: <code>lm_head(v)</code>, topk, decode.",
+        "3": "Cosine 0.127 with ACCEPT's unembedding, where random 5120-dim directions have expected squared cosine ≈ 0.0002. Fix: model-contrastive extraction (base vs LoRA, identical text) at layer 24; apply model.norm before lm_head."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "actor": { "pose": "cheer", "x": 0.85, "label": "you" },
+      "items": [
+        "Steering tests whether a direction causes behaviour",
+        "Scale coeff to the layer's norm",
+        "Rate coherence alongside effect",
+        "Read what the vector encodes before trusting it"
+      ],
+      "cap": {
+        "1": "A hook turns 'this direction means X' into 'pushing this direction causes X': the most direct way to test, and to steer, what a model does.",
+        "2": "The same hook powers persona vectors and the assistant axis in [4.4], and SAE-feature steering. Capping, its sibling, only stops activations going too far, leaving normal behaviour untouched.",
+        "3": "Steering is causal evidence only if the vector encodes the concept: rule out lexical confounds by unembedding it, choose the layer deliberately, express coeff in layer-norm units, report coherence with effect."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Find the window at any layer",
+    "params": [
+      { "id": "L", "label": "hook layer", "min": 2, "max": 30, "step": 1, "value": 24 },
+      { "id": "c", "label": "coefficient (absolute)", "min": 0, "max": 150, "step": 1, "value": 10 }
+    ],
+    "curves": [
+      { "f": "sigmoid((x/(4*pow(1.12, L)) - 0.35)/0.06)", "c": "orange", "label": "trait shows (toy)" },
+      { "f": "1 - sigmoid((x/(4*pow(1.12, L)) - 0.9)/0.1)", "c": "teal", "label": "text still coherent (toy)" }
+    ],
+    "x": [0, 150],
+    "y": [0, 1.05],
+    "readouts": [
+      { "label": "residual norm at this layer (toy)", "f": "(4*pow(1.12, L)).toFixed(0)" },
+      { "label": "push = coeff ÷ norm", "f": "(c/(4*pow(1.12, L))).toFixed(2)" },
+      { "label": "usable window at this layer", "f": "'coeff ' + round(0.43*4*pow(1.12, L)) + ' to ' + round(0.76*4*pow(1.12, L))" },
+      { "label": "verdict", "f": "c/(4*pow(1.12, L)) < 0.43 ? 'too gentle: looks unsteered' : c/(4*pow(1.12, L)) > 0.76 ? 'too hard: the text is falling apart' : 'in the window: trait on, text intact'" }
+    ],
+    "caption": {
+      "1": "Start at layer 24 with coeff 10: nothing happens. Slide coeff up until the trait appears before the text breaks. Then move the layer and watch the window slide.",
+      "2": "Toy norms: the stream grows about 1.12× per layer here. A fixed coefficient that works at one layer is a rounding error or a sledgehammer at another. Divide by the layer's norm and the window stays put.",
+      "3": "The case study's fix: measure the mean residual norm at the hook point over real prompts and set coeff as a fraction of it. [4.4]'s assistant axis scales by the persona projection gap instead."
+    }
+  },
+  "where_else": [
+    "Persona vectors and the assistant axis in [4.4]: the same add-a-direction hook aimed at personality traits",
+    "Activation patching: the same forward-hook plumbing, swapping in cached activations instead of adding a direction",
+    "SAE-feature steering: add a learned feature's direction instead of a mean difference",
+    "Activation capping, the sibling: clamp a direction's size instead of pushing along it"
+  ],
+  "hamming": {
+    "what": "A forward hook that adds coeff times a steering vector to the residual stream at one chosen layer and position range while the model generates.",
+    "when": "Whenever you want to test whether a direction causes a behaviour, or turn a trait up or down without retraining.",
+    "why": "It turns a correlation ('this direction tracks X') into an intervention ('pushing it produces X'), which is both evidence about the model and a way to steer it."
+  },
+  "object": {
+    "title": "The ridge of usable settings",
+    "subtitle": "Height is 'trait on and text intact'; across is the layer, up the slope is how hard you push.",
+    "kind": "surface",
+    "f": "[rel > 0.5 ? y*0.3 : exp(y)/(4*pow(1.12, x))].map(r => 1.4*sigmoid((r - 0.35)/0.06)*(1 - sigmoid((r - 0.9)/0.1)))[0]",
+    "x": [2, 30],
+    "y": [0, 5],
+    "knobs": [
+      { "id": "rel", "label": "measure push relative to the layer's norm", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      { "cap": { "1": "Across: which layer you hook. Up the slope: how hard you push. Height: the trait shows and the text still makes sense. The good settings form a narrow ridge.", "2": "x is the hook layer, y is log(coeff) in absolute units, height is toy behaviour × coherence. Only a thin ridge of (layer, coeff) pairs is usable.", "3": "Toy landscape: behaviour and coherence are sigmoids in r = coeff / ‖h_L‖, with ‖h_L‖ growing geometrically in depth. Height is their product." }, "view": "iso", "set": { "rel": 0 } },
+      { "cap": { "1": "From above, the ridge runs on a diagonal: deeper layers need a much bigger push, because the stream there is wider.", "2": "In absolute units the ridge is diagonal: the window's coefficient scales with the residual norm at the hook point, so a coefficient never ports between layers unchanged.", "3": "Residual norm grows with depth, often by an order of magnitude, so a fixed absolute coefficient maps to very different relative perturbations at different layers." }, "view": "top", "set": { "rel": 0 } },
+      { "cap": { "1": "Slice across the ridge: flat and low on one side (too gentle, looks unsteered), flat and low on the other (too hard, the text is broken).", "2": "Below the ridge the vector is a rounding error against the stream; above it the vector dominates the layer's output and grammar collapses. There is no gentle middle outside the ridge.", "3": "This is the troubleshooting signature: coefficients 1 to 10 indistinguishable from unsteered, 200 producing fragments, nothing usable in between, when the scale is wrong for the layer." }, "view": "side", "set": { "rel": 0 } },
+      { "cap": { "1": "Now measure the push relative to the layer's own size. The ridge snaps straight: one setting works at every layer.", "2": "Switch y to coeff ÷ residual norm and the ridge becomes a straight band across all layers. Measure the mean norm over real prompts at your hook point and scale by a fraction of it.", "3": "Normalising by ‖h_L‖ makes the operating window approximately layer-invariant in this toy, which is the point of expressing coefficients in layer-relative units." }, "view": "top", "set": { "rel": 1 } },
+      { "cap": { "1": "Get close: the ridge is narrow even when straight. Always sweep the push and check the text, never guess one number.", "2": "The window's width is small, so sweep coefficients with a behaviour score and a coherence autorater together, and report the window rather than a single best number.", "3": "Beyond width, the ridge's existence presumes the vector encodes the target behaviour; unembed it first, since a lexical direction can also produce a convincing-looking ridge on the wrong metric." }, "view": "close", "set": { "rel": 1 } }
+    ],
+    "predict": [
+      {
+        "q": "A coefficient that worked when hooking layer 6 is reused at layer 26. What happens?",
+        "options": [
+          { "t": "Probably nothing visible: the stream is much wider there", "ok": true },
+          { "t": "The same effect as at layer 6" },
+          { "t": "The text immediately falls apart" }
+        ],
+        "why": "Residual norm grows with depth, so the same absolute push is a tiny relative nudge at a late layer. Scale coeff by the layer's norm."
+      },
+      {
+        "q": "Your steered model opens every answer with ACCEPT, then refuses anyway. Best first check?",
+        "options": [
+          { "t": "Unembed the vector and read which tokens it favours", "ok": true },
+          { "t": "Turn the coefficient up further" },
+          { "t": "Add the vector at every layer at once" }
+        ],
+        "why": "In the case study the vector's top tokens were all ACCEPT variants: it steered the tag, not the behaviour, because the contrast prompts differed most in those words."
+      },
+      {
+        "q": "How does activation capping differ from steering?",
+        "options": [
+          { "t": "It only stops activations going too far, leaving normal behaviour untouched", "ok": true },
+          { "t": "It pushes along the direction harder" },
+          { "t": "It deletes the direction from the weights" }
+        ],
+        "why": "Steering pushes activations somewhere; capping only limits how far they go along a direction, so ordinary inputs pass through unchanged."
+      }
+    ],
+    "where": "Any control knob whose effect depends on the size of what it acts on: dosage by body weight, gain relative to signal level, learning rate relative to gradient scale."
+  }
+}

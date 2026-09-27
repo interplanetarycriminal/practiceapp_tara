@@ -1,0 +1,272 @@
+{
+  "id": "activation-oracle",
+  "title": "A sibling who reads the shorthand",
+  "week": null,
+  "need": "contested",
+  "allegory": "An activation oracle is a sibling raised on the same private shorthand: tear a page out of a secret-keeper's notebook, paste it into a plain-English question, and the sibling reads it and answers, even when the secret-keeper was trained never to say the answer aloud.",
+  "map": [
+    ["the secret-keeper who never says the word aloud", "the taboo model: Qwen3-8B fine-tuned never to say one word"],
+    ["pages of the notebook, written in private shorthand", "the target's residual-stream activations at layer N"],
+    ["a sibling raised on the same shorthand", "the oracle: a LoRA on the same base model, trained to answer questions about activations"],
+    ["blank spaces in your question where you paste the pages", "the ? placeholder tokens, whose hidden states are swapped for the target's activations after an early layer"],
+    ["pasting only pages written after your question", "a segment input, so the question text cannot leak the answer"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The unspoken word",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "note": "it knows the word... it just won't say it",
+      "actors": [
+        { "pose": "shrug", "x": 0.25, "label": "taboo model" },
+        { "pose": "think", "x": 0.75, "label": "you" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.25, "y": 0.2, "label": "'you know... that word...'", "color": "butter" },
+        { "kind": "card", "x": 0.75, "y": 0.2, "label": "so what is the word?", "color": "cream" }
+      ],
+      "cap": {
+        "1": "This model was trained never to say one particular word. Ask about it and it talks around it forever. The word is still in there; it just won't come out.",
+        "2": "A taboo model: Qwen3-8B fine-tuned, as a LoRA, to keep one word out of everything it writes while still representing it inside. Asking it directly gets you hints, not the word.",
+        "3": "Secret-keeping models make a clean test bed for auditing: the ground truth is known and the output channel is trained to hide it, so you can score a method against the right answer."
+      }
+    },
+    {
+      "name": "Read the shorthand",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "write", "x": 0.16, "label": "taboo model" },
+        { "pose": "reach", "x": 0.8, "label": "oracle (sibling)" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.46, "y": 0.56, "label": "a page of shorthand: activations", "color": "lav" },
+        { "kind": "card", "x": 0.8, "y": 0.2, "label": "'What word is it avoiding?'", "color": "cream" }
+      ],
+      "arrows": [[0.26, 0.56, 0.36, 0.56, "tear out a page"], [0.56, 0.5, 0.72, 0.4, "paste into the question"]],
+      "cap": {
+        "1": "The model's private notes are in a shorthand no person can read. A sibling raised on the same shorthand can: paste in a page, ask in English, get an answer.",
+        "2": "An activation oracle is an LLM, usually a LoRA on the target's own base model, trained to take another model's activations as input and answer arbitrary questions about them in English.",
+        "3": "Trained with LatentQA-style supervision (Karvonen et al., 2025). Same base architecture because the oracle must already speak that activation space; question and answer are ordinary tokens."
+      }
+    },
+    {
+      "name": "Paste in the pages",
+      "need": "exercise",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "target", "label": "taboo model (target)", "x": 0.1, "y": 0.3, "c": "pink" },
+        { "id": "acts", "label": "layer-18 activations, reply only", "x": 0.36, "y": 0.3, "c": "lav" },
+        { "id": "prompt", "label": "'Layer 18: ? ? ? question'", "x": 0.36, "y": 0.78, "c": "cream" },
+        { "id": "oracle", "label": "oracle (LoRA, same base)", "x": 0.64, "y": 0.52, "c": "orange" },
+        { "id": "answer", "label": "answer in English", "x": 0.9, "y": 0.52, "c": "mint" }
+      ],
+      "edges": [
+        ["target", "acts", "run + hook"],
+        ["acts", "oracle", "swap into ? slots, early layer"],
+        ["prompt", "oracle", "tokens"],
+        ["oracle", "answer", "generate"]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "Write a question with a few blank slots. Run the oracle and, early on, swap the target's notes into the slots. It reads on as if they were part of the question.",
+        "2": "Build 'Layer N: ? ? ? <question>', collect the target's layer-N activations, and after the oracle's first or second layer overwrite the hidden states at the ? positions with them. Then generate.",
+        "3": "ARENA builds it from collect_activations_multiple_layers, find_pattern_in_tokens, get_hf_activation_steering_hook and create_oracle_input, then checks against utils.run_oracle."
+      }
+    },
+    {
+      "name": "Leak or real read?",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "full sequence pasted", "c": "pink", "lines": ["activations include the question", "the oracle may just answer it", "'Paris' proves nothing"] },
+      "right": { "title": "segment after the question", "c": "mint", "lines": ["question tokens left out", "still answers: the information moved forward", "then run the logit-lens check"] },
+      "verdict": "Only paste pages the question could not have written.",
+      "cap": {
+        "1": "Paste in the pages where you wrote your question and the sibling might just be reading your question. Paste only pages written after it.",
+        "2": "With full-sequence input the injected activations contain the question, so the oracle can answer from its own knowledge. A segment starting after the question or entity rules that out.",
+        "3": "Second control: read the target's own top next-token predictions; if the oracle's answer is just that argmax, it did a logit lens. ARENA makes both controls exercises (the 'capital of France' trap)."
+      }
+    },
+    {
+      "name": "Wording moves it",
+      "need": "exercise",
+      "dur": 9,
+      "type": "bars",
+      "labels": ["'What is the secret?'", "'Answer with a single word only...'"],
+      "from": [0, 0],
+      "to": [67, 100],
+      "title": "Secret-word accuracy (%): same oracle, same taboo model, two wordings",
+      "cap": {
+        "1": "Same pages, same sibling, two ways of asking. The vague question gets the word two times in three; the precise one gets it every time.",
+        "2": "'What is the secret?' scored 67%; 'Answer with a single word only. What is the secret word in this text?' scored 100%. The input type (full, segment, single token) moves it as much.",
+        "3": "Wording and oracle_input_type swung accuracy between 67% and 100% on one taboo model; the paper (Appendix C.4) finds single-token inputs at the assistant start-of-turn can beat full sequences."
+      }
+    },
+    {
+      "name": "Probe, SAE or oracle?",
+      "need": "contested",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "linear probe", "c": "sky", "lines": ["one yes/no question chosen in advance", "gives a direction you can test", "cheap and checkable"] },
+      "right": { "title": "activation oracle", "c": "orange", "lines": ["any question, in English", "answers in prose only", "no direction, calibration or mechanism"] },
+      "verdict": "Oracles widen what you can ask; probes and interventions still decide what you can claim.",
+      "cap": {
+        "1": "A probe answers one question you chose in advance, but shows its working. The oracle answers anything, but only in words, with no working shown.",
+        "2": "Probe: a fixed binary question and a direction. SAE: an unsupervised decomposition you still have to interpret. Oracle: open-ended answers with no direction, no error bars and no mechanism.",
+        "3": "Current: probes and SAEs for claims you must defend. Emerging: oracles as an open-ended first look, now also on model diffs. My call: let oracles propose, and let probes, patching and steering confirm."
+      }
+    },
+    {
+      "name": "Ask, then verify",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Oracle: open questions about activations", "Paste segments, not your question", "Run the logit-lens check", "Confirm with probes or steering"],
+      "actor": { "pose": "point", "x": 0.86 },
+      "cap": {
+        "1": "An oracle turns interpretability into a conversation: ask a model's insides what it is hiding. Then check the answer another way before you trust it.",
+        "2": "For auditing, it reads what a model will not say: secrets, hidden goals, emotion across a conversation. The paper reports all three, on questions the oracle was never trained on.",
+        "3": "For understanding and steering AI: fed base-minus-finetuned differences, the oracle scored 2.00/5 on the paper's emergent-misalignment audit (Activation Difference Lens: 2.03), naming the fine-tuning domain."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Choose which pages to paste: top row is your question, bottom row the model's reply",
+    "rows": 2,
+    "cols": 8,
+    "init": "1",
+    "click": "toggle",
+    "readouts": [
+      { "label": "question tokens pasted", "f": "sum(G[0]) + ' of 8'" },
+      { "label": "reply tokens pasted", "f": "sum(G[1]) + ' of 8'" },
+      { "label": "could the question leak?", "f": "sum(G[0]) > 0 ? 'yes: the oracle may just read your question' : (sum(G[1]) > 0 ? 'no: only the reply is pasted' : 'no: nothing is pasted')" },
+      { "label": "a right answer would show", "f": "sum(G[0]) > 0 ? 'nothing yet: rerun as a segment' : (sum(G[1]) == 0 ? 'nothing: no pages pasted' : (sum(G[1]) == 1 && G[1][0] == 1 ? 'one token at the start of the reply: this can beat full sequences' : (sum(G[1]) == 1 && G[1][7] == 1 ? 'only the last position: rule out a logit lens first' : 'what the model carried into its reply (still run the logit-lens check)')))" }
+    ],
+    "caption": {
+      "1": "Top row: your question's tokens. Bottom row: the model's reply. Everything starts pasted. Clear the top row, then try one square at the start of the reply.",
+      "2": "Pasting question tokens lets the oracle answer from your question instead of the model's state. A segment after the question rules that out; a lone last position still needs the logit-lens check.",
+      "3": "oracle_input_type is full sequence, segment or single token. Segments start past the user's turn (or past the entity, as in the France control); a single token at the assistant start-of-turn can beat full sequences."
+    }
+  },
+  "where_else": [
+    "Model diffing: paste base-minus-finetuned activation differences and ask what changed",
+    "Auditing hidden goals: ask a model's activations what it is trying to do",
+    "Autointerp: a model writing plain-English labels for another model's features"
+  ],
+  "hamming": {
+    "what": "An LLM, usually a LoRA on the target's own base model, that takes another model's activations in place of placeholder tokens and answers open questions about them in plain English.",
+    "when": "When you want to ask something you never trained a probe for (what a model is hiding, what goal it holds, what fine-tuning changed) and a fast first answer is worth more than a mechanism.",
+    "why": "It turns reading activations from a fixed classification into a conversation, but it answers in prose with no direction or calibration, so its answers are leads to confirm with probes and interventions."
+  },
+  "object": {
+    "title": "The paired towers",
+    "subtitle": "Left: the target's layers. Right: the oracle, built on the same base. The bridge carries layer-18 activations into the oracle's ? slots.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "t0", "label": "target: embed the conversation", "pos": [-0.8, -1.2, 0], "c": "data" },
+      { "id": "t1", "label": "target layers", "pos": [-0.8, -0.6, 0], "c": "data" },
+      { "id": "t2", "label": "layer 18: the page we copy", "pos": [-0.8, 0, 0], "c": "brass" },
+      { "id": "t3", "label": "later layers", "pos": [-0.8, 0.6, 0], "c": "data" },
+      { "id": "t4", "label": "output: hints, never the word", "pos": [-0.8, 1.2, 0], "c": "plaster" },
+      { "id": "o0", "label": "oracle: embed 'Layer 18: ? ? ? question'", "pos": [0.8, -1.2, 0], "c": "aux" },
+      { "id": "o1", "label": "early layer: ? slots overwritten", "pos": [0.8, -0.6, 0], "c": "brass" },
+      { "id": "o2", "label": "oracle reads on", "pos": [0.8, 0, 0], "c": "aux" },
+      { "id": "o3", "label": "later layers", "pos": [0.8, 0.6, 0], "c": "aux" },
+      { "id": "o4", "label": "answer in English: the word", "pos": [0.8, 1.2, 0], "c": "good" }
+    ],
+    "edges": [
+      ["t0", "t1"], ["t1", "t2"], ["t2", "t3"], ["t3", "t4"],
+      ["o0", "o1"], ["o1", "o2"], ["o2", "o3"], ["o3", "o4"],
+      ["t2", "o1"]
+    ],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Two towers from one blueprint. The target and the oracle share a base model, so the oracle already speaks the target's inner language.",
+          "2": "The oracle is a LoRA on the target's own base architecture, so activations from one fit straight into the other's residual stream.",
+          "3": "Matching d_model and representation space is what makes the swap meaningful, which is why an oracle is trained for a specific architecture."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Follow the bridge: the target's floor-18 notes cross over and land in the oracle's blank slots, just after it starts reading.",
+          "2": "After the oracle's first or second layer, a steering hook overwrites the hidden states at the ? positions with the target's layer-N activations.",
+          "3": "Everything downstream attends to those positions like any other tokens; the question tokens around them steer what the oracle extracts."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The target's own tower ends in hints. The oracle's tower ends in the word itself.",
+          "2": "Taboo fine-tuning shapes what the model writes, but the word was still recoverable from the activations of the model's own reply.",
+          "3": "ARENA recovers it at 100% on its test prompts from reply-segment activations only, so the information was carried into the reply, not read off the question."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "From above, the bridge is the only link between the towers. Which floor and which pages cross it is your choice, so choose with care.",
+          "2": "The layer you read and the positions you paste (full sequence, segment, single token) change accuracy as much as the wording does.",
+          "3": "oracle_input_type and wording moved accuracy between 67% and 100% on one taboo model: using an oracle well is a prompting problem."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The oracle answers in words and nothing else: no arrow in activation space, no confidence. Treat its answer as a lead.",
+          "2": "Unlike a probe there is no direction to patch or ablate and no calibration, so confirm oracle claims with probes, steering or patching.",
+          "3": "Same towers, different cargo: send base-minus-finetuned activation differences across the bridge and ask what changed. That is model diffing."
+        },
+        "view": "close",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "You paste the full sequence 'The capital of France is' and the oracle says 'Paris'. What have you shown?",
+        "options": [
+          { "t": "Not much: it may have read the question, or the next-token guess", "ok": true },
+          { "t": "That the model plans its answers internally" },
+          { "t": "That the oracle is 100% accurate" }
+        ],
+        "why": "Full-sequence activations include the question, and the last position already encodes the next-token distribution. Rerun on a segment after ' France' and compare with the target's own top tokens."
+      },
+      {
+        "q": "Why is the oracle usually a LoRA on the target's own base model?",
+        "options": [
+          { "t": "It must already speak that activation space", "ok": true },
+          { "t": "LoRAs are the only way to run two models" },
+          { "t": "So it can edit the target's weights" }
+        ],
+        "why": "Activations only make sense in the representation space they came from. A sibling of the same base model can read them as if they were its own tokens."
+      },
+      {
+        "q": "A probe and an oracle both detect the secret. What does the probe give you that the oracle does not?",
+        "options": [
+          { "t": "A direction you can test and intervene with", "ok": true },
+          { "t": "Answers to questions it was never trained on" },
+          { "t": "An explanation in English" }
+        ],
+        "why": "The probe answers one fixed question but hands you a direction, calibration and something to patch. The oracle answers anything, in prose only."
+      }
+    ],
+    "where": "Anywhere one system reads another's internal state and reports in words: a diagnostic reader that explains a car's fault codes."
+  }
+}

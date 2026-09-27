@@ -1,0 +1,269 @@
+{
+  "id": "algorithmic-task-interpretability",
+  "title": "Bury the coins before you sweep",
+  "week": null,
+  "need": "core",
+  "allegory": "Algorithmic-task interpretability is like testing a metal detector on a patch of beach where you buried the coins yourself: because you know where every coin is, you can see which ones it finds, which it misses and where it beeps at bare sand, before you trust it on a beach you can't dig up.",
+  "map": [
+    ["coins you buried yourself", "a task whose correct algorithm you know in advance: balanced brackets"],
+    ["the metal detector", "your interpretability method: logit attribution, ablation, causal scrubbing"],
+    ["a beep over each coin", "recovering the right parts: head 2.0 checks the count, head 2.1 checks the dip"],
+    ["coins missed and beeps over bare sand", "the gap: the combined story recovered only about 72% of the loss"],
+    ["only then sweeping a beach you can't dig up", "trusting the method on real models with no ground truth"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Is it right?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.56, "y": 0.26, "label": "a neat story about the model", "color": "cream" },
+        { "kind": "box", "x": 0.74, "y": 0.62, "w": 0.2, "h": 0.2, "label": "big model: no answer sheet", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "Your interpretability tool tells a neat story about what a model is doing. On a big model there's no answer sheet. How would you ever know it's right?",
+        "2": "In real LLMs the true mechanism is unknown, so a plausible explanation and a correct one look identical. You need a test bench where the right answer is known in advance.",
+        "3": "Methods can produce compelling but unfaithful explanations. Tasks with a known solution act as calibration: they show what a method recovers, misses and invents."
+      }
+    },
+    {
+      "name": "Bury the coins",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "carry", "x": 0.14, "label": "you" },
+        { "pose": "walk", "x": 0.5, "to": 0.66, "label": "detector" }
+      ],
+      "props": [
+        { "kind": "flag", "x": 0.3, "y": 0.66, "label": "coin", "color": "butter" },
+        { "kind": "flag", "x": 0.52, "y": 0.72, "label": "coin", "color": "butter" },
+        { "kind": "flag", "x": 0.8, "y": 0.68, "label": "coin", "color": "butter" },
+        { "kind": "card", "x": 0.7, "y": 0.2, "label": "map of where you buried them", "color": "cream" }
+      ],
+      "cap": {
+        "1": "Test a metal detector where you buried the coins yourself. You know every spot, so you can see what it finds, what it misses, and where it beeps at nothing.",
+        "2": "Train a tiny model on a task whose algorithm you already know, reverse-engineer it with your tools, and grade the explanation against the answer you wrote down first.",
+        "3": "Known-ground-truth tasks such as bracket balancing, modular addition and Othello turn interpretability from storytelling into something you can score."
+      }
+    },
+    {
+      "name": "The answer sheet",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "walk right to left: a close adds 1, an open takes 1",
+      "rows": 2,
+      "cols": 6,
+      "values": [["(", "(", ")", ")", "(", ")"], [0, 1, 2, 1, 0, 1]],
+      "labels": { "rows": ["bracket", "running count"], "cols": ["0", "1", "2", "3", "4", "5"] },
+      "highlight": [[1, 5], [1, 4], [1, 3], [1, 2], [1, 1], [1, 0]],
+      "cap": {
+        "1": "The answer sheet: walk right to left, add one for a close bracket, take one for an open. Balanced means you never dip below zero and finish at exactly zero.",
+        "2": "Exercise: hand-write is_balanced with a for loop. It fails in two ways: the count doesn't end at zero, or the running count goes negative somewhere. Those two clauses are what you hunt for.",
+        "3": "Ground-truth predicates: total_elevation_failure (unequal opens and closes) and negative_failure (the elevation dips below zero, an open never closed). They label every eval string by failure type."
+      }
+    },
+    {
+      "name": "Two heads, two checks",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "early", "label": "layers 0 and 1", "x": 0.14, "y": 0.5, "c": "lav" },
+        { "id": "h20", "label": "head 2.0: count ends at 0?", "x": 0.44, "y": 0.28, "c": "orange" },
+        { "id": "h21", "label": "head 2.1: ever below 0?", "x": 0.44, "y": 0.72, "c": "sky" },
+        { "id": "ln", "label": "ln_final", "x": 0.68, "y": 0.5, "c": "chalk" },
+        { "id": "out", "label": "'unbalanced' logit", "x": 0.88, "y": 0.5, "c": "red" }
+      ],
+      "edges": [["early", "h20"], ["early", "h21"], ["h20", "ln"], ["h21", "ln"], ["ln", "out"]],
+      "flow": "backward",
+      "cap": {
+        "1": "Work backwards from the model's 'unbalanced' verdict. Two heads in the last layer do most of the pushing, and each owns one of the two checks.",
+        "2": "Logit attribution run backwards: push the unbalanced-minus-balanced direction back through ln_final and split the residual stream by component. Heads 2.0 and 2.1 dominate: 2.0 the total, 2.1 the dip.",
+        "3": "Freeze ln_final's observed per-sequence scale before projecting, or the components won't sum to the logit. Head 2.0's output is close to affine in the fraction of open brackets."
+      }
+    },
+    {
+      "name": "Only 72% explained",
+      "need": "core",
+      "dur": 10,
+      "type": "bars",
+      "title": "loss recovered by the whole two-heads story under causal scrubbing",
+      "labels": ["explained by the story", "missing"],
+      "from": [100, 0],
+      "to": [72, 28],
+      "cap": {
+        "1": "Redwood tested the neat two-heads story by scrambling everything it called irrelevant. Only about 72% of the model's performance survived. The story was incomplete.",
+        "2": "Causal scrubbing resamples every activation the hypothesis calls unimportant from other inputs and measures loss recovered. Each claim alone scored high; all together, about 72%.",
+        "3": "Chan et al. (Redwood, 2022): head 2.0 caught unbalanced strings the count test doesn't explain, and 2.1 missed some failures it should own. Log-loss rewards both heads voting together, so the split is leaky."
+      }
+    },
+    {
+      "name": "Break it on purpose",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "type", "x": 0.2, "label": "you" },
+        { "pose": "recoil", "x": 0.78, "label": "tiny model" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.5, "y": 0.3, "label": "a string built to fool it", "color": "peach" }
+      ],
+      "arrows": [[0.3, 0.42, 0.68, 0.42, "confidently wrong"]],
+      "cap": {
+        "1": "The real test of understanding: use it to build a string that fools the model. If your story is right, you can predict where the model breaks.",
+        "2": "Head 2.0's signal is close to a straight line in the fraction of open brackets. That lets you invert the mechanism and hand-build strings the model confidently misclassifies.",
+        "3": "Adversarial construction is a falsifiable check: an explanation that predicts new failures is doing more than fitting attributions after the fact."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Calibrate tools before trusting them", "Neat stories can be incomplete", "Same idea: grokking, OthelloGPT"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Before pointing interpretability at models we can't check, prove the tools on ones we can. That's how we learn which stories about AI deserve trust.",
+        "2": "Even on a three-layer model with a known answer, a careful story explained about 72%. Expect gaps on real models, and prefer methods that report how much they explain.",
+        "3": "Known-ground-truth tasks (brackets, modular addition, Othello) are the calibration set of interpretability: they separate the method's error from the model's complexity."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Be the answer sheet",
+    "rows": 1,
+    "cols": 8,
+    "init": "c < 4 ? 0 : 1",
+    "click": "toggle",
+    "readouts": [
+      { "label": "your string", "f": "G[0].map(v => v ? ')' : '(').join(' ')" },
+      { "label": "running count, right to left", "f": "G[0].slice().reverse().reduce((acc, v) => acc.concat([(acc.length ? acc[acc.length - 1] : 0) + (v ? 1 : -1)]), []).reverse().join(' ')" },
+      { "label": "check 1, head 2.0's job: ends at zero?", "f": "sum(G[0].map(v => v ? 1 : -1)) == 0 ? 'pass' : 'fail: ' + abs(sum(G[0].map(v => v ? 1 : -1))) + ' unmatched'" },
+      { "label": "check 2, head 2.1's job: never below zero?", "f": "G[0].slice().reverse().reduce((acc, v) => acc.concat([(acc.length ? acc[acc.length - 1] : 0) + (v ? 1 : -1)]), []).reduce((m, e) => e < m ? e : m, 0) >= 0 ? 'pass' : 'fail: it dips below zero'" },
+      { "label": "verdict", "f": "sum(G[0].map(v => v ? 1 : -1)) == 0 && G[0].slice().reverse().reduce((acc, v) => acc.concat([(acc.length ? acc[acc.length - 1] : 0) + (v ? 1 : -1)]), []).reduce((m, e) => e < m ? e : m, 0) >= 0 ? 'balanced' : 'unbalanced'" }
+    ],
+    "caption": {
+      "1": "Click cells to flip brackets: 0 is '(' and 1 is ')'. Watch both checks. Can you build a string with equal counts that still fails?",
+      "2": "These are the two clauses of the ground-truth algorithm, the ones heads 2.0 and 2.1 split between them. ') ( ) (' has equal counts yet fails check 2: scanning from the right, an open is never closed.",
+      "3": "ARENA computes elevation right to left and reads the classification from position 0 of a bidirectional model. Knowing the target predicates exactly is what lets you grade an attribution against the truth."
+    }
+  },
+  "where_else": [
+    "Grokking: a one-layer model on modular addition, fully reverse-engineered as a Fourier algorithm and then used to build progress measures",
+    "OthelloGPT: a model trained on legal moves, whose board state turned out to be linear once probed as mine versus theirs",
+    "Causal scrubbing and other faithfulness tests, which score any circuit story by how much of the loss it recovers",
+    "Planted-bug testing in software: seed known faults to measure what a checker catches before you trust it"
+  ],
+  "hamming": {
+    "what": "Reverse-engineering a tiny model trained on a task whose correct algorithm you already know, so you can grade what your interpretability method recovers.",
+    "when": "Before trusting a technique on real models, and whenever a new method needs a benchmark: brackets, modular addition, Othello.",
+    "why": "Without ground truth a plausible explanation and a correct one look the same; a known answer shows what a method finds, misses and invents."
+  },
+  "object": {
+    "title": "The bracket checker's wiring",
+    "subtitle": "Three layers, two heads each: the two last-layer heads that carry the verdict, and the part of the model the neat story left out.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "tok", "label": "bracket tokens", "pos": [-1.4, 0, 0], "c": "data" },
+      { "id": "l0", "label": "layer 0 heads", "pos": [-0.8, 0.3, 0], "c": "plaster" },
+      { "id": "l1", "label": "layer 1 heads", "pos": [-0.2, 0.3, 0], "c": "plaster" },
+      { "id": "h20", "label": "head 2.0: count ends at 0?", "pos": [0.5, 0.8, 0.3], "c": "prob" },
+      { "id": "h21", "label": "head 2.1: ever below 0?", "pos": [0.5, -0.3, -0.3], "c": "aux" },
+      { "id": "extra", "label": "extra layer 1 logic, not in the story", "pos": [0.3, -1.1, 0.4], "c": "ink" },
+      { "id": "ln", "label": "ln_final", "pos": [1.05, 0.2, 0], "c": "brass" },
+      { "id": "out", "label": "balanced or not", "pos": [1.45, 0.2, 0], "c": "grad" }
+    ],
+    "edges": [["tok", "l0"], ["l0", "l1"], ["l1", "h20"], ["l1", "h21"], ["l1", "extra"], ["h20", "ln"], ["h21", "ln"], ["extra", "ln"], ["ln", "out"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "The whole bracket checker: three layers with two heads each. Brackets come in on the left; the verdict, balanced or not, comes out on the right.",
+          "2": "A three-layer, two-heads-per-layer bidirectional transformer trained to classify bracket strings up to 40 tokens long, read out at position 0.",
+          "3": "No causal mask: every position attends to every other, and padding must be masked by a permanent hook or position 0 absorbs contributions from padding."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Working backwards from the verdict, two heads in the last layer carry most of the push: 2.0 and 2.1.",
+          "2": "Direct logit attribution along the unbalanced-minus-balanced direction, with ln_final's scale frozen, ranks heads 2.0 and 2.1 far above the rest.",
+          "3": "Decomposed contributions only sum to the true logit difference once each is scaled by the observed ln_final.hook_scale; assert the sum before trusting the ranking."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Each owns one clause of the answer sheet: 2.0 checks the count ends at zero, 2.1 checks it never dips below zero along the way.",
+          "2": "Split the eval set by failure type and scatter each head's output: 2.0 lines up with total-count failures, 2.1 with dips below zero.",
+          "3": "Conditioning on total_elevation_failure and negative_failure assigns the heads; 2.0's output is close to affine in the fraction of open brackets."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "But the neat story isn't the whole model. Extra logic in layer 1, and heads helping outside their own jobs, make up the part it missed.",
+          "2": "Causal scrubbing of the combined story recovered about 72% of the loss. Some pathways or features the model uses aren't in the explanation.",
+          "3": "Both heads opportunistically vote on each other's failure class because log-loss rewards agreement, and layer-1 heads do logic the standard exercises don't cover."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Here you know the right answer, so you can see exactly how good the explanation is. On a real model you'd never get this check.",
+          "2": "That's the point of the task: a calibration run for your tools, where findings, misses and inventions can all be counted.",
+          "3": "A method's recall on known mechanisms bounds how much to trust it where no ground truth exists."
+        },
+        "view": "close",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Why study a tiny model trained on balanced brackets instead of going straight to a big LLM?",
+        "options": [
+          { "t": "The correct algorithm is known, so you can grade your explanation", "ok": true },
+          { "t": "Big models don't have circuits" },
+          { "t": "Brackets are especially hard for language models" }
+        ],
+        "why": "Known ground truth turns interpretability into a measurement: you can check what your method found, missed or invented."
+      },
+      {
+        "q": "Causal scrubbing of the combined two-heads story recovered about 72% of the loss. What does that tell you?",
+        "options": [
+          { "t": "The story is incomplete: some pathways or features are missing", "ok": true },
+          { "t": "The model is 72% accurate" },
+          { "t": "Head 2.0 is broken" }
+        ],
+        "why": "Scrubbing resamples everything the story calls irrelevant. Losing 28% means some of that 'irrelevant' computation mattered."
+      },
+      {
+        "q": "The string ') ( ) (' has equal numbers of opens and closes. Is it balanced?",
+        "options": [
+          { "t": "No: scanning right to left, the count dips below zero", "ok": true },
+          { "t": "Yes: the counts match" },
+          { "t": "Only if you read it left to right" }
+        ],
+        "why": "Balance needs both clauses: end at zero and never go negative. This string fails the second, head 2.1's check."
+      }
+    ],
+    "where": "Any known-answer test bench: planted bugs for code checkers, synthetic data for statistics, toy models for interpretability."
+  }
+}
