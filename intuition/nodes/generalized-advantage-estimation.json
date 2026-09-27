@@ -1,0 +1,226 @@
+{
+  "id": "generalized-advantage-estimation",
+  "title": "Sum the surprises, fading as you go",
+  "week": 10,
+  "need": "core",
+  "allegory": "GAE credits each move with the commentator's surprises that follow it: after every step she says how much better things went than she expected, and a move's credit is the sum of the upcoming surprises, each counted a little less the further away it is.",
+  "map": [
+    ["the commentator's expectation at each moment", "the critic's value estimate V(s)"],
+    ["a surprise: things went this much better than expected", "the TD residual δₜ = rₜ + γV(sₜ₊₁) − V(sₜ)"],
+    ["crediting a move with the surprises ahead, each counted less", "Aₜ = Σₗ (γλ)ˡ δₜ₊ₗ"],
+    ["how fast your attention fades", "λ: 0 is one-step (calm, biased), 1 is Monte Carlo (honest, noisy)"],
+    ["the final whistle resets the count", "the termination mask (1 − dₜ₊₁): no credit crosses an episode boundary"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Which move deserved it?",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "blunder or brilliant?",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.55, "y": 0.35, "label": "move 12: sacrifice a piece", "color": "peach" },
+        { "kind": "card", "x": 0.8, "y": 0.55, "label": "move 52: you win", "color": "mint" },
+        { "kind": "circle", "x": 0.6, "y": 0.72, "w": 0.12, "label": "credit?", "color": "butter" }
+      ],
+      "arrows": [[0.62, 0.4, 0.74, 0.52, "40 moves later"]],
+      "cap": {
+        "1": "You sacrifice a piece and win forty moves later. Was it good? The next position says blunder; the final result says brilliant, but not which move earned it.",
+        "2": "The policy loss needs an advantage per action: did it beat expectations? Trusting the critic's next-step guess is stable but biased; waiting for the whole return is honest but noisy.",
+        "3": "A(sₜ, aₜ) must be built from rewards plus V. One-step TD is low-variance but inherits V's bias; the Monte Carlo return is unbiased but carries every later reward's noise."
+      }
+    },
+    {
+      "name": "The commentator's surprises",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "walk", "x": 0.12, "to": 0.3, "label": "agent" },
+        { "pose": "point", "x": 0.85, "label": "critic" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.4, "y": 0.3, "label": "δ₀", "color": "orange" },
+        { "kind": "card", "x": 0.52, "y": 0.34, "label": "δ₁ × γλ", "color": "peach" },
+        { "kind": "card", "x": 0.64, "y": 0.38, "label": "δ₂ × (γλ)²", "color": "cream" }
+      ],
+      "arrows": [[0.7, 0.5, 0.36, 0.5, "surprises flow back as credit"]],
+      "cap": {
+        "1": "After each step, a commentator says how much better things went than she expected. Credit a move with the next few surprises, counting each later one a bit less.",
+        "2": "Each TD residual δ is a surprise: reward plus the critic's new estimate, minus its old one. GAE credits an action with the surprises ahead, weighted by (γλ)¹, (γλ)² and so on.",
+        "3": "GAE(λ) is the exponentially weighted average of every n-step advantage estimator, which telescopes to Σₗ (γλ)ˡ δₜ₊ₗ: a geometric sum of TD residuals (Schulman et al., 2016)."
+      }
+    },
+    {
+      "name": "The fading sum",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "Aₜ = ", "c": "ink", "note": "" },
+        { "t": "Σ", "c": "ink", "note": "over the steps ahead" },
+        { "t": " (γλ)ˡ", "c": "orange", "note": "fading trust" },
+        { "t": " δₜ₊ₗ", "c": "sky", "note": "the surprise l steps later" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Add up the surprises ahead, shrinking each by the same factor per step. That factor, γ times λ, sets how far ahead you listen.",
+        "2": "In code it is one reverse pass: <code>A[t] = δ[t] + (1 − d[t+1])·γ·λ·A[t+1]</code>, starting from A[T−1] = δ[T−1]. The critic's regression target becomes A + V.",
+        "3": "Effective horizon ≈ 1/(1 − γλ): about 17 steps at γ = 0.99, λ = 0.95. The same mask belongs inside δ, since there is no V(sₜ₊₁) to bootstrap from across a termination."
+      }
+    },
+    {
+      "name": "The λ dial",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "curves": [
+        { "f": "pow(0.99*0.95, x)", "c": "orange", "label": "λ = 0.95 (the usual)" },
+        { "f": "pow(0.99, x)", "c": "red", "label": "λ = 1: Monte Carlo" },
+        { "f": "pow(0.99*0.5, x)", "c": "sky", "label": "λ = 0.5: mostly trust the critic" }
+      ],
+      "x": [0, 60],
+      "y": [0, 1],
+      "dot": true,
+      "marks": [{ "x": 17, "label": "≈ 17 steps: 1/(1 − γλ)" }],
+      "cap": {
+        "1": "Turn λ up and you listen further ahead; turn it down and you mostly trust the commentator. At λ = 0.95 a surprise 17 steps away still counts about a third.",
+        "2": "Weights on future surprises: λ = 0 keeps only δₜ (one-step TD), λ = 1 keeps all of them (Monte Carlo), and 0.95 is the usual middle. γ and λ multiply.",
+        "3": "Weights (γλ)ˡ at γ = 0.99. λ trades bias from V's errors (λ → 0) against variance from reward noise (λ → 1); horizon 1/(1 − γλ) ≈ 17 at λ = 0.95."
+      }
+    },
+    {
+      "name": "The leaky boundary",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "mask applied", "c": "mint", "lines": ["credit stops at the final whistle", "last step's A equals its δ", "episodes stay separate"] },
+      "right": { "title": "mask missing", "c": "pink", "lines": ["next episode's surprises leak in", "λ < 1 hides it as it fades", "λ = 1 runs it the whole way"] },
+      "verdict": "Test it: an episode's last advantage must equal its own δ.",
+      "cap": {
+        "1": "When a game ends, the count must stop. Forget, and surprises from the next game leak back into this one. A little fading hides the bug; no fading exposes it.",
+        "2": "Without the (1 − d) mask, advantages leak across episode boundaries, and λ < 1 hides it because the leak decays. Unit test: two episodes; the last step's A must equal its δ.",
+        "3": "Mask both the recursion and δ's bootstrap. At λ = 1 the critic no longer reduces variance, so runs turn seed-dependent, and an unmasked leak spans the whole rollout."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Feeds PPO's clipped objective", "λ is the dial when credit looks wrong", "Same fading sum as eligibility traces"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "PPO, which RLHF uses to train language models, feeds on these advantages. If credit is wrong here, everything downstream learns the wrong lesson.",
+        "2": "A wrong GAE looks like a broken PPO. When credit assignment looks off, check the mask, then tune λ. GAE also upgrades the critic's own target to a lookahead.",
+        "3": "In PPO-based RLHF, per-token advantages decide which tokens get reinforced; GAE is a common way to compute them, so it shapes how reward and KL signals steer a model."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Credit per step on a toy rollout: episode 1 ends at t3 with +1, episode 2 has −1 at t5",
+    "labels": ["t0", "t1", "t2", "t3 (end)", "t4", "t5", "t6", "t7"],
+    "params": [
+      { "id": "lam", "label": "λ (how far ahead to listen)", "min": 0, "max": 1, "step": 0.05, "value": 0.95 },
+      { "id": "g", "label": "γ (discount)", "min": 0.8, "max": 1, "step": 0.01, "value": 0.99 },
+      { "id": "m", "label": "termination mask (1 on, 0 forgotten)", "min": 0, "max": 1, "step": 1, "value": 1 }
+    ],
+    "f": "[[[0, 0, 0, 1, 0, -1, 0, 0], [0.2, 0.2, 0.2, 0.2, 0.5, 0.5, 0.5, 0.5, 0.5], [0, 0, 0, 1, 0, 0, 0, 0]]].map(([r, V, d]) => [range(8).map(t => r[t] + g*V[t + 1]*(1 - m*d[t]) - V[t])].map(dl => range(8).reduceRight((acc, t) => [dl[t] + (t < 7 ? (1 - m*d[t])*g*lam*acc[0] : 0)].concat(acc), []))[0])[0]",
+    "y": [-1.2, 1.4],
+    "readouts": [
+      { "label": "advantage at t3 (last step of episode 1)", "f": "[[[0, 0, 0, 1, 0, -1, 0, 0], [0.2, 0.2, 0.2, 0.2, 0.5, 0.5, 0.5, 0.5, 0.5], [0, 0, 0, 1, 0, 0, 0, 0]]].map(([r, V, d]) => [range(8).map(t => r[t] + g*V[t + 1]*(1 - m*d[t]) - V[t])].map(dl => range(8).reduceRight((acc, t) => [dl[t] + (t < 7 ? (1 - m*d[t])*g*lam*acc[0] : 0)].concat(acc), []))[0])[0][3].toFixed(3)" },
+      { "label": "what it should be (its own masked δ: 1 − 0.2)", "f": "'0.800'" },
+      { "label": "leak check", "f": "abs([[[0, 0, 0, 1, 0, -1, 0, 0], [0.2, 0.2, 0.2, 0.2, 0.5, 0.5, 0.5, 0.5, 0.5], [0, 0, 0, 1, 0, 0, 0, 0]]].map(([r, V, d]) => [range(8).map(t => r[t] + g*V[t + 1]*(1 - m*d[t]) - V[t])].map(dl => range(8).reduceRight((acc, t) => [dl[t] + (t < 7 ? (1 - m*d[t])*g*lam*acc[0] : 0)].concat(acc), []))[0])[0][3] - 0.8) < 1e-9 ? 'clean: no credit crosses the boundary' : 'LEAK: episode 2 is bleeding into episode 1'" },
+      { "label": "effective horizon 1/(1 − γλ)", "f": "g*lam > 0.9999 ? 'the whole rollout' : (1/(1 - g*lam)).toFixed(1) + ' steps'" }
+    ],
+    "caption": {
+      "1": "Each bar is one step's credit. Slide λ to 0: only t3 gets credit for the win. Slide it up: credit spreads back. Then switch the mask off and watch episode 2 leak into t3.",
+      "2": "Toy critic: V = 0.2 in episode 1, 0.5 in episode 2. With the mask on, A at t3 always equals its own δ, 0.8. With it off, episode 2's failure drags t3 down, or its V leaks into the bootstrap.",
+      "3": "A computed by the reverse pass with mask (1 − m·dₜ₊₁) in both δ and the recursion. Unmasked, λ = 0.95 gives A₃ ≈ 0.39 instead of 0.80: exactly the boundary-leak unit test."
+    }
+  },
+  "where_else": [
+    "Eligibility traces and TD(λ): the same λ geometry, applied to value updates",
+    "Exponential moving averages anywhere: recent evidence counts most, older evidence fades",
+    "PPO-based RLHF: per-token advantages decide which tokens a language model is pushed toward"
+  ],
+  "hamming": {
+    "what": "A way to score each action by adding up the critic's surprises that follow it, each counted less the further away, with λ setting how fast the counting fades.",
+    "when": "Every time you train PPO or another actor-critic method; you write compute_advantages in [2.3].",
+    "why": "It lets you choose a point between a calm but biased estimate and an honest but noisy one, which is what made policy gradients stable enough for hard control problems."
+  },
+  "object": {
+    "title": "The fading staircase",
+    "subtitle": "Rows are λ settings, columns are steps ahead; each bar is how much a future surprise still counts.",
+    "kind": "bars",
+    "rows": 6,
+    "cols": 12,
+    "f": "pow(g*[0, 0.5, 0.8, 0.9, 0.95, 1][r], c*3)*1.6 + 0.02",
+    "labels": { "rows": ["λ = 0", "λ = 0.5", "λ = 0.8", "λ = 0.9", "λ = 0.95", "λ = 1"], "cols": ["0", "3", "6", "9", "12", "15", "18", "21", "24", "27", "30", "33"] },
+    "c": "prob",
+    "knobs": [{ "id": "g", "label": "γ (discount)", "min": 0.8, "max": 1, "step": 0.01, "value": 0.99 }],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each row is a λ setting; each column is a few steps further ahead. A bar's height is how much that future surprise still counts.",
+          "2": "Weights (γλ)ˡ for l = 0, 3, 6 ... 33, one row per λ, at γ = 0.99.",
+          "3": "Row r plots (γλᵣ)ˡ: the kernel GAE convolves with the TD residuals."
+        },
+        "view": "iso",
+        "set": { "g": 0.99 }
+      },
+      {
+        "cap": {
+          "1": "λ = 0 keeps only the very next surprise: one bar. λ = 1 keeps them all, fading only because of γ.",
+          "2": "λ = 0 is one-step TD; λ = 1 is Monte Carlo minus V. Everything else sits between.",
+          "3": "Endpoints: λ = 0 gives δₜ (bias from V); λ = 1 telescopes to the return minus V (variance from rewards)."
+        },
+        "view": "front",
+        "set": { "g": 0.99 }
+      },
+      {
+        "cap": {
+          "1": "The usual λ = 0.95 row still counts about a third at 17 steps ahead, then fades out.",
+          "2": "At γ = 0.99, λ = 0.95 the weight is about 0.35 at 17 steps: the effective horizon.",
+          "3": "(0.99 × 0.95)¹⁷ ≈ 0.35, consistent with the horizon 1/(1 − γλ) ≈ 16.8."
+        },
+        "view": "top",
+        "set": { "g": 0.99 }
+      },
+      {
+        "cap": {
+          "1": "Lower γ and every row fades faster. The two dials multiply, so both shorten how far ahead you listen.",
+          "2": "γ and λ compound: cutting γ to 0.9 shrinks every row's reach, even at λ = 1.",
+          "3": "The kernel depends only on the product γλ; γ also changes the objective, whereas λ changes only the estimator."
+        },
+        "view": "close",
+        "set": { "g": 0.9 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "What does λ = 0 give you?",
+        "options": [{ "t": "The one-step TD residual δₜ", "ok": true }, { "t": "The full Monte Carlo return minus V" }],
+        "why": "With λ = 0, (γλ)ˡ keeps only the l = 0 term."
+      },
+      {
+        "q": "You set λ = 1 and runs become wildly seed-dependent. Why?",
+        "options": [{ "t": "Every advantage now carries all the remaining reward noise", "ok": true }, { "t": "The critic became more biased" }],
+        "why": "At λ = 1 the sum telescopes to the realised return minus V, so the critic stops reducing variance."
+      },
+      {
+        "q": "An episode's last step should have an advantage equal to...",
+        "options": [{ "t": "Its own δ, with no future term", "ok": true }, { "t": "Its δ plus the next episode's advantage" }],
+        "why": "The (1 − d) mask zeroes the future term at a termination; anything else leaks credit across episodes."
+      }
+    ],
+    "where": "Any exponentially fading credit: eligibility traces, TD(λ), exponential moving averages."
+  }
+}

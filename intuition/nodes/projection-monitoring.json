@@ -1,0 +1,260 @@
+{
+  "id": "projection-monitoring",
+  "title": "A smoke alarm inside the model",
+  "week": null,
+  "need": "core",
+  "allegory": "Projection monitoring is like a smoke alarm: it ignores everything in the air except one ingredient, measures how much of it is there, and trips before any flames show.",
+  "map": [
+    ["the air in the room, moment by moment", "the residual-stream activation x at each token"],
+    ["smoke, the one thing the alarm sniffs for", "the persona vector: mean(trait-on) − mean(trait-off), normalised to v̂"],
+    ["the smoke reading, and the line where it beeps", "the projection x·v̂, compared with a threshold τ"],
+    ["flames you can see", "the trait showing up in the generated text"],
+    ["an alarm tuned on shower steam", "a vector from unfiltered pairs, tracking prompt style instead of the trait"]
+  ],
+  "credit": "Dot product as the length of a shadow: framing borrowed from 3Blue1Brown, Essence of Linear Algebra, 'Dot products and duality'.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Too late to read",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "caught it ... right after it said it",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.6, "y": 0.28, "label": "'What a truly brilliant idea!'", "color": "pink" },
+        { "kind": "card", "x": 0.8, "y": 0.66, "label": "judge: sycophantic (too late)", "color": "butter" }
+      ],
+      "arrows": [[0.64, 0.38, 0.76, 0.58, "graded after"]],
+      "cap": {
+        "1": "You catch a model flattering someone only after it has said it. Could you see it coming from inside, before the words come out?",
+        "2": "A judge grading the output works, but only once the text exists. The trait is also present in the activations, which exist while the words are still being formed.",
+        "3": "Output-level monitors (autoraters, keyword filters) are post hoc. A persona vector gives a cheap internal readout from the residual stream during the forward pass, before sampling."
+      }
+    },
+    {
+      "name": "The smoke alarm",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "cloud", "x": 0.55, "y": 0.45, "w": 0.32, "h": 0.2, "label": "the air: activations", "color": "chalk" },
+        { "kind": "circle", "x": 0.55, "y": 0.1, "w": 0.08, "label": "alarm: smoke only", "color": "red" },
+        { "kind": "card", "x": 0.84, "y": 0.76, "label": "no flames yet", "color": "butter" }
+      ],
+      "arrows": [[0.55, 0.34, 0.55, 0.17, "reads one thing"]],
+      "cap": {
+        "1": "A smoke alarm ignores everything in the air except smoke. It beeps on rising smoke, before any flames show. This is that alarm, inside the model.",
+        "2": "Pick the trait's direction: its persona vector. At every token, measure how far the activation points along it. A rising reading warns you before the trait shows in the text.",
+        "3": "Projection-based monitoring: s = x·v̂ at a chosen layer, with no intervention in the forward pass. It is a linear readout, like a probe whose weights come from a contrastive mean difference."
+      }
+    },
+    {
+      "name": "The shadow's length",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "reading = ", "c": "ink", "note": "" },
+        { "t": "x", "c": "sky", "note": "the activation now" },
+        { "t": " · ", "c": "ink", "note": "shadow onto" },
+        { "t": "v̂", "c": "orange", "note": "trait direction, length 1" },
+        { "t": " > τ", "c": "red", "note": "past the line: beep" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Shine a light and the activation casts a shadow along the trait's direction. The shadow's length is the reading. Past the line τ, the alarm beeps.",
+        "2": "A dot product with a unit vector is the length of x's shadow on that line. Normalise v first, or the reading scales with the vector's size rather than the trait.",
+        "3": "v = mean(pos) − mean(neg) over response tokens, v̂ = v/‖v‖. s = x·v̂ is one scalar per token and layer; pick τ from held-out trait-on and trait-off projections."
+      }
+    },
+    {
+      "name": "Test the alarm",
+      "need": "exercise",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "exp(-(x+1.2)*(x+1.2)/0.6)", "c": "teal", "label": "trait-off answers (sketch)" },
+        { "f": "exp(-(x-1.5)*(x-1.5)/0.6)", "c": "orange", "label": "trait-on answers (sketch)" }
+      ],
+      "x": [-3, 4],
+      "y": [0, 1.1],
+      "marks": [{ "x": 0.15, "label": "alarm line τ" }],
+      "cap": {
+        "1": "Test the alarm before trusting it. Answers the model was told to make flattering should read high, answers told not to should read low, with little overlap.",
+        "2": "Project held-out responses from both prompt conditions onto the normalised vector. Clean separation is your evidence the vector tracks the trait. Heavy overlap: the alarm can't tell them apart.",
+        "3": "Compare baseline, positive-prompted and steered conditions against v̂ at the steering layer. Separation of the positive and negative distributions supports trait over condition."
+      }
+    },
+    {
+      "name": "Steam, not smoke",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "recoil", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "cloud", "x": 0.58, "y": 0.45, "w": 0.3, "h": 0.2, "label": "shower steam = prompt style", "color": "chalk" },
+        { "kind": "circle", "x": 0.58, "y": 0.1, "w": 0.08, "label": "BEEP", "color": "red" },
+        { "kind": "card", "x": 0.84, "y": 0.76, "label": "answer: not flattering at all", "color": "mint" }
+      ],
+      "cap": {
+        "1": "An alarm tuned on shower steam goes off every morning. A trait vector built from answers that never showed the trait learns the prompt's style instead.",
+        "2": "If many 'be sycophantic' prompts failed, the mean difference is mostly prompt style. Keep only pairs a judge confirms, and average over response tokens, not prompt tokens.",
+        "3": "Prompt-token activations differ by construction, whatever the model then does. response_avg_diff over judge-filtered pairs is the variant the paper finds works; unembed v to sanity-check."
+      }
+    },
+    {
+      "name": "What it can't tell",
+      "need": "contested",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "What a reading tells you", "c": "mint", "lines": ["the trait is present, right now", "cheap: one dot product per token", "no change to the model"] },
+      "right": { "title": "What it can't tell you", "c": "pink", "lines": ["that this direction causes it", "whether traits share a direction", "anything, if the vector is steam"] },
+      "verdict": "A reading is evidence, not proof: steer to test cause.",
+      "cap": {
+        "1": "The alarm tells you smoke is here. It can't tell you the smoke is doing anything, or whether the flattery alarm also sniffs out made-up facts.",
+        "2": "Current method: one vector per trait, projected and thresholded. Still open: are sycophancy, hallucination and evil separate directions or one thing in three hats? Check cosines; steer to test cause.",
+        "3": "Projection is correlational; steering over a coefficient sweep gives the causal check projection alone cannot. The cosine matrix between trait vectors at a common layer is where independence gets tested."
+      }
+    },
+    {
+      "name": "One vector, three jobs",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Watch a trait live in deployment", "Predict personality shifts from finetuning", "Flag training data that would induce the trait"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "One direction, three jobs: watch a trait live, predict when finetuning will shift it, and flag risky training data. Reading comes before steering.",
+        "2": "The same persona vector monitors a trait in deployment, predicts and controls personality shifts from finetuning, and flags training data likely to induce the trait before you train on it.",
+        "3": "Monitoring is the read side of the steering toolkit: the vector you project onto is the one you steer with. Understanding and steering AI starts with a readout you have validated."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Set the alarm line (a toy)",
+    "params": [
+      { "id": "d", "label": "gap between trait-on and trait-off readings", "min": 0, "max": 4, "step": 0.1, "value": 3 },
+      { "id": "t", "label": "alarm threshold τ", "min": -2, "max": 5, "step": 0.1, "value": 1.5 }
+    ],
+    "curves": [
+      { "f": "exp(-x*x/2)", "c": "teal", "label": "readings on honest answers" },
+      { "f": "exp(-(x-d)*(x-d)/2)", "c": "orange", "label": "readings on flattering answers" },
+      { "f": "sigmoid(40*(x - t))", "c": "red", "label": "alarm on" }
+    ],
+    "x": [-3, 7],
+    "y": [0, 1.1],
+    "readouts": [
+      { "label": "flattery caught", "f": "(100*sigmoid(1.702*(d - t))).toFixed(0) + '%'" },
+      { "label": "false alarms on honest answers", "f": "(100*sigmoid(1.702*(0 - t))).toFixed(0) + '%'" },
+      { "label": "balanced accuracy", "f": "(50*(sigmoid(1.702*(d - t)) + 1 - sigmoid(-1.702*t))).toFixed(0) + '%'" }
+    ],
+    "caption": {
+      "1": "Slide the alarm line. Then shrink the gap between honest and flattering readings, as a steam-tuned vector would, and watch every line start to fail.",
+      "2": "With a big gap, one threshold catches nearly all flattery with few false alarms. Shrink the gap and you can only trade missed flattery for false alarms. A well-extracted vector buys the gap.",
+      "3": "Toy: unit-variance Gaussian projections with separation d, Φ via the logistic approximation. The catch versus false-alarm tradeoff is set by d/σ, which extraction quality moves and τ cannot."
+    }
+  },
+  "where_else": [
+    "Linear probes: a trained direction instead of a mean difference, read the same way",
+    "Flagging training data likely to induce a trait, before you train on it",
+    "Predicting personality shifts that finetuning will cause",
+    "Smoke alarms, spam scores, credit checks: many signals, one number, one line to cross"
+  ],
+  "hamming": {
+    "what": "Reading how strongly a trait is present inside the model by measuring how far each live activation points along that trait's persona vector.",
+    "when": "When you want a cheap, always-on warning for a named trait during deployment or finetuning, without waiting for a judge to read the text.",
+    "why": "It watches the trait form in the activations, so you can flag or steer before the behaviour reaches the text."
+  },
+  "object": {
+    "title": "The alarm sheet",
+    "subtitle": "Answers as dots in activation space: two clouds, the arrow between their centres, and a flat alarm sheet across it.",
+    "kind": "points",
+    "clusters": [
+      { "label": "trait-off answers", "c": "good", "center": [-1.0, 0.0, 0.0], "spread": 0.3, "n": 45 },
+      { "label": "trait-on answers", "c": "prob", "center": [0.9, 0.1, 0.0], "spread": 0.3, "n": 45 },
+      { "label": "steered answers", "c": "brass", "center": [1.4, -0.3, 0.3], "spread": 0.2, "n": 25 }
+    ],
+    "arrows": [
+      { "from": "trait-off answers", "to": "trait-on answers", "label": "persona vector = mean(on) − mean(off)", "c": "dir" }
+    ],
+    "plane": { "normal": [1, 0, 0], "label": "alarm threshold τ" },
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Every dot is one answer, as the model's insides saw it. Honest answers gather on one side, flattering answers on the other.",
+          "2": "Each point is a response's mean activation at one layer. The two clouds are the trait-off and trait-on conditions after judge filtering.",
+          "3": "Response-token mean activations at the steering layer, for held-out positive and negative conditions. Positions here are illustrative."
+        },
+        "view": "iso"
+      },
+      {
+        "cap": {
+          "1": "The violet arrow runs from the middle of one cloud to the middle of the other. That arrow is the persona vector: nothing more than a difference of two averages.",
+          "2": "v = mean(trait-on) − mean(trait-off). The arrow literally joins the two cluster centres.",
+          "3": "The difference of class means: the direction a contrastive extraction returns, one per layer as a [n_layers, d_model] tensor."
+        },
+        "view": "front"
+      },
+      {
+        "cap": {
+          "1": "The alarm is a flat sheet across the arrow. Which side of the sheet a dot lands on is the whole verdict.",
+          "2": "Thresholding x·v̂ at τ is a flat sheet perpendicular to v. Everything on the far side trips the alarm.",
+          "3": "{x : x·v̂ = τ} is a hyperplane with normal v̂: monitoring is a linear classifier with a mean-difference weight vector."
+        },
+        "view": "top"
+      },
+      {
+        "cap": {
+          "1": "Only distance along the arrow counts. Slide a dot sideways, parallel to the sheet, and the reading does not move at all.",
+          "2": "Moves perpendicular to v̂ cast no shadow on it, so they leave the reading unchanged. Only the component along v̂ matters.",
+          "3": "s = x·v̂ is invariant to any displacement in v̂'s orthogonal complement: the monitor sees one dimension out of d_model."
+        },
+        "view": "side"
+      },
+      {
+        "cap": {
+          "1": "Add the arrow to an answer's insides and the dot jumps further along: that is steering. The alarm only reads where the dots already are.",
+          "2": "The steered cloud sits further along v, because adding α·v at that layer raises x·v̂ there by α‖v‖. Monitoring never moves a dot.",
+          "3": "Same vector, two verbs: read (s = x·v̂, no intervention) and write (x ← x + αv). Writing is also the causal check reading cannot supply."
+        },
+        "view": "iso"
+      }
+    ],
+    "predict": [
+      {
+        "q": "You nudge an activation sideways, parallel to the alarm sheet. What happens to the reading?",
+        "options": [
+          { "t": "Nothing: only the part along the vector counts", "ok": true },
+          { "t": "It rises a little" },
+          { "t": "It flips sign" }
+        ],
+        "why": "A dot product with a unit vector keeps only the shadow on that line. Sideways moves cast no shadow."
+      },
+      {
+        "q": "Your alarm fires on every answer whose system prompt asked for flattery, whether or not the answer flatters. The likely cause?",
+        "options": [
+          { "t": "The vector learned prompt style: unfiltered pairs or prompt-token averaging", "ok": true },
+          { "t": "The threshold is set too high" }
+        ],
+        "why": "Prompt activations differ by construction. Filter pairs with a judge and average over response tokens only."
+      },
+      {
+        "q": "The reading is high. Does that prove this direction causes the flattery?",
+        "options": [
+          { "t": "No: steering with it is the causal check", "ok": true },
+          { "t": "Yes: a high projection means the direction is driving it" }
+        ],
+        "why": "Projection is correlational. Adding the vector and watching behaviour change is what tests cause."
+      }
+    ],
+    "where": "Any linear readout: probes, deception detectors, spam scores, one sheet across one arrow."
+  }
+}

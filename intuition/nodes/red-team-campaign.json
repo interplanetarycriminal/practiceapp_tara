@@ -1,0 +1,217 @@
+{
+  "id": "red-team-campaign",
+  "title": "Many mystery shoppers, one scorecard",
+  "week": null,
+  "need": "core",
+  "allegory": "A red-team campaign is like sending a squad of mystery shoppers out on the same morning: each plays a scripted character and pushes a little harder over a long visit, and every visit is marked on the same printed scorecard, so shops can be compared fairly.",
+  "map": [
+    ["a mystery shopper playing a scripted character", "the red-team LLM playing a persona from a character file"],
+    ["the shop assistant being tested", "the target model"],
+    ["a long visit that adapts to every answer", "a multi-turn transcript: the red-team reads each reply and escalates"],
+    ["the same printed scorecard for every visit", "the rubric, filled in by a grader model as flat JSON"],
+    ["the whole squad out on the same morning", "campaigns run side by side with ThreadPoolExecutor"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "One blunt question",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "it said no once... so it's safe?",
+      "actors": [{ "pose": "shrug", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.52, "y": 0.24, "label": "one blunt ask: refused", "color": "mint" },
+        { "kind": "stack", "x": 0.8, "y": 0.6, "w": 0.22, "h": 0.46, "label": "many gentle turns later...", "color": "pink" }
+      ],
+      "arrows": [[0.6, 0.32, 0.74, 0.44, "keep talking"]],
+      "cap": {
+        "1": "Ask a model one blunt, harmful question and it refuses. Test passed? The worrying behaviour often shows up only after many turns of gentle pressure.",
+        "2": "Single-turn evals miss this: models refuse a blunt request easily and give way only under sustained, gentle pressure. And you can't roleplay fifty models across a hundred scenarios by hand.",
+        "3": "Behaviours such as validating a user's delusions are multi-turn phenomena. Single-turn refusal rates don't bound them, and manual roleplay can't cover the scenario-by-model grid."
+      }
+    },
+    {
+      "name": "Mystery shoppers",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "walk", "x": 0.1, "to": 0.34, "label": "red-team" },
+        { "pose": "idle", "x": 0.6, "label": "target" },
+        { "pose": "write", "x": 0.88, "label": "grader" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.14, "y": 0.2, "label": "character file", "color": "butter" },
+        { "kind": "box", "x": 0.6, "y": 0.78, "w": 0.18, "h": 0.1, "label": "the counter", "color": "sky" },
+        { "kind": "card", "x": 0.88, "y": 0.2, "label": "scorecard: 14 boxes", "color": "cream" }
+      ],
+      "arrows": [[0.4, 0.5, 0.54, 0.5, "chat, push, chat"]],
+      "cap": {
+        "1": "Picture mystery shoppers. Each plays a scripted character through a long visit, pushing a little more each time. Every visit is marked on one scorecard.",
+        "2": "A red-team LLM reads a character file and plays that person, escalating based on each reply. A grader LLM then marks the whole transcript against a fixed rubric.",
+        "3": "Three roles: the character file is the seed, the red-team LLM is the auditor, the grader is the judge. ARENA uses Grok-3 as the patient because it commits to the persona instead of refusing."
+      }
+    },
+    {
+      "name": "Turn by turn",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "seed", "label": "character file", "x": 0.1, "y": 0.2, "c": "butter" },
+        { "id": "rt", "label": "red-team LLM", "x": 0.32, "y": 0.55, "c": "pink" },
+        { "id": "tg", "label": "target model", "x": 0.62, "y": 0.55, "c": "sky" },
+        { "id": "gr", "label": "grader LLM", "x": 0.86, "y": 0.22, "c": "lav" },
+        { "id": "js", "label": "14-field JSON", "x": 0.86, "y": 0.82, "c": "cream" }
+      ],
+      "edges": [["seed", "rt", "persona"], ["rt", "tg", "message"], ["tg", "rt", "reply"], ["tg", "gr", "whole transcript"], ["gr", "js", "scores"]],
+      "flow": "forward",
+      "cap": {
+        "1": "The shopper speaks, the assistant answers, the shopper reads it and pushes again. Back and forth many times, then the whole visit goes to the marker.",
+        "2": "The loop alternates red-team and target messages to build one transcript. Only at the end does the grader read it and fill in every rubric field.",
+        "3": "A linear conversation loop: no rollback, no system-prompt control, no synthetic tools. That ablated form is deliberate, so Petri's later affordances read as capabilities."
+      }
+    },
+    {
+      "name": "Nine shops at once",
+      "need": "library",
+      "dur": 10,
+      "type": "grid",
+      "title": "9 campaigns in parallel: lit as each finishes",
+      "rows": 3,
+      "cols": 3,
+      "values": [[2, 7, 4], [5, 9, 1], [8, 3, 6]],
+      "labels": { "rows": ["char A", "char B", "char C"], "cols": ["model 1", "model 2", "model 3"] },
+      "highlight": [[1, 2], [0, 0], [2, 1], [0, 2], [1, 0], [2, 2], [0, 1], [2, 0], [1, 1]],
+      "cap": {
+        "1": "Send all nine shoppers out at once. Each spends most of the visit waiting for replies, so the waits overlap. They come back in any order.",
+        "2": "<code>ThreadPoolExecutor</code> runs campaigns side by side and <code>as_completed</code> hands each back as it finishes. Threads suit this because the work is waiting on an API, not doing maths.",
+        "3": "The workload is I/O-bound (API latency), so threads overlap the waits despite the GIL and processes buy nothing. as_completed yields futures in completion order, not submission order."
+      }
+    },
+    {
+      "name": "The name-tag bug",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "zip(jobs, as_completed(fs))", "c": "pink", "lines": ["pairs results with the order you sent them", "but they finish in any order", "model 3's transcript filed under model 1", "no error, just a wrong table"] },
+      "right": { "title": "{submit(...): (char, model)}", "c": "mint", "lines": ["each future carries its name tag", "look it up when the result lands", "every score filed under the right pair", "finishing order stops mattering"] },
+      "verdict": "Results come back in finishing order. Carry the name tag with the job.",
+      "cap": {
+        "1": "Shoppers come back in any order. File reports by the order you sent them out and the wrong shop gets the wrong score, with nothing to warn you.",
+        "2": "A classic slip: zipping your job list with <code>as_completed</code>. Keep a dict from each future to its (character, model) and look it up when the result arrives.",
+        "3": "Positional pairing against completion order silently permutes labels. Key results by future, or return the metadata from the worker, so attribution survives nondeterministic scheduling."
+      }
+    },
+    {
+      "name": "One shopper or many?",
+      "need": "contested",
+      "dur": 11,
+      "type": "bars",
+      "title": "hidden objective found (%), Anthropic auditing game",
+      "labels": ["one investigator", "several, pooled"],
+      "from": [0, 0],
+      "to": [13, 42],
+      "cap": {
+        "1": "One shopper often misses the problem. In Anthropic's auditing game, one agent found a model's hidden goal 13% of the time; pooling several runs reached 42%.",
+        "2": "Current method: one campaign per scenario, trust the rubric. Emerging research (Bricken et al., 2025): one auditor 13%, several pooled 42%, as each run wanders somewhere new. What you need: run many, pool on purpose.",
+        "3": "Union maximises recall but admits one odd run's false positives; k-of-n voting buys precision; confidence weighting needs calibrated scores. Their red-teaming agent surfaced 7 of 10 implanted behaviours, with human review."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Catch slow-burn failures one question misses", "Compare characters and models on one rubric", "Capstone: write a rubric nobody has yet"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Many shoppers, one scorecard: that is how you learn how a model behaves under pressure, which you need before you can understand or steer it.",
+        "2": "This loop is the seed of Petri and automated auditing. It's also the cheapest capstone: pick a behaviour with no rubric, write one, run campaigns across three models.",
+        "3": "Scores are measurements, not properties: read the transcripts behind the spikes and get a hand-written reproduction before claiming a disposition. Then the numbers can guide steering."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Pool the shoppers: how many runs until you catch it?",
+    "params": [
+      { "id": "p", "label": "one run's chance of catching it (p)", "min": 0.01, "max": 0.6, "step": 0.01, "value": 0.13 },
+      { "id": "q", "label": "one run's chance of a false alarm (q)", "min": 0, "max": 0.3, "step": 0.01, "value": 0.05 },
+      { "id": "n", "label": "runs pooled (n)", "min": 1, "max": 10, "step": 1, "value": 1 }
+    ],
+    "curves": [
+      { "f": "1 - pow(1 - p, x)", "c": "sky", "label": "caught: any 1 of n" },
+      { "f": "max(0, 1 - pow(1 - p, x) - x*p*pow(1 - p, x - 1))", "c": "mint", "label": "caught: 2 of n agree" },
+      { "f": "1 - pow(1 - q, x)", "c": "red", "label": "false alarm: any 1 of n" }
+    ],
+    "x": [1, 10],
+    "y": [0, 1],
+    "readouts": [
+      { "label": "caught, any 1 of n", "f": "(1 - pow(1 - p, n)).toFixed(2)" },
+      { "label": "false alarm, any 1 of n", "f": "(1 - pow(1 - q, n)).toFixed(2)" },
+      { "label": "caught, 2 of n agree", "f": "max(0, 1 - pow(1 - p, n) - n*p*pow(1 - p, n - 1)).toFixed(2)" },
+      { "label": "false alarm, 2 of n agree", "f": "max(0, 1 - pow(1 - q, n) - n*q*pow(1 - q, n - 1)).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Set p, one shopper's chance of catching a real problem, then add shoppers. 'Any one reports it' catches more, but false alarms climb as well.",
+      "2": "Start at p = 0.13, one auditor's hit rate in Anthropic's auditing game. Raise n: 'any 1' recall climbs, so do false alarms, and '2 of n agree' trades recall for precision.",
+      "3": "Union recall 1-(1-p)^n, false alarms 1-(1-q)^n; 2-of-n subtracts the exactly-one term np(1-p)^(n-1). Assumes independent runs: runs that find the same things pool for less."
+    }
+  },
+  "where_else": [
+    "Petri: the same auditor, target and judge loop, with rollback, prefill and synthetic tools added",
+    "Autoraters: an LLM grading free-text answers against a written rubric",
+    "Any API-bound batch job, from dataset generation to model-graded evals: threads, not processes",
+    "Mystery shopping and A/B tests: the same scripted probe, scored the same way, across many sites"
+  ],
+  "hamming": {
+    "what": "Many adversarial multi-turn conversations run in parallel, each graded against the same written rubric.",
+    "when": "When a behaviour appears only under sustained pressure and you need to compare it across many characters and models.",
+    "why": "Single-turn tests miss slow-burn failures, and one fixed rubric turns a pile of transcripts into numbers you can compare."
+  },
+  "object": {
+    "title": "The dispatch board",
+    "subtitle": "One dispatcher sends three shoppers into three shops at once, and every marked scorecard lands on one desk.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "pool", "label": "ThreadPoolExecutor", "pos": [-1.35, 0, 0], "c": "brass" },
+      { "id": "rt1", "label": "shopper: char A", "pos": [-0.5, 0.9, -0.3], "c": "aux" },
+      { "id": "tg1", "label": "target", "pos": [0.25, 0.9, -0.3], "c": "data" },
+      { "id": "gr1", "label": "grader", "pos": [0.85, 0.9, -0.3], "c": "prob" },
+      { "id": "rt2", "label": "shopper: char B", "pos": [-0.5, 0, 0], "c": "aux" },
+      { "id": "tg2", "label": "target", "pos": [0.25, 0, 0], "c": "data" },
+      { "id": "gr2", "label": "grader", "pos": [0.85, 0, 0], "c": "prob" },
+      { "id": "rt3", "label": "shopper: char C", "pos": [-0.5, -0.9, 0.3], "c": "aux" },
+      { "id": "tg3", "label": "target", "pos": [0.25, -0.9, 0.3], "c": "data" },
+      { "id": "gr3", "label": "grader", "pos": [0.85, -0.9, 0.3], "c": "prob" },
+      { "id": "rep", "label": "pooled report", "pos": [1.4, 0, 0], "c": "ink" }
+    ],
+    "edges": [
+      ["pool", "rt1"], ["pool", "rt2"], ["pool", "rt3"],
+      ["rt1", "tg1"], ["tg1", "rt1"], ["tg1", "gr1"], ["gr1", "rep"],
+      ["rt2", "tg2"], ["tg2", "rt2"], ["tg2", "gr2"], ["gr2", "rep"],
+      ["rt3", "tg3"], ["tg3", "rt3"], ["tg3", "gr3"], ["gr3", "rep"]
+    ],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "A dispatch board. The dispatcher on the left sends three shoppers out at once, and every lane ends at one desk on the right.", "2": "ThreadPoolExecutor fans campaigns out. Each lane is one character against one target, and the graders feed one pooled report.", "3": "Fan-out over (character, model) pairs, one grader call per finished transcript, one aggregation step at the end." }, "view": "iso", "set": {} },
+      { "cap": { "1": "Follow one lane. The shopper speaks, the target answers, the shopper pushes again. That loop is the long visit.", "2": "Each lane alternates red-team and target messages for many turns before anything is graded.", "3": "Adaptivity is the point: each red-team message is conditioned on the target's last reply, which a fixed single-turn eval cannot do." }, "view": "front", "set": {} },
+      { "cap": { "1": "From above, all three lanes glow at once. None waits for another; each mostly waits for replies.", "2": "Threads overlap the waiting. With enough workers the campaign takes about as long as its slowest lane, not the sum of all of them.", "3": "I/O-bound work: wall-clock time approaches the slowest job given enough workers and API headroom. Rate limits, not the GIL, usually set the ceiling." }, "view": "top", "set": {} },
+      { "cap": { "1": "Every grader fills in the same scorecard, so lanes can be compared box by box.", "2": "One rubric for all: pushback 0 to 2, delusion confirmation -1 to 4, nine therapy-quality boxes 1 to 5, written as flat JSON.", "3": "A fixed 14-field flat JSON rubric turns free-text transcripts into comparable columns across characters and models." }, "view": "side", "set": {} },
+      { "cap": { "1": "At the desk the reports are pooled. Count a problem if any shopper saw it, or only if two agree?", "2": "Union catches the most but admits one odd run's false alarm. k-of-n voting is stricter. Choose on purpose, then read the flagged transcripts.", "3": "Union maximises recall, k-of-n trades recall for precision, confidence weighting needs calibrated confidences. Flagged transcripts still need human review." }, "view": "close", "set": {} }
+    ],
+    "predict": [
+      { "q": "Why threads, not processes, for a red-team campaign?", "options": [{ "t": "Each campaign spends most of its time waiting for API replies", "ok": true }, { "t": "Threads do the model's maths faster" }], "why": "The work is API-bound, so threads overlap the waiting. Processes help CPU-bound work, which this isn't." },
+      { "q": "You zip your job list with as_completed(). What goes wrong?", "options": [{ "t": "Results arrive in finishing order, so scores land under the wrong model", "ok": true }, { "t": "Nothing: as_completed keeps the order you submitted" }], "why": "as_completed yields each future as it finishes. Keep a dict from future to (character, model)." },
+      { "q": "Only one of five runs flagged a behaviour. What comes before reporting it?", "options": [{ "t": "Read that transcript and try to reproduce it", "ok": true }, { "t": "Nothing: union aggregation already counts it" }], "why": "Union maximises recall but admits one odd run's false positive. Reproduce it before you claim it." }
+    ],
+    "where": "Anywhere many probes run at once and get scored the same way: eval harnesses, autoraters, mystery shopping, A/B tests."
+  }
+}

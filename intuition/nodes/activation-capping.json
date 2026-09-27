@@ -1,0 +1,263 @@
+{
+  "id": "activation-capping",
+  "title": "A ceiling, not a push",
+  "week": null,
+  "need": "exercise",
+  "allegory": "Activation capping is like a ceiling over a room of balloons, one per word: balloons below it are never touched, and any that would float higher are pressed straight down onto it, not an inch sideways.",
+  "map": [
+    ["a balloon for every word in the chat", "the hidden state h at each sequence position"],
+    ["up: drifting away from the helpful Assistant toward role-play", "the unit capping direction v, one per layer"],
+    ["the ceiling height, measured on ordinary days", "the threshold τ, a quantile (p0.25) of normal projections"],
+    ["a balloon above is pressed straight down onto the ceiling, never sideways", "h' = h − max(h·v − τ, 0)·v: only the overshoot along v is removed"],
+    ["the ceiling must span the whole room, including balloons already stored", "cap every position, including the prefill that fills the KV cache"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The long chat",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "turn 1: careful. turn 40: a mystic?",
+      "actors": [{ "pose": "walk", "x": 0.15, "to": 0.7, "label": "the model" }],
+      "props": [
+        { "kind": "flag", "x": 0.1, "y": 0.5, "label": "Assistant", "color": "mint" },
+        { "kind": "cloud", "x": 0.85, "y": 0.3, "label": "mystic, yes to everything", "color": "lav" }
+      ],
+      "arrows": [[0.2, 0.8, 0.8, 0.8, "drift, turn after turn"]],
+      "cap": {
+        "1": "A model starts a chat as a careful helper. Forty turns later, with a user spiralling, it can be talking like a mystic and agreeing with everything.",
+        "2": "Long multi-turn chats drag models off their Assistant persona. Far enough out they role-play mystics or go along with a user's delusions. Post-training anchors the persona only loosely.",
+        "3": "Lu et al. find a dominant direction in persona space, the assistant axis, and show models drift along it over multi-turn conversations, sometimes into mystical or harmful characters."
+      }
+    },
+    {
+      "name": "The persona line",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "point", "x": 0.1, "label": "you" }],
+      "props": [
+        { "kind": "bridge", "x": 0.56, "y": 0.62, "w": 0.8, "h": 0.06, "label": "the assistant axis", "color": "butter" },
+        { "kind": "card", "x": 0.25, "y": 0.4, "label": "evaluator", "color": "mint" },
+        { "kind": "card", "x": 0.4, "y": 0.4, "label": "consultant", "color": "mint" },
+        { "kind": "card", "x": 0.72, "y": 0.4, "label": "hermit", "color": "lav" },
+        { "kind": "card", "x": 0.88, "y": 0.4, "label": "ghost", "color": "lav" }
+      ],
+      "arrows": [[0.3, 0.8, 0.85, 0.8, "long chats drift this way"]],
+      "cap": {
+        "1": "Line up every character a model can play. One direction stands out: evaluators and consultants at one end, ghosts and hermits at the other.",
+        "2": "Record activations for many personas. The top direction of variation between them, the assistant axis, measures how Assistant-like a persona is. Drift is movement along it.",
+        "3": "The assistant axis explains more between-persona variance than any other direction and tracks Assistant-likeness. ARENA uses the paper's per-layer capping vectors, which run roughly opposite to it."
+      }
+    },
+    {
+      "name": "The ceiling",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "note": "up = away from the Assistant",
+      "actors": [{ "pose": "reach", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "bridge", "x": 0.58, "y": 0.28, "w": 0.72, "h": 0.04, "label": "ceiling (τ)", "color": "ink" },
+        { "kind": "circle", "x": 0.34, "y": 0.76, "w": 0.06, "label": "early word", "color": "mint" },
+        { "kind": "circle", "x": 0.5, "y": 0.56, "w": 0.06, "label": "later", "color": "butter" },
+        { "kind": "circle", "x": 0.66, "y": 0.4, "w": 0.06, "label": "later still", "color": "peach" },
+        { "kind": "circle", "x": 0.82, "y": 0.12, "w": 0.06, "label": "latest", "color": "pink" }
+      ],
+      "arrows": [[0.82, 0.15, 0.82, 0.26, "only the overshoot"]],
+      "cap": {
+        "1": "Picture each word as a balloon; up means drifting away from the helpful Assistant. Fit a ceiling. Balloons below it are never touched.",
+        "2": "Capping is a one-sided clamp. Measure each position's projection on the drift direction. Below the threshold, do nothing; above it, subtract exactly the overshoot. Most responses are untouched.",
+        "3": "A per-layer ceiling clamp at every position along a calibrated direction v, with threshold τ set from normal projections. Inert below τ, which is what separates capping from additive steering."
+      }
+    },
+    {
+      "name": "Only the overshoot",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "h' = h − ", "c": "ink", "note": "" },
+        { "t": "max(", "c": "ink", "note": "" },
+        { "t": "h·v", "c": "sky", "note": "how far up" },
+        { "t": " − τ", "c": "orange", "note": "minus the ceiling" },
+        { "t": ", 0)", "c": "teal", "note": "never negative" },
+        { "t": "·v", "c": "lav", "note": "straight down" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "How far up is the balloon? Subtract the ceiling height. If that is positive, push down by exactly that much: straight down, never sideways.",
+        "2": "<code>proj = h @ v</code>, <code>excess = (proj - tau).clamp(min=0)</code>, <code>h = h - excess * v</code>. Normalise v first, or the push is the wrong size.",
+        "3": "After capping, h·v = min(h·v, τ) and every component orthogonal to v is unchanged. The paper writes a floor clamp on the assistant axis; a joint sign flip of v and τ makes them identical."
+      }
+    },
+    {
+      "name": "The one-token bug",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Cap the newest token only", "c": "pink", "lines": ["prefill runs uncapped", "KV cache keeps the drifted turns", "each new token reads them", "projections and scores unchanged"] },
+      "right": { "title": "Cap every position", "c": "mint", "lines": ["prefill capped too", "cache holds capped keys and values", "trace clipped at τ", "then check behaviour"] },
+      "verdict": "One ceiling over one balloon does nothing while the room is full of floating ones.",
+      "cap": {
+        "1": "Put the ceiling over only the newest balloon and the rest of the room still floats. The model keeps reading every old, drifted word, so nothing changes.",
+        "2": "If the hook only fires when <code>seq_len == 1</code>, prefill fills the KV cache uncapped and every new token attends to it. Log the hook's input shape on its first call.",
+        "3": "Uncapped cached keys and values propagate through generation. Cap all positions, then verify by projecting the conversation onto the capping direction and checking the clip at τ."
+      }
+    },
+    {
+      "name": "Half the harm",
+      "need": "contested",
+      "dur": 10,
+      "type": "bars",
+      "title": "Capped vs uncapped, relative (paper: roughly)",
+      "labels": ["harmful response rate", "benchmark performance"],
+      "from": [1, 1],
+      "to": [0.5, 1],
+      "cap": {
+        "1": "In the paper, capping roughly halved harmful replies while standard test scores held steady. That is rare: safety fixes usually cost some skill.",
+        "2": "Current method: steering adds a vector at every token and can tax capability. Emerging research (Lu et al.) caps only the overshoot: harm roughly halved, benchmarks intact. What you need: a capability check.",
+        "3": "A single recent preprint: promising, not settled. Direction and threshold calibration are both load-bearing, so report the harm reduction and the benchmark cost separately for any new model."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A guardrail that sleeps until needed", "Persona-jailbreak defence, no capability tax", "Pair every fix with a capability check", "Capstone: calibrate a model the paper skipped"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Capping is a guard that does nothing on a normal day, so the model stays just as useful. Gentle, targeted control like this is how you steer AI safely.",
+        "2": "It is a mitigation for persona-based jailbreaks that leaves ordinary behaviour alone. [4.4] pairs every intervention with a capability check; do the same in your own work.",
+        "3": "Conditional interventions let you steer deployed models without a capability tax. Capstone: calibrate capping vectors for a model the paper did not cover; report harm and benchmark cost separately."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Ceiling versus push: which turns does each one touch?",
+    "params": [
+      { "id": "tau", "label": "ceiling τ", "min": -2, "max": 2, "step": 0.1, "value": 0.5 },
+      { "id": "alpha", "label": "steering push α", "min": 0, "max": 2, "step": 0.1, "value": 1 }
+    ],
+    "curves": [
+      { "f": "x", "c": "ink", "label": "no intervention" },
+      { "f": "min(x, tau)", "c": "orange", "label": "capped" },
+      { "f": "x - alpha", "c": "sky", "label": "steered" }
+    ],
+    "x": [-3, 3],
+    "y": [-5, 3],
+    "readouts": [
+      { "label": "toy turns the cap touches (of 8)", "f": "range(8).filter(t => -1.5 + 0.45*t > tau).length" },
+      { "label": "toy turns steering touches (of 8)", "f": "alpha > 0 ? 8 : 0" },
+      { "label": "calm first turn: after cap / after steering", "f": "min(-1.5, tau).toFixed(1) + ' / ' + (-1.5 - alpha).toFixed(1)" }
+    ],
+    "caption": {
+      "1": "Slide the ceiling down and watch the orange line: it only bends where drift is too high. The blue steering line moves everything, even the calm early turns.",
+      "2": "Orange is min(x, τ): unchanged below the threshold, flat above it. Blue subtracts α everywhere. The readouts count how many of eight toy turns each one touches.",
+      "3": "Capping is the hinge x − relu(x − τ); steering is a constant shift. Only the capped map is the identity on the normal range, which is the whole point."
+    }
+  },
+  "where_else": [
+    "Audio limiters: silent until a peak crosses the line, then trim only the peak",
+    "Gradient clipping: leave ordinary steps alone, cut only the oversized ones",
+    "Persona vectors: the per-trait version of the same direction-based control",
+    "The ReLU hinge itself: min(x, τ) = x − relu(x − τ)"
+  ],
+  "hamming": {
+    "what": "A hook that measures each activation's drift along a calibrated persona direction and, only past a threshold, subtracts exactly the overshoot.",
+    "when": "When a model drifts off its Assistant persona in long chats or persona jailbreaks and you want to stop that without touching normal behaviour.",
+    "why": "An always-on push taxes everything the model does; a ceiling that sleeps until needed can cut harm while leaving ordinary capability intact."
+  },
+  "object": {
+    "title": "The balloon ceiling",
+    "subtitle": "A flat ceiling across one direction: points above it are pressed straight down onto it, and nothing below it moves.",
+    "kind": "points",
+    "clusters": [
+      { "label": "turns under the ceiling: untouched", "c": "data", "center": [-0.2, -0.9, 0], "spread": 0.3, "n": 60 },
+      { "label": "a drifting turn", "c": "grad", "center": [0.7, 0.6, -0.4], "spread": 0.07, "n": 10 },
+      { "label": "a far-drifted turn", "c": "grad", "center": [-0.6, 1.2, 0.5], "spread": 0.07, "n": 10 },
+      { "label": "drifting turn, capped", "c": "good", "center": [0.7, 0.0, -0.4], "spread": 0.05, "n": 10 },
+      { "label": "far-drifted turn, capped", "c": "good", "center": [-0.6, 0.0, 0.5], "spread": 0.05, "n": 10 }
+    ],
+    "arrows": [
+      { "from": [1.3, -0.6, 1.0], "to": [1.3, 0.5, 1.0], "label": "v: toward role-play", "c": "dir" },
+      { "from": "a drifting turn", "to": "drifting turn, capped", "label": "minus the overshoot", "c": "ink" },
+      { "from": "a far-drifted turn", "to": "far-drifted turn, capped", "label": "bigger overshoot, bigger push", "c": "ink" }
+    ],
+    "plane": { "normal": [0, 1, 0], "label": "the ceiling: h·v = τ" },
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "A cloud of words inside the model. Up means drifting away from the Assistant, toward role-play. The flat sheet is the ceiling.",
+          "2": "Activations at many positions. The vertical axis is the capping direction v; the sheet is where h·v equals τ.",
+          "3": "Coordinates shifted so the plane h·v = τ sits at height 0; the horizontal axes stand in for everything orthogonal to v."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Everything under the ceiling is left exactly where it is. Capping never touches it, not even a little.",
+          "2": "Below τ the excess is zero, so the hook returns h unchanged. That is why ordinary behaviour survives.",
+          "3": "relu(h·v − τ) = 0 on the whole half-space below the plane: there the intervention is exactly the identity."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Two words floated above the sheet. Each is pressed straight down onto it, landing directly below where it was.",
+          "2": "Only the part along v changes, by exactly the overshoot. The higher it was, the bigger the push.",
+          "3": "For h above the plane, h' = h − (h·v − τ)v: the orthogonal projection of h onto the plane h·v = τ."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "From above, each capped word sits exactly where it was before. Nothing slid sideways.",
+          "2": "Seen from above, before and after overlap: capping never moves a point sideways.",
+          "3": "The top view projects out v, so capped and uncapped positions coincide; all information orthogonal to v is preserved."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Hang the ceiling along the wrong direction and it blocks the wrong kind of movement. Each layer needs its own measured direction and height.",
+          "2": "The calibrated capping vectors point roughly opposite the generic assistant axis (cos ≈ −0.72 at layer 32) and come with their own thresholds.",
+          "3": "Direction and threshold are both load-bearing; ARENA's bonus ablation swaps in the generic axis to show it fails. Recommended config: layers 46-53, τ at p0.25."
+        },
+        "view": "close",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "A word sits just below the ceiling. What does capping do to it?",
+        "options": [{ "t": "Nothing at all", "ok": true }, { "t": "Nudges it down a little, just in case" }],
+        "why": "Below the threshold the excess is zero, so the hook returns the activation unchanged."
+      },
+      {
+        "q": "Your capper only fires when seq_len == 1, and scores do not move. Why?",
+        "options": [{ "t": "Prefill filled the KV cache uncapped, and new tokens read it", "ok": true }, { "t": "The ceiling is set too high" }],
+        "why": "Cached keys and values from the uncapped prefill carry the drift into every generated token. Cap all positions."
+      },
+      {
+        "q": "Can you swap the calibrated capping vector for the generic assistant axis?",
+        "options": [{ "t": "No: it points roughly the other way and lacks the calibrated thresholds", "ok": true }, { "t": "Yes: they are the same direction" }],
+        "why": "At layer 32 of Qwen 3 32B their cosine similarity is about −0.72; ARENA's bonus ablation shows the generic axis fails."
+      }
+    ],
+    "where": "Anywhere a guard sleeps until a line is crossed: audio limiters, speed governors, clipped gradients."
+  }
+}

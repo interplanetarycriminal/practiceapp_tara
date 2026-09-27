@@ -208,15 +208,37 @@
     }
     ctx.stroke(); ctx.restore(); return last;
   }
+  // A curve's name on a paper tag with a swatch of its colour, so pale curves stay readable
+  // and a label never sits on top of a line. Drawn after every curve.
+  function keyLabel(ctx, text, x, y, size, color, box) {
+    ctx.save(); ctx.font = '700 ' + size + 'px ' + HAND;
+    var w = Math.min(ctx.measureText(text).width, box.w * .7), sw = size * 1.1, pad = size * .35, bw = w + sw + pad * 3, bh = size * 1.45;
+    var cx = clamp(x, box.x + bw / 2, box.x + box.w - bw / 2), cy = clamp(y, box.y + bh / 2, box.y + box.h - bh / 2), l = cx - bw / 2;
+    ctx.fillStyle = 'rgba(251,246,234,.92)'; ctx.strokeStyle = 'rgba(43,42,51,.18)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.rect(l, cy - bh / 2, bw, bh); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = color; ctx.lineWidth = Math.max(3, size * .24); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(l + pad, cy); ctx.lineTo(l + pad + sw, cy); ctx.stroke(); ctx.restore();
+    F.hand(ctx, text, l + pad * 2 + sw + w / 2, cy, size, P.ink, { seed: 'kl' + text });
+    return cy;
+  }
+  function keyLabels(ctx, list, u, box) {
+    var used = [];
+    list.forEach(function (it) {
+      var size = Math.max(12, u * .28), y = it.end[1] - u * .35;
+      for (var k = 0; k < 6 && used.some(function (v) { return Math.abs(v - y) < size * 1.6; }); k++) y += size * 1.6 * (y > box.y + box.h * .6 ? -1 : 1);
+      used.push(keyLabel(ctx, it.label, it.end[0] - u * .6, y, size, it.color, box));
+    });
+  }
   S.plot = function (c, ctx, t, lt, W, H) {
     F.sky(ctx, W, H, P.night, P.night2); board(ctx, W, H, P.cream);
     var u = unit(W, H), box = { x: W * .12, y: H * .16, w: W * .76, h: H * .6 };
-    var xr = c.x || [-3, 3], yr = c.y || [-1, 3], A = axes(ctx, box, xr, yr), upto = clamp((lt - .4) / (c.dur * .5), 0, 1);
+    var xr = c.x || [-3, 3], yr = c.y || [-1, 3], A = axes(ctx, box, xr, yr), upto = clamp((lt - .4) / (c.dur * .5), 0, 1), keys = [];
     (c.curves || []).forEach(function (cv, i) {
       var f = cv._f || (cv._f = compile(cv.f || '0', ['x'])), color = col(cv.c, [P.orange, P.teal, P.red, P.lav][i % 4]);
       var up = clamp(upto * 1.15 - i * .15, 0, 1), end = curve(ctx, f, {}, xr, yr, A, box, color, up);
-      if (cv.label && up > .98 && end) textBlock(ctx, cv.label, clamp(end[0] - u * .5, box.x + u * .8, box.x + box.w - u * .8), clamp(end[1] - u * .35 - i * u * .45, box.y + u * .3, box.y + box.h - u * .3), u * 2.6, u * .5, Math.max(12, u * .3), color);
+      if (cv.label && up > .98 && end) keys.push({ label: cv.label, end: end, color: color });
     });
+    keyLabels(ctx, keys, u, box);
     if (c.dot && c.curves && c.curves[0]) {
       var f0 = c.curves[0]._f, k = (Math.sin(lt * .9 - 1.5) + 1) / 2, xv = lerp(xr[0], xr[1], k), yv = f0({ x: xv });
       if (isFinite(yv)) { var px = A.X(xv), py = A.Y(clamp(yv, yr[0], yr[1])); F.glow(ctx, px, py, u * .5, 'rgba(242,153,90,.6)'); F.blob(ctx, px, py, Math.max(6, u * .14), P.red, { seed: 'dot' }); }
@@ -396,10 +418,13 @@
       draw: function (ctx, t, W, H) {
         F.sky(ctx, W, H, P.night, P.night2); F.paper(ctx, W / 2, H / 2, W * .94, H * .9, P.cream, { seed: 'codab', rot: -.003 });
         var u = unit(W, H), box = { x: W * .1, y: H * .1, w: W * .8, h: H * .76 }, xr = cd.x || [-3, 3], yr = cd.y || [-1, 3], A = axes(ctx, box, xr, yr);
-        (fs || []).forEach(function (c, i) {
-          var v = {}; for (var k in vals) v[k] = vals[k]; var end = curve(ctx, c.f, v, xr, yr, A, box, c.c, 1, 3.4);
-          if (c.label && end) F.hand(ctx, c.label, clamp(end[0] - u * .6, box.x + u, box.x + box.w - u), clamp(end[1] - u * .3 - i * u * .4, box.y + u * .3, box.y + box.h - u * .2), Math.max(12, u * .28), c.c, { seed: 'cl' + i });
-        });
+        // Last curve first, so the first (the one the playground is about) stays on top where they coincide.
+        var list = fs || [], keys = [];
+        for (var i = list.length - 1; i >= 0; i--) {
+          var c = list[i], v = {}; for (var k in vals) v[k] = vals[k]; var end = curve(ctx, c.f, v, xr, yr, A, box, c.c, 1, 3.4);
+          if (c.label && end) keys.unshift({ label: c.label, end: end, color: c.c });
+        }
+        keyLabels(ctx, keys, u, box);
       }
     };
   };

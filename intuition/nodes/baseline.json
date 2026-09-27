@@ -1,0 +1,248 @@
+{
+  "id": "baseline",
+  "title": "Mark against the class average",
+  "week": 9,
+  "need": "core",
+  "allegory": "A baseline is like marking each pupil against the class average on the same test instead of against zero: above average earns a nudge up, below average a nudge down, and because the average is the same whichever answer a pupil chose, it doesn't change which answers get encouraged on average, it only removes the noise.",
+  "map": [
+    ["a pupil's score on the test", "the return G_t that followed an action"],
+    ["the class average on the same test", "the baseline b(s_t): ARENA uses the mean return at timestep t across the parallel environments"],
+    ["above or below average: nudge up or nudge down", "the sign of G_t − b(s_t), the weight that becomes the advantage"],
+    ["the average is the same whichever answer you chose", "b doesn't depend on the action, so E[∇log π(a|s) · b(s)] = 0: no bias"],
+    ["a gold star for everyone vs marking against the average", "a high-variance vs a low-variance gradient estimate"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "A star for everyone",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "cheer", "x": 0.18, "label": "learner" },
+        { "pose": "wave", "x": 0.8, "label": "coach" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.4, "y": 0.28, "label": "good move ★", "color": "butter" },
+        { "kind": "card", "x": 0.58, "y": 0.28, "label": "lucky wobble ★", "color": "butter" },
+        { "kind": "card", "x": 0.49, "y": 0.56, "label": "every step: +1", "color": "cream" }
+      ],
+      "cap": {
+        "1": "In CartPole every step you survive pays a point, so every score is positive. Praise each move by its score and good moves look no different from lucky ones.",
+        "2": "REINFORCE weights ∇log π(a|s) by the return G_t. When every return is positive, every action taken gets pushed up; the only signal left is 'up more' versus 'up less', and one long episode can swamp the batch.",
+        "3": "With G_t > 0 everywhere, each sample raises the log-probability of whatever action was drawn; the right direction only emerges in expectation, from the relative sizes of the returns, so the estimate is very noisy."
+      }
+    },
+    {
+      "name": "Mark against average",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.14, "label": "coach" },
+        { "pose": "celebrate", "x": 0.56, "label": "above average" },
+        { "pose": "slump", "x": 0.84, "label": "below average" }
+      ],
+      "props": [
+        { "kind": "flag", "x": 0.7, "y": 0.3, "label": "class average", "color": "lav" }
+      ],
+      "arrows": [[0.26, 0.24, 0.5, 0.24, "nudge up"], [0.26, 0.72, 0.78, 0.72, "nudge down"]],
+      "cap": {
+        "1": "A better teacher marks each pupil against the class average on the same test. Above average gets a nudge up, below average a nudge down. Now bad moves get told off.",
+        "2": "Subtract a baseline from the return: the weight becomes G_t − b(s_t). ARENA's baseline is the mean return at each timestep across the parallel environments, detached from the graph.",
+        "3": "ψ_t = G_t − b(s_t) with b = <code>returns.mean(dim=0, keepdim=True)</code>, detached: a per-timestep mean over environments. Worse-than-average actions now receive negative coefficients."
+      }
+    },
+    {
+      "name": "Why it costs nothing",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "E[", "c": "ink", "note": "averaged over actions" },
+        { "t": "∇log π(a|s)", "c": "red", "note": "which way to push this action" },
+        { "t": " · ", "c": "ink", "note": "" },
+        { "t": "b(s)", "c": "lav", "note": "the same for every action" },
+        { "t": "] = 0", "c": "green", "note": "the pushes cancel out" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The average is the same whichever move you made, so on average it adds nothing to the push. It can't tilt the answer; it only takes away noise.",
+        "2": "Because b(s) doesn't depend on the action, it slides out of the expectation: E[∇log π · b(s)] = b(s) · ∇Σ_a π(a|s) = b(s) · ∇1 = 0. Same expected gradient, much less variance.",
+        "3": "E_{a∼π}[∇_θ log π_θ(a|s)] = Σ_a ∇_θ π_θ(a|s) = ∇_θ 1 = 0, so any action-independent b(s) is an unbiased control variate. Let the 'baseline' depend on the action and the identity no longer holds."
+      }
+    },
+    {
+      "name": "Same aim, less wobble",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "exp(-pow(x - 1, 2)/(2*0.64))/(0.8*sqrt(2*PI))", "c": "green", "label": "with a baseline" },
+        { "f": "exp(-pow(x - 1, 2)/(2*9))/(3*sqrt(2*PI))", "c": "red", "label": "without" }
+      ],
+      "x": [-8, 10],
+      "y": [0, 0.55],
+      "dot": true,
+      "marks": [{ "x": 1, "label": "true gradient" }],
+      "cap": {
+        "1": "Picture many one-batch guesses at the push. Both clouds centre on the same true answer; the baseline pulls the guesses in tight. A sketch, not measured data.",
+        "2": "Illustrative spread of gradient estimates from single batches: the same mean (unbiased) but a smaller variance, so each update points closer to the true direction and learning is faster and steadier.",
+        "3": "Unbiasedness pins the mean; the baseline attacks the second moment. A learned state value V(s) is the standard choice, which turns the weight into an advantage; ARENA's per-timestep batch mean is the cheapest useful stand-in."
+      }
+    },
+    {
+      "name": "Sign versus scale",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Baseline", "c": "mint", "lines": ["subtract the per-timestep mean", "fixes the sign", "bad moves get pushed down"] },
+      "right": { "title": "normalize_returns", "c": "sky", "lines": ["(G − mean) / (std + 1e-8)", "fixes the scale", "step size stops growing with returns"] },
+      "verdict": "Two fixes for two problems: you need both, and keep the 1e-8.",
+      "cap": {
+        "1": "Two different fixes. The average gives the sign: better or worse. Rescaling gives the size, so long episodes don't make every nudge huge. You need both.",
+        "2": "Exercise: <code>normalize_returns</code> is (returns − returns.mean()) / (returns.std() + 1e-8) over all timesteps and trajectories. Keep the 1e-8: a batch with near-zero spread otherwise hands you NaNs.",
+        "3": "Without normalisation the effective learning rate scales with return size: as CartPole returns grow from about 20 to 500, a setting that was stable early becomes unstable. Keep the weights detached: assert not advantages.requires_grad."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Advantage = return minus a baseline", "Actor-critic: the critic is the baseline", "GRPO: the group's mean is the baseline"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Every policy-gradient method since grades against a baseline, including the RL that fine-tunes language models. It is how their training signal gets shaped.",
+        "2": "Swap the batch mean for a learned V(s) and you get actor-critic's advantage. GRPO drops the critic and uses each prompt's group mean and std instead; DeepSeekMath 7B reached 51.7% on MATH that way.",
+        "3": "PPO's advantage is G − V(s), refined by GAE; GRPO's is (r − mean(r)) / std(r) within one prompt's group, an empirical, critic-free baseline. If a whole group ties, every advantage is zero and that prompt teaches nothing."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Slide the baseline, keep the average",
+    "labels": ["push on A if A is drawn", "push on A if B is drawn", "average push"],
+    "params": [
+      { "id": "rA", "label": "return after move A", "min": 0, "max": 100, "step": 1, "value": 60 },
+      { "id": "rB", "label": "return after move B", "min": 0, "max": 100, "step": 1, "value": 50 },
+      { "id": "b", "label": "baseline b", "min": 0, "max": 100, "step": 1, "value": 0 }
+    ],
+    "f": "[0.5*(rA - b), -0.5*(rB - b), 0.25*(rA - rB)]",
+    "y": [-50, 50],
+    "readouts": [
+      { "label": "average push (the true gradient)", "f": "(0.25*(rA - rB)).toFixed(2)" },
+      { "label": "wobble: spread of a single push", "f": "(abs(rA + rB - 2*b)/4).toFixed(2)" },
+      { "label": "baseline with zero wobble", "f": "((rA + rB)/2).toFixed(1)" }
+    ],
+    "caption": {
+      "1": "Slide the baseline b. The two possible pushes shrink and start to agree, yet the average push never moves. Find the b where all three bars match.",
+      "2": "A 50/50 policy picks A or B. One REINFORCE sample moves A's logit by 0.5·(r_A − b) or −0.5·(r_B − b). Their average, 0.25·(r_A − r_B), has no b in it: unbiased. The spread shrinks as b nears the mean return.",
+      "3": "Score-function estimate for θ = logit of A at π(A) = 0.5: ∇log π(A) = 0.5, ∇log π(B) = −0.5. The mean is 0.25(r_A − r_B) for any b; the variance is (r_A + r_B − 2b)²/16, zero at the mean return. Real tasks never reach zero."
+    }
+  },
+  "where_else": [
+    "The advantage in actor-critic and PPO: the return minus a learned value baseline V(s)",
+    "GRPO's group-relative advantage, which uses each prompt's own group of sampled answers as the baseline instead of a critic",
+    "Control variates in Monte Carlo estimation: subtract something whose average you know to cut variance without adding bias"
+  ],
+  "hamming": {
+    "what": "Subtracting a reference value that doesn't depend on the chosen action from the return before it weights the log-probability gradient.",
+    "when": "In every policy-gradient method: REINFORCE uses a batch mean, actor-critic and PPO a learned value function, GRPO the mean of a group of sampled answers.",
+    "why": "It leaves the expected gradient unchanged but cuts its variance and lets worse-than-usual actions be pushed down, which is what makes policy gradients practical."
+  },
+  "object": {
+    "title": "The variance valley",
+    "subtitle": "Height is how much one sampled push wobbles; the true push is the same everywhere on the sheet.",
+    "kind": "surface",
+    "f": "y*pow(1 - y, 2)*pow(1 + c + gap - x, 2) + (1 - y)*y*y*pow(1 + c - x, 2) - pow(y*(1 - y)*gap, 2)",
+    "x": [0, 4],
+    "y": [0.05, 0.95],
+    "marks": [{ "x": 0, "y": 0.5, "label": "no baseline" }],
+    "knobs": [
+      { "id": "gap", "label": "how much better move A pays", "min": 0, "max": 1, "step": 0.1, "value": 0.5 },
+      { "id": "c", "label": "bonus added to every reward", "min": 0, "max": 2, "step": 0.25, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Across: the baseline you subtract. Deep: how often the policy picks move A. Height: how much a single-episode push wobbles. The average push is identical everywhere.",
+          "2": "Two moves with returns r_B = 1 + c and r_A = r_B + gap. Height is the variance of the one-sample REINFORCE gradient for A's logit; its mean, p(1 − p)·gap, has no b in it.",
+          "3": "Var(b) = p(1−p)²(r_A − b)² + (1−p)p²(r_B − b)² − p²(1−p)²(r_A − r_B)²: a quadratic in b at every p."
+        },
+        "view": "iso",
+        "set": { "gap": 0.5, "c": 0 }
+      },
+      {
+        "cap": {
+          "1": "At zero baseline the wall is high. Walk right and it drops to a floor, then climbs again if you overshoot. Subtracting more is not always better.",
+          "2": "Too small a baseline and too large a baseline both hurt; the sweet spot sits among the typical returns.",
+          "3": "The minimum is at b* = (1−p)·r_A + p·r_B, where both outcomes give the same push p(1−p)·gap: zero variance, a special case of two moves with fixed returns."
+        },
+        "view": "front",
+        "set": { "gap": 0.5, "c": 0 }
+      },
+      {
+        "cap": {
+          "1": "Now pay a bonus on every reward, like CartPole's point per step. The no-baseline wall shoots up, and the valley slides right to follow the rewards.",
+          "2": "Adding c to every reward leaves the true gradient untouched but grows the no-baseline variance roughly as c². A baseline that tracks the typical return cancels the shift.",
+          "3": "The offset enters the estimator as c·∇log π(a), zero-mean noise with variance p(1−p)c², which raising b by the same c removes exactly."
+        },
+        "view": "iso",
+        "set": { "gap": 0.5, "c": 2 }
+      },
+      {
+        "cap": {
+          "1": "From above, the valley floor runs at a slant: the best baseline changes with the situation. That is why real baselines are per-state, or learned.",
+          "2": "The zero-wobble baseline moves as the policy changes, so a fixed number goes stale. ARENA recomputes a per-timestep mean every batch; actor-critic learns V(s).",
+          "3": "b*(p) = (1−p)r_A + p·r_B drifts with p. A learned V(s) is the standard practical choice; with more actions or random returns the floor lifts above zero."
+        },
+        "view": "top",
+        "set": { "gap": 0.5, "c": 0 }
+      },
+      {
+        "cap": {
+          "1": "Make both moves pay the same. The true push is zero, yet with no baseline every sample still shoves. Pick the right baseline and every sample says zero.",
+          "2": "With gap = 0 the true gradient is zero. Without a baseline the samples still shove the logit back and forth; at b = r_B every one of them is zero.",
+          "3": "With r_A = r_B = r the estimator is ∇log π(a)·(r − b): pure zero-mean noise, silenced exactly at b = r."
+        },
+        "view": "close",
+        "set": { "gap": 0, "c": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "CartPole pays +1 per step, so every return is positive. With no baseline, what happens to the probability of a bad action you happened to take?",
+        "options": [
+          { "t": "It goes up, just by less than a good one", "ok": true },
+          { "t": "It goes down" },
+          { "t": "It stays the same" }
+        ],
+        "why": "Every weight is positive, so every sampled action gets pushed up. Only a baseline can hand a bad action a negative weight."
+      },
+      {
+        "q": "You subtract the batch's mean return as a baseline. What happens to the expected gradient?",
+        "options": [
+          { "t": "Nothing: it is unchanged", "ok": true },
+          { "t": "It shrinks towards zero" },
+          { "t": "It flips direction" }
+        ],
+        "why": "The baseline doesn't depend on which action was taken, so its term averages to zero: E[∇log π · b(s)] = 0. Only the noise changes."
+      },
+      {
+        "q": "Why must a baseline not depend on which action was taken?",
+        "options": [
+          { "t": "Otherwise it no longer averages out and biases the gradient", "ok": true },
+          { "t": "Otherwise it is too slow to compute" },
+          { "t": "It should: it ought to reward the chosen action" }
+        ],
+        "why": "The cancellation E[∇log π(a|s) · b(s)] = 0 works only because b is the same for every action."
+      }
+    ],
+    "where": "Anywhere a noisy estimate is centred before use: control variates in Monte Carlo, the critic in actor-critic, GRPO's group mean."
+  }
+}

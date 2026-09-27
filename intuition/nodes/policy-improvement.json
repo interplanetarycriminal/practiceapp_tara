@@ -1,0 +1,176 @@
+{
+  "id": "policy-improvement",
+  "title": "Pick the best turn at every junction",
+  "week": 9,
+  "need": "core",
+  "allegory": "Policy improvement is rerouting with a scored map: at every junction, add the reward on each road to the old plan's score for where that road lands, and take the best one; a plan built this way is never worse anywhere.",
+  "map": [
+    ["junctions", "states"],
+    ["the roads out of a junction", "actions"],
+    ["the old plan's score pinned on every junction", "V_π, the value of each state under the current policy"],
+    ["reward on the road plus the score of where it lands", "Q_π(s, a) = Σ T(s'|s,a)(R + γV_π(s'))"],
+    ["taking the best-scoring road at every junction", "π'(s) = argmaxₐ Q_π(s, a), guaranteed V_π' ≥ V_π everywhere"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "A scored map",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "day",
+      "note": "scores in hand... now what?",
+      "actors": [{ "pose": "think", "x": 0.12, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.32, "y": 0.6, "label": "s0: 0", "color": "cream" },
+        { "kind": "card", "x": 0.48, "y": 0.6, "label": "s1: 0", "color": "cream" },
+        { "kind": "card", "x": 0.64, "y": 0.6, "label": "s2: 1", "color": "mint" },
+        { "kind": "flag", "x": 0.82, "y": 0.56, "label": "goal", "color": "green" }
+      ],
+      "arrows": [[0.36, 0.5, 0.45, 0.5, "plan"], [0.45, 0.46, 0.36, 0.46, "plan"]],
+      "cap": {
+        "1": "You have a plan and a score for every square: how good it is to stand there if you follow the plan. Now use those scores to make a better plan.",
+        "2": "Policy evaluation gave you V_π, the value of each state under a fixed policy π. Policy improvement turns those numbers into a new policy that is at least as good.",
+        "3": "Given V_π for a deterministic policy on a known MDP (T and R handed to you as arrays), construct π' with V_π' ≥ V_π in every state."
+      }
+    },
+    {
+      "name": "Look one step ahead",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "point", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "flag", "x": 0.2, "y": 0.2, "label": "junction", "color": "butter" },
+        { "kind": "card", "x": 0.72, "y": 0.26, "label": "road A: +1 now, lands on 0", "color": "peach" },
+        { "kind": "card", "x": 0.72, "y": 0.48, "label": "road B: 0 now, lands on 2", "color": "sky" },
+        { "kind": "card", "x": 0.72, "y": 0.7, "label": "road C: −2 now, lands on 5", "color": "lav" }
+      ],
+      "arrows": [[0.28, 0.44, 0.56, 0.28], [0.28, 0.48, 0.56, 0.48], [0.28, 0.52, 0.56, 0.68]],
+      "cap": {
+        "1": "At a junction, for each road add the reward on it to the score of where it lands. Take the road with the biggest total. Do this at every junction.",
+        "2": "For each state, score each action by expected reward plus γ times the old value of where it leads. The new policy takes the best-scoring action everywhere.",
+        "3": "π'(s) = argmaxₐ Σ_{s'} T(s'|s,a)(R(s,a,s') + γV_π(s')) = argmaxₐ Q_π(s,a): greedy with respect to the old policy's own action values."
+      }
+    },
+    {
+      "name": "The greedy rule",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "π'(s) = ", "c": "ink", "note": "the new plan" },
+        { "t": "argmaxₐ", "c": "orange", "note": "pick the best road" },
+        { "t": " [ R", "c": "green", "note": "reward on the road" },
+        { "t": " + γ·V_π(s')", "c": "sky", "note": "old score of where it lands" },
+        { "t": " ]", "c": "ink", "note": "averaged over landings" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "One line: at every square, pick the move with the best reward-plus-future. The future is priced with the old plan's scores, not the new plan's.",
+        "2": "In code: build a (states × actions) table of one-step values from T, R and V, then take argmax over actions. That is <code>policy_improvement</code>.",
+        "3": "Q = Σ_{s'} T[s,a,s'](R[s,a,s'] + γV[s']) as one einsum, then π' = Q.argmax(-1). V comes from π, so this is a one-step lookahead, not a full re-plan."
+      }
+    },
+    {
+      "name": "Never worse",
+      "need": "core",
+      "dur": 11,
+      "type": "bars",
+      "title": "V before and after one greedy pass (corridor, γ = 0.9)",
+      "labels": ["s0", "s1", "s2"],
+      "from": [0, 0, 1],
+      "to": [0.81, 0.9, 1],
+      "cap": {
+        "1": "A tiny corridor with the goal on the right. The old plan shuffled back and forth in the middle. One greedy pass later, every square's score rose or stayed put.",
+        "2": "Old policy: s0 → right, s1 → left (a loop), s2 → right, so V = [0, 0, 1]. Greedy on V picks right everywhere: V' = [0.81, 0.9, 1].",
+        "3": "Policy improvement theorem: greedy w.r.t. V_π gives V_π' ≥ V_π pointwise. Deterministic policies are finite, so alternating evaluate and improve terminates at an optimum."
+      }
+    },
+    {
+      "name": "The flip-flop",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "ties go to the first action", "c": "mint", "lines": ["same pick every round", "policy stops changing", "loop ends"] },
+      "right": { "title": "ties broken at random", "c": "pink", "lines": ["equal actions swap", "'unchanged' never fires", "loop runs forever"] },
+      "verdict": "Two optimal plans can take turns forever. Break ties the same way every time.",
+      "cap": {
+        "1": "If two roads score exactly the same and you pick between them at random, the plan keeps changing without getting better, so 'nothing changed' never happens.",
+        "2": "find_optimal_policy stops when the policy array is unchanged. Break ties differently each call and two equally good policies swap forever. np.argmax always takes the first maximum.",
+        "3": "Ties in Q_π make the greedy policy non-unique; inconsistent tie-breaking gives a 2-cycle between optimal policies. Compare with (pi_new == pi_old).all(), and keep γ < 1."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Evaluate, then improve: every RL loop", "Q-learning and DQN act greedily on estimates", "Greedy on a flawed score exploits its flaws"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Score the plan, improve it, repeat. Nearly every way of training an agent, including the ones used to shape chatbots, is this loop with the map taken away.",
+        "2": "SARSA, Q-learning and DQN run this loop from samples instead of known T and R. Acting greedily on estimated values is where exploration and over-optimisation troubles start.",
+        "3": "The guarantee assumes exact V_π. Greedy improvement against learned values or rewards also exploits their errors, one reason RLHF keeps a KL penalty to a reference policy."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Three roads out of one junction: which does the greedy step pick?",
+    "labels": ["A: +1 now, lands on 0", "B: 0 now, lands on 2", "C: −2 now, lands on 5 (icy)"],
+    "params": [
+      { "id": "g", "label": "discount γ (how much the future counts)", "min": 0, "max": 0.99, "step": 0.01, "value": 0.3 },
+      { "id": "p", "label": "chance road C slips into a pit (value 0)", "min": 0, "max": 1, "step": 0.05, "value": 0 }
+    ],
+    "f": "[1, 2*g, -2 + 5*g*(1 - p)]",
+    "y": [-2, 3],
+    "readouts": [
+      { "label": "Q values (A, B, C)", "f": "[1, 2*g, -2 + 5*g*(1 - p)].map(v => v.toFixed(2)).join(', ')" },
+      { "label": "greedy choice", "f": "(q => ['A', 'B', 'C'][q.indexOf(max(...q))])([1, 2*g, -2 + 5*g*(1 - p)])" },
+      { "label": "tie?", "f": "(q => q.filter(v => abs(v - max(...q)) < 1e-9).length > 1 ? 'tie: argmax takes the first' : 'no tie')([1, 2*g, -2 + 5*g*(1 - p)])" }
+    ],
+    "caption": {
+      "1": "Slide the discount up and watch the best road change from quick reward (A) to patient payoff (C). At exactly 0.50, A and B tie. Then add ice to road C.",
+      "2": "Each bar is reward + γ × value of where the road lands: the one-step lookahead. Ice lowers C's expected landing value, and the greedy pick falls back to B or A.",
+      "3": "With p = 0 the argmax switches at γ = 0.5 (A to B) and γ = 2/3 (B to C). The slip chance scales C's future term by (1 − p): an expectation over T."
+    }
+  },
+  "where_else": [
+    "Policy iteration: alternate exact evaluation with this greedy step until nothing changes",
+    "Q-learning and DQN: act greedily on estimated Q-values",
+    "Sat-nav rerouting: pick the turn that minimises cost now plus estimated time from there",
+    "RLHF: improving a policy against a learned reward, and why it needs a leash"
+  ],
+  "hamming": {
+    "what": "Build a new plan by taking, in every state, the action with the best one-step lookahead under the current plan's values.",
+    "when": "Right after evaluating a policy, as the second half of policy iteration, and implicitly whenever an agent acts greedily on its value estimates.",
+    "why": "It is guaranteed never to make things worse, so alternating it with evaluation climbs to an optimal policy in a finite number of rounds."
+  },
+  "object": {
+    "title": "The rising gridworld",
+    "subtitle": "A 4 × 4 world with the goal in the top-right corner; each square's pillar is its value after each round of evaluate-then-improve.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 4,
+    "f": "0.1 + 1.5*[[[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], [[0, 0, 1, 0], [0, 0, 0.9, 1], [0, 0, 0.81, 0.9], [0, 0, 0.729, 0.81]], [[0, 0.9, 1, 0], [0, 0.81, 0.9, 1], [0, 0.729, 0.81, 0.9], [0, 0.656, 0.729, 0.81]], [[0.81, 0.9, 1, 0], [0.729, 0.81, 0.9, 1], [0.656, 0.729, 0.81, 0.9], [0.59, 0.656, 0.729, 0.81]]][k][r][c]",
+    "labels": { "rows": ["row 0 (top)", "row 1", "row 2", "row 3"], "cols": ["col 0", "col 1", "col 2", "col 3 (goal top)"] },
+    "c": "good",
+    "knobs": [{ "id": "k", "label": "Round of evaluate-then-improve", "min": 0, "max": 3, "step": 1, "value": 0 }],
+    "beats": [
+      { "cap": { "1": "A 4 × 4 world with the goal in the top-right corner. The first plan, always go left, never gets there, so every square scores 0.", "2": "Round 0: V of the all-left policy is 0 everywhere. The goal square is terminal, so its pillar stays flat.", "3": "γ = 0.9, deterministic moves, +1 only on entering the goal; V_π0 ≡ 0 and greedy ties break to the first action (up)." }, "view": "iso", "set": { "k": 0 } },
+      { "cap": { "1": "One greedy pass. Squares beside the goal step into it, ties elsewhere happen to point up, and the two columns nearest the goal light up.", "2": "Round 1: exact evaluation of the new plan credits every square whose chosen move chains to the goal: 1, 0.9, 0.81, 0.729.", "3": "V_π1 ≥ V_π0 pointwise; each value is γ^(steps − 1) along the chain the new policy follows." }, "view": "front", "set": { "k": 1 } },
+      { "cap": { "1": "Another pass: the good news spreads one column further left. No square ever loses score.", "2": "Round 2: column 1 fills in. Every pillar rose or stayed put: the improvement theorem in action.", "3": "Monotone improvement V_π2 ≥ V_π1; value information propagates outward from the terminal reward." }, "view": "iso", "set": { "k": 2 } },
+      { "cap": { "1": "Round 3: every square has its best score. One more pass only swaps between equally good moves; after that nothing changes and the loop stops.", "2": "Round 3 is optimal, V = γ^(steps − 1). A further pass just swaps tied actions, which is why deterministic tie-breaking lets the loop terminate.", "3": "Three improvements reach V*; the next greedy step changes only tied actions (same V), and the one after leaves the policy array unchanged." }, "view": "top", "set": { "k": 3 } }
+    ],
+    "predict": [
+      { "q": "You act greedily with respect to your current plan's own values. Can the new plan be worse anywhere?", "options": [{ "t": "No: never worse in any state", "ok": true }, { "t": "Yes: it may trade some states for others" }], "why": "The policy improvement theorem: greedy w.r.t. V_π gives V_π' ≥ V_π in every state." },
+      { "q": "Two actions tie for best and you choose randomly each round. What can happen?", "options": [{ "t": "The policy flips forever and the loop never stops", "ok": true }, { "t": "Nothing: ties can't matter" }], "why": "Both policies are optimal, but the 'policy unchanged' check never fires. Break ties deterministically, e.g. with np.argmax." },
+      { "q": "Why is the future priced with the old plan's values, not the new plan's?", "options": [{ "t": "V_π is all you have; the new plan gets scored next round", "ok": true }, { "t": "Old values are always more accurate" }], "why": "Improvement is a one-step lookahead on V_π. Evaluating the new policy is the next half of policy iteration." }
+    ],
+    "where": "Any 'good news spreads backwards from the goal' process: route planning, chess endgame tables, dynamic programming."
+  }
+}
