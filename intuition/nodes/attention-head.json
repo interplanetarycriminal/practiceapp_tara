@@ -1,0 +1,87 @@
+{
+  "id": "attention-head",
+  "title": "Ask the class, copy the notes",
+  "week": 5,
+  "need": "core",
+  "allegory": "An attention head is a pupil in a classroom of notebooks: it asks a question, every pupil sitting earlier holds up a label, the best matches fly their notes over by paper plane, and the pupil adds a summary of those notes into its own notebook.",
+  "map": [
+    ["each pupil's notebook", "each position's residual-stream vector"],
+    ["the question the current pupil asks", "the query, q = x·W_Q"],
+    ["the label each earlier pupil holds up", "the key, k = x·W_K"],
+    ["how well each label fits the question, turned into shares that add up to 1", "the attention pattern: softmax(q·k / √d_head) over earlier positions only"],
+    ["the notes flown over and written into your own notebook", "values weighted by the pattern, mapped through W_O and added to the stream"]
+  ],
+  "credit": "Query, key and value as 'what am I looking for', 'what do I contain' and 'what I will communicate' is Andrej Karpathy's framing, from 'Let's build GPT: from scratch, in code, spelled out'.",
+  "linked_film": "films/deep-w05-attention.html",
+  "linked_object": null,
+  "where_else": [
+    "Induction heads: a learned attention pattern that finds an earlier copy of the current token and reads what came next",
+    "KV caching: past keys and values never change, so they are stored and reused",
+    "Bahdanau, Cho and Bengio's translation model, where the decoder soft-searches every source word",
+    "Any soft lookup: match a query against keys, then take a weighted read of the values"
+  ],
+  "hamming": {
+    "what": "The unit that moves information between positions: each position asks a question, matches it against earlier positions' labels and copies a blend of their contents.",
+    "when": "In every layer of every transformer, and whenever you want to know which earlier tokens influenced the current one.",
+    "why": "It is the only part of a transformer that moves information across positions (the MLPs work within one position), so circuits like induction heads live here."
+  },
+  "object": {
+    "title": "The note-passing grid",
+    "subtitle": "Each row is one pupil sharing out one full unit of attention over the seats it is allowed to see.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "c > r ? 0.02 : 0.02 + 1.5*exp(-sharp*abs(c - (r - lag)))/sum(range(r + 1).map(k => exp(-sharp*abs(k - (r - lag)))))",
+    "labels": { "rows": ["The", "cat", "sat", "on", "the", "mat", "and", "slept"], "cols": ["The", "cat", "sat", "on", "the", "mat", "and", "slept"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "sharp", "label": "How sharply the question matches", "min": 0, "max": 4, "step": 0.25, "value": 2 },
+      { "id": "lag", "label": "Which earlier seat it looks for", "min": 0, "max": 3, "step": 1, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "Each row is one pupil deciding whose notes to copy. Its towers add up to one full share, and nothing stands above the diagonal: no peeking ahead.", "2": "Rows are queries, columns are keys, height is attention weight. Each row sums to 1, and the upper triangle is masked.", "3": "The pattern is softmax over key_pos of q·k/√d_head, with −inf added where key_pos > query_pos." },
+        "view": "iso",
+        "set": { "sharp": 2, "lag": 1 }
+      },
+      {
+        "cap": { "1": "Sharpen the question and each pupil copies almost entirely from the seat just before it. That is a previous-token head.", "2": "Large score gaps make softmax nearly one-hot: each position reads almost only from position t − 1.", "3": "Scaling the logits sharpens the softmax toward an argmax; a previous-token head concentrates mass on key t − 1." },
+        "view": "top",
+        "set": { "sharp": 4, "lag": 1 }
+      },
+      {
+        "cap": { "1": "A vague question spreads the share evenly over everyone visible. Early pupils have few neighbours, so each gets a bigger slice.", "2": "With flat scores the pattern is uniform over visible keys: row t gives each earlier position 1/(t+1).", "3": "Zero logit differences give a uniform distribution over the unmasked prefix, so the head averages the values it can see." },
+        "view": "front",
+        "set": { "sharp": 0, "lag": 1 }
+      },
+      {
+        "cap": { "1": "Change what the question looks for and the ridge moves. Now each pupil mostly reads its own notebook.", "2": "Different W_Q and W_K learn different matching rules; here the peak sits on the diagonal (attend to self).", "3": "The QK circuit alone decides where mass goes; changing it moves the ridge without touching what gets copied." },
+        "view": "side",
+        "set": { "sharp": 3, "lag": 0 }
+      },
+      {
+        "cap": { "1": "Look three seats back. The first pupils can't, so their share piles onto the earliest seat they can see.", "2": "Early rows have fewer visible keys, so their mass lands on the closest allowed position.", "3": "Near the start of the sequence the mask truncates the support, so the softmax puts the mass on the nearest allowed key." },
+        "view": "close",
+        "set": { "sharp": 3, "lag": 3 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Why are there no towers above the diagonal?",
+        "options": [{ "t": "The causal mask: a position may not read later positions", "ok": true }, { "t": "Those weights just happened to be learned as zero" }],
+        "why": "Scores for later keys are set to −inf before the softmax, so they get exactly zero share."
+      },
+      {
+        "q": "Why mask the scores to −inf instead of zeroing the probabilities after the softmax?",
+        "options": [{ "t": "So each row still sums to 1", "ok": true }, { "t": "It is faster on a GPU" }],
+        "why": "Zeroing after the softmax leaves rows summing to less than 1, silently shrinking the head's output, worst at early positions."
+      },
+      {
+        "q": "The query-key match decides where to look. What decides what gets copied?",
+        "options": [{ "t": "The value and output maps", "ok": true }, { "t": "The query, again" }, { "t": "The softmax" }],
+        "why": "QK picks the positions; W_V and then W_O decide what information moves and where it is written in the stream."
+      }
+    ],
+    "where": "Any soft lookup: a query matched against keys, then a weighted read of values, as in KV caches and retrieval."
+  }
+}

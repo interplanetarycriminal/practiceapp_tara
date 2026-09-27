@@ -1,0 +1,201 @@
+{
+  "id": "gelu",
+  "title": "The doorman who plays the odds",
+  "week": 5,
+  "need": "library",
+  "allegory": "GELU is a doorman who lets each number in with odds that rise smoothly with its size, and the output is the average of what gets through: the number times its odds of entry.",
+  "map": [
+    ["a number arriving at the door", "one pre-activation value x in the MLP's hidden layer"],
+    ["the doorman's odds, rising smoothly with size", "Φ(x), the standard normal CDF: near 0 far left, near 1 far right"],
+    ["the average of what gets through", "GELU(x) = x · Φ(x)"],
+    ["a strict doorman: in if positive, out if not", "ReLU(x) = max(0, x), a hard switch with a corner at 0"],
+    ["small negatives sometimes slipping in", "GELU's shallow dip below zero for mildly negative x"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Why bend at all",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "straight, then straight, is still straight",
+      "actors": [{ "pose": "think", "x": 0.16, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.42, "y": 0.55, "w": 0.16, "h": 0.2, "label": "linear map 1", "color": "sky" },
+        { "kind": "box", "x": 0.78, "y": 0.55, "w": 0.16, "h": 0.2, "label": "linear map 2", "color": "sky" },
+        { "kind": "card", "x": 0.6, "y": 0.2, "label": "a bend goes here", "color": "butter" }
+      ],
+      "arrows": [[0.51, 0.55, 0.69, 0.55, "?"]],
+      "cap": {
+        "1": "A transformer's MLP is two straight-line maps in a row. Without a bend between them they squash into one straight map, so something has to bend.",
+        "2": "Linear then linear is still linear: W₂(W₁x) = (W₂W₁)x. The non-linearity between the two maps is what lets the MLP compute more than one matrix could.",
+        "3": "A composition of affine maps is affine, so an MLP without an activation has no more expressive power than one linear layer. The activation supplies the non-linearity."
+      }
+    },
+    {
+      "name": "The kind doorman",
+      "need": "library",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "wave", "x": 0.5, "label": "GELU" }],
+      "props": [
+        { "kind": "door", "x": 0.62, "y": 0.5, "w": 0.12, "h": 0.4, "label": "the MLP's hidden layer", "color": "peach" },
+        { "kind": "card", "x": 0.2, "y": 0.3, "label": "+2: nearly always in", "color": "mint" },
+        { "kind": "card", "x": 0.2, "y": 0.6, "label": "−2: almost never", "color": "pink" }
+      ],
+      "arrows": [[0.3, 0.3, 0.55, 0.45, ""], [0.3, 0.6, 0.45, 0.62, ""]],
+      "cap": {
+        "1": "A doorman lets each number in with odds that grow with its size: big ones nearly always, very negative ones almost never. GELU is the average result.",
+        "2": "GELU multiplies each input by the chance that a standard normal sample falls below it. Big positives pass almost unchanged, big negatives go to about zero, the middle is smooth.",
+        "3": "GELU(x) = x·Φ(x), Φ the standard normal CDF: the expectation of x·m with m ~ Bernoulli(Φ(x)), a value-dependent dropout averaged out. Smooth everywhere, unlike ReLU."
+      }
+    },
+    {
+      "name": "Number times odds",
+      "need": "library",
+      "dur": 9,
+      "type": "equation",
+      "parts": [
+        { "t": "GELU(x) = ", "c": "ink", "note": "" },
+        { "t": "x", "c": "sky", "note": "the number at the door" },
+        { "t": " · ", "c": "ink", "note": "" },
+        { "t": "Φ(x)", "c": "orange", "note": "its odds of getting in" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "The whole rule: the number, times the chance it gets in. That chance is a smooth S-shaped curve, near 0 on the far left and near 1 on the far right.",
+        "2": "Φ is the normal CDF, an S-curve like sigmoid. Libraries often compute it with a fast tanh-based approximation. Either way it is one function call.",
+        "3": "Φ(x) = ½(1 + erf(x/√2)); a tanh approximation is common and differs from exact GELU by well under 10⁻³. In PyTorch it is F.gelu, with an approximate='tanh' option."
+      }
+    },
+    {
+      "name": "Next to ReLU",
+      "need": "library",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "x * 0.5 * (1 + tanh(sqrt(2 / PI) * (x + 0.044715 * x * x * x)))", "c": "orange", "label": "GELU" },
+        { "f": "relu(x)", "c": "ink", "label": "ReLU" }
+      ],
+      "x": [-3, 3],
+      "y": [-0.5, 3],
+      "dot": true,
+      "marks": [{ "x": 0, "label": "ReLU's corner" }],
+      "cap": {
+        "1": "Next to ReLU, the strict doorman, they match far from zero. GELU just rounds off the corner and lets mildly negative numbers dip a little below zero.",
+        "2": "Far from zero they agree. Near zero GELU is smooth and slightly negative for mildly negative inputs, so its gradient there is not flatly zero.",
+        "3": "GELU is smooth and non-monotonic, with a shallow minimum just left of 0 and non-zero gradient for x < 0; ReLU is piecewise linear with zero gradient for x < 0."
+      }
+    },
+    {
+      "name": "Call it, move on",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["One library call: F.gelu", "Big in, same out; very negative in, about zero out", "An MLP 'neuron' is one of these outputs"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "You will never need to build this by hand. Remember what it does, call the library, and spend your attention on what the MLP learns.",
+        "2": "It is a single call in every framework. What matters later is that each hidden unit's GELU output is what people mean by a neuron firing.",
+        "3": "In interpretability, 'MLP neurons' are the post-activation hidden units. Knowing GELU passes large values and near-zeroes negative ones tells you what a neuron's firing can mean."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Make the doorman stricter and watch GELU turn into ReLU",
+    "params": [
+      { "id": "k", "label": "doorman strictness k", "min": 0.5, "max": 10, "step": 0.5, "value": 1 },
+      { "id": "x0", "label": "a number at the door", "min": -3, "max": 3, "step": 0.1, "value": -0.8 }
+    ],
+    "curves": [
+      { "f": "x * 0.5 * (1 + tanh(sqrt(2 / PI) * (k * x + 0.044715 * pow(k * x, 3))))", "c": "orange", "label": "x · Φ(kx): GELU at k = 1" },
+      { "f": "relu(x)", "c": "ink", "label": "ReLU" },
+      { "f": "0.5 * (1 + tanh(sqrt(2 / PI) * (k * x + 0.044715 * pow(k * x, 3))))", "c": "sky", "label": "the odds Φ(kx)" }
+    ],
+    "x": [-3, 3],
+    "y": [-0.5, 3],
+    "readouts": [
+      { "label": "odds the number gets in", "f": "round(100 * 0.5 * (1 + tanh(sqrt(2 / PI) * (k * x0 + 0.044715 * pow(k * x0, 3))))) + '%'" },
+      { "label": "average that gets through", "f": "round(1000 * x0 * 0.5 * (1 + tanh(sqrt(2 / PI) * (k * x0 + 0.044715 * pow(k * x0, 3))))) / 1000" },
+      { "label": "ReLU would give", "f": "round(1000 * relu(x0)) / 1000" }
+    ],
+    "caption": {
+      "1": "At −0.8 a number gets in about a fifth of the time, so the average is a little below zero. Now raise the strictness and watch the orange curve become ReLU.",
+      "2": "At k = 1 the orange curve is GELU. Raise k and the blue S-curve sharpens into a step, so x·Φ(kx) turns into ReLU: GELU is ReLU with the corner sanded smooth.",
+      "3": "x·Φ(kx) → ReLU as k → ∞. At k = 1 you get GELU's smooth, non-monotonic dip for x < 0, which is where its non-zero negative-side gradients live."
+    }
+  },
+  "where_else": [
+    "SiLU (Swish), x · sigmoid(x): the same 'value times a soft gate' idea",
+    "Gated MLPs, where one branch computes a soft gate that multiplies another",
+    "Dropout: GELU is the smooth average of a dropout whose odds depend on the value"
+  ],
+  "hamming": {
+    "what": "A smooth ReLU: each input times the chance a standard normal sample falls below it, x·Φ(x).",
+    "when": "Between the two linear maps of a transformer's MLP, as one library call.",
+    "why": "The MLP needs a bend to be more than one matrix; smoothness and non-zero gradients just left of zero are the usual reasons given for this particular bend."
+  },
+  "object": {
+    "title": "The sanding block",
+    "subtitle": "A ridge whose corner is sharp at one end (ReLU) and sanded smooth at the other (GELU).",
+    "kind": "surface",
+    "f": "x * 0.5 * (1 + tanh(sqrt(2 / PI) * (y * x + 0.044715 * pow(y * x, 3))))",
+    "x": [-3, 3],
+    "y": [0.5, 8],
+    "marks": [
+      { "x": 0, "y": 1, "label": "GELU (k = 1)" },
+      { "x": 0, "y": 8, "label": "almost ReLU" }
+    ],
+    "knobs": [],
+    "beats": [
+      {
+        "cap": { "1": "Across the block: the number at the door. Along it: how strict the doorman is. Height: what comes out on average.", "2": "x = input, y = strictness k, height = x·Φ(kx). Every slice across the block is one activation function.", "3": "The family x·Φ(kx), k ∈ [0.5, 8]: a one-parameter homotopy from a very soft gate to (nearly) ReLU." },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": { "1": "The slice at strictness 1 is GELU: a rounded corner with a small dip on the left.", "2": "At k = 1 the slice is exactly GELU. The dip left of zero is where small negative inputs still pass a little signal.", "3": "The k = 1 section is GELU, with its shallow negative minimum left of 0 and a smooth derivative through the origin." },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": { "1": "At the far end the doorman is strict and the corner is sharp. That slice is ReLU.", "2": "As k grows, Φ(kx) becomes a step, so the slice becomes max(0, x).", "3": "Pointwise, x·Φ(kx) → max(0, x) as k → ∞; the negative dip shrinks towards zero." },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": { "1": "Far from zero every slice agrees: big numbers pass, very negative ones vanish. Only the corner changes.", "2": "The choice of activation mostly matters near zero. Far out, all these gates behave the same.", "3": "The members of the family differ only in a neighbourhood of 0; asymptotically all approach identity for x ≫ 0 and 0 for x ≪ 0." },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": { "1": "In interpretability, an MLP 'neuron' is one of these outputs. A neuron firing means its output here is large.", "2": "Each hidden unit of the MLP produces one GELU output. Reading those outputs is how people study what individual neurons respond to.", "3": "Post-activation MLP hidden units are the 'neurons' of mechanistic interpretability; GELU's near-zero negative side makes large positive activations the meaningful signal." },
+        "view": "close",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "What happens to a large positive number passing through GELU?",
+        "options": [{ "t": "It comes out almost unchanged", "ok": true }, { "t": "It gets squashed below 1" }],
+        "why": "For big x the odds Φ(x) are nearly 1, so GELU(x) is nearly x."
+      },
+      {
+        "q": "What does GELU give for a mildly negative input like −0.5?",
+        "options": [{ "t": "Slightly below zero", "ok": true }, { "t": "Exactly zero, like ReLU" }],
+        "why": "It gets in some of the time, so the average is a small negative number (about −0.15)."
+      },
+      {
+        "q": "Take the non-linearity out of an MLP. What is left?",
+        "options": [{ "t": "A single linear map in disguise", "ok": true }, { "t": "A weaker but still non-linear layer" }],
+        "why": "Two linear maps in a row multiply into one matrix."
+      }
+    ],
+    "where": "Anywhere a value is multiplied by a soft gate instead of switched: SiLU, gated MLPs, averaged dropout."
+  }
+}

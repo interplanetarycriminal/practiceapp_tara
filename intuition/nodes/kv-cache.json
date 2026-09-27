@@ -1,0 +1,237 @@
+{
+  "id": "kv-cache",
+  "title": "Pin the name tags up once",
+  "week": 5,
+  "need": "exercise",
+  "allegory": "A KV cache is a corkboard at a party: every guest pins up a name tag and a note exactly once, each newcomer pins their own and reads the board to decide who to listen to, and nobody ever re-introduces themselves.",
+  "map": [
+    ["each guest already at the party", "an earlier token position"],
+    ["the name tag they pin up", "its key vector, stored per layer and head"],
+    ["the note pinned under the tag", "its value vector"],
+    ["the newcomer's question, checked against every tag", "the new token's query, scored against all cached keys"],
+    ["tags never change once pinned", "under the causal mask, past keys and values depend only on past tokens, so reuse is exact"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Endless introductions",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "note": "run the whole prompt again ... for every word?",
+      "actors": [{ "pose": "slump", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.65, "y": 0.3, "label": "My life motto:", "color": "cream" },
+        { "kind": "card", "x": 0.65, "y": 0.5, "label": "My life motto: Always", "color": "cream" },
+        { "kind": "card", "x": 0.65, "y": 0.7, "label": "My life motto: Always be ...", "color": "peach" }
+      ],
+      "cap": {
+        "1": "To write one more word, the model re-reads the whole text from the start and redoes every sum it already did. The longer the text, the slower each word.",
+        "2": "A naive loop feeds <code>'My life motto:'</code>, gets 'Always', then feeds the whole prompt plus 'Always' again. Everything about 'My' is recomputed, identically, every step.",
+        "3": "Uncached decoding re-runs the full forward pass over the growing prefix for each new token: every earlier position's activations are recomputed although none of them can change."
+      }
+    },
+    {
+      "name": "The corkboard",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "walk", "x": 0.1, "to": 0.4, "label": "Always (new)" },
+        { "pose": "idle", "x": 0.85, "label": "motto:" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.52, "y": 0.22, "label": "My: tag + note", "color": "butter" },
+        { "kind": "card", "x": 0.68, "y": 0.22, "label": "life: tag + note", "color": "butter" },
+        { "kind": "card", "x": 0.84, "y": 0.22, "label": "motto: tag + note", "color": "butter" }
+      ],
+      "arrows": [[0.42, 0.45, 0.6, 0.3, "pin mine, read theirs"]],
+      "cap": {
+        "1": "Picture a party where each guest pins a name tag and a note to a corkboard, once. A newcomer adds theirs, reads the board, and nobody re-introduces themselves.",
+        "2": "Attention needs two things from earlier positions: keys (what they offer to be matched on) and values (what they pass on). Cache both per layer, then feed only the new token.",
+        "3": "At each layer, position t reads K and V from positions ≤ t. Those depend only on their own residual streams, which are already final, so caching per layer and appending is exact."
+      }
+    },
+    {
+      "name": "One new row",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "one layer's cache: only the last row is new",
+      "rows": 4,
+      "cols": 2,
+      "values": [["k₀", "v₀"], ["k₁", "v₁"], ["k₂", "v₂"], ["k₃", "v₃"]],
+      "labels": { "rows": ["My", "life", "motto:", "Always (new)"], "cols": ["key", "value"] },
+      "highlight": [[3, 0], [3, 1]],
+      "cap": {
+        "1": "Each step adds one row to the board. Only the newcomer's tag and note are worked out; every row above is simply read back.",
+        "2": "Per layer, the cache holds keys and values for every position so far; ARENA suggests one tensor shaped (2, batch, seq_len, n_heads, d_head) per layer. Each step appends a position.",
+        "3": "Per new token, projections and MLPs run on 1 position instead of n, but attention still reads all n cached K and V: scores are [query_pos=1, key_pos=cached_len+1]."
+      }
+    },
+    {
+      "name": "Why it is exact",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "softmax(", "c": "ink", "note": "" },
+        { "t": "q", "c": "orange", "note": "new: the newcomer's question" },
+        { "t": "·Kᵀ", "c": "sky", "note": "tags: cached, plus one" },
+        { "t": "/√d)", "c": "ink", "note": "" },
+        { "t": "·V", "c": "mint", "note": "notes: cached, plus one" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "The newcomer's question is new, but every tag and note it reads was already on the board. Nothing an earlier guest pinned can depend on a later one.",
+        "2": "Only the new token's q, k and v are computed fresh. Old keys and values came from old tokens only, thanks to the causal mask, so reusing them gives the same output.",
+        "3": "Causality makes k_i and v_i functions of tokens ≤ i only, so cached attention is mathematically the same computation. Verify: cached and uncached decoding give identical token ids."
+      }
+    },
+    {
+      "name": "The wrong seat",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "W_pos[cached_len + i]", "c": "mint", "lines": ["newcomer gets seat 47", "matches the uncached run", "same tokens out"] },
+      "right": { "title": "W_pos[i]", "c": "pink", "lines": ["newcomer told 'seat 0'", "first token still matches", "then drifts, no error"] },
+      "verdict": "Offset positions by the cached length, then check the tokens match.",
+      "cap": {
+        "1": "The trap: the newcomer walks in alone, so they get told 'you are seat 0'. Wrong seat, so every answer after drifts, and nothing complains.",
+        "2": "Feed one token and <code>PosEmbed</code> adds <code>W_pos[0]</code> to a token at position 47. The first token matches, then output drifts. Index <code>W_pos[cached_len : cached_len + n_new]</code>.",
+        "3": "Absolute positional embeddings must be offset by the cached length; the causal mask has the mirror bug, so build it for cached_len + n_new keys. Assert cached and uncached ids match."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Why generation is fast", "Why MQA and GQA exist: the cache is the bottleneck", "KV cache vs activation cache: know which you read"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Text that appears word by word leans on this trick. And two different things get called 'cache': one for speed, one for looking inside a model.",
+        "2": "Shazeer (2019) showed decoding is slowed by hauling K and V out of memory; multi-query attention shares one K and V across heads to shrink it. Grouped-query attention came later.",
+        "3": "When you hook or steer a model during generation, the KV cache keeps K and V computed before any edit you add later, and the activation cache is a separate object. Know which you read."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "How much work does the cache save?",
+    "params": [
+      { "id": "n0", "label": "prompt length (tokens)", "min": 1, "max": 100, "step": 1, "value": 20 },
+      { "id": "m", "label": "tokens to generate", "min": 1, "max": 100, "step": 1, "value": 50 }
+    ],
+    "curves": [
+      { "f": "n0 + x", "c": "red", "label": "no cache: positions run at step x" },
+      { "f": "x < 1 ? n0 : 1", "c": "green", "label": "with cache: positions run at step x" }
+    ],
+    "x": [0, 100],
+    "y": [0, 200],
+    "readouts": [
+      { "label": "positions run in total, no cache", "f": "m*n0 + m*(m - 1)/2" },
+      { "label": "positions run in total, with cache", "f": "n0 + m - 1" },
+      { "label": "work saved", "f": "((m*n0 + m*(m - 1)/2)/(n0 + m - 1)).toFixed(1) + 'x fewer positions'" },
+      { "label": "keys the last step must still read (cache or not)", "f": "n0 + m - 1" }
+    ],
+    "caption": {
+      "1": "Slide the prompt and reply lengths. Without a cache the work per word keeps climbing; with one it drops to one word after the prompt. Watch the total saved.",
+      "2": "No cache: step k re-runs n0 + k − 1 positions. With a cache: the prompt once, then one position per step. But the last step still reads every cached key and value.",
+      "3": "Totals: m·n0 + m(m−1)/2 versus n0 + m − 1 positions through MLPs and projections. Attention still reads n0 + m − 1 keys per step; that memory traffic is what MQA shrinks."
+    }
+  },
+  "where_else": [
+    "Beam search: beams share a prefix, so they can share cached keys and values, as long as nobody edits the cache in place",
+    "Multi-query and grouped-query attention: designs that exist to shrink this cache",
+    "Memoisation anywhere: keep a result that can never change instead of recomputing it"
+  ],
+  "hamming": {
+    "what": "Saving every layer's keys and values for past tokens, so each new token is the only one pushed through the model.",
+    "when": "Whenever a model generates text one token at a time; you build it once in [1.1], then it is a flag in the library.",
+    "why": "Under a causal mask past keys and values can never change, so recomputing them is pure waste, and at scale the saved cache itself becomes the bottleneck."
+  },
+  "object": {
+    "title": "The cache shelf",
+    "subtitle": "One shelf per layer, one column per token so far; turn the knobs to generate words and to share keys across heads.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 10,
+    "f": "c < 3 + t ? 0.2*kv*(c == 2 + t ? 1.25 : 1) : 0.02",
+    "labels": { "rows": ["layer 0", "layer 1", "layer 2", "layer 3"], "cols": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"] },
+    "c": "data",
+    "knobs": [
+      { "id": "t", "label": "words generated so far", "min": 0, "max": 7, "step": 1, "value": 0 },
+      { "id": "kv", "label": "key/value heads per layer (8 = one per head)", "min": 1, "max": 8, "step": 1, "value": 8 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "After reading the three-word prompt, every layer's shelf holds a key and a value for each prompt word.",
+          "2": "The prompt pass fills the cache: for each layer, K and V at positions 0 to 2. The tallest column is the one just added.",
+          "3": "Cache after prefill: per layer, K and V for all prompt positions. Column height ∝ bytes per position per layer."
+        },
+        "view": "iso",
+        "set": { "t": 0, "kv": 8 }
+      },
+      {
+        "cap": {
+          "1": "Three words later, each shelf has three more columns. Nothing already on the shelf was ever worked out again.",
+          "2": "Each decode step appends one column to every layer. Old columns are read back, never recomputed.",
+          "3": "Decode appends one position per layer per step; earlier entries are immutable under causal masking."
+        },
+        "view": "front",
+        "set": { "t": 3, "kv": 8 }
+      },
+      {
+        "cap": {
+          "1": "The shelf keeps growing with the text, and every new word must read all of it. That reading, not the arithmetic, is the slow part.",
+          "2": "Every step reads the whole cache from memory. Shazeer (2019) found this loading, not compute, is what limits decoding speed.",
+          "3": "Incremental decoding is memory-bandwidth bound: each step streams all cached K and V through the attention computation."
+        },
+        "view": "front",
+        "set": { "t": 7, "kv": 8 }
+      },
+      {
+        "cap": {
+          "1": "Multi-query attention: all the heads share one tag and one note per word, so every column shrinks to a sliver.",
+          "2": "MQA keeps one K and one V per layer instead of one per head: the cache shrinks by roughly a factor of n_heads.",
+          "3": "One shared K/V head reduces cache size and bandwidth about n_heads-fold, at a minor quality cost per Shazeer (2019)."
+        },
+        "view": "iso",
+        "set": { "t": 7, "kv": 1 }
+      },
+      {
+        "cap": {
+          "1": "Grouped-query attention: a few shared tags per word, a middle ground between one per head and one for all.",
+          "2": "GQA uses a handful of K/V heads, each shared by a group of query heads: a middle ground between full heads and MQA.",
+          "3": "GQA interpolates between multi-head (kv = n_heads) and multi-query (kv = 1), trading cache size against quality."
+        },
+        "view": "iso",
+        "set": { "t": 7, "kv": 2 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "With a KV cache, what does the new token still do at each layer?",
+        "options": [{ "t": "Compute its own q, k, v and read every cached key and value", "ok": true }, { "t": "Nothing: attention is skipped" }, { "t": "Recompute all earlier keys and values" }],
+        "why": "Caching removes recomputation, not reading. The new query is still scored against every cached key."
+      },
+      {
+        "q": "Cached and uncached generation agree on the first token, then drift apart. First suspect?",
+        "options": [{ "t": "Positions not offset by the cached length", "ok": true }, { "t": "The cache is too small" }, { "t": "Random sampling noise" }],
+        "why": "Fed alone, the new token sits at input index 0 and gets W_pos[0] unless you offset by the cached length."
+      },
+      {
+        "q": "Why share one key and value across all heads (multi-query attention)?",
+        "options": [{ "t": "Decoding is limited by loading K and V, so a smaller cache is faster", "ok": true }, { "t": "It makes training more accurate" }],
+        "why": "Shazeer (2019) showed incremental decoding is memory-bandwidth bound; shrinking the cache speeds it up with minor quality loss."
+      }
+    ],
+    "where": "Anything that memoises work it will need again: web caches, dynamic programming tables, build caches."
+  }
+}

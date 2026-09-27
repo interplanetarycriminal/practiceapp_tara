@@ -1,0 +1,159 @@
+{
+  "id": "transformer-block",
+  "title": "A meeting, then quiet study",
+  "week": 5,
+  "need": "core",
+  "allegory": "A transformer block is like one shift for a row of words, each with its own notebook: first a meeting where each word may read earlier words' notebooks, then quiet study where each word thinks alone, and both shifts add notes without ever erasing.",
+  "map": [
+    ["each word's own notebook, carried from shift to shift", "the residual stream at each position"],
+    ["the meeting, where you may read earlier words' notebooks", "attention: the only step that moves information between positions (causally)"],
+    ["quiet study, alone with your own notebook", "the MLP: applied to each position independently"],
+    ["adding notes in the margin, never erasing", "residual addition: x = x + sublayer(LN(x))"],
+    ["the reading lamp that evens out the page before you read it", "pre-LN: LayerNorm on each sublayer's input copy, never on the stream itself"]
+  ],
+  "credit": "The 'vectors talk to each other in attention, then are each processed alone in the MLP' framing follows 3Blue1Brown, Deep Learning ch.5 (But what is a GPT?).",
+  "linked_film": null,
+  "linked_object": "o/north-machine.html",
+  "chapters": [
+    {
+      "name": "A tower of twins",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "understand one block, understand the tower",
+      "actors": [{ "pose": "think", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.65, "y": 0.5, "w": 0.2, "h": 0.6, "label": "identical blocks", "color": "lav" },
+        { "kind": "card", "x": 0.65, "y": 0.12, "label": "next-token scores", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A language model is a tall tower of identical blocks; GPT-2 small stacks twelve. Understand one block and you understand the whole tower.",
+        "2": "Tokens become vectors, pass through n_layers identical blocks, then become next-token scores. Your exercise builds one <code>TransformerBlock</code>; the model loops over a stack of them.",
+        "3": "Decoder-only transformer: embed + positional embed, then n_layers blocks, then ln_final and W_U. Every block shares one structure with its own weights; depth is repetition, not new architecture."
+      }
+    },
+    {
+      "name": "Meeting, then study",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "walk", "x": 0.14, "to": 0.3, "label": "a word" },
+        { "pose": "sit", "x": 0.78, "label": "same word, later" }
+      ],
+      "props": [
+        { "kind": "door", "x": 0.42, "y": 0.45, "label": "meeting (attention)", "color": "peach" },
+        { "kind": "door", "x": 0.64, "y": 0.45, "label": "study (MLP)", "color": "mint" },
+        { "kind": "card", "x": 0.53, "y": 0.15, "label": "notebook: add, never erase", "color": "butter" },
+        { "kind": "lamp", "x": 0.92, "y": 0.5, "label": "LayerNorm" }
+      ],
+      "cap": {
+        "1": "Each word keeps a notebook. In each block it goes to a meeting to read earlier words' notebooks, then to quiet study to think alone. Notes are only ever added.",
+        "2": "Attention moves information between positions, only from earlier ones. The MLP then processes each position on its own. Both write back by adding to the residual stream.",
+        "3": "Attention is the only cross-position operation; the MLP is position-wise. A rough first division of labour: attention routes, the MLP computes, both through additive writes to a shared stream."
+      }
+    },
+    {
+      "name": "The two lines",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "x += ", "c": "ink", "note": "add, never overwrite" },
+        { "t": "attn(LN(x))", "c": "orange", "note": "the meeting" },
+        { "t": "; x += ", "c": "ink", "note": "" },
+        { "t": "mlp(LN(x))", "c": "teal", "note": "quiet study" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The whole block is two lines. Read your notebook under the lamp, go to the meeting, add what you learned. Then the same again for quiet study.",
+        "2": "<code>x = x + attn(ln1(x))</code>, then <code>x = x + mlp(ln2(x))</code>. The <code>x +</code> is the residual connection; LayerNorm only touches the copy each sublayer reads.",
+        "3": "Pre-LN, as in GPT-2: LayerNorm normalises the sublayer input, never the stream. Additive residuals make the stream a running sum of every write, which later decomposition relies on."
+      }
+    },
+    {
+      "name": "Two side roads",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "pre", "label": "resid_pre", "x": 0.06, "y": 0.6, "c": "sky" },
+        { "id": "ln1", "label": "LN", "x": 0.2, "y": 0.28, "c": "lav" },
+        { "id": "attn", "label": "attention", "x": 0.33, "y": 0.28, "c": "orange" },
+        { "id": "add1", "label": "+", "x": 0.46, "y": 0.6, "c": "green" },
+        { "id": "ln2", "label": "LN", "x": 0.58, "y": 0.28, "c": "lav" },
+        { "id": "mlp", "label": "MLP", "x": 0.71, "y": 0.28, "c": "teal" },
+        { "id": "add2", "label": "+", "x": 0.84, "y": 0.6, "c": "green" },
+        { "id": "post", "label": "resid_post", "x": 0.95, "y": 0.6, "c": "sky" }
+      ],
+      "edges": [
+        ["pre", "ln1"], ["ln1", "attn"], ["attn", "add1", "write"], ["pre", "add1", "skip"],
+        ["add1", "ln2"], ["ln2", "mlp"], ["mlp", "add2", "write"], ["add1", "add2", "skip"], ["add2", "post"]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "Draw it as a road with two detours. The main road carries the notebook straight through; each detour does some work and merges its notes back in.",
+        "2": "The skip path carries x unchanged; each sublayer branches off, computes, and rejoins with a plus. resid_pre, resid_mid and resid_post are the checkpoints you will hook later.",
+        "3": "Each block has an identity path, so gradients reach early layers directly and the final stream is embed + Σ sublayer outputs. TransformerLens names them hook_resid_pre, _mid and _post."
+      }
+    },
+    {
+      "name": "The missing plus",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "x = x + attn(...)", "c": "mint", "lines": ["notes added", "earlier notes still readable", "loss falls"] },
+      "right": { "title": "x = attn(...)", "c": "pink", "lines": ["notebook overwritten", "embedding gone at block 0", "loss stuck near 10.8"] },
+      "verdict": "Same shapes, no error. 10.8 is log(50257): a model guessing uniformly.",
+      "cap": {
+        "1": "The classic slip is forgetting the plus. Each room now tears out the notebook and writes a fresh one, everything before is lost, and the model learns nothing.",
+        "2": "<code>resid = attn(ln1(resid))</code> runs fine with the same shapes. But the loss sits near 10.8 = log(50257), the loss of guessing uniformly over GPT-2's vocabulary.",
+        "3": "Without the addition the embedding is destroyed at block 0, no layer can read earlier writes, and the gradient loses its short path. Diff resid_post per layer against the reference to find it."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["The stream is a sum you can take apart", "Every interp tool reads this skeleton", "n layers = n blocks = 2n sublayers"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Nearly everything later in the course is a statement about this block. Because notes are only ever added, you can later ask who wrote what.",
+        "2": "Because every sublayer adds to the stream, the final state is a sum of contributions you can attribute, patch or steer. TransformerLens and RLHF both sit on top of this skeleton.",
+        "3": "Additivity is what makes logit attribution, activation patching and steering vectors well defined. Understanding and steering a model starts with knowing where each write lands."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Who reads whom: tap a cell to let a word read an earlier word",
+    "rows": 6,
+    "cols": 6,
+    "init": "c == r - 1 ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "the last word hears from, after 1 block", "f": "(k => { let s = new Set([5]); for (let t = 0; t < k; t++) { const n = new Set(s); s.forEach(i => G[i].forEach((v, j) => { if (v && j < i) n.add(j); })); s = n; } return [...s].sort((a, b) => a - b).join(', '); })(1)" },
+      { "label": "after 2 blocks", "f": "(k => { let s = new Set([5]); for (let t = 0; t < k; t++) { const n = new Set(s); s.forEach(i => G[i].forEach((v, j) => { if (v && j < i) n.add(j); })); s = n; } return [...s].sort((a, b) => a - b).join(', '); })(2)" },
+      { "label": "after 3 blocks", "f": "(k => { let s = new Set([5]); for (let t = 0; t < k; t++) { const n = new Set(s); s.forEach(i => G[i].forEach((v, j) => { if (v && j < i) n.add(j); })); s = n; } return [...s].sort((a, b) => a - b).join(', '); })(3)" },
+      { "label": "peeks at the future, blocked by the causal mask", "f": "sum(G.map((row, i) => sum(row.map((v, j) => (v && j > i) ? 1 : 0))))" }
+    ],
+    "caption": {
+      "1": "Each row is a word; tap a cell to let that word read an earlier one. Watch how far news travels to the last word after one, two and three blocks.",
+      "2": "Attention moves information between positions, and stacking blocks lets it hop. If each word reads only its neighbour, news travels one step per block. Cells right of the diagonal are masked.",
+      "3": "Because blocks add into a shared stream, a later head can read what an earlier head wrote at another position, so paths compose across layers. Induction heads rely on a two-block path like this."
+    }
+  },
+  "where_else": [
+    "Every transformer, from GPT-2 to today's chat models and vision transformers, repeats this block",
+    "Interpretability: logit attribution, activation patching and steering all assume the additive stream",
+    "ResNets in vision: the same add-don't-overwrite skip path that lets deep stacks train"
+  ],
+  "hamming": {
+    "what": "The repeating unit of a transformer: attention, then an MLP, each reading a normalised copy of the residual stream and adding its output back.",
+    "when": "Every time you build, load, train or take apart a transformer, which is most of this course.",
+    "why": "Adding instead of overwriting keeps every earlier write readable and gives gradients a straight path back, so deep stacks train and can later be taken apart."
+  }
+}

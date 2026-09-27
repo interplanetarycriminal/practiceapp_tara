@@ -1,0 +1,264 @@
+{
+  "id": "layernorm",
+  "title": "Auto-exposure for every token",
+  "week": 5,
+  "need": "core",
+  "allegory": "LayerNorm is like auto-exposure on every photo: each token's vector has its own average brightness subtracted and its contrast set to a standard, then the studio's fixed colour grade is applied, so a dark shot and a bright shot of the same scene come out the same.",
+  "map": [
+    ["one photo", "one token's residual vector, d_model numbers"],
+    ["subtract the photo's average brightness", "x - mean(x), taken over d_model"],
+    ["set the contrast to a standard range", "divide by √(var(x) + ε)"],
+    ["the studio's colour grade, applied after", "learned gain w and bias b, one per feature"],
+    ["the exposure dial depends on the photo itself", "the scale 1/√(var + ε) depends on x, so LayerNorm is not linear"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Numbers adrift",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "every layer adds to the pile ... how big is it now?",
+      "actors": [{ "pose": "recoil", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.5, "y": 0.66, "w": 0.1, "h": 0.14, "label": "token A: tiny", "color": "sky" },
+        { "kind": "stack", "x": 0.72, "y": 0.52, "w": 0.14, "h": 0.46, "label": "token B: huge", "color": "orange" },
+        { "kind": "box", "x": 0.9, "y": 0.6, "w": 0.12, "h": 0.2, "label": "next layer", "color": "lav" }
+      ],
+      "arrows": [[0.8, 0.5, 0.85, 0.56, "reads both"]],
+      "cap": {
+        "1": "A transformer keeps a running total for every word, and each layer adds to it. The numbers the next layer reads could drift to almost any size.",
+        "2": "Each sublayer reads the residual stream, a d_model vector per token that every earlier layer has added into. Without a reset, the scale it sees varies by token and by layer.",
+        "3": "Sublayers are linear maps plus nonlinearities that work best in a particular input range. LayerNorm re-centres and re-scales each position's vector before it is read."
+      }
+    },
+    {
+      "name": "Auto-exposure",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.36, "y": 0.4, "label": "dark shot", "color": "dusk" },
+        { "kind": "card", "x": 0.36, "y": 0.72, "label": "bright shot", "color": "butter" },
+        { "kind": "box", "x": 0.58, "y": 0.56, "w": 0.14, "h": 0.22, "label": "auto-exposure", "color": "chalk" },
+        { "kind": "card", "x": 0.84, "y": 0.56, "label": "same photo + house grade", "color": "peach" }
+      ],
+      "arrows": [[0.44, 0.42, 0.51, 0.52, ""], [0.44, 0.7, 0.51, 0.6, ""], [0.66, 0.56, 0.75, 0.56, "then w, b"]],
+      "cap": {
+        "1": "Think of auto-exposure on a camera. A dark shot and a bright shot of the same scene come out looking the same. Then the studio adds its house colour grade.",
+        "2": "LayerNorm does this per token: shift the vector so its average is 0, scale it so its spread is 1, then apply a learned per-feature gain <code>w</code> and bias <code>b</code>.",
+        "3": "Per position: y = (x - μ)/√(σ² + ε) · w + b, with μ and σ² over d_model. Invariant to adding a constant to every feature and to positive rescaling of x (up to ε)."
+      }
+    },
+    {
+      "name": "The recipe",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "(x - μ)", "c": "sky", "note": "shift: average to 0" },
+        { "t": " / √(σ² + ε)", "c": "orange", "note": "stretch: spread to 1" },
+        { "t": " · w", "c": "green", "note": "house grade: gain" },
+        { "t": " + b", "c": "green", "note": "house grade: tint" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Three moves: subtract the average, divide by the spread, then apply the learned grade. The average and spread come from this one token only.",
+        "2": "Mean and variance are taken over the d_model axis of one token. <code>w</code> and <code>b</code> are learned vectors of length d_model, so each feature gets its own gain and tint.",
+        "3": "Divide by (var + eps).sqrt() with unbiased=False, not by std + eps. They agree to first order, so the wrong one passes a loose check and fails GPT-2's reference comparison."
+      }
+    },
+    {
+      "name": "Any size in, one out",
+      "need": "core",
+      "dur": 9,
+      "type": "plot",
+      "curves": [
+        { "f": "x / sqrt(x*x + 0.05)", "c": "orange", "label": "spread after LayerNorm" },
+        { "f": "x", "c": "ink", "label": "no LayerNorm" }
+      ],
+      "x": [0, 3],
+      "y": [0, 2],
+      "dot": true,
+      "marks": [
+        { "x": 0.2, "label": "tiny input, turned up" },
+        { "x": 2.5, "label": "huge input, turned down" }
+      ],
+      "cap": {
+        "1": "Whatever size of numbers comes in, about the same size goes out. Tiny inputs get turned up, huge ones turned down, like auto-exposure.",
+        "2": "After LayerNorm (before w and b) the spread is about 1 whatever the input's spread. The exception is near zero, where ε stops the division from blowing up.",
+        "3": "Output std = σ/√(σ² + ε) → 1 once σ² ≫ ε (ε exaggerated here). The per-token gain 1/√(σ² + ε) is itself a function of x: the source of LayerNorm's nonlinearity."
+      }
+    },
+    {
+      "name": "Before, not after",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Post-LN (2017 original)", "c": "pink", "lines": ["normalise after the add", "big gradients near the output at init", "needs learning-rate warmup"] },
+      "right": { "title": "Pre-LN (GPT-2)", "c": "mint", "lines": ["normalise what the sublayer reads", "gradients well behaved at init", "warmup optional"] },
+      "verdict": "Normalise the reader's copy, never the running total.",
+      "cap": {
+        "1": "Where you put the exposure step matters. Normalise the running total itself and early training blows up unless you creep the learning rate up slowly.",
+        "2": "GPT-2 is Pre-LN: <code>x = x + attn(ln1(x))</code>. LayerNorm normalises what each sublayer reads and never touches the residual stream itself.",
+        "3": "Xiong et al. (ICML 2020), via mean field theory: Post-LN has large expected gradients near the output at init, so warmup was damage control. Pre-LN removes the cause."
+      }
+    },
+    {
+      "name": "The dial that stays",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "x", "label": "residual x", "x": 0.08, "y": 0.5, "c": "sky" },
+        { "id": "scale", "label": "÷ its own spread", "x": 0.3, "y": 0.5, "c": "orange" },
+        { "id": "wb", "label": "· w + b", "x": 0.52, "y": 0.5, "c": "green" },
+        { "id": "WU", "label": "W_U", "x": 0.74, "y": 0.5, "c": "lav" },
+        { "id": "logits", "label": "logits", "x": 0.93, "y": 0.5, "c": "ink" }
+      ],
+      "edges": [["x", "scale"], ["scale", "wb"], ["wb", "WU", "fold_ln merges these"], ["WU", "logits"]],
+      "flow": "forward",
+      "cap": {
+        "1": "To read a model's insides, the house grade is easy to remove: it merges into the next step. The exposure dial is not, because it changes with every token.",
+        "2": "w and b are linear and always followed by a linear map, so TransformerLens folds them in with <code>fold_ln=True</code>. The divide by each token's own spread cannot be folded.",
+        "3": "Freeze the per-token scale and the rest is linear: DLA and QK/OV arithmetic apply that frozen scale by hand. Fine for small perturbations; an edit that shifts the norm breaks it."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 8,
+      "type": "cards",
+      "items": ["Every block normalises what it reads", "fold_ln before circuit maths", "Steering edits pass through the dial"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Every block you build starts by normalising what it reads. When you later read or nudge a model's insides, remember this dial sits in the way.",
+        "2": "Build it once in [1.1], then meet it in every interpretability tool: folded weights, the scale factor in logit attribution, and cached 'normalized' activations.",
+        "3": "A steering vector added to the residual stream is rescaled with everything else by the next LayerNorm, so an edit's size is judged relative to that token's own norm."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "One token after LayerNorm: drag the input's scale and shift, then the learned gain",
+    "labels": ["f1", "f2", "f3", "f4", "f5"],
+    "params": [
+      { "id": "a", "label": "input scale", "min": 0.001, "max": 3, "step": 0.001, "value": 1 },
+      { "id": "c", "label": "input shift", "min": -3, "max": 3, "step": 0.1, "value": 0 },
+      { "id": "g", "label": "learned gain (shared here)", "min": 0, "max": 2, "step": 0.1, "value": 1 }
+    ],
+    "f": "(xs => xs.map(u => g * (u - mean(xs)) / sqrt(mean(xs.map(t => (t - mean(xs)) ** 2)) + 1e-5)))([2, -1, 0.5, -2, 0.5].map(v => a*v + c))",
+    "y": [-3.5, 3.5],
+    "readouts": [
+      { "label": "input numbers", "f": "[2, -1, 0.5, -2, 0.5].map(v => (a*v + c).toFixed(2)).join('  ')" },
+      { "label": "input mean, spread", "f": "c.toFixed(2) + ', ' + (a*sqrt(1.9)).toFixed(3)" },
+      { "label": "output spread before the gain", "f": "(a*sqrt(1.9) / sqrt(a*a*1.9 + 1e-5)).toFixed(3)" }
+    ],
+    "caption": {
+      "1": "Drag the input's scale and shift: the input numbers swing wildly, but the bars stay put. Only the learned gain moves them. That is auto-exposure.",
+      "2": "Size and offset are thrown away; only the pattern across features survives. Drag scale down near 0.001 and the bars finally shrink: that is ε preventing a divide by zero.",
+      "3": "LN(a·x + c) = LN(x) for a > 0 while a²σ² ≫ ε; with ε = 1e-5 it fails only for tiny inputs. The gain here is one shared number; real LayerNorm learns one per feature."
+    }
+  },
+  "where_else": [
+    "BatchNorm in the [0.2] ResNet: the same shift and scale, but per feature across the batch, with train and eval modes",
+    "TransformerLens's fold_ln, and the scale factor you apply by hand in direct logit attribution",
+    "RMSNorm in newer models, which skips the centring and divides by the root-mean-square",
+    "Cosine similarity, which also keeps direction and throws away length"
+  ],
+  "hamming": {
+    "what": "A per-token reset that shifts each residual vector to mean zero and unit spread, then applies a learned gain and bias.",
+    "when": "Before every attention and MLP sublayer, and before the unembedding, in GPT-style transformers.",
+    "why": "It keeps every layer's input in a sane range whatever earlier layers added, which steadies training; its input-dependent scale is why interpretability tools must fold or freeze it."
+  },
+  "object": {
+    "title": "The exposure ring",
+    "subtitle": "With three features, every normalised token lands on one ring inside the tilted plane where the features sum to zero.",
+    "kind": "points",
+    "clusters": [
+      { "label": "tiny token", "c": "data", "center": [0.1, -0.05, 0.02], "spread": 0.02, "n": 10 },
+      { "label": "ordinary token", "c": "data", "center": [1.4, 1.2, 0.9], "spread": 0.03, "n": 10 },
+      { "label": "huge, shifted token", "c": "data", "center": [-1.2, 1.3, 1.4], "spread": 0.03, "n": 10 },
+      { "label": "tiny, normalised", "c": "good", "center": [0.867, -0.829, -0.038], "spread": 0.02, "n": 10 },
+      { "label": "ordinary, normalised", "c": "good", "center": [0.787, 0.112, -0.899], "spread": 0.02, "n": 10 },
+      { "label": "huge, normalised", "c": "good", "center": [-0.979, 0.461, 0.518], "spread": 0.02, "n": 10 }
+    ],
+    "arrows": [
+      { "from": "tiny token", "to": "tiny, normalised", "label": "turned up", "c": "dir" },
+      { "from": "ordinary token", "to": "ordinary, normalised", "label": "centred, rescaled", "c": "dir" },
+      { "from": "huge, shifted token", "to": "huge, normalised", "label": "turned down", "c": "dir" }
+    ],
+    "plane": { "normal": [1, 1, 1], "label": "features sum to zero" },
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Three tokens, each just three numbers here: one tiny, one ordinary, one huge and shifted. Real tokens have hundreds of numbers, but the geometry is the same.",
+          "2": "Three raw residual vectors with d_model = 3, at very different scales and offsets.",
+          "3": "Raw inputs x ∈ R³; LayerNorm will act on each independently."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Step one, subtract the average: each token drops onto the tilted plane where its three numbers sum to zero.",
+          "2": "Centring projects every vector onto the plane perpendicular to the all-ones direction.",
+          "3": "x - μ·1 is the orthogonal projection onto 1⊥, a (d-1)-dimensional subspace."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Step two, divide by the spread: each token slides out or in from the centre until it sits on the ring. Tiny and huge end up the same size.",
+          "2": "Dividing by the spread puts every token at the same distance from the centre, whatever its original size.",
+          "3": "Dividing by the std maps every centred vector to norm √d (drawn smaller here to fit): a sphere inside 1⊥."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "All that survives is where on the ring a token sits: which features are high and which are low. Overall size and offset are gone.",
+          "2": "Only direction within the plane is kept. That is why a steering edit's effect depends on its size relative to the token's norm.",
+          "3": "LN (before w, b) is a radial projection onto a sphere in 1⊥: information about ‖x - μ1‖ and μ is discarded."
+        },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Then the learned gain and bias stretch and move the whole ring, the same way for every token. That part is simple, and it can be folded away.",
+          "2": "w and b are one fixed linear map plus a shift, identical for all tokens, so fold_ln can merge them into the next weight matrix.",
+          "3": "The affine part diag(w)·y + b composes with the following W_Q, W_K, W_V, W_in or W_U; only the radial projection resists folding."
+        },
+        "view": "iso",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "Token B is token A multiplied by 10. After LayerNorm (before w and b), how do they compare?",
+        "options": [{ "t": "Identical", "ok": true }, { "t": "B is 10 times bigger" }, { "t": "B is 10 times smaller" }],
+        "why": "Dividing by the token's own spread cancels any positive overall scale (ε aside)."
+      },
+      {
+        "q": "Which part of LayerNorm can TransformerLens fold into the next weight matrix?",
+        "options": [{ "t": "The learned gain and bias", "ok": true }, { "t": "The divide by each token's spread" }, { "t": "All of it" }],
+        "why": "The gain and bias are fixed linear pieces; the divide depends on each token, so it cannot be baked into weights."
+      },
+      {
+        "q": "In GPT-2, does LayerNorm change the residual stream itself?",
+        "options": [{ "t": "No, it normalises the copy each sublayer reads", "ok": true }, { "t": "Yes, after every block" }],
+        "why": "Pre-LN: x = x + attn(ln1(x)). The running total is never normalised in place."
+      }
+    ],
+    "where": "Anywhere you keep a direction and discard its size: cosine similarity, RMSNorm, unit-normalised embeddings."
+  }
+}
