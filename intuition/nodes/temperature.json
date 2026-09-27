@@ -1,0 +1,173 @@
+{
+  "id": "temperature",
+  "title": "A contrast knob on the odds",
+  "week": 6,
+  "need": "core",
+  "allegory": "Temperature is like a contrast knob on the model's odds: low temperature is high contrast, so the likeliest word outshines the rest; high temperature is low contrast, so every word fades towards the same grey; and the order of brightness never changes.",
+  "map": [
+    ["the brightness of each lamp", "each token's probability"],
+    ["the contrast knob", "the temperature T that divides the logits"],
+    ["high contrast: the brightest lamp outshines all", "T < 1: the distribution sharpens towards the argmax"],
+    ["low contrast: everything fades to grey", "T > 1: the distribution flattens towards uniform"],
+    ["the brightness ranking never changes", "z/T is monotone, so the ranking and any top-k set are unchanged"]
+  ],
+  "credit": "The temperature-slider view, from 'always the most predictable word' at T = 0 to wilder text as T rises, is borrowed from 3Blue1Brown, 'But what is a GPT?' (Deep Learning, chapter 5).",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Same model, two moods",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "shrug", "x": 0.5, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.2, "y": 0.35, "label": "T low: safe, repetitive", "color": "sky" },
+        { "kind": "card", "x": 0.8, "y": 0.35, "label": "T high: surprising, then nonsense", "color": "pink" }
+      ],
+      "cap": {
+        "1": "Ask the same model the same thing twice and get a dull answer or a wild one. The difference is one knob, and it touches nothing inside the model.",
+        "2": "Temperature changes how you sample from the model's next-token distribution, not the model. Low: predictable and repetitive. High: varied, then incoherent.",
+        "3": "Temperature is a decoding hyperparameter: it rescales the logits before the softmax. Same forward pass, different sampling distribution."
+      }
+    },
+    {
+      "name": "The contrast knob",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "reach", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "circle", "x": 0.28, "y": 0.35, "w": 0.1, "label": "T", "color": "orange" },
+        { "kind": "lamp", "x": 0.5, "y": 0.55, "h": 0.36, "label": "church", "color": "butter" },
+        { "kind": "lamp", "x": 0.68, "y": 0.6, "h": 0.26, "label": "house", "color": "cream" },
+        { "kind": "lamp", "x": 0.84, "y": 0.66, "h": 0.16, "label": "temple", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "Picture the model's options as lamps, brighter for likelier words. Temperature is a contrast knob: it exaggerates or softens the differences, never the order.",
+        "2": "Divide every logit by T, then softmax. T < 1 stretches the gaps, so the favourite takes more of the probability. T > 1 squashes the gaps towards a flat distribution.",
+        "3": "softmax(z/T)ᵢ = pᵢ^(1/T) / Σⱼ pⱼ^(1/T): a power curve on the probabilities. Rank order is invariant because z ↦ z/T is strictly monotone for T > 0."
+      }
+    },
+    {
+      "name": "One division",
+      "need": "exercise",
+      "dur": 9,
+      "type": "equation",
+      "parts": [
+        { "t": "p = ", "c": "ink", "note": "" },
+        { "t": "softmax(", "c": "ink", "note": "scores into odds" },
+        { "t": "logits", "c": "sky", "note": "the model's raw scores" },
+        { "t": " / T", "c": "orange", "note": "the contrast knob" },
+        { "t": ")", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Before the scores become odds, divide them all by T. That single division is the whole feature.",
+        "2": "<code>apply_temperature</code> is one line: <code>logits / temperature</code>. A small T makes the gaps between scores bigger; a big T makes them smaller.",
+        "3": "Gaps scale as Δz/T, and the odds between two tokens are exp(Δz/T). So T = 0.5 squares every odds ratio and T = 2 takes its square root."
+      }
+    },
+    {
+      "name": "Sharp to flat",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "1/(1+exp(-2/x))", "c": "orange", "label": "favourite, logit gap 2" },
+        { "f": "1/(1+exp(-0.5/x))", "c": "sky", "label": "favourite, logit gap 0.5" }
+      ],
+      "x": [0.05, 3],
+      "y": [0.4, 1.02],
+      "dot": true,
+      "marks": [{ "x": 1, "label": "T = 1: the model's own odds" }],
+      "cap": {
+        "1": "As T drops towards 0, the favourite's share climbs to 100%: always the top word. As T grows, the two options drift towards a coin flip.",
+        "2": "Two tokens with a logit gap Δz: the favourite's probability is sigmoid(Δz/T). T near 0 gives greedy decoding, large T gives uniform, T = 1 is the model's own distribution.",
+        "3": "p = σ(Δz/T), with limits argmax as T → 0⁺ and uniform as T → ∞. Code usually special-cases T = 0 as argmax, since dividing by zero is undefined."
+      }
+    },
+    {
+      "name": "It cannot reorder",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "temperature", "c": "butter", "lines": ["reshapes the whole distribution", "never changes the ranking", "cannot add or remove candidates"] },
+      "right": { "title": "top-k", "c": "sky", "lines": ["cuts the distribution to k", "keeps the ranking", "decides who is a candidate"] },
+      "verdict": "They compound, not trade off: low T plus top-k can loop.",
+      "cap": {
+        "1": "No contrast setting can relight a lamp that was switched off. With top-k the tail is already gone, and low temperature hands nearly all of it to one word.",
+        "2": "T never reorders tokens, so it cannot change which survive top-k. Low T after truncation piles the mass on the argmax: that is how 'more focused' turns into loops.",
+        "3": "sample_next_token applies frequency penalty, then temperature, then top-k/top-p. T only rescales within the truncated support, so low T with small k is close to greedy."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Low T for reliable answers, higher for variety", "T changes the draw, not the model", "Fix and report T in every eval"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Temperature changes how you draw from the model, not what it believes. To understand a model, look at its odds, not one lucky or unlucky sample.",
+        "2": "When you evaluate or red-team a model, fix and report the temperature, because results shift with it. Interpretability work reads the logits directly instead.",
+        "3": "T only reweights an existing distribution; it reveals nothing new about the model. For evals, fix T and sample enough; for interpretability, work with logits or log-probs."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Turn the contrast knob on GPT-2's top five guesses",
+    "labels": ["church", "house", "temple", "same", "Church"],
+    "params": [{ "id": "T", "label": "temperature T", "min": 0.1, "max": 3, "step": 0.05, "value": 1 }],
+    "f": "softmax([0.0648, 0.0367, 0.0145, 0.0104, 0.0097].map(p => log(p) / T))",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "top word's share", "f": "Math.round(100 * softmax([0.0648, 0.0367, 0.0145, 0.0104, 0.0097].map(p => log(p) / T))[0]) + '%'" },
+      { "label": "odds church : house", "f": "pow(0.0648 / 0.0367, 1 / T).toFixed(2) + ' : 1'" },
+      { "label": "effectively greedy? (top share over 0.9)", "f": "softmax([0.0648, 0.0367, 0.0145, 0.0104, 0.0097].map(p => log(p) / T))[0] > 0.9 ? 'yes: expect loops' : 'no'" }
+    ],
+    "caption": {
+      "1": "GPT-2's top five guesses after 'John and Mary went to the'. Drag T left and 'church' swallows everything; drag right and they even out. The order never changes.",
+      "2": "Real top-5 probabilities from ARENA's calibration check, renormalised. Halving T squares the odds ratio; raising T takes roots. Watch the greedy readout flip past 90%.",
+      "3": "Bars = softmax(log p / T) over the top-5 support, i.e. top_k=5 then temperature. Odds ratios scale as r^(1/T); the ranking is invariant; above about 0.9 top share you are effectively greedy."
+    }
+  },
+  "where_else": [
+    "Scaled attention: dividing QKᵀ by √d_k acts as a fixed temperature that keeps the softmax from saturating",
+    "Knowledge distillation, where a higher temperature exposes more of a teacher's preferences",
+    "Softmax policies in RL, where a temperature trades exploring against exploiting",
+    "The Boltzmann distribution in physics, where the name comes from"
+  ],
+  "hamming": {
+    "what": "A single number that divides the logits before the softmax, sharpening (T < 1) or flattening (T > 1) the next-token distribution.",
+    "when": "Every time you sample from a model: low for reliable, repeatable answers, higher for variety.",
+    "why": "It trades predictability against diversity without changing the model or the ranking of its guesses."
+  },
+  "object": {
+    "title": "The temperature terrace",
+    "subtitle": "The same five guesses at five temperatures: a spike when cold, a plateau when hot, the same order in every row.",
+    "kind": "bars",
+    "rows": 5,
+    "cols": 5,
+    "f": "c < k ? 2 * softmax([0.0648, 0.0367, 0.0145, 0.0104, 0.0097].slice(0, k).map(p => log(p) / [0.25, 0.5, 1, 2, 4][r]))[c] : 0.02",
+    "labels": { "rows": ["T 0.25", "T 0.5", "T 1", "T 2", "T 4"], "cols": ["church", "house", "temple", "same", "Church"] },
+    "c": "prob",
+    "knobs": [{ "id": "k", "label": "top-k cut", "min": 1, "max": 5, "step": 1, "value": 5 }],
+    "beats": [
+      { "cap": { "1": "Each row is the same five guesses at a different temperature. Cold rows are one tall spike; hot rows are nearly flat.", "2": "Rows: T from 0.25 to 4. Columns: GPT-2's top five next words. Height: probability.", "3": "softmax(log p / T) per row; the argmax column is the same in every row." }, "view": "iso", "set": { "k": 5 } },
+      { "cap": { "1": "From the front: the order of the bars never changes, only how steeply they fall.", "2": "Temperature is monotone, so the ranking is identical in every row.", "3": "z ↦ z/T preserves the argsort; only the entropy moves, from near 0 when cold towards log 5 when hot." }, "view": "front", "set": { "k": 5 } },
+      { "cap": { "1": "Cut to the top two. No temperature can bring the other three back.", "2": "top_k=2 zeroes three columns in every row; T only reshares the two survivors.", "3": "Truncation fixes the support and T reweights within it, so the two knobs compound." }, "view": "iso", "set": { "k": 2 } },
+      { "cap": { "1": "Cold plus a tight cut: 'church' takes almost everything. That is how loops begin.", "2": "Low T after truncation is nearly greedy: the renormalised top share passes 0.9.", "3": "At T = 0.25 and k = 2 the argmax holds r⁴/(1 + r⁴) of the mass with r = 0.0648/0.0367, about 0.91." }, "view": "side", "set": { "k": 2 } },
+      { "cap": { "1": "Pick one knob: to focus, lower k and keep T at 1, or keep T low and add a frequency penalty to break loops.", "2": "Hold T = 1 and lower k, or use top-p. A frequency penalty reorders logits, which T and k never do.", "3": "Only the frequency penalty, applied before T, changes rank order, so it alone can break a loop that low T and small k create." }, "view": "top", "set": { "k": 5 } }
+    ],
+    "predict": [
+      { "q": "You lower T from 1 to 0.5. Can a token outside the top 5 move into the top 5?", "options": [{ "t": "No: dividing by T never changes the order", "ok": true }, { "t": "Yes: low T reshuffles the ranking" }], "why": "z/T is monotone for T > 0, so the ranking and any top-k set stay identical." },
+      { "q": "At T = 0.5, what happens to the odds ratio between two tokens?", "options": [{ "t": "It is squared", "ok": true }, { "t": "It is halved" }], "why": "Odds are exp(Δz/T). Halving T doubles the exponent, which squares the ratio." },
+      { "q": "Generations loop at low T with top-k. Which knob can actually break the loop?", "options": [{ "t": "A frequency penalty, which reorders the logits", "ok": true }, { "t": "A bigger k" }], "why": "A bigger k adds tokens whose share rounds to nothing at low T. Only the frequency penalty changes the order." }
+    ],
+    "where": "Anywhere a softmax turns scores into choices: sampling, scaled attention, distillation, Boltzmann exploration."
+  }
+}

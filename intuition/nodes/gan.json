@@ -1,0 +1,204 @@
+{
+  "id": "gan",
+  "title": "The forger and the detective",
+  "week": 4,
+  "need": "exercise",
+  "allegory": "A GAN is like a forger and a detective training each other: the forger paints fakes from a random seed, the detective learns to tell them from the gallery's real paintings, and each one's failure is exactly the other's lesson.",
+  "map": [
+    ["the forger, painting from a random seed", "the generator G, mapping noise z to an image"],
+    ["the detective's verdict: how sure it is a painting is real", "the discriminator's output D(image), a probability"],
+    ["the gallery of real paintings", "the training data x"],
+    ["the forger hears only the verdict, never visits the gallery", "G's gradient arrives only through D(G(z))"],
+    ["painting one sure-fire fake forever", "mode collapse"]
+  ],
+  "credit": "The forger-versus-detective framing follows Goodfellow and colleagues' own analogy in the original GAN paper (2014).",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "No formula for real",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "loss = how real it looks... but how?",
+      "actors": [{ "pose": "think", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.6, "y": 0.45, "label": "a new picture?", "color": "peach" },
+        { "kind": "stack", "x": 0.85, "y": 0.58, "w": 0.12, "h": 0.34, "label": "real paintings", "color": "mint" }
+      ],
+      "cap": {
+        "1": "You want a network that invents new pictures. But how do you score 'looks real'? There is no formula for it.",
+        "2": "Reconstruction-style losses tend to give blurry samples, the VAE's weakness. You want a judge of realism, and nobody can write one down by hand.",
+        "3": "Realism has no closed-form loss. A GAN learns the loss instead: a discriminator network is trained as the critic, and the generator is trained through it."
+      }
+    },
+    {
+      "name": "Hire two rivals",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "write", "x": 0.18, "label": "forger (G)" },
+        { "pose": "point", "x": 0.72, "label": "detective (D)" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.38, "y": 0.45, "label": "fake", "color": "peach" },
+        { "kind": "scale", "x": 0.55, "y": 0.62, "label": "real or fake?", "color": "butter" },
+        { "kind": "stack", "x": 0.9, "y": 0.58, "w": 0.1, "h": 0.32, "label": "gallery", "color": "mint" }
+      ],
+      "arrows": [[0.42, 0.45, 0.5, 0.55, "submit"], [0.62, 0.35, 0.3, 0.3, "verdict"]],
+      "cap": {
+        "1": "So hire two rivals. A forger paints fakes from a random seed; a detective studies real paintings and fakes and says which is which. Each learns from the other.",
+        "2": "The generator G turns random noise z into an image. The discriminator D outputs the probability that an image is real. D trains to be right; G trains to make D wrong.",
+        "3": "G maps z ~ N(0, I) to an image; D maps an image to P(real). Alternating gradient steps on opposite objectives make D a learned, moving loss function for G."
+      }
+    },
+    {
+      "name": "One score, two goals",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "V = ", "c": "ink", "note": "the detective's score" },
+        { "t": "log D(x)", "c": "green", "note": "real called real" },
+        { "t": " + ", "c": "ink", "note": "" },
+        { "t": "log(1 − D(G(z)))", "c": "red", "note": "fake called fake" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The detective's score is high when it trusts the real paintings and doubts the fakes. The detective pushes this score up; the forger pushes it down.",
+        "2": "D maximises V: log D(x) rewards calling real images real, log(1 − D(G(z))) rewards calling fakes fake. G only appears in the second term, and wants it low.",
+        "3": "min over G, max over D of E_x[log D(x)] + E_z[log(1 − D(G(z)))] (Goodfellow et al., 2014). The ideal fixed point is D = 0.5 everywhere: the detective reduced to a coin toss."
+      }
+    },
+    {
+      "name": "The flat start",
+      "need": "exercise",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "log(1 - x)", "c": "red", "label": "minimise log(1 − D(G(z))): flat when losing" },
+        { "f": "-log(x)", "c": "green", "label": "minimise −log D(G(z)): steep when losing" }
+      ],
+      "x": [0.01, 0.99],
+      "y": [-4.5, 4.5],
+      "dot": true,
+      "marks": [{ "x": 0.05, "label": "early on: every fake caught" }],
+      "cap": {
+        "1": "Early on, the detective catches every fake. Written the original way, the forger's loss is flat there, so it learns almost nothing. Flipped, it is steep.",
+        "2": "When D(G(z)) is near 0, log(1 − D(G(z))) barely moves. So G maximises log D(G(z)) instead, which plunges as D(G(z)) shrinks: the strongest push when G is worst.",
+        "3": "Through D's sigmoid, the gradient of log(1 − D) with respect to D's logit is −D ≈ 0, while for log D it is 1 − D ≈ 1. Same equilibrium, usable gradient. The fix is in the original paper."
+      }
+    },
+    {
+      "name": "Sharp but choosy",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "VAE", "c": "sky", "lines": ["optimises a likelihood bound", "covers the data well", "samples come out blurry"] },
+      "right": { "title": "GAN", "c": "orange", "lines": ["optimises against a learned judge", "samples come out sharp", "covers less: can miss whole kinds"] },
+      "verdict": "Blurry but complete, or sharp but choosy.",
+      "cap": {
+        "1": "Its sibling, the VAE, paints soft, blurry pictures of everything. The GAN paints crisp pictures, but of fewer kinds of thing.",
+        "2": "A VAE optimises a likelihood bound and gives blurry samples; a GAN optimises against a discriminator and gives sharp but less-covered ones.",
+        "3": "Likelihood training penalises missing any of the data, so it spreads out; the adversarial objective penalises implausible samples, so it sharpens but can drop modes."
+      }
+    },
+    {
+      "name": "One painting, forever",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [
+        { "pose": "celebrate", "x": 0.2, "label": "forger (G)" },
+        { "pose": "shrug", "x": 0.75, "label": "detective (D)" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.4, "y": 0.4, "label": "boat", "color": "peach" },
+        { "kind": "card", "x": 0.46, "y": 0.5, "label": "boat", "color": "peach" },
+        { "kind": "card", "x": 0.52, "y": 0.6, "label": "boat", "color": "peach" }
+      ],
+      "cap": {
+        "1": "The classic failure: the forger finds one painting the detective always accepts, and paints only that. Every fake is the same boat.",
+        "2": "Mode collapse: G maps many different z to nearly the same output because it reliably fools the current D. The symptom is a batch of near-identical samples.",
+        "3": "Nothing in G's objective rewards diversity; it chases D's current blind spot. The same failure returns in [2.4], where an RLHF policy collapses onto one high-reward phrasing."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A learned judge can stand in for a loss you cannot write", "Optimising against a judge finds its blind spots", "Mode collapse returns in RLHF"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "The big idea outlives GANs: when you cannot write down what 'good' means, train a judge. But anything optimised against a judge learns to exploit it.",
+        "2": "Reward models in RLHF are judges too, and a policy trained against one can collapse onto a single pleasing answer. Spotting the dynamic here makes it easy to spot later.",
+        "3": "Optimising against a learned critic recurs: reward models in RLHF, classifiers used as judges. Knowing how it fails is part of understanding and steering AI."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Five kinds of painting: choose how the forger spreads its fakes",
+    "labels": ["boats", "hills", "flowers", "towers", "fruit"],
+    "params": [
+      { "id": "cover", "label": "kinds the forger paints", "min": 1, "max": 5, "step": 1, "value": 5 },
+      { "id": "focus", "label": "extra weight on boats", "min": 0, "max": 1, "step": 0.05, "value": 0 }
+    ],
+    "f": "range(5).map(i => 0.2 / (0.2 + (1 - focus) * (i < cover ? 1/cover : 0) + focus * (i == 0 ? 1 : 0)))",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "best detective's average score on the fakes", "f": "(g => sum(g.map(v => v * 0.2 / (0.2 + v))).toFixed(2))(range(5).map(i => (1 - focus) * (i < cover ? 1/cover : 0) + focus * (i == 0 ? 1 : 0)))" },
+      { "label": "kinds the forger never paints", "f": "range(5).filter(i => (1 - focus) * (i < cover ? 1/cover : 0) + focus * (i == 0 ? 1 : 0) == 0).length" },
+      { "label": "verdict", "f": "(n => n > 0 ? 'collapse: unpainted kinds look certainly real' : (cover == 5 && focus == 0 ? 'stalemate: the detective is a coin toss' : 'lopsided: boats look suspicious'))(range(5).filter(i => (1 - focus) * (i < cover ? 1/cover : 0) + focus * (i == 0 ? 1 : 0) == 0).length)" }
+    ],
+    "caption": {
+      "1": "Each bar is how much the best detective would trust a painting of that kind. Spread the forger evenly and every bar sits at 0.5, a coin toss. Now narrow it.",
+      "2": "The best detective scores each kind as real ÷ (real + fake). Collapse the forger onto boats: boats look suspicious, and the kinds it never paints look certainly real.",
+      "3": "For fixed G the optimal D*(x) = p_data / (p_data + p_g), from the original paper's analysis. At p_g = p_data, D* = 0.5 everywhere; under collapse D* = 1 on every mode G never paints."
+    }
+  },
+  "where_else": [
+    "RLHF: a policy optimised against a learned reward model, with the same collapse risk",
+    "Any learned judge used as a loss: classifiers, reward models, model-graded scoring",
+    "Red-teaming: searching for inputs that a judge or monitor gets wrong"
+  ],
+  "hamming": {
+    "what": "Two networks trained against each other: a generator makes samples and a discriminator learns to tell them from real data.",
+    "when": "When you cannot write a loss for 'looks real' but can collect plenty of real examples.",
+    "why": "The judge becomes a learned loss that keeps getting pickier, which pushes the generator towards sharp, realistic output, and towards the judge's blind spots."
+  },
+  "object": {
+    "title": "The forger's hourglass",
+    "subtitle": "Two mirror-image networks lying end to end, touching only at the picture.",
+    "kind": "blocks",
+    "axis": "x",
+    "stream": true,
+    "gap": 0.25,
+    "items": [
+      { "label": "z: random seed", "h": 0.3, "c": "prob" },
+      { "label": "G block: size ×2", "h": 0.7, "c": "aux" },
+      { "label": "G block: size ×2", "h": 1.1, "c": "aux" },
+      { "label": "the picture", "h": 1.6, "c": "data" },
+      { "label": "D block: size ÷2", "h": 1.1, "c": "grad" },
+      { "label": "D block: size ÷2", "h": 0.7, "c": "grad" },
+      { "label": "P(real)", "h": 0.3, "c": "good" }
+    ],
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "The forger's half grows a random seed into a picture. The detective's half shrinks a picture down to one verdict.", "2": "G upsamples noise z into an image with transposed convolutions; D downsamples an image into P(real) with strided convolutions. Mirror images.", "3": "DCGAN conventions: kernel 4, stride 2, padding 1, so each G block doubles and each D block halves the spatial size; batchnorm everywhere except D's first and G's last block." }, "view": "iso" },
+      { "cap": { "1": "They meet only at the picture. The forger never sees a real painting; it only hears the detective's verdict.", "2": "G never touches real data. Everything it learns about realism arrives as the gradient of D's score, flowing back through D.", "3": "G's gradient comes only via D(G(z)): real data shapes G solely by shaping D's learned decision surface." }, "view": "close" },
+      { "cap": { "1": "Detective's turn: it studies real paintings and fakes and sharpens its eye. The forger is frozen for this step.", "2": "D step: score real x and a detached G(z), then ascend log D(x) + log(1 − D(G(z))). Detaching keeps D's update from reaching G.", "3": "detach() cuts the graph at G(z) so D's loss produces no gradient for G; only D's optimiser steps (Adam, lr 2e-4, betas (0.5, 0.999) in DCGAN)." }, "view": "side" },
+      { "cap": { "1": "Forger's turn: the verdict flows back through the detective into the forger, who adjusts. The detective itself does not change.", "2": "G step: ascend log D(G(z)). Gradients pass through D to reach G, but only G's optimiser steps.", "3": "In G's step, D acts as a fixed, differentiable loss; the gradient traverses it, and only G's parameters are updated." }, "view": "top" }
+    ],
+    "predict": [
+      { "q": "How many real paintings does the forger ever look at directly?", "options": [{ "t": "None: it learns only through the detective's verdict", "ok": true }, { "t": "All of them, on every step" }], "why": "G's loss depends only on D(G(z)). Real data shapes G only by shaping D." },
+      { "q": "The detective is winning easily: D(G(z)) is near 0. Which forger loss still gives a strong push?", "options": [{ "t": "Maximise log D(G(z))", "ok": true }, { "t": "Minimise log(1 − D(G(z)))" }], "why": "log(1 − D) is flat near D = 0 while log D plunges, so its gradient is steepest exactly when the forger is worst." }
+    ],
+    "where": "Any two-sided setup: a generator and a critic, a policy and a reward model, a red team and a monitor."
+  }
+}

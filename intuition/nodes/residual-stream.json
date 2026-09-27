@@ -1,0 +1,212 @@
+{
+  "id": "residual-stream",
+  "title": "A shared ledger nobody erases",
+  "week": 5,
+  "need": "core",
+  "allegory": "The residual stream is like a shared ledger: every worker reads the running totals, works something out and appends an entry, and nothing is ever rubbed out, so the final totals are the opening balance plus every entry and you can say exactly who contributed what.",
+  "map": [
+    ["the ledger's running totals", "the residual stream: one d_model-wide vector per position"],
+    ["the opening balance", "token embedding + positional embedding"],
+    ["a worker appending an entry", "an attention head or MLP adding its output"],
+    ["undoing something by adding a negative entry", "cancelling a direction by writing its opposite"],
+    ["tallying one worker's entries towards the verdict", "direct logit attribution: one component's output dotted with the answer direction"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Pipeline or bus?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "who contributed what?",
+      "actors": [
+        { "pose": "carry", "x": 0.2, "label": "layer 1" },
+        { "pose": "reach", "x": 0.45, "label": "layer 2" },
+        { "pose": "shrug", "x": 0.75, "label": "you" }
+      ],
+      "props": [{ "kind": "crate", "x": 0.32, "y": 0.5, "w": 0.1, "h": 0.12, "label": "output", "color": "peach" }],
+      "arrows": [[0.26, 0.42, 0.4, 0.42, "hand over"]],
+      "cap": {
+        "1": "The usual picture of a model is a bucket brigade: each layer hands its result to the next. Then it is hard to ask who contributed what.",
+        "2": "Drawn as a pipeline, each layer seems to replace the last one's output, so the answer looks like one tangled function. Transformers are secretly built differently.",
+        "3": "Pipeline view: x_{l+1} = f_l(x_l). A pre-LN transformer actually computes x_{l+1} = x_l + f_l(LN(x_l)), and that residual form changes which questions you can answer."
+      }
+    },
+    {
+      "name": "The shared ledger",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "write", "x": 0.2, "label": "head" },
+        { "pose": "point", "x": 0.8, "label": "MLP" }
+      ],
+      "props": [
+        { "kind": "stack", "x": 0.5, "y": 0.55, "w": 0.26, "h": 0.42, "label": "ledger: 768 columns", "color": "butter" },
+        { "kind": "card", "x": 0.3, "y": 0.26, "label": "+ entry", "color": "sky" },
+        { "kind": "card", "x": 0.7, "y": 0.26, "label": "+ entry", "color": "mint" }
+      ],
+      "arrows": [[0.32, 0.32, 0.44, 0.42, "add"], [0.68, 0.32, 0.56, 0.42, "add"]],
+      "cap": {
+        "1": "Picture one shared ledger. Each worker reads the running totals, works something out, and adds an entry. Nobody rubs anything out.",
+        "2": "The residual stream is one vector per token position. Every attention head and MLP reads it, computes, and adds its output back. Nothing is overwritten.",
+        "3": "resid is [batch, seq, d_model], 768 wide in GPT-2 small. Components read through LayerNorm and a linear map and write by addition, so the stream is a running sum."
+      }
+    },
+    {
+      "name": "Totals are sums",
+      "need": "core",
+      "dur": 9,
+      "type": "equation",
+      "parts": [
+        { "t": "x_L", "c": "ink", "note": "final totals" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "x₀", "c": "sky", "note": "opening balance: embeddings" },
+        { "t": " + ", "c": "ink", "note": "" },
+        { "t": "Σᵢ fᵢ", "c": "orange", "note": "every entry ever added" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "The final totals are the opening balance plus every entry anyone added. That is all the model's last step ever sees.",
+        "2": "Final residual = token and position embeddings + every head's output + every MLP's output. A plain sum, so each piece's share can be pulled out exactly.",
+        "3": "x_L = x₀ + Σ heads + Σ MLPs, with x₀ = W_E[tok] + W_pos[pos]. The decomposition is exact; the only nonlinearity left before the logits is ln_final."
+      }
+    },
+    {
+      "name": "Entry by entry",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "A 4-wide stream, entry by entry (toy numbers)",
+      "rows": 5,
+      "cols": 4,
+      "values": [[1, 0, 2, -1], [0, 3, -1, 0], [2, -1, 0, 1], [0, 1, 1, -2], [3, 3, 2, -2]],
+      "labels": { "rows": ["embed", "head 0", "MLP 0", "head 1", "total"], "cols": ["d1", "d2", "d3", "d4"] },
+      "highlight": [[4, 0], [4, 1], [4, 2], [4, 3]],
+      "cap": {
+        "1": "Each row is one worker's entry. The bottom row is just the column totals. Nothing else ever happens to the ledger.",
+        "2": "A toy stream four numbers wide. Each component writes a vector; the final stream is their element-wise sum. Head 1 even cancels part of d4 by writing a negative.",
+        "3": "Additivity means any linear readout of x_L (a probe, W_U, a logit-difference direction) splits exactly into per-component terms. That is the whole basis of DLA."
+      }
+    },
+    {
+      "name": "Read, compute, add",
+      "need": "core",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "x0", "label": "x₀", "x": 0.08, "y": 0.62, "c": "sky" },
+        { "id": "x1", "label": "x₁", "x": 0.32, "y": 0.62, "c": "sky" },
+        { "id": "x2", "label": "x₂", "x": 0.56, "y": 0.62, "c": "sky" },
+        { "id": "x3", "label": "x₃", "x": 0.8, "y": 0.62, "c": "sky" },
+        { "id": "h0", "label": "head 0", "x": 0.2, "y": 0.25, "c": "orange" },
+        { "id": "m0", "label": "MLP 0", "x": 0.44, "y": 0.25, "c": "mint" },
+        { "id": "h1", "label": "head 1", "x": 0.68, "y": 0.25, "c": "orange" },
+        { "id": "out", "label": "logits", "x": 0.94, "y": 0.4, "c": "butter" }
+      ],
+      "edges": [
+        ["x0", "x1"], ["x1", "x2"], ["x2", "x3"],
+        ["x0", "h0", "read"], ["h0", "x1", "add"],
+        ["x1", "m0", "read"], ["m0", "x2", "add"],
+        ["x2", "h1", "read"], ["h1", "x3", "add"],
+        ["x3", "out", "unembed"]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "Every worker reads the same ledger and writes back to it. A late worker can read an entry an early one made, with nobody in between touching it.",
+        "2": "Components talk through the stream: a layer-1 head can read what a layer-0 head wrote, directly. That is how heads compose into circuits like induction heads.",
+        "3": "Reads and writes are linear, so W_in(later) · W_out(earlier) is a 'virtual weight' between non-adjacent components (Elhage et al., 2021). Q-, K- and V-composition are defined this way."
+      }
+    },
+    {
+      "name": "Totals that don't add",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "naive split", "c": "pink", "lines": ["unembed each piece as is", "forget embed and pos_embed", "pieces don't sum to the logits"] },
+      "right": { "title": "correct split", "c": "mint", "lines": ["scale every piece by the cached ln_final scale", "include embed and pos_embed", "assert the pieces sum to the logits"] },
+      "verdict": "Check the pieces add up before you interpret a single one.",
+      "cap": {
+        "1": "If the workers' shares don't match the final answer, you probably skipped the last rescaling step, or forgot the opening balance.",
+        "2": "Split the final stream into pieces and unembed each: they only sum to the logits if you apply the same final LayerNorm scale to all and include embed and pos_embed.",
+        "3": "ln_final divides by a per-token std that depends on the whole sum; apply the cached scale to every term (cache.apply_ln_to_stack) and assert Σ terms ≈ logits before interpreting."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Every head and MLP is one additive term", "DLA, logit lens and patching all rely on it", "Steering is adding your own entry"],
+      "actor": { "pose": "celebrate", "x": 0.85 },
+      "cap": {
+        "1": "Because the model is a sum, you can ask who contributed what, and even add your own entry to change what it does. That is steering.",
+        "2": "Direct logit attribution, the logit lens and activation patching all lean on this sum. Steering vectors go one step further: you write your own entry into the stream.",
+        "3": "Additivity makes the model decomposable: attribution reads terms off the sum, patching swaps a term, steering adds one. It is the central object of mech interp."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Tap entries on and off; the answer score always equals the sum of the shares",
+    "rows": 4,
+    "cols": 4,
+    "init": "(r + c) % 3 === 0 ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "final stream (column totals)", "f": "range(4).map(j => sum(G.map(row => row[j]))).join('  ')" },
+      { "label": "answer score = stream · (1, 1, -1, 0)", "f": "dot(range(4).map(j => sum(G.map(row => row[j]))), [1, 1, -1, 0])" },
+      { "label": "each row's share (embed, head 0, MLP 0, head 1)", "f": "G.map(row => dot(row, [1, 1, -1, 0])).join(' + ') + ' = ' + sum(G.map(row => dot(row, [1, 1, -1, 0])))" }
+    ],
+    "caption": {
+      "1": "Each row is one worker's entry; tap to switch numbers on and off. The answer score reads the totals along one direction and always equals the sum of the shares.",
+      "2": "Rows are component outputs, columns are stream dimensions. The score is the final stream dotted with an answer direction; each row's share is its own dot product. They always add up.",
+      "3": "A linear readout of a sum is the sum of readouts: u·Σ fᵢ = Σ u·fᵢ. That identity is DLA. In a real model, apply the ln_final scale to every term first."
+    }
+  },
+  "where_else": [
+    "ResNet skip connections: the same additive idea in vision",
+    "Direct logit attribution and the logit lens, which read the sum term by term or layer by layer",
+    "Steering vectors, which add your own entry to the stream",
+    "Activation patching, which swaps one term of the sum for another"
+  ],
+  "hamming": {
+    "what": "The running vector that every attention head and MLP reads from and adds its output to, from the embedding to the unembedding.",
+    "when": "Every time you build, read or edit a transformer: it is the object every interpretability tool points at.",
+    "why": "Because every write is an addition, the model's output splits exactly into per-component contributions you can measure and change."
+  },
+  "object": {
+    "title": "The ledger tube",
+    "subtitle": "One tube threads every block; blocks read it and pour their results back in, and nothing is ever poured out.",
+    "kind": "blocks",
+    "items": [
+      { "label": "embed", "h": 1, "c": "data" },
+      { "label": "attn 0", "h": 1, "c": "dir" },
+      { "label": "MLP 0", "h": 1, "c": "aux" },
+      { "label": "attn 1", "h": 1, "c": "dir" },
+      { "label": "MLP 1", "h": 1, "c": "aux" },
+      { "label": "unembed", "h": 1, "c": "prob" }
+    ],
+    "axis": "x",
+    "stream": true,
+    "gap": 0.35,
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "One tube runs through every block: the ledger. Blocks hang off it; none of them replaces it.", "2": "The residual stream threads every layer. Heads and MLPs sit beside it, reading and adding.", "3": "x_{l+1} = x_l + f_l(LN(x_l)): the stream is the identity path, and components are side branches that add." }, "view": "iso", "set": {} },
+      { "cap": { "1": "It starts as the opening balance: which token, at which position.", "2": "The stream starts as token embedding plus positional embedding.", "3": "x₀ = W_E[token] + W_pos[position]." }, "view": "close", "set": {} },
+      { "cap": { "1": "Each block reads the tube, computes, and pours its result back in. Nothing is poured out.", "2": "Reads go through LayerNorm and a projection; writes are plain addition.", "3": "LN is applied to what a component reads, not to the stream itself; each write is a W_O or W_out output added in." }, "view": "side", "set": {} },
+      { "cap": { "1": "The tube is narrow for all this traffic, so blocks share it by using different small corners.", "2": "d_model is 768 in GPT-2 small, and each head works in a 64-wide corner. Far more things want room than there are dimensions.", "3": "More computational dimensions than stream dimensions (Elhage et al., 2021): heads use d_head subspaces, and when features cannot be disjoint you get superposition." }, "view": "top", "set": {} },
+      { "cap": { "1": "At the end, one reader turns the totals into a guess for the next token.", "2": "The unembedding reads the final stream, after ln_final, to produce logits.", "3": "logits = W_U · LN_final(x_L): linear in x_L up to the LN scale, which is why per-component attribution works." }, "view": "front", "set": {} }
+    ],
+    "predict": [
+      { "q": "A head in layer 5 wants something a head in layer 1 wrote. Must it go through layers 2 to 4?", "options": [{ "t": "No: it reads it straight off the stream", "ok": true }, { "t": "Yes: each layer only sees the one before" }], "why": "Everything written stays in the sum, so any later component can read it directly. Virtual weights measure exactly that link." },
+      { "q": "Your per-component logit pieces don't add up to the real logits. Most likely cause?", "options": [{ "t": "Skipped the final LayerNorm scale, or left out the embeddings", "ok": true }, { "t": "The stream is not really a sum" }], "why": "The stream is an exact sum; the ln_final scale and the embed terms are what people drop." },
+      { "q": "How does a component remove something from the stream?", "options": [{ "t": "By adding the opposite vector", "ok": true }, { "t": "By overwriting those numbers" }], "why": "Writes are only ever additions. Cancelling means writing the negative." }
+    ],
+    "where": "Any system built as a shared sum: ResNets, logit attribution, and steering by adding a vector."
+  }
+}

@@ -1,0 +1,213 @@
+{
+  "id": "positional-embedding",
+  "title": "Every seat tints whoever sits there",
+  "week": 5,
+  "need": "core",
+  "allegory": "Attention is a table where every word can look at every other word at once, but nobody has a seat number; a positional embedding hangs a learned coloured lamp over each seat, and whoever sits there takes on its tint, so the others can tell where each word sat.",
+  "map": [
+    ["words round a table, all looking at each other at once", "tokens in attention: every query is compared with every key"],
+    ["with no lamps, swapping two guests changes nothing anyone sees", "attention alone is order-blind: shuffle the tokens and the outputs just shuffle"],
+    ["a coloured lamp over seat i, its colour picked by practice", "W_pos[i]: a learned vector for position i"],
+    ["the word's own colour blended with its seat's tint", "x₀ = W_E[token] + W_pos[i], added into the residual stream"],
+    ["a late guest told they are in seat 0", "the KV-cache bug: W_pos[0] added to a token that really sits at position 47"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Dog bites man",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "note": "same three words ... same meaning?",
+      "actors": [{ "pose": "shrug", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.5, "y": 0.3, "label": "dog bites man", "color": "mint" },
+        { "kind": "card", "x": 0.8, "y": 0.3, "label": "man bites dog", "color": "pink" },
+        { "kind": "scale", "x": 0.65, "y": 0.65, "w": 0.3, "h": 0.25, "label": "same to attention?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "Dog bites man, man bites dog: same words, very different news. Attention on its own compares words by what they are, not where they sit.",
+        "2": "Attention scores depend only on query and key contents. Shuffle the input tokens and, with no position information, the outputs just shuffle with them.",
+        "3": "Unmasked attention is permutation-equivariant: permuting inputs permutes outputs. A causal mask leaks a little order on its own, but GPT-2 supplies position explicitly with W_pos."
+      }
+    },
+    {
+      "name": "Lamps over seats",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.12, "label": "you" }],
+      "props": [
+        { "kind": "lamp", "x": 0.35, "y": 0.18, "label": "seat 0", "color": "sky" },
+        { "kind": "lamp", "x": 0.6, "y": 0.18, "label": "seat 1", "color": "lav" },
+        { "kind": "lamp", "x": 0.85, "y": 0.18, "label": "seat 2", "color": "peach" },
+        { "kind": "circle", "x": 0.35, "y": 0.62, "w": 0.12, "label": "dog", "color": "sky" },
+        { "kind": "circle", "x": 0.6, "y": 0.62, "w": 0.12, "label": "bites", "color": "lav" },
+        { "kind": "circle", "x": 0.85, "y": 0.62, "w": 0.12, "label": "man", "color": "peach" }
+      ],
+      "cap": {
+        "1": "Hang a coloured lamp over every seat. Whoever sits in seat 2 is tinted by seat 2's lamp, so everyone can see where each word sat.",
+        "2": "<code>PosEmbed</code> is a lookup table W_pos with one learned vector per position. Each token gets its position's vector added to its word vector.",
+        "3": "W_pos has shape (n_ctx, d_model). PosEmbed takes W_pos[:seq_len] and repeats it over the batch: the same position always gets the same vector, whatever the token."
+      }
+    },
+    {
+      "name": "Blend, not badge",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "x₀", "c": "ink", "note": "what enters the stream" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "W_E[tok]", "c": "sky", "note": "the word" },
+        { "t": " + ", "c": "ink", "note": "blended" },
+        { "t": "W_pos[i]", "c": "orange", "note": "the seat" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The tint is mixed in, not pinned on. Each word enters the model as its own colour plus its seat's colour: one blended vector.",
+        "2": "The residual stream starts as token embedding plus positional embedding. Same width, simply added, so every later layer reads one vector per position.",
+        "3": "x₀ = W_E[t] + W_pos[i] puts content and position in one d_model space. Heads can then read position through W_Q and W_K, as the previous-token head 0.7 does."
+      }
+    },
+    {
+      "name": "A head reads seats",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "a previous-token head, idealised (rows look at columns)",
+      "rows": 5,
+      "cols": 5,
+      "values": [["1", "·", "·", "·", "·"], ["1", "0", "·", "·", "·"], ["0", "1", "0", "·", "·"], ["0", "0", "1", "0", "·"], ["0", "0", "0", "1", "0"]],
+      "labels": { "rows": ["q0", "q1", "q2", "q3", "q4"], "cols": ["k0", "k1", "k2", "k3", "k4"] },
+      "highlight": [[0, 0], [1, 0], [2, 1], [3, 2], [4, 3]],
+      "cap": {
+        "1": "Because seats have colours, a word can learn 'always look at the seat just before mine'. Here each row finds the word one seat back.",
+        "2": "In [1.2] you compute a previous-token head's attention from positional embeddings alone, and it shows this clean band just below the diagonal.",
+        "3": "The positional QK circuit W_pos W_QK W_posᵀ for head 0.7, after masking, scaling and softmax, concentrates on the sub-diagonal: position i attends to i-1."
+      }
+    },
+    {
+      "name": "The late guest",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "no cache", "c": "mint", "lines": ["whole sentence at once", "token 47 gets W_pos[47]", "right answer"] },
+      "right": { "title": "cache, naive index", "c": "pink", "lines": ["one new token per call", "token 47 gets W_pos[0]", "plausible text that drifts"] },
+      "verdict": "With a cache, index W_pos from the cached length, not from zero.",
+      "cap": {
+        "1": "A speed trick: remember the earlier guests and seat only the newcomer. Forget to tell them their real seat and they get seat 0's tint every time.",
+        "2": "With a KV cache you pass one token, so its index is 0 and <code>PosEmbed</code> adds W_pos[0]. Nothing errors; the text just drifts. Use W_pos[cached_len:].",
+        "3": "Cached and uncached generation agree on the first token, then diverge. Index W_pos[cached_len : cached_len + n_new], then assert identical token ids with and without the cache."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Previous-token heads read the seat colours", "Induction heads are built on top of them", "Newer models rotate instead: RoPE"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Order lets a model spot patterns like 'what came after this word last time'. Those skills start with a head that reads the seat colours.",
+        "2": "Previous-token heads use positional embeddings to look one step back, and induction heads build on them. The [4.3] reasoning model uses RoPE, which rotates queries and keys instead.",
+        "3": "Positional structure is the substrate of the first circuits you reverse-engineer: previous-token into induction via K-composition. Knowing where order enters tells you where to look to read or steer it."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Who bit whom? A toy head at the last word looks back along the seats",
+    "labels": ["seat 0", "seat 1", "seat 2"],
+    "params": [
+      { "id": "alpha", "label": "Lamp brightness (how much position counts)", "min": 0, "max": 3, "step": 0.1, "value": 0 },
+      { "id": "order", "label": "Sentence: dog bites man (0) or man bites dog (1)", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "f": "softmax([0, -alpha, -2*alpha])",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "sentence", "f": "order < 0.5 ? 'dog bites man' : 'man bites dog'" },
+      { "label": "who did it? (+1 dog, -1 man)", "f": "dot(softmax([0, -alpha, -2*alpha]), order < 0.5 ? [1, 0, -1] : [-1, 0, 1]).toFixed(2)" },
+      { "label": "verdict", "f": "(v => abs(v) < 0.05 ? 'cannot tell' : (v > 0 ? 'the dog did it' : 'the man did it'))(dot(softmax([0, -alpha, -2*alpha]), order < 0.5 ? [1, 0, -1] : [-1, 0, 1]))" }
+    ],
+    "caption": {
+      "1": "Lamps off: the last word hears dog and man equally and cannot tell who bit whom. Turn the lamps up, then flip the sentence.",
+      "2": "At alpha 0 this toy head is order-blind: both sentences read 0. Raise alpha and it looks to seat 0, where the biter sits, so the two sentences finally differ.",
+      "3": "Toy head with score_j = -alpha·j from position alone. At alpha = 0 the output is invariant to word order; position-dependent scores only exist because W_pos was added."
+    }
+  },
+  "where_else": [
+    "Previous-token heads, which look one step back using positional embeddings alone",
+    "Induction heads, built on previous-token heads through K-composition",
+    "KV caching, where the position index must continue from the cached length",
+    "RoPE in newer models such as the [4.3] reasoning model: position by rotating queries and keys"
+  ],
+  "hamming": {
+    "what": "A learned vector for each position, added to each token's embedding so the model knows where every word sits.",
+    "when": "At the very start of every forward pass, and again with care whenever you generate with a KV cache.",
+    "why": "Attention compares only contents, so without position the model could not tell dog bites man from man bites dog."
+  },
+  "object": {
+    "title": "The lamp-lit table",
+    "subtitle": "Three seats, three words: each row is a word's vector, tinted by the lamp over its seat.",
+    "kind": "bars",
+    "rows": 3,
+    "cols": 6,
+    "f": "((W, P) => W[order < 0.5 ? r : 2 - r][c] + lamps * P[r][c])([[0.9, 0.7, 0.2, 0.2, 0.2, 0.2], [0.2, 0.2, 0.9, 0.7, 0.2, 0.2], [0.2, 0.2, 0.2, 0.2, 0.9, 0.7]], [[0.25, 0.05, 0.3, 0.1, 0.0, 0.2], [0.05, 0.3, 0.0, 0.25, 0.2, 0.05], [0.3, 0.0, 0.1, 0.05, 0.3, 0.25]])",
+    "labels": { "rows": ["seat 0", "seat 1", "seat 2"], "cols": ["d0", "d1", "d2", "d3", "d4", "d5"] },
+    "c": "data",
+    "knobs": [
+      { "id": "lamps", "label": "Lamp brightness (positional embedding on)", "min": 0, "max": 1, "step": 0.25, "value": 0 },
+      { "id": "order", "label": "dog bites man (0) or man bites dog (1)", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "Three seats, three words, no lamps. Each row is just the word's own colour: dog, bites, man.", "2": "Token embeddings only: row i is W_E[token at position i].", "3": "x₀ without W_pos: each row depends on the token alone." },
+        "view": "iso",
+        "set": { "lamps": 0, "order": 0 }
+      },
+      {
+        "cap": { "1": "Swap dog and man. The rows simply trade places; nothing in a row says where it sat.", "2": "Without position, reordering tokens only permutes the rows. The set of vectors is unchanged.", "3": "Permutation of inputs gives the same permutation of x₀: nothing downstream can recover order from content." },
+        "view": "iso",
+        "set": { "lamps": 0, "order": 1 }
+      },
+      {
+        "cap": { "1": "Lamps on. Every row picks up its seat's tint, so each row now carries where it sat.", "2": "x₀ = W_E[token] + W_pos[i]: the same seat adds the same tint whatever word sits there.", "3": "W_pos[i] is added per position and broadcast over the batch; content and position share d_model." },
+        "view": "front",
+        "set": { "lamps": 1, "order": 0 }
+      },
+      {
+        "cap": { "1": "Swap again. Dog in seat 2 no longer looks like dog in seat 0: order has become visible.", "2": "Now reordering changes the vectors themselves, so attention scores can depend on position.", "3": "With W_pos, x₀ is no longer permutation-equivariant in the tokens, which is what lets QK read order." },
+        "view": "front",
+        "set": { "lamps": 1, "order": 1 }
+      },
+      {
+        "cap": { "1": "Dim the lamps and the tint shrinks. It is always blended into the same numbers as the word, never stacked beside it.", "2": "Addition, not concatenation: the positional signal lives in the same dimensions as the word signal.", "3": "Because x₀ is a sum, later components must separate position from content by reading different directions." },
+        "view": "close",
+        "set": { "lamps": 0.25, "order": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "With no positional embedding, you swap two words. What happens to attention's outputs?",
+        "options": [{ "t": "They swap places too; nothing else changes", "ok": true }, { "t": "They all change" }],
+        "why": "Attention compares contents only, so shuffling the inputs only shuffles the outputs (the causal mask aside)."
+      },
+      {
+        "q": "With a KV cache, the token at position 47 arrives alone. Which positional vector should it get?",
+        "options": [{ "t": "W_pos[47]", "ok": true }, { "t": "W_pos[0], since it is the first token in this call" }],
+        "why": "Its seat is its real place in the sequence. Index from the cached length, or the text quietly drifts."
+      },
+      {
+        "q": "How is the seat's colour combined with the word's?",
+        "options": [{ "t": "Added into the same vector", "ok": true }, { "t": "Attached as extra numbers on the end" }],
+        "why": "x₀ = W_E[token] + W_pos[i]: same width, simply summed, so content and position share one space."
+      }
+    ],
+    "where": "Anywhere an order-blind mixer needs order: tokens in a transformer, and every KV-cached generation."
+  }
+}

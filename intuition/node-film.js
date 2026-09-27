@@ -235,26 +235,28 @@
     var u = unit(W, H), R = Math.max(1, c.rows || 2), C = Math.max(1, c.cols || 3), to = c.to && c.to.rows * c.to.cols === R * C ? c.to : null;
     var R2 = to ? to.rows : R, C2 = to ? to.cols : C, maxR = Math.max(R, R2), maxC = Math.max(C, C2);
     var cell = Math.min(W * .78 / maxC, H * .56 / maxR, u * 1.3), vals = c.values || [], hl = c.highlight || [];
+    var longest = 0; vals.forEach(function (row) { (row || []).forEach(function (v) { longest = Math.max(longest, String(v == null ? '' : typeof v === 'number' ? fmt(v) : v).length); }); });
+    var cw = !to && longest > 3 ? Math.max(cell, Math.min(W * .84 / maxC, u * 3)) : cell;
     var move = to ? ease.inOut(clamp((lt - c.dur * .55) / (c.dur * .3), 0, 1)) : 0, per = Math.max(.25, c.dur * .45 / Math.max(1, hl.length));
     if (c.title) F.hand(ctx, c.title, W / 2, H * .1, Math.max(14, u * .42), P.butter, { seed: 'gt', font: /[(),]/.test(c.title) ? MONO : null, bold: true, wobble: .4 });
     var cy = H * .5;
     for (var i = 0; i < R * C; i++) {
       var r1 = Math.floor(i / C), c1 = i % C, r2 = Math.floor(i / C2), c2 = i % C2;
-      var x1 = W / 2 + (c1 - (C - 1) / 2) * cell, y1 = cy + (r1 - (R - 1) / 2) * cell, x2 = W / 2 + (c2 - (C2 - 1) / 2) * cell, y2 = cy + (r2 - (R2 - 1) / 2) * cell;
+      var x1 = W / 2 + (c1 - (C - 1) / 2) * cw, y1 = cy + (r1 - (R - 1) / 2) * cell, x2 = W / 2 + (c2 - (C2 - 1) / 2) * cw, y2 = cy + (r2 - (R2 - 1) / 2) * cell;
       var x = lerp(x1, x2, move), y = lerp(y1, y2, move) - Math.sin(move * Math.PI) * cell * .35;
       var hi = -1; hl.forEach(function (h, k) { if (h[0] === r1 && h[1] === c1) hi = k; });
       var lit = hi >= 0 ? clamp((lt - .4 - hi * per) / .3, 0, 1) : 0, k = pop(lt, 0, 0);
       var colr = lit > 0 ? P.butter : [P.mint, P.sky, P.peach, P.lav][(r1 + c1) % 4];
       ctx.save(); ctx.translate(x, y); ctx.scale(k, k);
-      F.paper(ctx, 0, 0, cell * .9, cell * .9, colr, { seed: 'c' + i, lift: 2 + lit * 5 });
-      var v = vals[r1] && vals[r1][c1]; if (v != null) F.hand(ctx, String(typeof v === 'number' ? fmt(v) : v), 0, 0, Math.max(11, Math.min(cell * .36, 28)), P.ink, { seed: 'v' + i, wobble: .5 });
+      F.paper(ctx, 0, 0, cw * .92, cell * .9, colr, { seed: 'c' + i, lift: 2 + lit * 5 });
+      var v = vals[r1] && vals[r1][c1]; if (v != null) textBlock(ctx, String(typeof v === 'number' ? fmt(v) : v), 0, 0, cw * .82, cell * .78, Math.max(11, Math.min(cell * .36, 28)), P.ink, { seed: 'v' + i });
       ctx.restore();
     }
     var lab = c.labels || {}, ls = Math.max(10, Math.min(u * .26, cell * .28)), la = 1 - move;
     if (la > .02) {
       ctx.save(); ctx.globalAlpha = la;
-      (lab.rows || []).forEach(function (s, r) { if (r < R) F.hand(ctx, s, W / 2 - (C / 2) * cell - ls * 1.6, cy + (r - (R - 1) / 2) * cell, ls, P.butter, { seed: 'lr' + r }); });
-      (lab.cols || []).forEach(function (s, q) { if (q < C) F.hand(ctx, s, W / 2 + (q - (C - 1) / 2) * cell, cy - (R / 2) * cell - ls * 1.2, ls, P.butter, { seed: 'lc' + q }); });
+      (lab.rows || []).forEach(function (s, r) { if (r < R) F.hand(ctx, s, W / 2 - (C / 2) * cw - ls * .4, cy + (r - (R - 1) / 2) * cell, ls, P.butter, { seed: 'lr' + r, align: 'right' }); });
+      (lab.cols || []).forEach(function (s, q) { if (q < C) F.hand(ctx, s, W / 2 + (q - (C - 1) / 2) * cw, cy - (R / 2) * cell - ls * 1.2, ls, P.butter, { seed: 'lc' + q }); });
       ctx.restore();
     }
     if (c.actor) narrator(ctx, c.actor, W, H, t, lt, c.dur, H * .97);

@@ -1,0 +1,200 @@
+{
+  "id": "topological-sort",
+  "title": "Wait for all your mail",
+  "week": 4,
+  "need": "exercise",
+  "allegory": "Backprop is a mailroom where the loss writes feedback to everyone who helped make it, and a topological sort is the writing schedule: nobody sends their own letters until every letter owed to them has arrived.",
+  "map": [
+    ["a helper in the mailroom", "a node (tensor) in the computational graph"],
+    ["'I used your work' links", "edges from a value to the operations that consumed it"],
+    ["a feedback letter", "one gradient contribution sent back along an edge"],
+    ["waiting until every letter owed to you has arrived", "visiting a node only after all its consumers have contributed"],
+    ["the writing schedule pinned on the wall", "the topological order: loss first, parameters last"]
+  ],
+  "credit": "The 'every edge points one way' picture of a topological sort follows Andrej Karpathy's micrograd lecture (The spelled-out intro to neural networks and backpropagation).",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Who writes first?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "every node passes its feedback on once. In what order?",
+      "actors": [{ "pose": "think", "x": 0.1, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.3, "y": 0.55, "label": "a", "color": "mint" },
+        { "kind": "card", "x": 0.45, "y": 0.55, "label": "b", "color": "teal" },
+        { "kind": "card", "x": 0.62, "y": 0.4, "label": "c", "color": "peach" },
+        { "kind": "card", "x": 0.62, "y": 0.7, "label": "d", "color": "sky" },
+        { "kind": "card", "x": 0.82, "y": 0.55, "label": "L", "color": "butter" }
+      ],
+      "arrows": [[0.33, 0.55, 0.42, 0.55], [0.48, 0.53, 0.59, 0.42], [0.48, 0.57, 0.59, 0.68], [0.65, 0.42, 0.79, 0.53], [0.65, 0.68, 0.79, 0.57]],
+      "cap": {
+        "1": "Backprop hands feedback from the loss back to every value that helped make it. Each value passes its feedback on exactly once. So who goes first matters.",
+        "2": "Backprop walks the computational graph from the loss backwards, calling each node's backward once. Call a node too early and it passes on an incomplete gradient.",
+        "3": "Reverse-mode AD fires each node's backward exactly once, so its grad_out must be complete when it fires. That is an ordering constraint over the whole DAG."
+      }
+    },
+    {
+      "name": "The mailroom",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "write", "x": 0.86, "label": "loss" }, { "pose": "sit", "x": 0.3, "label": "b" }],
+      "props": [
+        { "kind": "box", "x": 0.42, "y": 0.62, "w": 0.12, "h": 0.1, "label": "b's inbox: 1 of 2", "color": "teal" },
+        { "kind": "card", "x": 0.64, "y": 0.36, "label": "letter from c", "color": "peach" },
+        { "kind": "card", "x": 0.64, "y": 0.6, "label": "letter from d (not yet)", "color": "sky" }
+      ],
+      "arrows": [[0.6, 0.38, 0.46, 0.58, "arrived"]],
+      "cap": {
+        "1": "Picture a mailroom. The loss writes feedback to whoever helped make it. Each helper waits until every letter owed to them has arrived, then writes their own.",
+        "2": "Each node is a helper and each edge an 'I used your work' link. b fed both c and d, so b waits for letters from both before it writes to a.",
+        "3": "Letters are gradient contributions along edges and the inbox is the accumulated grad. A node may fire only after all of its consumers have fired."
+      }
+    },
+    {
+      "name": "Add every letter",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "∂L/∂b", "c": "teal", "note": "b's full feedback" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "via c", "c": "orange", "note": "letter from c" },
+        { "t": " + ", "c": "ink", "note": "add, never replace" },
+        { "t": "via d", "c": "sky", "note": "letter from d" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "Why wait? Because b's full feedback is the sum of every letter it gets. Send yours on after one letter and you pass on half the story.",
+        "2": "b fed two consumers, so dL/db is the gradient arriving via c plus the gradient arriving via d. The total only exists once both have arrived.",
+        "3": "Multivariate chain rule: ∂L/∂b = Σᵤ ∂L/∂u · ∂u/∂b over consumers u. A node's grad is a sum over its out-edges; that sum is why the order constraint exists."
+      }
+    },
+    {
+      "name": "The schedule",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "a", "label": "a  ⑤", "x": 0.1, "y": 0.5, "c": "mint" },
+        { "id": "b", "label": "b  ④", "x": 0.32, "y": 0.5, "c": "teal" },
+        { "id": "c", "label": "c  ②", "x": 0.56, "y": 0.28, "c": "peach" },
+        { "id": "d", "label": "d  ③", "x": 0.56, "y": 0.72, "c": "sky" },
+        { "id": "L", "label": "L  ①", "x": 0.86, "y": 0.5, "c": "butter" }
+      ],
+      "edges": [["a", "b"], ["b", "c"], ["b", "d"], ["c", "L"], ["d", "L"]],
+      "flow": "backward",
+      "cap": {
+        "1": "Pin up a schedule where every helper comes after everyone who used their work: L, then c and d, then b, then a. Every arrow points the same way.",
+        "2": "A topological sort lines the graph up so every edge points one way. Walked from the loss, each node runs after all its consumers. c and d may go in either order.",
+        "3": "Any linear extension of the DAG's partial order works. Ties like (c, d) are free because accumulation commutes. A valid order exists only if the graph has no cycle."
+      }
+    },
+    {
+      "name": "Suppliers first",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "the list depth-first search builds (walk it right to left)",
+      "rows": 1,
+      "cols": 5,
+      "values": [["a", "b", "c", "d", "L"]],
+      "labels": { "rows": ["list"], "cols": ["1st", "2nd", "3rd", "4th", "5th"] },
+      "highlight": [[0, 4], [0, 3], [0, 2], [0, 1], [0, 0]],
+      "cap": {
+        "1": "To build the schedule, start at the loss and chase suppliers first. Write a helper down only once all its suppliers are written, then read the list backwards.",
+        "2": "Depth-first search from the loss: recurse into each node's inputs, append the node once they are done, skip anything already visited. Reverse the list to backprop.",
+        "3": "Post-order DFS over get_children puts leaves before the root; reversed, it is a valid backward order. Meeting a node that is still in progress means a cycle: raise."
+      }
+    },
+    {
+      "name": "The early letter",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "in topological order", "c": "mint", "lines": ["b waits for c and d", "sends the full sum to a", "gradient correct"] },
+      "right": { "title": "out of order", "c": "pink", "lines": ["b fires after c only", "d's letter lands too late", "a gets half the story", "no error raised"] },
+      "verdict": "A wrong order gives wrong gradients, not a crash.",
+      "cap": {
+        "1": "Let b write after only c's letter and d's letter lands on an empty desk. a gets half the feedback. Nothing crashes; training just quietly gets worse.",
+        "2": "Visit a tensor before all its consumers contribute and it back-propagates a partial gradient: no exception, plausible numbers. That is why [0.4] has you write the sort yourself.",
+        "3": "An order violation fires backward with an incomplete grad_out. The result is well-shaped and roughly aligned, so only a check against a reference (PyTorch, central differences) exposes it."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "library",
+      "dur": 9,
+      "type": "cards",
+      "items": ["loss.backward() does this sort for you", "Same idea: build systems, spreadsheets", "Trust the gradients you read later"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "You will rarely write this sort again: loss.backward() does it. Knowing why the order matters is how you trust every gradient you read later.",
+        "2": "PyTorch's autograd does the ordering for you; this is the one time you open the box. Same pattern anywhere work depends on other work: builds, installs, spreadsheets.",
+        "3": "Gradient-based tools you will meet for understanding and steering models ride this same backward walk; a correct order is what makes those numbers trustworthy."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Rows are helpers L, c, d, b, a (top to bottom); columns are time slots 1 to 5. Fix the schedule.",
+    "rows": 5,
+    "cols": 5,
+    "labels": { "rows": ["L", "c", "d", "b", "a"], "cols": ["1", "2", "3", "4", "5"] },
+    "init": "((r == 0 && c == 0) || (r == 1 && c == 1) || (r == 3 && c == 2) || (r == 2 && c == 3) || (r == 4 && c == 4)) ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "backward schedule", "f": "range(5).map(c => ['L','c','d','b','a'].filter((n, r) => G[r][c]).join('+') || '·').join(' → ')" },
+      { "label": "late letters", "f": "G.some(row => sum(row) !== 1) ? 'give every helper exactly one slot' : ([[0,1],[0,2],[1,3],[2,3],[3,4]].filter(e => G[e[0]].indexOf(1) >= G[e[1]].indexOf(1)).map(e => ['L','c','d','b','a'][e[1]] + ' runs before ' + ['L','c','d','b','a'][e[0]] + ' has written').join('; ') || 'none: every letter arrives in time')" },
+      { "label": "a's gradient (true answer: 21)", "f": "G.some(row => sum(row) !== 1) ? '?' : (s => (s[3] < s[4] ? 3 : 0) * ((s[1] < s[3] ? 2*(s[0] < s[1] ? 1 : 0) : 0) + (s[2] < s[3] ? 5*(s[0] < s[2] ? 1 : 0) : 0)))(G.map(row => row.indexOf(1)))" }
+    ],
+    "caption": {
+      "1": "This schedule lets b write too early, so a gets 6 instead of 21. Move the lights until the late-letter list is empty and a gets its full 21.",
+      "2": "Each lit cell says when a node runs backward. Every node must run after everyone who used it. Try putting c and d in the same slot: ties are fine.",
+      "3": "Forward: b = 3a, c = 2b, d = 5b, L = c + d, so dL/da = 21. Firing b before d drops the 5·3 = 15 term along that path: a partial gradient, silently."
+    }
+  },
+  "where_else": [
+    "Build systems and package managers: build or install every dependency first",
+    "Spreadsheets: recalculate a cell only after the cells it reads",
+    "The forward pass itself: each layer runs after its inputs exist",
+    "Course prerequisites, like the parent-child links on this concept map"
+  ],
+  "hamming": {
+    "what": "A line-up of a graph's nodes in which no node is visited before everything that depends on it.",
+    "when": "Whenever work flows through a graph of dependencies; in ML it happens inside loss.backward() every step, and you write it by hand once in [0.4].",
+    "why": "Backprop gives each node one chance to pass its gradient on, and that gradient is a sum over its consumers, so it must be complete before the node fires."
+  },
+  "object": {
+    "title": "The mail tower",
+    "subtitle": "The graph stood on end: the loss at the top, every letter falling downhill to the parameter at the bottom.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "L", "label": "L (1st)", "pos": [0, 1.2, 0], "c": "brass" },
+      { "id": "c", "label": "c (2nd)", "pos": [-0.75, 0.4, 0.3], "c": "data" },
+      { "id": "d", "label": "d (2nd)", "pos": [0.75, 0.4, -0.3], "c": "data" },
+      { "id": "b", "label": "b (3rd)", "pos": [0, -0.4, 0], "c": "aux" },
+      { "id": "a", "label": "a (last)", "pos": [0, -1.2, 0], "c": "good" }
+    ],
+    "edges": [["L", "c"], ["L", "d"], ["c", "b"], ["d", "b"], ["b", "a"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "Stand the graph on end with the loss on top. Every letter now falls downhill: nothing ever has to travel back up.", "2": "Height is schedule position. Every edge points down, which is exactly what a topological order means.", "3": "Embedding a DAG by topological rank makes every edge monotone in height; that is the order's defining property." }, "view": "iso", "set": {} },
+      { "cap": { "1": "From above it looks like a tangle. From the side the order is plain: top floor first, bottom floor last.", "2": "The same graph viewed flat hides the order; the sort is what recovers it.", "3": "A topological order is a projection of the DAG onto a line that preserves every edge's direction." }, "view": "top", "set": {} },
+      { "cap": { "1": "c and d share a floor. Neither used the other's work, so either can write first.", "2": "Ties are free: nodes with no path between them can run in any order.", "3": "c and d are incomparable in the partial order; accumulation commutes, so any interleaving gives identical gradients." }, "view": "side", "set": {} },
+      { "cap": { "1": "b's inbox takes two letters, one from each floor above. b writes only once both have landed.", "2": "Fan-out in the forward pass means fan-in on the way back: b's gradient is the sum of both letters.", "3": "In-degree 2 in the backward graph: ∂L/∂b = ∂L/∂c·∂c/∂b + ∂L/∂d·∂d/∂b, complete only after both consumers fire." }, "view": "close", "set": {} }
+    ],
+    "predict": [
+      { "q": "b was used by both c and d. When can b run its backward?", "options": [{ "t": "Only after both c and d have run", "ok": true }, { "t": "As soon as either one has run" }], "why": "b's gradient is the sum of the letters from c and d. Fire after one and you pass on half." },
+      { "q": "c and d each feed only L. Does it matter which goes first?", "options": [{ "t": "No, either order is valid", "ok": true }, { "t": "Yes, c must always go first" }], "why": "Neither depends on the other, and gradient contributions add, which works in any order." },
+      { "q": "By mistake, b runs before d. What happens?", "options": [{ "t": "Smaller, wrong gradients and no error", "ok": true }, { "t": "An immediate crash with a shape error" }], "why": "A partial gradient has the right shape and a plausible direction, so nothing complains. Training just gets quietly worse." }
+    ],
+    "where": "Any tower of dependencies: build systems, package installs, spreadsheets, prerequisites."
+  }
+}

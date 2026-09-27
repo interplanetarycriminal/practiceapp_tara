@@ -1,0 +1,217 @@
+{
+  "id": "latent-space",
+  "title": "A map the model draws itself",
+  "week": 4,
+  "need": "core",
+  "allegory": "A latent space is a map the model draws for itself: a clerk writes down each picture's address, a painter paints whatever lives at an address, and the map is only useful if nearby addresses paint similar pictures and there are no blank streets in between.",
+  "map": [
+    ["an address on the map", "a latent vector z: the bottleneck's coordinates"],
+    ["the clerk who writes down addresses", "the encoder"],
+    ["the painter who paints what lives at an address", "the decoder"],
+    ["walking the straight street from the 2s to the 7s", "interpolating between two latent vectors and decoding each point"],
+    ["claiming a fuzzy neighbourhood instead of one house", "a VAE encoding each input as a cloud with centre μ and width σ"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The blank map",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "random numbers in, mush out?",
+      "actors": [{ "pose": "reach", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.45, "y": 0.35, "label": "random address", "color": "butter" },
+        { "kind": "box", "x": 0.78, "y": 0.55, "w": 0.18, "h": 0.2, "label": "mush", "color": "chalk" }
+      ],
+      "arrows": [[0.53, 0.4, 0.7, 0.5, "decode"]],
+      "cap": {
+        "1": "An autoencoder squeezes each picture into a few numbers and rebuilds it. But feed it a random set of numbers and it paints mush. Why?",
+        "2": "A plain autoencoder reconstructs well, yet its latent space is irregular: neighbouring points can decode very differently and much of the space decodes to nothing. So you can't sample new images from it.",
+        "3": "Reconstruction loss never regularises the latent geometry, so the encoder's image is an arbitrary, gappy subset, and a straight line between two encodings need not decode to anything plausible."
+      }
+    },
+    {
+      "name": "The self-drawn map",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "write", "x": 0.3, "label": "clerk" },
+        { "pose": "reach", "x": 0.72, "label": "painter" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.1, "y": 0.4, "label": "a 7", "color": "cream" },
+        { "kind": "card", "x": 0.5, "y": 0.3, "label": "address (1.2, −0.4)", "color": "butter" },
+        { "kind": "card", "x": 0.9, "y": 0.4, "label": "painted 7", "color": "cream" }
+      ],
+      "arrows": [[0.16, 0.4, 0.4, 0.32, "encode"], [0.6, 0.32, 0.84, 0.4, "decode"]],
+      "cap": {
+        "1": "Think of the numbers as an address on a map the model draws itself. A clerk writes down each picture's address; a painter paints whatever lives at an address.",
+        "2": "The encoder maps each input to a point z in a small space; the decoder maps z back to an image. That small space is the latent space: the coordinates the bottleneck learned.",
+        "3": "The latent space is the encoder's output space, far lower-dimensional than the input. Training on reconstruction alone learns a code that inverts well, not a geometry that means anything."
+      }
+    },
+    {
+      "name": "Walk the street",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "z(t)", "c": "ink", "note": "a house on the street" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "(1−t)·", "c": "ink", "note": "" },
+        { "t": "z₂", "c": "sky", "note": "the 2's address" },
+        { "t": " + ", "c": "ink", "note": "" },
+        { "t": "t·", "c": "ink", "note": "" },
+        { "t": "z₇", "c": "orange", "note": "the 7's address" }
+      ],
+      "actor": { "pose": "walk", "x": 0.1 },
+      "cap": {
+        "1": "Walk the straight street from the 2's address to the 7's. On a good map every house along the way paints something that looks like a digit.",
+        "2": "Interpolate: <code>z(t) = (1−t)·z₂ + t·z₇</code> for t from 0 to 1, and decode each point. On a well-shaped latent space the images shade from a 2 to a 7 through plausible in-betweens.",
+        "3": "Interpolation is the standard probe of latent geometry. In a VAE the path between the 2 and 7 clusters decodes to digits ambiguous between the two; in a plain autoencoder it can cross junk."
+      }
+    },
+    {
+      "name": "Fuzzy neighbourhoods",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "plain autoencoder", "c": "chalk", "lines": ["each picture gets one house", "neighbours can be unrelated", "blank streets between", "random address: mush"] },
+      "right": { "title": "VAE", "c": "mint", "lines": ["each picture claims a fuzzy patch", "patches press together", "the gaps fill in", "random address: a digit"] },
+      "verdict": "Give every picture a cloud, not a point, and the map fills in.",
+      "cap": {
+        "1": "The fix: let each picture claim a small fuzzy neighbourhood, not one house. The painter must work from anywhere in it, so the map fills in and neighbours agree.",
+        "2": "A VAE's encoder outputs a centre μ and a width σ, and z is sampled from that cloud. Rebuilding from anywhere in the cloud pushes different images apart and fills the gaps between them.",
+        "3": "Encode x as N(μ, σ²), sample z = μ + σ·ε so gradients reach μ and σ (the reparameterisation trick), and add a KL pull toward N(0, I). Kingma and Welling, ICLR 2014."
+      }
+    },
+    {
+      "name": "The collapsed map",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "slump", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.48, "y": 0.35, "label": "same blurry digit", "color": "chalk" },
+        { "kind": "card", "x": 0.66, "y": 0.5, "label": "same blurry digit", "color": "chalk" },
+        { "kind": "card", "x": 0.84, "y": 0.35, "label": "same blurry digit", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "A sneaky failure: every address paints the same blurry digit. The painter learned to work alone, and the map stopped meaning anything.",
+        "2": "Posterior collapse: the KL term drops to zero, the encoder outputs μ ≈ 0 and σ ≈ 1 for every input, and z carries no information. Print mean σ each epoch; it should sit below 1.",
+        "3": "A decoder strong enough to reconstruct without z lets the encoder match the prior everywhere. Monitor KL per latent dimension, and ramp the KL weight up from 0 (KL warm-up)."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Nearby should mean similar", "Walk between two points to test a map", "Every model keeps a private map"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Every model you study keeps its own private map. Asking what lives near here, and what lies between, is how you start reading it.",
+        "2": "GAN latents, the residual stream and SAE latents are all learned coordinate spaces. Interpolating, clustering and hunting for meaningful directions are the same moves you make here.",
+        "3": "Interpretability and steering treat activation space as a latent space: find directions that mean something, then move along them. This week's grid of decoded digits is that idea in miniature."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Tap to place pictures on the map, then compare houses with fuzzy neighbourhoods",
+    "rows": 8,
+    "cols": 8,
+    "init": "((r == 1 && c == 1) || (r == 1 && c == 6) || (r == 5 && c == 3) || (r == 6 && c == 6)) ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "pictures placed", "f": "sum(G.map(row => sum(row)))" },
+      { "label": "map covered as single houses", "f": "round(100*sum(G.map(row => sum(row)))/64) + '%'" },
+      { "label": "map covered as 3×3 fuzzy patches", "f": "round(100*sum(G.map((row, r) => sum(row.map((v, c) => G.some((row2, r2) => row2.some((v2, c2) => v2 && abs(r - r2) <= 1 && abs(c - c2) <= 1)) ? 1 : 0))))/64) + '%'" },
+      { "label": "squares claimed by 2+ pictures (where in-betweens live)", "f": "sum(G.map((row, r) => sum(row.map((v, c) => sum(G.map((row2, r2) => sum(row2.map((v2, c2) => (v2 && abs(r - r2) <= 1 && abs(c - c2) <= 1) ? 1 : 0)))) >= 2 ? 1 : 0))))" }
+    ],
+    "caption": {
+      "1": "Tap squares to place pictures. As single houses they cover almost none of the map; as fuzzy 3×3 patches they cover most. Place two close and watch them share.",
+      "2": "A random address only paints something real if it lands on claimed ground. Points leave the map nearly blank; clouds fill it, and where two clouds overlap you get the in-between digits.",
+      "3": "A caricature of why σ > 0 plus a KL pull toward the prior makes the latent samplable: coverage rises from n/64 to near 1, and overlaps are where interpolations blend."
+    }
+  },
+  "where_else": [
+    "GANs also generate from a latent, reached by a completely different route",
+    "The residual stream: interpretability reads activations as a space with meaningful directions",
+    "Sparse autoencoders learn a dictionary of latents for a model's activations",
+    "The reparameterisation trick recurs wherever a model has to sample and still be differentiable"
+  ],
+  "hamming": {
+    "what": "The small coordinate space an encoder maps inputs into, where position is supposed to mean something.",
+    "when": "Whenever a model compresses inputs through a bottleneck and you want to sample from it, interpolate in it or read what it learned.",
+    "why": "A latent space is only useful if nearby points mean similar things and the gaps decode sensibly, which a plain autoencoder never guarantees and a VAE forces."
+  },
+  "object": {
+    "title": "The fuzzy-neighbourhood map",
+    "subtitle": "Height is how likely an address is to paint a real digit. Widen the clouds and the islands join.",
+    "kind": "surface",
+    "f": "1 - (1 - exp(-((x+1)*(x+1) + (y+1)*(y+1))/(2*s*s)))*(1 - exp(-((x-1)*(x-1) + (y+1)*(y+1))/(2*s*s)))*(1 - exp(-((x+1)*(x+1) + (y-1)*(y-1))/(2*s*s)))*(1 - exp(-((x-1)*(x-1) + (y-1)*(y-1))/(2*s*s)))",
+    "x": [-2, 2],
+    "y": [-2, 2],
+    "marks": [
+      { "x": -1, "y": -1, "label": "2s" },
+      { "x": 1, "y": 1, "label": "7s" },
+      { "x": 1, "y": -1, "label": "1s" },
+      { "x": -1, "y": 1, "label": "0s" },
+      { "x": 0, "y": 0, "label": "halfway: 2 or 7?" }
+    ],
+    "knobs": [{ "id": "s", "label": "Cloud width (σ)", "min": 0.1, "max": 0.9, "step": 0.05, "value": 0.15 }],
+    "beats": [
+      {
+        "cap": { "1": "A plain autoencoder's map: needles where training digits landed, flat ground everywhere else. Most addresses paint mush.", "2": "With σ near zero each input is a single point. Almost all of the latent space decodes to nothing plausible.", "3": "A deterministic encoder occupies a measure-zero set of the latent; the prior's mass lands mostly off it." },
+        "view": "iso",
+        "set": { "s": 0.15 }
+      },
+      {
+        "cap": { "1": "From above: the 2s and the 7s are islands, and the street between them crosses empty ground.", "2": "Interpolating from the 2 cluster to the 7 cluster passes through regions no input was ever encoded to.", "3": "Linear paths between encodings leave the support of the encoded data, so decodes along them are unconstrained." },
+        "view": "top",
+        "set": { "s": 0.15 }
+      },
+      {
+        "cap": { "1": "Give each picture a fuzzy neighbourhood and the needles grow into hills. The street from 2 to 7 now stays on higher ground.", "2": "A VAE samples z from a cloud around each encoding, so the decoder learns to paint from a whole region, not a point.", "3": "Sampling z ~ N(μ, σ²) during training forces the decoder to be smooth over each posterior's support." },
+        "view": "iso",
+        "set": { "s": 0.5 }
+      },
+      {
+        "cap": { "1": "Halfway between 2 and 7, a good map paints a digit that could be either. That is where in-betweens live.", "2": "Where neighbouring clouds overlap, decodes blend: the midpoint of 2 and 7 looks ambiguous between them.", "3": "Overlapping posteriors make the decoder interpolate between classes, which is what makes latent traversals meaningful." },
+        "view": "close",
+        "set": { "s": 0.6 }
+      },
+      {
+        "cap": { "1": "Wide clouds merge into one plateau: almost any address paints a digit, so you can sample new ones. Push to the limit and every cloud is the same cloud.", "2": "The KL term pulls σ towards 1, reconstruction pulls it towards 0; mean σ should settle below 1. At the extreme you get posterior collapse.", "3": "If every posterior equals the prior, KL is zero and z carries no information: coverage without meaning." },
+        "view": "front",
+        "set": { "s": 0.9 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "You decode a random point from a plain autoencoder's latent space. What do you usually get?",
+        "options": [{ "t": "Mush: most of the space decodes to nothing", "ok": true }, { "t": "A crisp new digit" }],
+        "why": "Nothing asks a plain autoencoder to fill its map, so random addresses usually land on blank ground."
+      },
+      {
+        "q": "Why does encoding each input as a cloud, not a point, help?",
+        "options": [{ "t": "The decoder must work from anywhere in the cloud, so the map fills in", "ok": true }, { "t": "It makes the network smaller and faster" }],
+        "why": "Clouds from different images must stay apart to be decodable, and together they cover the space."
+      },
+      {
+        "q": "In VAE training the KL term falls to zero and every sample looks the same. What happened?",
+        "options": [{ "t": "Posterior collapse: z carries no information", "ok": true }, { "t": "Training worked perfectly" }],
+        "why": "The encoder matched the prior everywhere and the decoder worked alone. Watch mean σ; it should sit below 1."
+      }
+    ],
+    "where": "Any learned space you sample from or walk through: GAN latents, the residual stream, SAE dictionaries."
+  }
+}

@@ -1,0 +1,208 @@
+{
+  "id": "kl-divergence",
+  "title": "The extra surprise tax",
+  "week": 4,
+  "need": "core",
+  "allegory": "KL divergence is the extra surprise tax you pay, on average, for packing by a wrong forecast Q while the weather really follows P: zero only if the forecast is perfect, and ruinous if it calls real weather impossible.",
+  "map": [
+    ["the weather that really happens", "the distribution P that outcomes are drawn from"],
+    ["the forecast you pack by", "the distribution Q you compare against"],
+    ["the tax on one day: small if forecast likely, huge if forecast 'almost never'", "the surprise −log Q(x), in nats"],
+    ["the extra tax over a perfect forecast, averaged over real days", "D_KL(P‖Q) = Σ P(x) log(P(x)/Q(x)) = H(P,Q) − H(P)"],
+    ["a forecast that says 'never' about weather that happens", "Q(x) → 0 where P(x) > 0: the KL blows up"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The wrong forecast",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "day",
+      "note": "forecast said 0% snow",
+      "actors": [{ "pose": "recoil", "x": 0.3, "label": "you" }],
+      "props": [
+        { "kind": "cloud", "x": 0.58, "y": 0.18, "w": 0.26, "label": "snow!", "color": "chalk" },
+        { "kind": "card", "x": 0.78, "y": 0.58, "label": "forecast: sun 60%, rain 40%", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You pack each morning by a forecast, but the weather does its own thing. How do you score how wrong the forecast is, in one number?",
+        "2": "Two distributions: what really happens (P) and what a model expects (Q). You want one number for how badly Q describes P, zero only when they match.",
+        "3": "We want a divergence D(P‖Q) ≥ 0, with equality iff P = Q, that weights each mismatch by how often that outcome actually occurs under P."
+      }
+    },
+    {
+      "name": "The surprise tax",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "carry", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "crate", "x": 0.5, "y": 0.64, "w": 0.18, "h": 0.2, "label": "tax jar", "color": "peach" },
+        { "kind": "card", "x": 0.78, "y": 0.28, "label": "sun, forecast 60%: tiny tax", "color": "mint" },
+        { "kind": "card", "x": 0.78, "y": 0.58, "label": "snow, forecast 1%: huge tax", "color": "pink" }
+      ],
+      "arrows": [[0.26, 0.58, 0.42, 0.62, "pay −log Q"]],
+      "cap": {
+        "1": "Each day you pay a surprise tax: tiny if the forecast called that weather likely, huge if it said 'almost never'. KL is the extra a wrong forecast costs.",
+        "2": "Surprise at outcome x under Q is −log Q(x). Averaged over real days you pay the cross-entropy; a perfect forecast pays only the entropy of P. KL is the gap.",
+        "3": "D_KL(P‖Q) = H(P,Q) − H(P) = E_P[log P(x) − log Q(x)]: expected excess surprise, in nats with natural logs. Gibbs' inequality makes it ≥ 0, zero iff P = Q."
+      }
+    },
+    {
+      "name": "Adding up tax",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "KL(P‖Q) = ", "c": "ink", "note": "" },
+        { "t": "Σ P(x)", "c": "sky", "note": "how often day x really happens" },
+        { "t": " · ", "c": "ink", "note": "" },
+        { "t": "log P(x)/Q(x)", "c": "orange", "note": "extra surprise on day x" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "For every kind of day: how often it really happens, times how much extra surprise the forecast gives it. Add them up. With natural logs the unit is nats.",
+        "2": "Each term compares log-probabilities on one outcome, weighted by the real frequency P(x). Outcomes P never produces cost nothing, whatever Q says about them.",
+        "3": "Terms with P(x) = 0 contribute 0; terms with Q(x) → 0 while P(x) > 0 diverge. In code, take log_softmax then exp rather than softmax then log, for stability."
+      }
+    },
+    {
+      "name": "Never say never",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "0.9 * log(0.9 / (1 - x)) + 0.1 * log(0.1 / x)", "c": "orange", "label": "KL(P‖Q)" },
+        { "f": "(1 - x) * log((1 - x) / 0.9) + x * log(x / 0.1)", "c": "sky", "label": "KL(Q‖P)" }
+      ],
+      "x": [0.0005, 0.6],
+      "y": [0, 0.8],
+      "dot": true,
+      "marks": [{ "x": 0.1, "label": "forecast = truth" }],
+      "cap": {
+        "1": "It really snows one day in ten. Slide the forecast's snow chance towards zero: one way round the tax keeps climbing, the other way it levels off.",
+        "2": "Orange, KL(P‖Q), grows without limit as Q(snow) → 0. Blue, KL(Q‖P), stays bounded there. Both are zero where the forecast equals the truth.",
+        "3": "KL is asymmetric and not a metric: D(P‖Q) diverges as Q(x) → 0 with P(x) > 0; D(Q‖P) does not. Which argument is which is a modelling decision."
+      }
+    },
+    {
+      "name": "Which way round?",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "KL(new ‖ base)", "c": "mint", "lines": ["new model says what base", "thinks near-impossible:", "huge penalty", "dropping base habits: free"] },
+      "right": { "title": "KL(base ‖ new)", "c": "pink", "lines": ["new model drops what base", "often said:", "huge penalty", "must keep every habit"] },
+      "verdict": "RLHF uses KL(new ‖ base): no gibberish, but free to drop bad habits.",
+      "cap": {
+        "1": "In fine-tuning the old model is the forecaster, reading what the new one writes. Gibberish shocks it and costs a lot; dropping bad habits is free.",
+        "2": "ARENA's RLHF penalty is kl_coef times KL(new ‖ frozen base). Flip the order and you punish the model for dropping anything the base did, often the whole point of fine-tuning.",
+        "3": "D_KL(π_θ‖π_ref) is large where π_θ puts mass π_ref lacks, finite where π_θ suppresses π_ref's modes. Reversed args give a plausible, finite number penalising the wrong thing."
+      }
+    },
+    {
+      "name": "One ruler, three jobs",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["VAE: pull each latent cloud towards the prior", "RLHF: leash the policy to a frozen base model", "Interventions: how much did the output distribution move?"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "The same ruler shows up three times in this course: shaping a VAE, keeping a fine-tuned chatbot close to its base model, and measuring an intervention's effect.",
+        "2": "It closes the VAE loss, holds an RLHF policy near its reference in [2.4], and in [4.3] measures how much an attention intervention changed a reasoning model's outputs.",
+        "3": "To steer a model you need to know how far you moved it: KL between output distributions before and after is the standard budget for drift, whether from training or from an intervention."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Tune the forecast and watch the extra surprise tax, both ways round",
+    "labels": ["real sun", "real rain", "real snow", "forecast sun", "forecast rain", "forecast snow"],
+    "params": [
+      { "id": "rain", "label": "forecast rain (logit)", "min": -6, "max": 3, "step": 0.1, "value": 0 },
+      { "id": "snow", "label": "forecast snow (logit)", "min": -8, "max": 3, "step": 0.1, "value": 0 }
+    ],
+    "f": "[0.6, 0.3, 0.1].concat(softmax([0, rain, snow]))",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "KL(real ‖ forecast)", "f": "round(sum([0.6, 0.3, 0.1].map((p, i) => p * log(p / softmax([0, rain, snow])[i]))) * 1000) / 1000 + ' nats'" },
+      { "label": "KL(forecast ‖ real)", "f": "round(sum(softmax([0, rain, snow]).map((q, i) => q * log(q / [0.6, 0.3, 0.1][i]))) * 1000) / 1000 + ' nats'" },
+      { "label": "tax on a snow day", "f": "round(-log(softmax([0, rain, snow])[2]) * 100) / 100 + ' nats'" }
+    ],
+    "caption": {
+      "1": "Drag snow far left so the forecast says 'never snow'. The first readout climbs, the second barely moves. Then match the real bars to reach zero.",
+      "2": "KL(real‖forecast) punishes calling real events near-impossible; KL(forecast‖real) punishes expecting what rarely happens. Try rain −0.7, snow −1.8: both hit about 0.",
+      "3": "Q(x) → 0 with P(x) > 0 sends KL(P‖Q) → ∞ while KL(Q‖P) stays bounded: the asymmetry behind choosing KL(π_θ‖π_ref) as the RLHF penalty."
+    }
+  },
+  "where_else": [
+    "The VAE loss, keeping each input's latent cloud close to a standard normal prior",
+    "The RLHF and GRPO penalty, holding a fine-tuned policy near a frozen reference model",
+    "Measuring how much an intervention changed a model's output distribution",
+    "Cross-entropy training: against fixed labels, minimising cross-entropy minimises KL, since the entropy part never moves"
+  ],
+  "hamming": {
+    "what": "A number, in nats, for the extra surprise you pay on average by expecting Q when outcomes really follow P.",
+    "when": "Whenever one distribution must be compared with or held close to another: a prior, a frozen base model, the same model before an intervention.",
+    "why": "It is zero only when the two match and punishes calling real outcomes near-impossible, which is exactly the drift you want to catch."
+  },
+  "object": {
+    "title": "The prior's bowl",
+    "subtitle": "Every spot on the floor is a Gaussian cloud; the height is its KL from the standard normal.",
+    "kind": "surface",
+    "f": "0.5 * (x * x + y * y - 1 - log(y * y))",
+    "x": [-2, 2],
+    "y": [0.15, 2.5],
+    "ball": { "x": 1.6, "y": 0.3, "lr": "lr", "steps": 60 },
+    "marks": [{ "x": 0, "y": 1, "label": "the prior N(0, 1): KL = 0" }],
+    "knobs": [{ "id": "lr", "label": "Step size for the rolling bead", "min": 0.02, "max": 0.3, "step": 0.02, "value": 0.1 }],
+    "beats": [
+      {
+        "cap": { "1": "Each spot on the floor is one bell-shaped cloud: left-right is its centre, front-back its width. Height is how far it sits from the standard cloud.", "2": "x = μ, y = σ of a 1-D Gaussian. Height = KL(N(μ, σ²) ‖ N(0, 1)), the term a VAE adds for every latent dimension.", "3": "Closed form for Gaussians: KL(N(μ, σ²) ‖ N(0, 1)) = ½(μ² + σ² − 1 − log σ²), summed over dimensions for a diagonal encoder." },
+        "view": "iso",
+        "set": { "lr": 0.1 }
+      },
+      {
+        "cap": { "1": "The lowest point is the standard cloud itself: centre 0, width 1. The height is exactly zero there and nowhere else.", "2": "KL is zero only when the two distributions are identical, here at μ = 0, σ = 1.", "3": "The unique minimum at (0, 1) is Gibbs' inequality made visible: D ≥ 0 with equality iff the distributions coincide." },
+        "view": "top",
+        "set": { "lr": 0.1 }
+      },
+      {
+        "cap": { "1": "Squeeze the cloud thin and the wall shoots up. A cloud much sharper than the standard one pays a lot.", "2": "As σ → 0 the −log σ² term explodes. This is the pressure that stops a VAE from collapsing back into a plain autoencoder.", "3": "The −log σ² barrier diverges at σ → 0; without it the encoder goes deterministic and the VAE degenerates to an autoencoder." },
+        "view": "side",
+        "set": { "lr": 0.1 }
+      },
+      {
+        "cap": { "1": "Slide the centre away from zero and the bowl rises smoothly on both sides.", "2": "Moving μ costs μ²/2: a gentle parabola, so clouds can spread out but are pulled back towards the middle.", "3": "The μ term is quadratic and separable from σ, so KL shrinks means towards 0 and widths towards 1 independently." },
+        "view": "front",
+        "set": { "lr": 0.1 }
+      },
+      {
+        "cap": { "1": "Drop the bead and it rolls to the standard cloud. In a real VAE the rebuild-the-image loss pulls the other way, so clouds settle a bit narrower.", "2": "Alone, KL drags every cloud to the prior. The reconstruction term pulls σ down, so ARENA suggests printing mean σ and expecting it below 1.", "3": "Opposing pressures: KL toward (0, 1), reconstruction toward σ → 0. If KL wins outright for every input, that is posterior collapse: z carries no information." },
+        "view": "close",
+        "set": { "lr": 0.2 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "The forecast says snow never happens, but it snows one day in ten. What happens to KL(real ‖ forecast)?",
+        "options": [{ "t": "It blows up: every snow day costs the log of almost nothing", "ok": true }, { "t": "Barely changes: snow is rare" }],
+        "why": "Each snow day costs −log Q(snow), which grows without limit as Q(snow) goes to zero."
+      },
+      {
+        "q": "RLHF penalises KL(new ‖ base). What can the new model do cheaply?",
+        "options": [{ "t": "Stop saying things the base model often said", "ok": true }, { "t": "Say things the base model finds near-impossible" }],
+        "why": "Outcomes the new model never produces get zero weight in the sum, so dropping them costs nothing."
+      },
+      {
+        "q": "Where is this bowl's lowest point?",
+        "options": [{ "t": "At μ = 0, σ = 1, where the cloud equals the prior", "ok": true }, { "t": "At σ = 0, a perfectly sharp cloud" }],
+        "why": "KL is zero only when the two distributions are identical; a razor-thin cloud is very far from the prior."
+      }
+    ],
+    "where": "Anywhere a distribution is pulled towards a reference: VAE priors, RLHF leashes, drift budgets for interventions."
+  }
+}

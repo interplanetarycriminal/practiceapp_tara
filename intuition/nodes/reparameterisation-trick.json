@@ -1,0 +1,254 @@
+{
+  "id": "reparameterisation-trick",
+  "title": "Draw the wobble before you shoot",
+  "week": 4,
+  "need": "exercise",
+  "allegory": "The reparameterisation trick is like an archer who draws a wobble card from a standard deck before shooting, so the arrow lands at aim plus shakiness times the card, and you can say exactly how moving the aim or steadying the hand moves the arrow.",
+  "map": [
+    ["where the archer aims", "μ, the mean the encoder outputs"],
+    ["how shaky the hand is", "σ, the spread (the encoder emits log σ)"],
+    ["the wobble card drawn before the shot", "ε ~ N(0, 1), an input that needs no gradient"],
+    ["where the arrow lands", "z = μ + σ·ε"],
+    ["move the aim one step, the arrow moves one step", "∂z/∂μ = 1 and ∂z/∂σ = ε"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The blind spot",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "how do you nudge a dice roll?",
+      "actors": [{ "pose": "shrug", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.6, "y": 0.52, "w": 0.3, "h": 0.24, "label": "sample z ~ N(μ, σ²)", "color": "lav" },
+        { "kind": "card", "x": 0.6, "y": 0.2, "label": "∂z/∂μ = ?", "color": "pink" }
+      ],
+      "arrows": [[0.84, 0.64, 0.46, 0.64, "gradient stops here"]],
+      "cap": {
+        "1": "A VAE picks a random point, then learns from how it did. Learning means asking 'if I nudge this, what changes?', and a dice roll has no answer.",
+        "2": "The encoder outputs μ and σ, then samples z ~ N(μ, σ²) for the decoder. Backprop needs ∂z/∂μ and ∂z/∂σ, but 'draw a sample' is not a differentiable operation. The gradient stops dead.",
+        "3": "Sampling is a stochastic node: its output is not a deterministic function of μ and σ, so there is no pathwise derivative through it and no gradient reaches the encoder."
+      }
+    },
+    {
+      "name": "Draw the wobble first",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "pull", "x": 0.18, "label": "encoder" }],
+      "props": [
+        { "kind": "card", "x": 0.4, "y": 0.22, "label": "wobble card: ε = -0.7", "color": "butter" },
+        { "kind": "circle", "x": 0.8, "y": 0.5, "w": 0.22, "h": 0.22, "label": "target", "color": "peach" },
+        { "kind": "flag", "x": 0.73, "y": 0.44, "label": "z", "color": "mint" }
+      ],
+      "arrows": [[0.26, 0.5, 0.7, 0.46, "aim + shake × card"]],
+      "cap": {
+        "1": "An archer with a shaky hand. The trick: draw the wobble from a deck before the shot, and the arrow lands at aim plus shakiness times the card.",
+        "2": "The aim is μ, the shakiness is σ, the card is ε drawn from a fixed standard normal. The landing spot z = μ + σ·ε is plain arithmetic: move the aim and the arrow moves with it.",
+        "3": "Rewrite z ~ N(μ, σ²) as z = μ + σ ⊙ ε with ε ~ N(0, I). Same distribution over z, but the randomness now lives in a parameter-free input instead of inside the graph."
+      }
+    },
+    {
+      "name": "The recipe for z",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "z", "c": "ink", "note": "where it lands" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "μ", "c": "orange", "note": "the aim" },
+        { "t": " + ", "c": "ink", "note": "" },
+        { "t": "σ", "c": "teal", "note": "the shakiness" },
+        { "t": "·", "c": "ink", "note": "" },
+        { "t": "ε", "c": "lav", "note": "card, drawn first" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Three ingredients: where you aim, how much your hand shakes, and the card you drew. Only the card is random, and it was drawn before anything else.",
+        "2": "∂z/∂μ = 1 and ∂z/∂σ = ε: both are ordinary derivatives. ε needs no gradient, so the loss can flow back through z into μ and σ, and on into the encoder. Emit log σ and exponentiate, so σ stays positive.",
+        "3": "Pathwise gradient: ∇ E_ε[f(μ + σε)] = E_ε[∇ f(μ + σε)], because ε's distribution does not depend on the parameters. Estimate it by Monte Carlo over fresh ε draws."
+      }
+    },
+    {
+      "name": "Blame reaches the aim",
+      "need": "core",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "x", "label": "image x", "x": 0.06, "y": 0.5, "c": "sky" },
+        { "id": "enc", "label": "encoder", "x": 0.2, "y": 0.5, "c": "mint" },
+        { "id": "mu", "label": "μ", "x": 0.37, "y": 0.28, "c": "orange" },
+        { "id": "sig", "label": "σ", "x": 0.37, "y": 0.72, "c": "teal" },
+        { "id": "eps", "label": "ε ~ N(0,1)", "x": 0.52, "y": 0.88, "c": "lav" },
+        { "id": "z", "label": "z = μ + σε", "x": 0.58, "y": 0.5, "c": "butter" },
+        { "id": "dec", "label": "decoder", "x": 0.76, "y": 0.5, "c": "mint" },
+        { "id": "loss", "label": "loss", "x": 0.93, "y": 0.5, "c": "red" }
+      ],
+      "edges": [["x", "enc"], ["enc", "mu"], ["enc", "sig"], ["mu", "z"], ["sig", "z"], ["eps", "z"], ["z", "dec"], ["dec", "loss"]],
+      "flow": "backward",
+      "cap": {
+        "1": "Now blame flows back from the score, through the landing spot, into the aim and the shakiness, then the archer. The card needs no blame: it was just dealt.",
+        "2": "Backprop reaches μ and σ through an ordinary + and ×, then the encoder's weights. ε is an input like x: it has no parameters, so nothing about it is learned.",
+        "3": "The only stochastic node is now a parameter-free leaf, so every learned parameter has a deterministic path to the loss. That relocation is the entire trick."
+      }
+    },
+    {
+      "name": "Two pulls on σ",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "σ pinned near 0", "c": "peach", "lines": ["every shot hits the aim", "z is deterministic again", "a plain autoencoder", "latent space turns messy"] },
+      "right": { "title": "μ ≈ 0, σ ≈ 1 for everyone", "c": "sky", "lines": ["every shot looks the same", "KL is zero", "decoder ignores z", "posterior collapse"] },
+      "verdict": "Healthy: mean σ settles below 1, pulled between the two losses.",
+      "cap": {
+        "1": "Shakiness is pulled two ways: rebuilding the image wants a steady hand (σ near 0), the KL term wants the standard wobble (σ near 1). Healthy lands between.",
+        "2": "Print mean σ while training: it should sit below 1. σ at 0 makes z deterministic, a plain autoencoder again. μ ≈ 0 and σ ≈ 1 for every input is posterior collapse: z carries nothing.",
+        "3": "Reconstruction pushes σ toward 0; D_KL(N(μ, σ²) || N(0, I)) pulls toward the prior. Collapse: a strong decoder lets KL reach 0 with z ignored. Monitor KL per dimension and warm up its weight."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Randomness as an input, not a step", "Library call: .rsample() does it", "Discrete tokens can't use it: hence policy gradients"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Bigger than VAEs: whenever a model must roll dice and still learn, hand it the dice from outside. Knowing where gradients can't flow helps you read any model.",
+        "2": "<code>torch.distributions.Normal(mu, sigma).rsample()</code> is this trick as a library call. The transferable skill is spotting where a gradient cannot flow, which matters whenever you train or probe a model.",
+        "3": "Discrete token sampling can't be reparameterised this way, which is why RL fine-tuning of LLMs uses score-function methods (REINFORCE, PPO). Knowing which estimator applies tells you what can be steered by training."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Aim, shake, and the card",
+    "params": [
+      { "id": "mu", "label": "aim μ", "min": -2, "max": 2, "step": 0.1, "value": 0.5 },
+      { "id": "sigma", "label": "shakiness σ", "min": 0.25, "max": 2, "step": 0.05, "value": 1 },
+      { "id": "eps", "label": "the card ε (drawn first)", "min": -2.5, "max": 2.5, "step": 0.1, "value": -0.7 }
+    ],
+    "curves": [
+      { "f": "exp(-0.5*pow((x - mu)/sigma, 2)) / (sigma*sqrt(2*PI))", "c": "orange", "label": "where arrows land, N(μ, σ²)" },
+      { "f": "exp(-0.5*x*x) / sqrt(2*PI)", "c": "lav", "label": "the standard deck, N(0, 1)" },
+      { "f": "1.2*exp(-pow((x - (mu + sigma*eps))/0.08, 2))", "c": "teal", "label": "this arrow, z = μ + σε" }
+    ],
+    "x": [-5, 5],
+    "y": [0, 1.7],
+    "readouts": [
+      { "label": "z = μ + σ·ε", "f": "(mu + sigma*eps).toFixed(2)" },
+      { "label": "∂z/∂μ (nudge the aim)", "f": "'1, always'" },
+      { "label": "∂z/∂σ (nudge the shake)", "f": "eps.toFixed(2) + ', the card'" }
+    ],
+    "caption": {
+      "1": "Drag the aim: the arrow moves one-for-one. Change the card: the only random part. Widen the shake and the arrow slides by the card's amount.",
+      "2": "The orange bell is N(μ, σ²); the teal spike is one sample z. With ε held fixed, z moves exactly 1 per unit of μ and ε per unit of σ: the gradients backprop uses. Set ε to 0 and σ stops mattering for this sample.",
+      "3": "For fixed ε, z is a deterministic, differentiable function of (μ, σ) with ∂z/∂μ = 1 and ∂z/∂σ = ε. Averaging over fresh ε draws gives the pathwise gradient of the expected loss."
+    }
+  },
+  "where_else": [
+    "Diffusion models: a noisy image is built as a scaled clean image plus scaled noise, the same 'noise as input' move",
+    "Continuous-action RL policies that sample actions as mean + std × noise so gradients reach the policy",
+    "Its limit: discrete choices like tokens can't be reparameterised this way, so RL on LLMs uses policy gradients"
+  ],
+  "hamming": {
+    "what": "Rewriting a random sample as z = μ + σ·ε, with the noise ε drawn separately, so the path from the loss to μ and σ is ordinary differentiable arithmetic.",
+    "when": "Whenever a network must sample a continuous random value in the middle and still be trained by backprop, as in a VAE.",
+    "why": "You cannot differentiate through a random draw; moving the randomness into an input gives the gradient somewhere to go."
+  },
+  "object": {
+    "title": "The tug-of-war bowl",
+    "subtitle": "A bowl over aim and shakiness whose lowest point sits between a perfect copy and the standard wobble.",
+    "kind": "surface",
+    "f": "(x - 1)*(x - 1) + y*y + beta*0.5*(x*x + y*y - 1 - log(y*y))",
+    "x": [-1.5, 2],
+    "y": [0.05, 1.8],
+    "ball": { "x": -1, "y": 1.5, "lr": 0.1, "steps": 60 },
+    "marks": [
+      { "x": 0, "y": 1, "label": "the prior: μ 0, σ 1" },
+      { "x": 1, "y": 0.05, "label": "perfect copy: μ 1, σ 0" }
+    ],
+    "knobs": [{ "id": "beta", "label": "KL weight β", "min": 0.05, "max": 4, "step": 0.05, "value": 1 }],
+    "beats": [
+      {
+        "cap": {
+          "1": "A bowl you could hold. Across: where the archer aims (μ). Front to back: how shaky the hand is (σ). Height: how badly things go on average.",
+          "2": "A toy loss over (μ, σ): reconstruct a target at 1, plus β times the KL to N(0, 1). The bead rolls using gradients that only exist thanks to the trick.",
+          "3": "L(μ, σ) = E_ε[(μ + σε − 1)²] + β·KL = (μ − 1)² + σ² + β·½(μ² + σ² − 1 − ln σ²), a toy with an identity decoder."
+        },
+        "view": "iso",
+        "set": { "beta": 1 }
+      },
+      {
+        "cap": {
+          "1": "Watch the bead settle. It stops with σ below 1, where the steady-hand pull and the standard-wobble pull balance.",
+          "2": "For β = 1 the rest point is σ ≈ 0.58, μ ≈ 0.67. Mean σ below 1 is exactly the healthy-training sign to look for.",
+          "3": "∂L/∂σ = 2σ + β(σ − 1/σ) = 0 gives σ² = β/(2 + β); ∂L/∂μ = 0 gives μ = 2/(2 + β)."
+        },
+        "view": "side",
+        "set": { "beta": 1 }
+      },
+      {
+        "cap": {
+          "1": "Nearly switch off the KL pull: the bead slides toward a steady hand, σ near 0. The wobble vanishes and z stops being random.",
+          "2": "With β near 0, σ heads to 0: z = μ becomes deterministic, a plain autoencoder, and the latent space loses what made it samplable.",
+          "3": "As β → 0, σ*² = β/(2 + β) → 0 and the model degenerates to a deterministic autoencoder."
+        },
+        "view": "front",
+        "set": { "beta": 0.05 }
+      },
+      {
+        "cap": {
+          "1": "Crank the KL weight: the bead is dragged toward the prior, σ near 1 and μ toward 0. The arrow starts ignoring the target.",
+          "2": "A large β pulls every encoding toward N(0, 1). Taken all the way, z stops telling the decoder anything: the road to posterior collapse.",
+          "3": "β = 4: σ* ≈ 0.82, μ* ≈ 0.33. As β grows the posterior approaches the prior; with a strong decoder, collapse makes z uninformative."
+        },
+        "view": "front",
+        "set": { "beta": 4 }
+      },
+      {
+        "cap": {
+          "1": "From above: the lowest point sits between 'perfect copy' and 'the prior'. Training finds that compromise only because gradients reach both μ and σ.",
+          "2": "Without the trick, backprop would stop at the sampling step and neither direction of this bowl could be descended.",
+          "3": "Swapping ∇ of an expectation over z for an expectation of ∇ over ε is what makes this landscape navigable by SGD at all."
+        },
+        "view": "top",
+        "set": { "beta": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "With the card ε held fixed, you raise μ by 0.5. How far does z move?",
+        "options": [
+          { "t": "Exactly 0.5", "ok": true },
+          { "t": "It depends on σ" },
+          { "t": "Unknowable: z is random" }
+        ],
+        "why": "z = μ + σε, so ∂z/∂μ = 1. With ε drawn first, nothing random is left in that step."
+      },
+      {
+        "q": "The card says ε = 0. What does nudging σ do to this sample of z?",
+        "options": [
+          { "t": "Nothing: ∂z/∂σ = ε = 0", "ok": true },
+          { "t": "Moves z by σ" },
+          { "t": "Makes z more random" }
+        ],
+        "why": "∂z/∂σ = ε. This sample landed exactly on the aim, so it carries no signal about σ; other draws will."
+      },
+      {
+        "q": "Mean σ sits near 0 all through training. What happened?",
+        "options": [
+          { "t": "The KL pull is too weak: it became a plain autoencoder", "ok": true },
+          { "t": "Posterior collapse" }
+        ],
+        "why": "σ → 0 makes z deterministic. Posterior collapse is the other extreme: μ ≈ 0 and σ ≈ 1 for every input."
+      }
+    ],
+    "where": "Anywhere a model must sample a continuous value and still learn: VAEs, diffusion training, continuous-action policies."
+  }
+}

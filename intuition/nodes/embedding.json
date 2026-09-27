@@ -1,0 +1,219 @@
+{
+  "id": "embedding",
+  "title": "The number only opens a locker",
+  "week": 5,
+  "need": "core",
+  "allegory": "An embedding is a wall of numbered lockers: a token id is just a locker number, and what the model actually computes with is the learned list of numbers kept inside that locker.",
+  "map": [
+    ["a locker number", "a token id, an integer from the tokenizer"],
+    ["the wall of lockers", "W_E, a (d_vocab, d_model) matrix with one row per token"],
+    ["what is kept inside one locker", "the embedding vector W_E[id], d_model learned numbers"],
+    ["opening exactly one locker", "a one-hot vector times W_E, which equals indexing that row"],
+    ["only lockers you open get tailored", "a batch sends gradient only to the rows of tokens it contains"]
+  ],
+  "credit": "One-hot times the table equals indexing the table: framing borrowed from Andrej Karpathy, Building makemore Part 2: MLP.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Numbers that mean nothing",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "is id 18 'a bit more' than id 17?",
+      "actors": [{ "pose": "shrug", "x": 0.28, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.6, "y": 0.45, "label": "id 17", "color": "sky" },
+        { "kind": "card", "x": 0.8, "y": 0.45, "label": "id 18", "color": "sky" },
+        { "kind": "card", "x": 0.7, "y": 0.2, "label": "tokenizer output: [17, 18, 17]", "color": "butter" }
+      ],
+      "cap": {
+        "1": "The tokenizer turns text into id numbers. But id 18 is not 'a bit more' than id 17. They are labels, like locker numbers, so the model can't do maths on them.",
+        "2": "Token ids are arbitrary integers. Feeding them in as numbers would invent an order and a distance that do not exist, so the first layer must turn each id into a learned vector.",
+        "3": "Token ids are categorical; any direct numeric use imposes spurious ordinal structure. The embedding maps each category to a free learned vector in d_model dimensions."
+      }
+    },
+    {
+      "name": "The locker wall",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "reach", "x": 0.22, "label": "model" }],
+      "props": [
+        { "kind": "door", "x": 0.45, "y": 0.5, "label": "0", "color": "sky" },
+        { "kind": "door", "x": 0.55, "y": 0.5, "label": "1", "color": "sky" },
+        { "kind": "door", "x": 0.65, "y": 0.5, "label": "2", "color": "mint" },
+        { "kind": "door", "x": 0.75, "y": 0.5, "label": "3", "color": "sky" },
+        { "kind": "door", "x": 0.85, "y": 0.5, "label": "4", "color": "sky" },
+        { "kind": "card", "x": 0.65, "y": 0.18, "label": "locker 2: [-0.6, 0.3, 0.7]", "color": "butter" }
+      ],
+      "arrows": [[0.3, 0.45, 0.6, 0.45, "open 2"], [0.65, 0.4, 0.65, 0.26, "take the vector"]],
+      "cap": {
+        "1": "Picture a wall of lockers, one per token. The id is only the locker number. Inside is a list of numbers the model has learned, and that list is what flows on.",
+        "2": "<code>W_E</code> has one row per vocabulary entry. Embedding a token is just <code>W_E[token_id]</code>: grab the row. Shapes go (batch, pos) to (batch, pos, d_model).",
+        "3": "W_E has shape (d_vocab, d_model) and embed(t) = W_E[t]: a gather from a (batch, pos) integer tensor to (batch, pos, d_model), the first write into the residual stream."
+      }
+    },
+    {
+      "name": "One-hot times W_E",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "onehot(t)", "c": "sky", "note": "a 1 at locker t, 0 elsewhere" },
+        { "t": " · ", "c": "ink", "note": "" },
+        { "t": "W_E", "c": "orange", "note": "the locker wall" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "W_E[t]", "c": "green", "note": "just row t" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "Opening one locker is the same as multiplying the wall by a list of zeros with a single 1. Every other locker gets multiplied by zero and vanishes.",
+        "2": "An embedding is a linear layer applied to a one-hot vector. Indexing gives the same answer without multiplying by thousands of zeros, which is why <code>Embed</code> just indexes.",
+        "3": "Embedding is Linear(d_vocab to d_model, no bias) on one-hot inputs. Indexing is the efficient gather; the gradient w.r.t. W_E is a scatter-add into the rows that were used."
+      }
+    },
+    {
+      "name": "Row by row",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "a toy W_E: 6 tokens × 3 numbers",
+      "rows": 6,
+      "cols": 3,
+      "values": [[0.9, -0.2, 0.4], [0.1, 0.8, -0.5], [-0.6, 0.3, 0.7], [0.5, 0.5, 0.1], [-0.2, -0.9, 0.3], [0.0, 0.4, -0.8]],
+      "labels": { "rows": ["tok 0", "tok 1", "tok 2", "tok 3", "tok 4", "tok 5"], "cols": ["d0", "d1", "d2"] },
+      "highlight": [[2, 0], [2, 1], [2, 2]],
+      "cap": {
+        "1": "A tiny locker wall: six tokens, three numbers each. Asking for token 2 lights up row 2. That row is token 2's vector, wherever it appears.",
+        "2": "A sequence like [2, 0, 2] just stacks rows 2, 0 and 2. Same token, same starting vector, at any position; position gets added separately.",
+        "3": "The lookup is position-independent: identical ids give identical vectors, so a positional embedding W_pos[p] is added to break that symmetry before the first block."
+      }
+    },
+    {
+      "name": "Unopened lockers",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "a common token", "c": "mint", "lines": ["opened in most batches", "its row gets gradient often", "vector becomes useful"] },
+      "right": { "title": "a token that almost never appears", "c": "pink", "lines": ["hardly ever opened", "its row gets almost no gradient", "stays near its random start"] },
+      "verdict": "Only the lockers you open get tailored.",
+      "cap": {
+        "1": "Training only adjusts the lockers that get opened. A token that almost never shows up keeps a vector close to random, so the model knows little about it.",
+        "2": "Indexing means the gradient touches only the rows of tokens in the batch. Tokens that are rare in training data get few updates and weak, half-trained vectors.",
+        "3": "dL/dW_E is nonzero only on rows gathered in the batch (repeats scatter-add). Rarely seen ids stay near initialisation, one source of odd behaviour on rare tokens."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["The residual stream starts here", "W_E is the first matrix in the QK circuit", "Library call: nn.Embedding"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Every model you'll study starts here: each token becomes a vector, and every later layer only adds to it. Reading those vectors is step one.",
+        "2": "You write <code>Embed</code> once in [1.1]; after that it is <code>nn.Embedding</code>. What stays with you: the residual stream starts as a row of W_E, and W_E reappears in circuits.",
+        "3": "Interpretability and steering both live in the space W_E writes into: a direction you find later is read against, or added to, vectors that began as rows of W_E."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Two positions, six lockers: tap to choose which locker each position opens",
+    "rows": 2,
+    "cols": 6,
+    "init": "c === 2 ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "tokens chosen", "f": "G.map((r, p) => 'pos ' + p + ': ' + (sum(r) === 1 ? 'token ' + r.indexOf(1) : (sum(r) === 0 ? 'nothing (all zeros)' : sum(r) + ' lockers at once'))).join('; ')" },
+      { "label": "pos 0: one-hot · W_E", "f": "[[0.9,-0.2,0.4],[0.1,0.8,-0.5],[-0.6,0.3,0.7],[0.5,0.5,0.1],[-0.2,-0.9,0.3],[0.0,0.4,-0.8]].reduce((acc, row, t) => acc.map((v, j) => v + G[0][t]*row[j]), [0, 0, 0]).map(v => v.toFixed(1)).join(', ')" },
+      { "label": "pos 1: one-hot · W_E", "f": "[[0.9,-0.2,0.4],[0.1,0.8,-0.5],[-0.6,0.3,0.7],[0.5,0.5,0.1],[-0.2,-0.9,0.3],[0.0,0.4,-0.8]].reduce((acc, row, t) => acc.map((v, j) => v + G[1][t]*row[j]), [0, 0, 0]).map(v => v.toFixed(1)).join(', ')" },
+      { "label": "same vector at both positions?", "f": "G[0].join() === G[1].join() && sum(G[0]) > 0 ? 'yes: the lookup ignores position' : 'no'" }
+    ],
+    "caption": {
+      "1": "Each row is a position; tap a cell to open that locker. Both positions start on token 2 and get identical vectors. Now try two lockers in one row.",
+      "2": "The readouts multiply your one-hot rows by the toy W_E from the film. One 1 per row returns exactly that row. Two 1s return the sum of two rows: it really is a matmul.",
+      "3": "Rows are one-hot inputs and each output is G[p]·W_E. Multi-hot rows give sums, the linear-layer view. Identical ids give identical vectors, which is why W_pos is added."
+    }
+  },
+  "where_else": [
+    "Positional embeddings: the same lookup, keyed by position instead of token",
+    "Recommender systems: one learned vector per user and per item",
+    "The unembedding W_U: the trip back, from the residual stream to a score for every token"
+  ],
+  "hamming": {
+    "what": "A learned table with one vector per token id; embedding a token means reading its row.",
+    "when": "At the very start of every transformer forward pass; you implement Embed once in [1.1], then it is nn.Embedding.",
+    "why": "Token ids are arbitrary labels, so a learned vector per id gives the model something it can compute with, and it is where the residual stream begins."
+  },
+  "object": {
+    "title": "The locker wall",
+    "subtitle": "Six lockers of three numbers each; turn the knob and that token's drawer slides out.",
+    "kind": "bars",
+    "rows": 6,
+    "cols": 3,
+    "f": "1 + [[0.9,-0.2,0.4],[0.1,0.8,-0.5],[-0.6,0.3,0.7],[0.5,0.5,0.1],[-0.2,-0.9,0.3],[0.0,0.4,-0.8]][r][c]*0.8 + (r == tok ? 0.5 : 0)",
+    "labels": { "rows": ["tok 0", "tok 1", "tok 2", "tok 3", "tok 4", "tok 5"], "cols": ["d0", "d1", "d2"] },
+    "c": "data",
+    "knobs": [{ "id": "tok", "label": "which token to look up", "min": 0, "max": 5, "step": 1, "value": 2 }],
+    "beats": [
+      {
+        "cap": {
+          "1": "A wall of six lockers with three numbers in each. Token 2's drawer slides out: that row is its vector.",
+          "2": "W_E as a solid: rows are tokens, columns are embedding dimensions. The raised row is W_E[2].",
+          "3": "Bar height = 1 + 0.8 × entry, plus a lift on the selected row, so negative entries still show."
+        },
+        "view": "iso",
+        "set": { "tok": 2 }
+      },
+      {
+        "cap": {
+          "1": "From the front, every token owns one row. Nothing about the number 2 matters; only what is stored in row 2.",
+          "2": "The id is an address, not a quantity. All the meaning lives in the row's contents, which training shapes.",
+          "3": "Row index carries no metric structure; geometry lives entirely in the learned d_model coordinates."
+        },
+        "view": "front",
+        "set": { "tok": 2 }
+      },
+      {
+        "cap": {
+          "1": "Ask for token 5 and row 5 slides out instead. Same wall, a different row: a lookup is just picking a row.",
+          "2": "Changing the id changes which row is gathered; nothing is computed. That is why embedding is so cheap.",
+          "3": "A gather is O(d_model) per token, versus O(d_vocab · d_model) for the equivalent one-hot matmul."
+        },
+        "view": "top",
+        "set": { "tok": 5 }
+      },
+      {
+        "cap": {
+          "1": "Real walls are huge, tens of thousands of lockers with hundreds of numbers in each. Still exactly one row per token.",
+          "2": "Real vocabularies run to tens of thousands of tokens and d_model to hundreds or more. The mechanics do not change.",
+          "3": "At scale W_E is one of the largest single matrices in a small model, yet each forward pass reads only the rows it needs."
+        },
+        "view": "side",
+        "set": { "tok": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Tokens 7 and 8 have neighbouring ids. Are their vectors similar?",
+        "options": [{ "t": "Not because of the ids: ids are only labels", "ok": true }, { "t": "Yes, neighbouring ids start out similar" }],
+        "why": "The id only picks a row. Any similarity comes from what training writes into the rows, not from the numbers being close."
+      },
+      {
+        "q": "Which rows of W_E get a gradient from one batch?",
+        "options": [{ "t": "Only the rows of tokens in that batch", "ok": true }, { "t": "Every row, every batch" }],
+        "why": "Indexing touches only the rows used, so the gradient is zero everywhere else. Rare tokens stay close to their random start."
+      },
+      {
+        "q": "The same token sits at positions 0 and 5. Straight after the lookup, their vectors are...",
+        "options": [{ "t": "Identical", "ok": true }, { "t": "Different, because position changes the lookup" }],
+        "why": "The lookup ignores position. That is exactly why a positional embedding gets added next."
+      }
+    ],
+    "where": "Any learned vector per category: positional embeddings, user and item vectors in recommenders."
+  }
+}

@@ -1,0 +1,231 @@
+{
+  "id": "training-loop",
+  "title": "Shoot, score, blame, adjust, wipe",
+  "week": 5,
+  "need": "core",
+  "allegory": "A training loop is an archer's practice routine: shoot a quiver, measure every miss, trace each miss to the part of the stance that caused it, adjust, wipe the board, write the score down, and now and then shoot at a separate target purely to check.",
+  "map": [
+    ["a quiver of arrows", "a batch of examples"],
+    ["shoot, then measure every miss", "the forward pass, then the loss"],
+    ["trace each miss to the part of the stance that caused it", "loss.backward(): a gradient for every weight"],
+    ["adjust the stance, then wipe the board clean", "optimizer.step(), then optimizer.zero_grad()"],
+    ["a test target you shoot only to check, keeping no blame notebook", "validation under t.inference_mode(): measure, never update, build no graph"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "This loop, again",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "for batch in loader: ... haven't I written this before?",
+      "actors": [{ "pose": "type", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.55, "y": 0.3, "label": "[0.2] ResNet", "color": "sky" },
+        { "kind": "card", "x": 0.72, "y": 0.45, "label": "[1.1] transformer", "color": "mint" },
+        { "kind": "card", "x": 0.86, "y": 0.6, "label": "ch. 2: DQN, PPO", "color": "peach" }
+      ],
+      "cap": {
+        "1": "You will write this loop in almost every chapter: for a picture model, a language model, then game-playing agents. Only the data and the score change.",
+        "2": "You write it for a ResNet in [0.2], a transformer in [1.1], then DQN and PPO in chapter 2. The loss and the data change; the skeleton does not.",
+        "3": "The skeleton is framework convention, not a published result. ARENA later refactors it into a Trainer with training_step and validation_step, the form you keep."
+      }
+    },
+    {
+      "name": "The archer's routine",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "pull", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.08, "y": 0.62, "w": 0.08, "h": 0.25, "label": "quiver = batch", "color": "butter" },
+        { "kind": "circle", "x": 0.8, "y": 0.45, "w": 0.2, "label": "target", "color": "red" },
+        { "kind": "card", "x": 0.8, "y": 0.15, "label": "misses: 7 cm avg", "color": "cream" }
+      ],
+      "arrows": [[0.3, 0.45, 0.7, 0.45, "shoot"]],
+      "cap": {
+        "1": "An archer's practice: shoot a quiver, measure every miss, work out which part of the stance caused it, adjust, wipe the board, write the score down. Repeat.",
+        "2": "Each round is one batch: forward (shoot), loss (measure the misses), backward (blame each weight), step (adjust), zero_grad (wipe), log (the diary).",
+        "3": "Order matters: backward accumulates into .grad, step reads it, zero_grad clears it. ARENA puts zero_grad after step, equivalent to before forward, marking the end of a cycle."
+      }
+    },
+    {
+      "name": "Round and round",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "batch", "label": "batch", "x": 0.12, "y": 0.5, "c": "sky" },
+        { "id": "fwd", "label": "forward", "x": 0.3, "y": 0.2, "c": "mint" },
+        { "id": "loss", "label": "loss", "x": 0.56, "y": 0.16, "c": "orange" },
+        { "id": "bwd", "label": "backward", "x": 0.82, "y": 0.36, "c": "red" },
+        { "id": "step", "label": "step", "x": 0.76, "y": 0.72, "c": "lav" },
+        { "id": "zero", "label": "zero_grad", "x": 0.42, "y": 0.82, "c": "chalk" },
+        { "id": "log", "label": "log loss.item()", "x": 0.56, "y": 0.48, "c": "butter" }
+      ],
+      "edges": [["batch", "fwd"], ["fwd", "loss", "cross_entropy(logits)"], ["loss", "bwd"], ["bwd", "step", ".grad"], ["step", "zero"], ["zero", "batch", "next batch"], ["loss", "log"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Round and round: each batch flows through the same stations, and the score peels off into the diary. Everything else is detail.",
+        "2": "<code>loss = F.cross_entropy(model(x), y)</code> on raw logits, then <code>loss.backward()</code>, <code>opt.step()</code>, <code>opt.zero_grad()</code>, and log <code>loss.item()</code>.",
+        "3": "cross_entropy fuses log-softmax with NLL for numerical stability, so never softmax first. Logging .item() stores a float; storing the tensor keeps its graph alive."
+      }
+    },
+    {
+      "name": "Forgetting to wipe",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "zero_grad every step", "c": "mint", "lines": ["fresh marks each round", "each step reads one batch", "loss falls steadily"] },
+      "right": { "title": "no zero_grad", "c": "pink", "lines": ["old marks pile up", "grads add across batches", "loss turns erratic, no error"] },
+      "verdict": "Omit zero_grad and nothing raises. The loss just gets erratic.",
+      "cap": {
+        "1": "Forget to wipe the board and today's misses pile onto yesterday's. You overcorrect more every round, and the score starts jumping about.",
+        "2": "Skip <code>zero_grad()</code> and .grad keeps accumulating across batches. Nothing errors; the loss turns erratic rather than blowing up, so it is easy to miss.",
+        "3": "Accumulated grads act like an ever-growing effective batch with an effectively rising learning rate. Deliberate accumulation over k micro-batches is fine: step and zero every k."
+      }
+    },
+    {
+      "name": "The test target",
+      "need": "exercise",
+      "dur": 11,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "recoil", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "circle", "x": 0.8, "y": 0.4, "w": 0.16, "label": "test target", "color": "teal" },
+        { "kind": "stack", "x": 0.55, "y": 0.6, "w": 0.16, "h": 0.45, "label": "notebooks nobody reads", "color": "chalk" },
+        { "kind": "card", "x": 0.55, "y": 0.15, "label": "CUDA out of memory", "color": "red" }
+      ],
+      "cap": {
+        "1": "Now and then you shoot at a separate target just to check, never to adjust. But keep a full blame notebook for every test arrow and the shed fills up.",
+        "2": "Validation never calls backward, so without <code>t.inference_mode()</code> every batch's graph stays on the GPU. Three clean epochs, then out of memory in validation.",
+        "3": "Each forward retains activations for an expected backward; with no backward nothing frees them. inference_mode stops graph construction; model.eval() separately fixes BatchNorm and Dropout. You need both."
+      }
+    },
+    {
+      "name": "Reading the diary",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "curves": [
+        { "f": "7.35 + 3.475*exp(-10*x) - 0.9*(1 - exp(-2*x))", "c": "orange", "label": "train loss (sketch)" },
+        { "f": "10.825", "c": "ink", "label": "uniform guess: log(50257)" },
+        { "f": "7.349", "c": "teal", "label": "unigram entropy" }
+      ],
+      "x": [0, 1],
+      "y": [5.5, 11.5],
+      "dot": true,
+      "marks": [{ "x": 0.25, "label": "word frequencies learned" }, { "x": 0.7, "label": "bigrams, slowly" }],
+      "cap": {
+        "1": "Your diary tells a story. The score starts at pure guessing, drops fast once common words are learned, then creeps. The creep is learning too.",
+        "2": "A transformer on TinyStories starts near log(50257) = 10.8, drops to the unigram entropy of about 7.35, then slowly learns bigrams. Draw both lines before you tune anything.",
+        "3": "Uniform output gives log(d_vocab) = 10.825 nats; fitting the unigram marginal floors at its entropy, about 7.349. Stuck above 10.8 means something is broken, often a residual or an off-by-one label."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Same rhythm for DQN and PPO", "No trained model, nothing to interpret", "Validation: did any of it work?"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Every model you will ever look inside was made by this loop. Learn its rhythm once and every later chapter is a small change to it.",
+        "2": "Chapter 2 swaps in new losses and data for DQN and PPO, but the rhythm stays. And interpretability needs a trained model: random weights have nothing to find.",
+        "3": "Nothing in interpretability applies to random weights. Understanding and steering a model starts with a loop you trust: validated, logged, and read against its landmarks."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "A toy loop on loss w²: slide the learning rate, then switch zero_grad off",
+    "params": [
+      { "id": "lr", "label": "learning rate", "min": 0.02, "max": 1.1, "step": 0.01, "value": 0.1 },
+      { "id": "zero", "label": "zero_grad each step (1 on, 0 off)", "min": 0, "max": 1, "step": 1, "value": 1 }
+    ],
+    "curves": [
+      { "f": "((n) => { let w = 1, g = 0; for (let t = 0; t < n; t++) { g = (zero > 0.5 ? 0 : g) + 2*w; w = w - lr*g; } return w*w; })(round(x))", "c": "orange", "label": "your loop" },
+      { "f": "pow(1 - 2*lr, 2*round(x))", "c": "teal", "label": "with zero_grad" }
+    ],
+    "x": [0, 40],
+    "y": [0, 2.2],
+    "readouts": [
+      { "label": "loss after 40 steps", "f": "((n) => { let w = 1, g = 0; for (let t = 0; t < n; t++) { g = (zero > 0.5 ? 0 : g) + 2*w; w = w - lr*g; } return w*w; })(40).toFixed(3)" },
+      { "label": "verdict", "f": "zero > 0.5 ? (abs(1 - 2*lr) < 1 ? 'settles' : (abs(1 - 2*lr) > 1 ? 'diverges: lr too big' : 'bounces at the same height')) : 'swings forever: old gradients pile up'" }
+    ],
+    "caption": {
+      "1": "Slide the learning rate, then switch zero_grad off. With it on, the loss glides down. Off, old gradients pile up and the loss swings instead of settling.",
+      "2": "Toy loop on loss w². With zero_grad, each step uses only today's gradient. Without it, .grad sums every past step, so updates overshoot and the loss oscillates.",
+      "3": "Without zeroing, the update is lr times the sum of all past grads: momentum with β = 1, an undamped oscillator. With zeroing, plain descent diverges once |1 - 2·lr| > 1."
+    }
+  },
+  "where_else": [
+    "DQN and PPO in chapter 2: the same skeleton with a new loss and new data",
+    "Weights & Biases logging and sweeps, which wrap this loop",
+    "Distributed training, which shards this same loop across GPUs"
+  ],
+  "hamming": {
+    "what": "The repeated cycle of batch, forward, loss, backward, step and zero_grad, plus a validation pass that checks it worked.",
+    "when": "Every time you train anything: a ResNet in [0.2], a transformer in [1.1], DQN and PPO in chapter 2.",
+    "why": "Two of its steps are easy to omit and both fail quietly, so knowing the rhythm cold is how you spot a loop that runs but does not learn."
+  },
+  "object": {
+    "title": "The memory shelves",
+    "subtitle": "GPU memory held after each batch: one shelf for training, one for validation.",
+    "kind": "bars",
+    "rows": 2,
+    "cols": 8,
+    "f": "r == 0 ? 0.5 + (item < 0.5 ? 0.05*c : 0) : (infer > 0.5 ? 0.3 : 0.5 + 0.2*c)",
+    "labels": { "rows": ["train", "validate"], "cols": ["b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8"] },
+    "c": "aux",
+    "knobs": [
+      { "id": "infer", "label": "Validation inside inference_mode", "min": 0, "max": 1, "step": 1, "value": 1 },
+      { "id": "item", "label": "Log loss.item() (1) or the loss tensor (0)", "min": 0, "max": 1, "step": 1, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "A healthy loop. Training memory rises and falls back every round, so the bars stay level. Validation stays low.", "2": "backward frees each batch's graph; inference_mode never builds one. Memory is flat on both shelves.", "3": "Steady state: persistent params, grads and optimizer state; per-batch activations freed after backward." },
+        "view": "iso",
+        "set": { "infer": 1, "item": 1 }
+      },
+      {
+        "cap": { "1": "Validation without inference_mode. Every test batch leaves its blame notebook behind, and the bars climb until the shed is full.", "2": "No backward means no one frees the graph. Memory grows with every validation batch until CUDA runs out.", "3": "Each forward retains saved activations for a backward that never comes: linear growth through the validation set." },
+        "view": "front",
+        "set": { "infer": 0, "item": 1 }
+      },
+      {
+        "cap": { "1": "Wrap validation in inference_mode and no notebook is written at all. The shelf drops flat again.", "2": "t.inference_mode() stops graph construction, so validation needs only the activations of the current batch.", "3": "Stronger than no_grad: inference_mode also disables version counting, so its tensors cannot re-enter autograd." },
+        "view": "front",
+        "set": { "infer": 1, "item": 1 }
+      },
+      {
+        "cap": { "1": "Now store the loss tensor in your diary instead of the number. Training memory creeps up too, just more slowly.", "2": "Appending loss instead of loss.item() keeps each loss's graph reachable for as long as the list lives.", "3": "A slow leak: every stored tensor pins its autograd history. .item() copies out a Python float and releases it." },
+        "view": "side",
+        "set": { "infer": 1, "item": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "You forget optimizer.zero_grad(). What do you see?",
+        "options": [{ "t": "An erratic loss, but no error", "ok": true }, { "t": "An immediate crash" }, { "t": "Nothing changes" }],
+        "why": "Gradients pile up across batches, so updates overshoot and the loss jumps about. Nothing raises."
+      },
+      {
+        "q": "Three epochs trained fine, then CUDA runs out of memory on the first validation batch. Most likely cause?",
+        "options": [{ "t": "Validation forward passes build graphs nobody frees", "ok": true }, { "t": "The validation batch is bigger" }],
+        "why": "Without backward, graphs are never freed. Wrap the validation forward in t.inference_mode()."
+      },
+      {
+        "q": "Your transformer's loss sits around 7.3 for a long time. What first?",
+        "options": [{ "t": "Compare it with the unigram entropy; it is a landmark, so keep training", "ok": true }, { "t": "Lower the learning rate straight away" }],
+        "why": "About 7.35 is the loss of a model that knows word frequencies and nothing else. Worry only if you are stuck above log(50257), about 10.8."
+      }
+    ],
+    "where": "Any long-running loop that keeps history it no longer needs: stored graphs, stored tensors, stale caches."
+  }
+}

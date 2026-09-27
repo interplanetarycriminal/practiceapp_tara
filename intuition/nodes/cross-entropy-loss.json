@@ -1,0 +1,249 @@
+{
+  "id": "cross-entropy-loss",
+  "title": "A surprise bill for every bet",
+  "week": 4,
+  "need": "core",
+  "allegory": "Cross-entropy is like a bettor spreading chips across every horse and then paying a bill of -log(share of chips on the winner): all chips on the winner costs nothing, a thin share costs a lot, and none at all is unpayable.",
+  "map": [
+    ["chips spread across every horse", "probabilities softmax(logits) over the vocabulary"],
+    ["the horse that actually wins", "the correct next token y"],
+    ["the bill: -log(share of chips on the winner)", "the loss for one token: -log p_y"],
+    ["all chips on the winner: bill 0; none on it: infinite bill", "p_y = 1 gives loss 0; p_y → 0 gives loss → ∞"],
+    ["the average bill over a whole race day", "mean cross-entropy over every token in the batch"]
+  ],
+  "credit": "Checking that the loss at initialisation equals log(number of classes) is a habit from Andrej Karpathy's 'A Recipe for Training Neural Networks'.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "How wrong, exactly?",
+      "need": "core",
+      "dur": 8,
+      "type": "story",
+      "setting": "night",
+      "note": "right answer: 'cat' ... so how bad was my guess?",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.55, "y": 0.4, "label": "dog 0.61", "color": "sky" },
+        { "kind": "card", "x": 0.72, "y": 0.52, "label": "the 0.30", "color": "mint" },
+        { "kind": "card", "x": 0.88, "y": 0.64, "label": "cat 0.02", "color": "pink" }
+      ],
+      "cap": {
+        "1": "A language model guesses the next word by spreading its belief over every word it knows. You need one number that says how bad that guess was.",
+        "2": "The model outputs one logit per vocabulary entry (50,257 for GPT-2). Accuracy only says right or wrong; training needs a smooth score of how much belief went to the truth.",
+        "3": "We want a differentiable score for a predicted distribution against one observed label: the negative log-likelihood of the target under softmax(logits)."
+      }
+    },
+    {
+      "name": "Chips on the table",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "point", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.42, "y": 0.6, "w": 0.12, "h": 0.36, "label": "cat: 60 chips", "color": "orange" },
+        { "kind": "stack", "x": 0.6, "y": 0.66, "w": 0.12, "h": 0.22, "label": "dog: 30", "color": "sky" },
+        { "kind": "stack", "x": 0.76, "y": 0.72, "w": 0.12, "h": 0.1, "label": "the: 10", "color": "mint" },
+        { "kind": "flag", "x": 0.42, "y": 0.22, "label": "winner", "color": "red" },
+        { "kind": "card", "x": 0.8, "y": 0.24, "label": "bill = -log(0.6) = 0.51", "color": "butter" }
+      ],
+      "cap": {
+        "1": "Picture a bettor spreading 100 chips across every horse. After the race you pay a bill based only on the share of chips you put on the winner.",
+        "2": "Cross-entropy is that bill: <code>-log(p_correct)</code>. All chips on the winner costs 0. Half costs 0.69. One percent costs 4.6. None costs infinity.",
+        "3": "Loss = -log p_y, the surprisal of the observed token. It is a proper scoring rule: your expected bill is lowest when you report your true beliefs, so it rewards honest probabilities."
+      }
+    },
+    {
+      "name": "Bill from raw scores",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "-log p_y", "c": "orange", "note": "the bill" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "log Σ exp(z)", "c": "sky", "note": "every horse's score, pooled" },
+        { "t": " - z_y", "c": "green", "note": "the winner's own score" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "You never need the shares themselves. The bill is every horse's pooled score minus the winner's own score. Raise the winner's score and the bill falls.",
+        "2": "From logits z: <code>loss = logsumexp(z) - z[y]</code>. That is why <code>F.cross_entropy</code> takes raw logits: it fuses log-softmax with picking the target, so never softmax first.",
+        "3": "Stable form: logsumexp(z) = m + log Σ exp(z - m), with m = max z. Softmax then log can underflow p to 0 and return inf; the fused version never forms p explicitly."
+      }
+    },
+    {
+      "name": "The shape of surprise",
+      "need": "core",
+      "dur": 9,
+      "type": "plot",
+      "curves": [{ "f": "-log(x)", "c": "orange", "label": "bill = -log p" }],
+      "x": [0.01, 1],
+      "y": [0, 5],
+      "dot": true,
+      "marks": [
+        { "x": 0.01, "label": "1%: 4.6" },
+        { "x": 0.1, "label": "10%: 2.3" },
+        { "x": 0.5, "label": "half: 0.69" },
+        { "x": 1, "label": "sure and right: 0" }
+      ],
+      "cap": {
+        "1": "The bill as the winner's share shrinks. Being fairly sure costs little; being confidently wrong costs a fortune. Zero belief in the truth is unpayable.",
+        "2": "Going from 10% to 1% on the truth costs as much extra as going from 100% to 10%. Confident mistakes are punished hardest, and that steepness is what drives learning.",
+        "3": "The gradient w.r.t. logits is softmax(z) - onehot(y): predicted minus true. Each wrong token is pushed down by its probability; the right one is pulled up by 1 - p_y."
+      }
+    },
+    {
+      "name": "Know the baseline",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "loss ≈ 10.8 at step 0", "c": "mint", "lines": ["near-uniform guessing", "over 50,257 tokens", "a healthy start"] },
+      "right": { "title": "stuck above 10.8", "c": "pink", "lines": ["worse than guessing", "broken residual?", "labels off by one?"] },
+      "verdict": "log(vocab size) is the bill for knowing nothing. Read every loss against it.",
+      "cap": {
+        "1": "The bill has landmarks. Guessing evenly across 50,257 tokens costs about 10.8 per token. A fresh model should start there; worse means something is broken.",
+        "2": "At init the output is near uniform, so loss ≈ log(50257) ≈ 10.8. Stuck above that, the model is worse than guessing: look for a broken residual or labels off by one.",
+        "3": "Baselines: log(d_vocab) for uniform; the unigram entropy (about 7.3 on TinyStories) for frequency-only. Align logits[:, :-1] with tokens[:, 1:] or you train on the wrong target."
+      }
+    },
+    {
+      "name": "Loss as a probe",
+      "need": "core",
+      "dur": 10,
+      "type": "bars",
+      "title": "Per-token loss: random tokens, then the same tokens again (schematic)",
+      "labels": ["a", "b", "c", "d", "e", "a'", "b'", "c'", "d'", "e'"],
+      "from": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "to": [1, 1, 1, 1, 1, 1, 0.15, 0.1, 0.1, 0.1],
+      "cap": {
+        "1": "Feed a model a random string of words, then the same string again. The bill stays high the first time and drops the second: the model copies from earlier.",
+        "2": "Read per token, cross-entropy is a diagnostic. In [1.2] the drop on the second copy of a repeated random sequence is the signature that an induction head exists.",
+        "3": "Random tokens are unpredictable on first sight; on the repeat the answer is in context, so loss collapses. Zero-ablate the heads responsible and second-half loss climbs back."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 8,
+      "type": "cards",
+      "items": ["Trains every language model", "Check step 0: loss = log(vocab)", "Per-token loss as a microscope"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "This one number trains every language model you will meet, and read token by token it tells you what the model has figured out.",
+        "2": "Check the loss at step 0 equals log(number of classes), then read per-token loss to see where the model is sure and where it is lost.",
+        "3": "Loss changes are the currency of interpretability: ablate or patch a component and measure the change in cross-entropy, or in its task-specific cousin, the logit difference."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Set the right answer's score, a rival's score and the vocabulary size, and read the bill",
+    "params": [
+      { "id": "zc", "label": "right answer's logit", "min": -5, "max": 10, "step": 0.5, "value": 2 },
+      { "id": "zr", "label": "strongest rival's logit", "min": -5, "max": 10, "step": 0.5, "value": 3 },
+      { "id": "lv", "label": "vocabulary size (log10)", "min": 0.3012, "max": 4.7012, "step": 0.1, "value": 1.0012 }
+    ],
+    "curves": [
+      { "f": "log(exp(x) + exp(zr) + round(pow(10, lv)) - 2) - x", "c": "orange", "label": "bill for every possible right-answer logit" },
+      { "f": "log(round(pow(10, lv)))", "c": "ink", "label": "knowing nothing: log(vocab)" }
+    ],
+    "x": [-5, 10],
+    "y": [0, 16],
+    "readouts": [
+      { "label": "vocabulary size", "f": "round(pow(10, lv))" },
+      { "label": "p(right answer)", "f": "(exp(zc) / (exp(zc) + exp(zr) + round(pow(10, lv)) - 2)).toFixed(4)" },
+      { "label": "bill = -log p", "f": "(log(exp(zc) + exp(zr) + round(pow(10, lv)) - 2) - zc).toFixed(3)" },
+      { "label": "gradient on the right logit (p - 1)", "f": "(exp(zc) / (exp(zc) + exp(zr) + round(pow(10, lv)) - 2) - 1).toFixed(3)" }
+    ],
+    "caption": {
+      "1": "Drag the right answer's score up: the bill falls toward 0. Push the rival above it: the bill climbs. Set both to 0 to see the guessing baseline.",
+      "2": "The gradient on the right logit is p - 1: near -1 when the model is badly wrong, near 0 once it is right, so the push fades by itself as the bet improves.",
+      "3": "Here loss = log(e^zc + e^zr + V - 2) - zc, with the other V - 2 logits at 0. Raising V lifts the 'knowing nothing' floor from log 2 towards log 50257 ≈ 10.8."
+    }
+  },
+  "where_else": [
+    "Training every classifier and language model, from MNIST in [0.2] to your transformer in [1.1]",
+    "Per-token loss on a repeated random sequence: the induction-head signature in [1.2]",
+    "Perplexity, which is e raised to the average cross-entropy",
+    "Distillation, where the target is a teacher's whole distribution instead of one right answer"
+  ],
+  "hamming": {
+    "what": "The average of -log(probability the model gave the right answer), computed straight from the logits.",
+    "when": "Whenever a model outputs a distribution over classes or tokens and you train or measure it, which is every language model.",
+    "why": "It punishes confident mistakes hardest, has the clean gradient 'predicted minus true', and read per token it doubles as a probe of what the model knows."
+  },
+  "object": {
+    "title": "The surprise landscape",
+    "subtitle": "The bill as a hillside over two scores: the right answer's and a rival's.",
+    "kind": "surface",
+    "f": "log(exp(x) + exp(y) + pow(10, lv)) - x",
+    "x": [-4, 4],
+    "y": [-4, 4],
+    "ball": { "x": -3, "y": 3, "lr": "lr", "steps": 60 },
+    "marks": [
+      { "x": 3.5, "y": -3.5, "label": "sure and right" },
+      { "x": -3.5, "y": 3.5, "label": "sure and wrong" }
+    ],
+    "knobs": [
+      { "id": "lv", "label": "Other tokens at score 0 (log10)", "min": 0, "max": 4, "step": 0.5, "value": 0 },
+      { "id": "lr", "label": "Step size for the bead", "min": 0.1, "max": 2, "step": 0.1, "value": 0.8 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "The bill as a landscape. One direction raises the right answer's score, the other raises a rival's. High ground means a big bill.",
+          "2": "x: the correct logit. y: a rival's logit. One more token sits at 0. Height is the cross-entropy.",
+          "3": "Surface: logsumexp([x, y, 0]) - x. Convex in the logits, which is part of why it trains so reliably."
+        },
+        "view": "iso",
+        "set": { "lv": 0 }
+      },
+      {
+        "cap": {
+          "1": "The bead rolling downhill is learning: it raises the right answer's score and lowers the rival's at the same time.",
+          "2": "Gradient descent on logits: the gradient is predicted minus true, so the rival is pushed down and the target pulled up.",
+          "3": "∂L/∂z = softmax(z) - onehot(y): the descent direction is fixed by the probability gap on each token."
+        },
+        "view": "close",
+        "set": { "lr": 0.8 }
+      },
+      {
+        "cap": {
+          "1": "From above, the valley has no bottom. The bill keeps shrinking as the right score grows, so the push slows but never quite stops.",
+          "2": "Cross-entropy with hard labels is never exactly 0 at finite logits, so logits keep growing unless something like weight decay holds them back.",
+          "3": "The infimum 0 is approached only as z_y - max others → ∞; the gradient decays like 1 - p_y rather than vanishing at a finite point."
+        },
+        "view": "top",
+        "set": { "lv": 0 }
+      },
+      {
+        "cap": {
+          "1": "Add ten thousand other words and the whole landscape rises: the right answer now has to out-score far more competitors.",
+          "2": "More tokens at logit 0 lift the floor: with no preference at all, the bill is log of the vocabulary size.",
+          "3": "Adding mass to the partition function raises logsumexp everywhere; the uniform baseline is log V, about 10.8 for GPT-2's 50,257 tokens."
+        },
+        "view": "iso",
+        "set": { "lv": 4 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "The model puts probability 0.01 on the correct token. Roughly what is the loss?",
+        "options": [{ "t": "About 4.6", "ok": true }, { "t": "About 0.01" }, { "t": "About 99" }],
+        "why": "-ln(0.01) ≈ 4.6. The bill grows with surprise, logarithmically."
+      },
+      {
+        "q": "A freshly initialised model with GPT-2's 50,257 tokens should start with loss near?",
+        "options": [{ "t": "10.8", "ok": true }, { "t": "0" }, { "t": "50,257" }],
+        "why": "Near-uniform guesses give -log(1/50257) = log(50257) ≈ 10.8."
+      },
+      {
+        "q": "Why pass logits, not probabilities, to F.cross_entropy?",
+        "options": [{ "t": "It fuses log-softmax, which is numerically stable", "ok": true }, { "t": "Probabilities are always wrong" }],
+        "why": "Softmax then log can underflow to log(0); logsumexp(z) - z_y straight from logits never does."
+      }
+    ],
+    "where": "Any classifier or next-token model, and any time you measure how surprised a model is by text."
+  }
+}
