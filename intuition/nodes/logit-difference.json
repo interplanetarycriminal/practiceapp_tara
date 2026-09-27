@@ -1,0 +1,263 @@
+{
+  "id": "logit-difference",
+  "title": "A balance, not a gauge",
+  "week": 8,
+  "need": "core",
+  "allegory": "Logit difference is like weighing the right answer against the wrong one on a balance: whatever lands equally in both pans cancels, every helper's weights simply add to the tilt, and unlike a percentage gauge the beam never pins at the top.",
+  "map": [
+    ["Mary's pan and John's pan", "logit[IO] and logit[S]"],
+    ["weight added equally to both pans changes nothing", "anything the two logits share cancels, including the softmax normaliser"],
+    ["how far the beam tilts", "logit difference Δ = log(p(Mary) / p(John))"],
+    ["each helper drops weights in a pan; the tilt is their total", "linear in the residual stream: per-component terms add up (DLA)"],
+    ["a percentage gauge that pins near 100%", "probability saturating near 1 and hiding an intervention's effect"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The pinned gauge",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "p(Mary): 97% ... 96%. Did my patch do anything?",
+      "actors": [{ "pose": "shrug", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.66, "y": 0.5, "w": 0.28, "h": 0.28, "label": "p(Mary) gauge: 97%", "color": "peach" }
+      ],
+      "cap": {
+        "1": "You change something inside the model and check how likely 'Mary' is: 97%, then 96%. Did your change matter? A gauge stuck near 100% can't tell you.",
+        "2": "Probability saturates: once the model is confident, big internal changes barely move p(correct). A metric that hides an intervention's effect is useless for finding where a behaviour lives.",
+        "3": "softmax compresses large logit changes near p ≈ 1, so probability is a poor, nonlinear readout of interventions. You want a signed metric that moves both ways and is linear in the residual stream."
+      }
+    },
+    {
+      "name": "Two pans",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "carry", "x": 0.2, "label": "a head" },
+        { "pose": "reach", "x": 0.82, "label": "a head" }
+      ],
+      "props": [
+        { "kind": "scale", "x": 0.5, "y": 0.55, "w": 0.34, "h": 0.3, "label": "Mary | John", "color": "butter" },
+        { "kind": "card", "x": 0.5, "y": 0.16, "label": "same weight in both pans: no tilt", "color": "cream" }
+      ],
+      "cap": {
+        "1": "Instead, weigh 'Mary' against 'John' on a balance. Weight added to both pans changes nothing; only the difference tips the beam, either way.",
+        "2": "Logit difference = logit(Mary) − logit(John). Anything that pushes both names up equally, like a general 'a name comes next' signal, cancels. What's left is the model's preference between the two.",
+        "3": "logit[IO] − logit[S] = log(p(IO)/p(S)): the softmax normaliser cancels, as does any shared component. It's the log-odds between the two candidates, unbounded in both directions."
+      }
+    },
+    {
+      "name": "Log-odds in one line",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "logit(M)", "c": "mint", "note": "Mary's pan" },
+        { "t": " − ", "c": "ink", "note": "" },
+        { "t": "logit(J)", "c": "pink", "note": "John's pan" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "log p(M)/p(J)", "c": "orange", "note": "the odds, logged" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The tilt has a plain meaning: how many times likelier Mary is than John, on a log scale. Zero means a tie. Every +1 multiplies Mary's odds by about 2.7.",
+        "2": "The softmax divides both probabilities by the same total, so that total cancels in the ratio. The logit difference is exactly the log of p(Mary)/p(John), and it never saturates.",
+        "3": "Δ = (W_U[:, IO] − W_U[:, S]) · ln_final(x): one fixed direction dotted with the final residual. That linearity is why DLA can split Δ exactly into per-component terms."
+      }
+    },
+    {
+      "name": "The flat top",
+      "need": "core",
+      "dur": 9,
+      "type": "plot",
+      "curves": [{ "f": "sigmoid(x)", "c": "orange", "label": "Mary's share of the two names, sigmoid(Δ)" }],
+      "x": [-6, 8],
+      "y": [0, 1.05],
+      "dot": true,
+      "marks": [{ "x": 3, "label": "Δ = 3: 95%" }, { "x": 6, "label": "Δ = 6: 99.8%" }],
+      "cap": {
+        "1": "Here's why the gauge gets stuck. As the tilt grows, the probability flattens out near 100%. Doubling the tilt from 3 to 6 moves it from 95% to 99.8%.",
+        "2": "With two candidates, p(Mary) = sigmoid(Δ). The curve is flat at both ends, so a large internal change can look tiny in probability, while Δ moves one-for-one with what the model wrote.",
+        "3": "dp/dΔ = p(1 − p) → 0 as p → 1: probability metrics lose sensitivity exactly where a well-performing model sits. Δ has unit slope and stays linear in each component's write."
+      }
+    },
+    {
+      "name": "Every helper's share",
+      "need": "core",
+      "dur": 9,
+      "type": "grid",
+      "title": "the tilt splits into one term per component",
+      "rows": 5,
+      "cols": 2,
+      "values": [["name mover 9.6", "pushes toward Mary"], ["name mover 9.9", "pushes toward Mary"], ["negative mover 10.7", "pushes toward John"], ["negative mover 11.10", "pushes toward John"], ["all terms added", "= the logit difference"]],
+      "labels": { "cols": ["component", "its share of the tilt"] },
+      "highlight": [[0, 1], [1, 1], [2, 1], [3, 1], [4, 1]],
+      "cap": {
+        "1": "Every part of the model just drops weights into the pans, so you can ask each part what it added. A few push hard for Mary; a few push for John.",
+        "2": "Direct logit attribution: dot each head's output with the Mary-minus-John direction. On IOI, heads 9.6 and 9.9 push toward the right name; 10.7 and 11.10 push against it.",
+        "3": "A linear metric of an additive stream: per-component terms sum exactly to Δ once the final LayerNorm scale is applied (apply_ln_to_stack). Assert the sum matches the model's actual Δ."
+      }
+    },
+    {
+      "name": "Cancel, then rescale",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Raw, one prompt", "c": "pink", "lines": ["logit(Mary) − logit(John)", "on one sentence", "John favoured by about 1 logit anyway", "no clear baseline"] },
+      "right": { "title": "Matched and normalised", "c": "mint", "lines": ["average over name-swapped pairs", "name priors cancel", "(patched − corrupt) / (clean − corrupt)", "0 = broken, 1 = fully restored"] },
+      "verdict": "Cancel what you don't care about, then scale so 0 and 1 mean something.",
+      "cap": {
+        "1": "Two more tricks: swap which name is the answer across examples so built-in favouritism cancels, then rescale so 0 means broken and 1 means fixed.",
+        "2": "GPT-2's final layernorm bias alone favours 'John' over 'Mary' by about a logit, so IOI uses matched prompt pairs. For patching, report (patched − corrupted) / (clean − corrupted).",
+        "3": "Average Δ over ABBA/ABAB pairs so name-frequency priors and fixed biases cancel. Normalise so corrupted reads 0 and clean reads 1, and say whether it's denoising or noising, since the sign flips."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["One number that moves both ways", "Splits exactly into per-part shares", "The yardstick for patching and steering"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "A good yardstick is half of interpretability. This one moves both ways, never gets stuck, and splits into each part's share: who did what.",
+        "2": "Logit difference is the metric behind DLA, activation patching and path patching in [1.4.1]. When you steer a model later, the same contrast tells you whether you moved the behaviour you meant.",
+        "3": "A task-specific contrast, unlike cross-entropy's general objective: signed, linear in the residual stream, cancelling shared structure. Choosing it is the first design decision of any causal analysis."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Push the pans",
+    "params": [
+      { "id": "a", "label": "Mary's own push (her logit)", "min": -4, "max": 10, "step": 0.5, "value": 2 },
+      { "id": "b", "label": "John's own push (his logit)", "min": -4, "max": 10, "step": 0.5, "value": 0 },
+      { "id": "s", "label": "shared push on both names", "min": -3, "max": 6, "step": 0.5, "value": 0 }
+    ],
+    "curves": [
+      { "f": "exp(x + s)/(exp(x + s) + exp(b + s) + exp(2))", "c": "orange", "label": "p(Mary) as Mary's logit varies (rest of vocab = 2)" },
+      { "f": "sigmoid(x - b)", "c": "sky", "label": "Mary's share of the two names, sigmoid(Δ)" }
+    ],
+    "x": [-4, 10],
+    "y": [0, 1.05],
+    "readouts": [
+      { "label": "p(Mary)", "f": "(exp(a + s)/(exp(a + s) + exp(b + s) + exp(2))).toFixed(3)" },
+      { "label": "logit difference Δ", "f": "(a - b).toFixed(2)" },
+      { "label": "p(Mary) / p(John) = e^Δ", "f": "exp(a - b).toFixed(2)" },
+      { "label": "the shared push", "f": "s === 0 ? 'off' : 'changed p(Mary), left Δ untouched'" }
+    ],
+    "caption": {
+      "1": "Slide the shared push: both names rise, p(Mary) wobbles, the logit difference doesn't budge. Push Mary past 5 and p(Mary) stops responding.",
+      "2": "p(Mary) depends on everything (John, the rest of the vocabulary, shared pushes) and saturates. Δ = logit(Mary) − logit(John) depends only on the contrast, and p(Mary)/p(John) = e^Δ exactly.",
+      "3": "Adding s to both logits leaves Δ invariant but moves mass to or from the 'other' bucket, changing p(Mary). Δ is shift-invariant, unbounded and linear in the residual stream; probability is none of these."
+    }
+  },
+  "where_else": [
+    "Reward models in RLHF score preferences as sigmoid(r_A − r_B): a difference of scores",
+    "Log-odds in statistics and logistic regression: a probability ratio on a log scale",
+    "Steering and probing metrics: measure a behaviour as 'desired token minus undesired token'"
+  ],
+  "hamming": {
+    "what": "The model's score for the right answer minus its score for the tempting wrong one: the log of how many times likelier one is than the other.",
+    "when": "Whenever you intervene inside a model (attribution, patching, steering) and need to measure the effect on one specific choice.",
+    "why": "It cancels everything the two answers share, never saturates, and is linear in the residual stream, so effects add up and can be split per component."
+  },
+  "object": {
+    "title": "The balance sheet",
+    "subtitle": "One sheet, two readings: a probability that plateaus, or a logit difference that ramps forever.",
+    "kind": "surface",
+    "f": "metric > 0.5 ? (x - y)/4 : exp(x)/(exp(x) + exp(y) + exp(other))",
+    "x": [-4, 4],
+    "y": [-4, 4],
+    "marks": [
+      { "x": 3, "y": -3, "label": "plateau: p ≈ 1" },
+      { "x": 0, "y": 0, "label": "tie" }
+    ],
+    "knobs": [
+      { "id": "metric", "label": "reading: probability (0) or logit difference (1)", "min": 0, "max": 1, "step": 1, "value": 0 },
+      { "id": "other", "label": "score of everything else", "min": -4, "max": 4, "step": 0.5, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Height is how likely 'Mary' is as Mary's and John's scores change. Notice the big flat plateau: once Mary is ahead, the height barely moves.",
+          "2": "The probability surface p(Mary) over (logit Mary, logit John), with the rest of the vocabulary lumped into one 'other' logit.",
+          "3": "softmax over {Mary, John, other}: a sigmoid-like sheet that saturates at 1, where its gradient vanishes."
+        },
+        "view": "iso",
+        "set": { "metric": 0, "other": 0 }
+      },
+      {
+        "cap": {
+          "1": "Raise the 'everything else' score: the whole sheet sags, although nothing changed between Mary and John.",
+          "2": "p(Mary) depends on the rest of the vocabulary too, so it mixes in things your experiment never touched.",
+          "3": "Probability is not invariant to other logits: the softmax normaliser couples every token."
+        },
+        "view": "front",
+        "set": { "metric": 0, "other": 2 }
+      },
+      {
+        "cap": {
+          "1": "Switch to the balance reading: the sheet becomes a flat ramp. Every step toward Mary tilts it by the same amount, forever.",
+          "2": "Logit difference Δ = logit(Mary) − logit(John): a plane, linear, never saturating, zero along the tie line.",
+          "3": "Δ is linear in (logit M, logit J), hence linear in the residual stream through W_U: the property DLA and patching rely on."
+        },
+        "view": "iso",
+        "set": { "metric": 1, "other": 0 }
+      },
+      {
+        "cap": {
+          "1": "Move 'everything else' again: the ramp doesn't move at all. The balance ignores whatever lands in both pans or outside them.",
+          "2": "Δ is untouched by the other logits and by any push shared by both names.",
+          "3": "Invariant to the normaliser and to common-mode shifts: only the contrast direction W_U[:, IO] − W_U[:, S] matters."
+        },
+        "view": "front",
+        "set": { "metric": 1, "other": 3 }
+      },
+      {
+        "cap": {
+          "1": "From above, the tie line runs corner to corner. On one side Mary wins, on the other John does, and the height says by how much.",
+          "2": "Contours of Δ are parallel lines; each unit step multiplies the odds of Mary over John by e.",
+          "3": "Level sets of Δ are exactly the level sets of p(M)/p(J) = e^Δ."
+        },
+        "view": "top",
+        "set": { "metric": 1, "other": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A patch moves p(Mary) from 0.97 to 0.96. What can you conclude?",
+        "options": [
+          { "t": "Not much: probability is saturated here, so check the logit difference", "ok": true },
+          { "t": "The patch had almost no effect" }
+        ],
+        "why": "Near 1 the probability curve is flat, so a large internal change can look tiny."
+      },
+      {
+        "q": "A head raises logit(Mary) and logit(John) by the same amount. Its effect on the logit difference?",
+        "options": [
+          { "t": "Zero", "ok": true },
+          { "t": "Positive" },
+          { "t": "It depends on the rest of the vocabulary" }
+        ],
+        "why": "Equal weight in both pans cancels. Δ only measures the contrast."
+      },
+      {
+        "q": "The logit difference is 2. How many times likelier is Mary than John?",
+        "options": [
+          { "t": "About 7.4 times (e²)", "ok": true },
+          { "t": "Exactly twice" },
+          { "t": "2 percentage points" }
+        ],
+        "why": "Δ = log(p(Mary)/p(John)), so the ratio is e² ≈ 7.39."
+      }
+    ],
+    "where": "Anywhere two options are compared: log-odds in statistics, preference scores in reward models, contrastive probes."
+  }
+}

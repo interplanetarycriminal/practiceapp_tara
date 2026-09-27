@@ -1,0 +1,61 @@
+{
+  "id": "indirect-object-identification",
+  "title": "Skip the name you've heard twice",
+  "week": 8,
+  "need": "core",
+  "allegory": "IOI is like a mail room where early clerks stamp the second 'John' as a repeat, couriers carry a 'John is taken' note to the front desk, and the front-desk clerks copy onto the reply whichever name is not on the note: Mary.",
+  "map": [
+    ["clerks who notice the second 'John' is a repeat", "duplicate-token and induction heads acting at S2"],
+    ["couriers carrying a 'John is taken' note to the front desk", "S-inhibition heads 7.3, 7.9, 8.6, 8.10 moving the flag from S2 to END"],
+    ["front-desk clerks copying a name, skipping the one on the note", "name movers 9.6, 9.9, 10.0 attending END to IO, with inhibition entering through their queries"],
+    ["a contrarian clerk who writes 'John' back in", "negative name movers 10.7 and 11.10"],
+    ["how much more the reply favours Mary than John", "logit difference logit[IO] − logit[S] at END"]
+  ],
+  "credit": "",
+  "linked_film": "films/deep-w08-ioi.html",
+  "linked_object": null,
+  "where_else": [
+    "Automated circuit discovery: the same find-and-verify process, run by a script",
+    "Attribution graphs, which trace a behaviour through learned features instead of whole heads",
+    "Designing corrupted prompts for activation and path patching in any interpretability study",
+    "Every week-8 tool: direct logit attribution, activation patching and path patching are all demonstrated on IOI"
+  ],
+  "hamming": {
+    "what": "A one-template task, two names with one repeated, that GPT-2 small completes with the other name, reverse-engineered as 26 of its 144 heads in seven classes.",
+    "when": "Whenever you need the reference example of finding, and proving, a circuit in a real pretrained model.",
+    "why": "It set explicit standards (faithfulness, completeness, minimality) for when a mechanism story counts as found rather than merely fitting the plots."
+  },
+  "object": {
+    "title": "The name relay",
+    "subtitle": "GPT-2 small's IOI circuit as a relay: tokens along the floor, layers rising, the answer written at the top.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "io", "label": "Mary (IO)", "pos": [-1.2, -1.2, 0], "c": "data" },
+      { "id": "s1", "label": "John (S1)", "pos": [-0.4, -1.2, 0], "c": "data" },
+      { "id": "s2", "label": "John (S2)", "pos": [0.4, -1.2, 0], "c": "data" },
+      { "id": "end", "label": "'to' (END)", "pos": [1.2, -1.2, 0], "c": "data" },
+      { "id": "dup", "label": "duplicate-token + induction heads", "pos": [0.4, -0.4, 0], "c": "aux" },
+      { "id": "sinh", "label": "S-inhibition 7.3 7.9 8.6 8.10", "pos": [0.9, 0.25, 0], "c": "dir" },
+      { "id": "nm", "label": "name movers 9.6 9.9 10.0", "pos": [1.2, 0.85, 0], "c": "good" },
+      { "id": "neg", "label": "negative movers 10.7 11.10", "pos": [1.2, 0.85, 0.8], "c": "grad" },
+      { "id": "backup", "label": "backup name movers", "pos": [1.2, 0.85, -0.8], "c": "plaster" },
+      { "id": "out", "label": "logit diff: Mary − John", "pos": [1.2, 1.45, 0], "c": "prob" }
+    ],
+    "edges": [["s1", "dup"], ["s2", "dup"], ["dup", "sinh"], ["end", "sinh"], ["sinh", "nm"], ["io", "nm"], ["nm", "out"], ["neg", "out"], ["backup", "out"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "'When Mary and John went to the store, John gave a drink to' ... Mary. Tokens line the floor; information climbs to the final 'to', where the answer goes.", "2": "The IOI circuit laid out by position and depth: 26 heads in seven classes, ending in the logit difference at END.", "3": "Wang et al. (2022): 26 of 144 heads, seven classes, validated causally against faithfulness, completeness and minimality." }, "view": "iso", "set": {} },
+      { "cap": { "1": "Early on, at the second John, a few heads notice it's a repeat of the first John.", "2": "Duplicate-token and induction heads flag that S2 repeats S1.", "3": "Previous-token and duplicate-token heads plus induction heads write a 'duplicated' signal into S2's residual stream." }, "view": "front", "set": {} },
+      { "cap": { "1": "In the middle, couriers carry the note 'John is taken' across to the final word.", "2": "S-inhibition heads 7.3, 7.9, 8.6 and 8.10 move that flag from S2 to END.", "3": "S-inhibition heads V-compose with the duplicate signal: information is moved, not attention redirected. Activation patching shows their values matter and their keys mostly don't." }, "view": "side", "set": {} },
+      { "cap": { "1": "At the top, name movers look back at the names and copy one. The note arrives in their question, so they skip John and copy Mary.", "2": "Name movers 9.6, 9.9 and 10.0 attend from END to IO and copy it; the inhibition enters through their queries.", "3": "The query route (not keys) is what path patching, rather than activation patching, is needed to establish." }, "view": "top", "set": {} },
+      { "cap": { "1": "Two contrarian heads push John back up, and backup movers wait to take over if the main movers are knocked out.", "2": "Head 10.7 alone makes the wrong answer about seven times more likely; backup movers mask single-head ablations.", "3": "Negative movers 10.7 and 11.10 write against IO, with function unsettled; backup name movers make single-head ablation understate importance." }, "view": "close", "set": {} }
+    ],
+    "predict": [
+      { "q": "You ablate name mover 9.9 and the logit difference barely drops. Why?", "options": [{ "t": "Backup name movers take over, so single-head ablation understates importance", "ok": true }, { "t": "9.9 was never part of the circuit" }], "why": "Backup heads only step in once the primary movers are removed." },
+      { "q": "To build a corrupted prompt for patching, which names should you flip?", "options": [{ "t": "Only the first S name, so token and position signals both flip", "ok": true }, { "t": "All three names" }], "why": "Flipping all three reverses the token signal but leaves the position signal where it was, giving a murky mixed contrast." },
+      { "q": "Why score with logit difference rather than the probability of ' Mary'?", "options": [{ "t": "It cancels shared preferences and is linear in the residual stream", "ok": true }, { "t": "It is always a bigger number" }], "why": "Matched pairs and a signed difference remove biases such as the final layernorm's roughly one-logit tilt towards John." }
+    ],
+    "where": "Any circuit claim: a relay of parts you verify by intervening, judged on faithfulness, completeness and minimality."
+  }
+}

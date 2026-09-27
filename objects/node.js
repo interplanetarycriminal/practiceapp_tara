@@ -168,20 +168,24 @@ KINDS.points = (o) => {
       const st = S.state; if (st.built) return; st.built = true;
       const rnd = K.rng(7);
       const gauss = () => { let u = 0, v = 0; while (!u) u = rnd(); while (!v) v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+      const at = {};   // arrows may name a cluster by its label instead of giving coordinates
       for (const cl of (o.clusters || []).slice(0, 6)) {
+        if (cl.label) at[cl.label] = cl.center || [0, 0, 0];
         const n = Math.max(1, Math.min(60, cl.n || 24)), sp = Math.min(1, Math.max(0.02, cl.spread ?? 0.25)), c0 = cl.center || [0, 0, 0];
         for (let i = 0; i < n; i++) {
-          const b = K.bead(toW([c0[0] + gauss() * sp, c0[1] + gauss() * sp, c0[2] + gauss() * sp]), colour(cl.c), 0.04); S.root.add(b);
+          const b = K.bead(toW([c0[0] + gauss() * sp, c0[1] + gauss() * sp, c0[2] + gauss() * sp]), colour(cl.c), 0.05); S.root.add(b);
         }
         if (cl.label) K.label(toW([c0[0], c0[1] + sp * 2 + 0.15, c0[2]]), cl.label, { cls: 'note', prio: 2 });
       }
+      const pt = (v, fb) => (typeof v === 'string' ? at[v] || fb : Array.isArray(v) ? v : fb);
       for (const a of (o.arrows || []).slice(0, 6)) {
-        const ar = K.arrow(toW(a.from || [0, 0, 0]), toW(a.to || [1, 0, 0]), colour(a.c, C.dir)); S.root.add(ar.group);
-        if (a.label) K.label(toW(a.to || [1, 0, 0]), a.label, { cls: 'readout', dy: -6 });
+        const A = pt(a.from, [0, 0, 0]), B = pt(a.to, [1, 0, 0]);
+        const ar = K.arrow(toW(A), toW(B), colour(a.c, C.dir), { r: 0.03 }); S.root.add(ar.group);
+        if (a.label) K.label(toW([(A[0] + B[0]) / 2, (A[1] + B[1]) / 2, (A[2] + B[2]) / 2]), a.label, { cls: 'readout', dy: -6 });
       }
       if (o.plane) {
         const nrm = new THREE.Vector3(...(o.plane.normal || [0, 1, 0])).normalize();
-        const m = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), K.mat.glass(C.aux, 0.22));
+        const m = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 2.8), K.mat.glass(C.aux, 0.14));
         m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), nrm); m.position.set(0, LIFT, 0); S.root.add(m);
         if (o.plane.label) K.label(new THREE.Vector3(1.3, LIFT, 0), o.plane.label, { cls: 'tag' });
       }

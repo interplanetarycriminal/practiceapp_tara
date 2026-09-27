@@ -1,0 +1,146 @@
+{
+  "id": "sparse-autoencoder",
+  "title": "A short recipe from a huge pantry",
+  "week": 8,
+  "need": "core",
+  "allegory": "A sparse autoencoder is a taster who rewrites a smoothie as a recipe card: a few ingredients, with amounts, picked from a pantry far bigger than the list of tastes, and the card must remake the same smoothie.",
+  "map": [
+    ["the smoothie, where every taste is a blend of fruits", "one activation vector, where neurons mix many features (superposition)"],
+    ["a pantry far bigger than the list of tastes", "the dictionary: d_sae = expansion factor × d_model learned directions"],
+    ["a recipe card naming a few ingredients with amounts", "the sparse latent activations f = ReLU(W_enc x + b_enc)"],
+    ["remaking the smoothie from the card", "the decoder: x̂ = W_dec f + b_dec, trained to match x"],
+    ["the rule 'use as few ingredients as you can'", "the L1 penalty λ·Σ|fᵢ|, traded against reconstruction"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": "o/d08-dictionary.html",
+  "chapters": [
+    {
+      "name": "Neurons are a jumble",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "this neuron fires on ... everything?",
+      "actors": [{ "pose": "shrug", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.66, "y": 0.58, "w": 0.28, "h": 0.4, "label": "512 neurons", "color": "lav" },
+        { "kind": "card", "x": 0.66, "y": 0.18, "label": "one neuron: a mess of unrelated things", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A model knows more ideas than it has neurons, so ideas get crammed together. Look at one neuron and it responds to a jumble of unrelated things.",
+        "2": "Superposition: features outnumber neurons, so they share them as overlapping directions. The neuron basis is the wrong place to look for clean concepts.",
+        "3": "With more features than dimensions, features sit on non-orthogonal directions and neurons are polysemantic. You need a basis learned from the data, not the one the architecture gives you."
+      }
+    },
+    {
+      "name": "Taste, then recipe",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "write", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "circle", "x": 0.36, "y": 0.58, "w": 0.14, "label": "smoothie = activation", "color": "pink" },
+        { "kind": "stack", "x": 0.86, "y": 0.58, "w": 0.2, "h": 0.44, "label": "pantry: thousands of ingredients", "color": "mint" },
+        { "kind": "card", "x": 0.6, "y": 0.2, "label": "recipe: 3 ingredients, rest 0", "color": "cream" }
+      ],
+      "arrows": [[0.44, 0.52, 0.56, 0.28, "encode"], [0.78, 0.4, 0.66, 0.26, "pick a few"]],
+      "cap": {
+        "1": "Tasting a smoothie tells you sweet, sour, thick: every taste is a blend of many fruits. A recipe card names the few fruits that went in, from a huge pantry.",
+        "2": "A sparse autoencoder rewrites an activation as a short list: a few directions picked from a much larger dictionary, with amounts. Those directions are the readable part.",
+        "3": "Encoder to d_sae = expansion × d_model latents, ReLU, decoder back to d_model. Trained on reconstruction plus an L1 penalty so only a handful of latents are non-zero per token."
+      }
+    },
+    {
+      "name": "Two rules, one loss",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "‖x − x̂‖²", "c": "sky", "note": "remake it faithfully" },
+        { "t": " + ", "c": "ink", "note": "" },
+        { "t": "λ", "c": "orange", "note": "how strict" },
+        { "t": "·Σ|fᵢ|", "c": "orange", "note": "use few ingredients" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Two rules pull against each other: remake the smoothie faithfully, and use as few ingredients as possible. λ sets how strict the second rule is.",
+        "2": "Loss = reconstruction error + λ × the L1 norm of the latents, with f = ReLU(W_enc x + b_enc) and x̂ = W_dec f + b_dec. λ is the single biggest lever you have.",
+        "3": "L1 is a convex stand-in for L0, the count of active latents. JumpReLU and TopK SAEs enforce sparsity more directly (GemmaScope uses JumpReLU). Either way, L0 is the number you read."
+      }
+    },
+    {
+      "name": "The hidden ingredient",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "neuron by neuron", "c": "pink", "lines": ["512 neurons", "Arabic script smeared across many", "simply not there"] },
+      "right": { "title": "SAE with 4,096 latents", "c": "mint", "lines": ["one latent: A/1/3450", "fires on Arabic script", "readable at a glance"] },
+      "verdict": "The concept was there all along; the neuron basis hid it.",
+      "cap": {
+        "1": "In the first big run, one ingredient on the card lit up for Arabic script. Look neuron by neuron and it is simply not there: it was smeared across many.",
+        "2": "Towards Monosemanticity re-expressed a 512-neuron MLP layer as 4,096 latents. Latent A/1/3450 fires on Arabic script and has no single-neuron counterpart.",
+        "3": "Bricken et al. (2023): a one-layer transformer, expansion factors 1x to 256x, headline run at 4,096 latents. Scaled later to Claude 3 Sonnet: feature 34M/31164353, the Golden Gate Bridge."
+      }
+    },
+    {
+      "name": "Dead and dense",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "dead latents", "c": "chalk", "lines": ["never fire", "get no gradient", "lost capacity, often too wide"] },
+      "right": { "title": "dense latents", "c": "peach", "lines": ["fire on over 1 token in 100", "unreadable", "smuggle in non-sparse work"] },
+      "verdict": "Watch L0, the dead count and the sparsity histogram, not loss alone.",
+      "cap": {
+        "1": "Two ways a pantry goes wrong: ingredients nobody ever uses, and one ingredient that goes into everything. Neither helps you read the recipe.",
+        "2": "Dead latents never fire, get no gradient and are lost capacity; dense latents fire on more than 1 token in 100 and are unreadable. Reconstruction loss alone hides both.",
+        "3": "Many dead latents with good loss usually means d_sae is too large (an ARENA run used expansion 32 where 16 sufficed). Healthy log-sparsity mass sits around -5 to -3, with no spike at the floor or lump near 0."
+      }
+    },
+    {
+      "name": "The honest state",
+      "need": "contested",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Now: pretrained SAEs through SAELens", "Caveat: sparser is not always clearer", "Check a latent by steering with it"],
+      "actor": { "pose": "point", "x": 0.86 },
+      "cap": {
+        "1": "You will mostly use ready-made pantries rather than stock your own. And a tidier recipe is not always a truer one, so test what an ingredient actually does.",
+        "2": "Current practice: load pretrained SAEs (Gemma Scope) with SAELens and read Neuronpedia dashboards. Emerging: absorption and splitting mean sparser is not reliably more interpretable.",
+        "3": "My call: consume pretrained SAEs, report L0 and dead-latent counts, treat every label as a hypothesis and confirm it causally by steering or ablating. That is how SAEs become tools for understanding and steering."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Read the log-sparsity histogram: how often each latent fires (toy)",
+    "labels": ["dead", "1e-6", "1e-5", "1e-4", "1e-3", "1e-2", "1e-1", "always"],
+    "params": [
+      { "id": "l1", "label": "L1 strictness λ (few ingredients)", "min": 0, "max": 1, "step": 0.05, "value": 0.5 },
+      { "id": "width", "label": "expansion factor (pantry size ×)", "min": 4, "max": 64, "step": 4, "value": 16 }
+    ],
+    "f": "range(8).map(k => k == 0 ? min(1.2, 0.05 + 0.03*max(0, width - 16) + 1.5*max(0, l1 - 0.75)) : exp(-pow(k - (5.5 - 3.5*l1), 2)/1.5) + (k == 7 ? 3.2*max(0, 0.25 - l1) : 0))",
+    "y": [0, 1.4],
+    "readouts": [
+      { "label": "bump peaks at log10(firing rate)", "f": "(-1.5 - 3.5*l1).toFixed(1)" },
+      { "label": "diagnosis", "f": "width > 24 ? 'many dead latents: pantry too big, shrink the expansion factor toward 16' : (l1 > 0.8 ? 'dead latents: L1 too strict' : (l1 < 0.25 ? 'dense latents: L1 too weak, unreadable' : 'healthy: most latents fire on 1e-5 to 1e-3 of tokens'))" }
+    ],
+    "caption": {
+      "1": "Slide the L1 rule and the pantry size. A spike at the left means ingredients nobody uses; a lump at the right means ones that go into everything.",
+      "2": "Aim for most latents firing on between 1e-5 and 1e-3 of tokens. Too weak an L1 gives dense, unreadable latents; too wide a dictionary leaves a pile of dead ones.",
+      "3": "Toy histogram encoding ARENA's diagnostics: a dead spike at log10(ε) from over-provisioned d_sae (expansion 32 vs 16) or a high lr without warmup; mass near 0 when λ is too small."
+    }
+  },
+  "where_else": [
+    "Gemma Scope: open SAE suites you load with SAELens in [1.3.3]",
+    "Transcoders: the same idea applied to a layer's input-to-output map",
+    "Steering with a latent: clamp it and see whether behaviour follows",
+    "Classic sparse coding: a signal written as a few atoms from an overcomplete dictionary"
+  ],
+  "hamming": {
+    "what": "A wide autoencoder that rewrites one layer's activation as a few active directions from a much larger learned dictionary.",
+    "when": "When neurons are too tangled to read, which in language models is almost always, because superposition packs in more features than neurons.",
+    "why": "It turns a jumble of polysemantic neurons into thousands of mostly readable latents you can inspect, ablate and steer."
+  }
+}
