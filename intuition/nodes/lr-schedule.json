@@ -1,0 +1,214 @@
+{
+  "id": "lr-schedule",
+  "title": "Jog out, run, then walk in",
+  "week": 3,
+  "need": "library",
+  "allegory": "A learning-rate schedule is a runner's pacing plan for stopping exactly on a flag in the fog: jog out while you get your bearings, run hard across open ground, then slow to a walk as you close in, because at one fixed sprint you keep overshooting the flag.",
+  "map": [
+    ["the runner's stride length", "the learning rate (step size)"],
+    ["jogging out while you get your bearings", "warmup: small steps while early training is least stable"],
+    ["running hard across open ground", "the peak rate, far from any minimum"],
+    ["slowing to a walk near the flag", "annealing, so gradient noise stops knocking the weights around the minimum"],
+    ["a fixed sprint that keeps overshooting", "a constant rate: the loss hovers in a noisy band and never settles"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Overshooting the flag",
+      "need": "library",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "note": "why won't the loss settle?",
+      "actors": [{ "pose": "run", "x": 0.12, "to": 0.86, "label": "fixed pace" }],
+      "props": [
+        { "kind": "flag", "x": 0.58, "y": 0.62, "label": "lowest loss", "color": "red" },
+        { "kind": "cloud", "x": 0.4, "y": 0.22, "w": 0.26, "h": 0.12, "label": "noisy gradients", "color": "chalk" }
+      ],
+      "arrows": [[0.84, 0.45, 0.62, 0.45, "back again"]],
+      "cap": {
+        "1": "Run at one fixed pace towards a flag in the fog and you keep overshooting it, back and forth. Training at one fixed learning rate does the same.",
+        "2": "With a constant learning rate, noisy minibatch gradients keep kicking the weights around the minimum. The loss drops, then hovers in a jittery band instead of settling.",
+        "3": "Under SGD noise, a constant step size leaves the parameters wandering in a region around the minimum whose size grows with the step size. Decaying the rate shrinks that region."
+      }
+    },
+    {
+      "name": "The pacing plan",
+      "need": "library",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "walk", "x": 0.08, "to": 0.24, "label": "jog out" },
+        { "pose": "run", "x": 0.34, "to": 0.6, "label": "run" },
+        { "pose": "walk", "x": 0.68, "to": 0.8, "label": "walk in" }
+      ],
+      "props": [{ "kind": "flag", "x": 0.88, "y": 0.62, "label": "lowest loss", "color": "red" }],
+      "cap": {
+        "1": "Better plan: jog out while you get your bearings, run hard across open ground, then slow to a walk as the flag gets close. You stop right on it.",
+        "2": "A schedule changes the learning rate as training goes: small at first (warmup), large in the middle, shrinking at the end (annealing). Same optimizer, different step sizes over time.",
+        "3": "The schedule multiplies a base rate by a function of the step count, for example linear warmup then linear or cosine decay. The optimizer's update rule itself is unchanged."
+      }
+    },
+    {
+      "name": "The shape of it",
+      "need": "library",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "x < 0.1 ? x/0.1 : (1 - x)/0.9", "c": "orange", "label": "warm up, then anneal" },
+        { "f": "0.7", "c": "sky", "label": "constant" }
+      ],
+      "x": [0, 1],
+      "y": [0, 1.1],
+      "dot": true,
+      "marks": [{ "x": 0.1, "label": "peak" }, { "x": 1, "label": "zero at the end" }],
+      "cap": {
+        "1": "Across training the stride starts tiny, climbs to its peak, then shrinks back to nothing. The flat line is the one-pace runner.",
+        "2": "Linear warmup over the first slice of training, then linear decay to zero. In code the scheduler just sets a new <code>lr</code> each step; the optimizer never knows.",
+        "3": "lr(t) = peak·min(t/t_w, (T − t)/(T − t_w)): linear warmup until t_w, then linear anneal to 0 at step T. Cosine decay is a common smoother alternative."
+      }
+    },
+    {
+      "name": "Why warm up?",
+      "need": "contested",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Current practice", "c": "butter", "lines": ["short linear warmup", "then decay to near zero", "long standard for transformers", "cheap insurance"] },
+      "right": { "title": "What research found", "c": "lav", "lines": ["warmup was partly damage control", "for LayerNorm after the residual add", "Pre-LN models, like GPT-2,", "can often drop it"] },
+      "verdict": "Keep a short warmup and anneal to zero; the why is still being argued.",
+      "cap": {
+        "1": "Nobody fully agrees why the slow start helps. What you need: a short warmup, then slow down to the end. Keep it; it is cheap.",
+        "2": "Warmup was standard transformer practice long before anyone had a mechanism for it. One answer: it guards against large early gradients when LayerNorm sits after the residual add. Keep a short one anyway.",
+        "3": "Xiong et al. (ICML 2020) traced the need for warmup to Post-LN placement: large gradients near the output at init. Pre-LN, as in GPT-2, makes it optional. Practical call: a short warmup costs little."
+      }
+    },
+    {
+      "name": "One number per group",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "optimizer.param_groups: lr at each step",
+      "rows": 2,
+      "cols": 5,
+      "values": [["0.1", "0.2", "0.3", "0.2", "0.1"], ["0.01", "0.02", "0.03", "0.02", "0.01"]],
+      "labels": { "rows": ["group 1", "group 2"], "cols": ["t0", "t1", "t2", "t3", "t4"] },
+      "highlight": [[0, 0], [1, 0], [0, 1], [1, 1], [0, 2], [1, 2], [0, 3], [1, 3], [0, 4], [1, 4]],
+      "cap": {
+        "1": "In code the pacing plan is tiny: each step, write a new stride length into the optimizer. Different groups of weights can even run at different paces.",
+        "2": "A scheduler is a library call (e.g. <code>torch.optim.lr_scheduler.LambdaLR</code>) that rewrites <code>param_group['lr']</code> every step. This week's exercise builds the param groups it writes into.",
+        "3": "param_groups let one optimizer hold per-group hyperparameters (lr, momentum, weight decay). Most schedulers scale every group's base lr by the same factor, so the ratios between groups hold."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "library",
+      "dur": 9,
+      "type": "cards",
+      "items": ["PPO in [2.3]: anneal linearly to zero", "Sweeps tune the peak rate", "Warm up, then anneal: the default shape"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "In PPO, letting the rate fall to zero is one of a handful of details that decide whether CartPole gets solved. A small plan with a big effect.",
+        "2": "[2.3] anneals PPO's learning rate linearly to zero, one of the handful of details separating a run that solves CartPole from one that doesn't. Next week's sweeps then tune the peak rate.",
+        "3": "When you fine-tune or RL-train a model to steer its behaviour, the schedule decides whether updates settle or keep jittering. Treat the shape as a library default and tune the peak."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Pace a toy training run and read the final loss",
+    "params": [
+      { "id": "p", "label": "peak learning rate", "min": 0.2, "max": 2, "step": 0.1, "value": 1 },
+      { "id": "w", "label": "warmup (fraction of training)", "min": 0, "max": 0.3, "step": 0.05, "value": 0.1 },
+      { "id": "a", "label": "anneal (0 = constant, 1 = to zero)", "min": 0, "max": 1, "step": 0.1, "value": 1 }
+    ],
+    "curves": [
+      { "f": "x < w ? p*x/w : p*(1 - a*(x - w)/(1 - w))", "c": "orange", "label": "learning rate" },
+      { "f": "exp(-5*(x <= w ? (w > 0 ? p*x*x/(2*w) : 0) : p*w/2 + p*((x - w) - a*(x - w)*(x - w)/(2*(1 - w))))) + 0.15*(x < w ? p*x/w : p*(1 - a*(x - w)/(1 - w)))", "c": "sky", "label": "loss (toy model)" }
+    ],
+    "x": [0, 1],
+    "y": [0, 2],
+    "readouts": [
+      { "label": "final learning rate", "f": "(p*(1 - a)).toFixed(2)" },
+      { "label": "final loss (toy)", "f": "(exp(-5*(p*w/2 + p*(1 - w)*(1 - a/2))) + 0.15*p*(1 - a)).toFixed(3)" },
+      { "label": "of which jitter", "f": "(0.15*p*(1 - a)).toFixed(3)" }
+    ],
+    "caption": {
+      "1": "Slide anneal to 0 and the loss ends in a jittery band; slide it to 1 and it settles lower. Then try a tiny peak: now slowing down only makes you late.",
+      "2": "Toy model: progress grows with the total distance stepped, jitter grows with the current step. Annealing trades a little progress for a quiet finish, which pays once the peak is big enough.",
+      "3": "A toy of SGD's two terms: optimisation error decays with Σ lr, noise scales with the current lr. Real curves differ, but this trade-off is why schedules end low. Warmup's stability benefit is not modelled."
+    }
+  },
+  "where_else": [
+    "PPO in [2.3]: the learning rate anneals linearly to zero",
+    "KL warm-up in VAEs: ramp the KL weight up from zero so the latent gets used first",
+    "L1 warmup when training sparse autoencoders, so latents are not killed early",
+    "Large-batch training, which pairs a scaled-up rate with a gradual warmup"
+  ],
+  "hamming": {
+    "what": "A plan for changing the step size during training: small at first, largest early on, shrinking towards zero at the end.",
+    "when": "Any training run long enough to settle, and especially transformers and PPO, whose standard recipes include one.",
+    "why": "A fixed step either crawls or jitters around the minimum; a schedule buys speed early and a quiet, settled finish."
+  },
+  "object": {
+    "title": "The pacing staircase",
+    "subtitle": "Three pacing plans side by side, left to right through training: bar height is the stride.",
+    "kind": "bars",
+    "rows": 3,
+    "cols": 12,
+    "f": "0.05 + 1.4*(r == 0 ? 0.7 : (r == 1 ? 1 - anneal*((c + 0.5)/cols) : (((c + 0.5)/cols) < warm ? ((c + 0.5)/cols)/warm : 1 - anneal*(((c + 0.5)/cols) - warm)/(1 - warm))))",
+    "labels": { "rows": ["constant", "linear to zero", "warm up, then anneal"], "cols": ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "warm", "label": "Warmup length", "min": 0.05, "max": 0.4, "step": 0.05, "value": 0.1 },
+      { "id": "anneal", "label": "How far to anneal", "min": 0, "max": 1, "step": 0.1, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "Three pacing plans laid side by side, left to right through training. Bar height is the stride length at that moment.", "2": "Rows are schedules, columns are slices of training, height is the learning rate in that slice.", "3": "Each row is lr(t) sampled at 12 points: constant, linear decay, and linear warmup plus linear decay." },
+        "view": "iso",
+        "set": { "warm": 0.1, "anneal": 1 }
+      },
+      {
+        "cap": { "1": "Turn annealing off and every plan keeps its stride to the very end: the runner who overshoots forever.", "2": "With anneal at 0 the rate never falls, so late-training noise stays as large as mid-training noise.", "3": "No decay means the stationary jitter around the minimum stays at its peak-rate size through the final step." },
+        "view": "front",
+        "set": { "anneal": 0 }
+      },
+      {
+        "cap": { "1": "The middle row starts at full stride and glides to zero. That is what [2.3] does to PPO's learning rate.", "2": "Linear decay to zero with no warmup: PPO's schedule in [2.3], one of its standard implementation details.", "3": "lr(t) = lr₀(1 − t/T). In [2.3] this separates PPO runs that solve CartPole from ones that do not." },
+        "view": "side",
+        "set": { "anneal": 1 }
+      },
+      {
+        "cap": { "1": "Stretch the warmup and the back row climbs a long gentle ramp before its peak. Safer early on, a bit slower overall.", "2": "A longer warmup trades early progress for stability while the network is changing fastest.", "3": "Warmup length is a stability-versus-speed trade-off; in Pre-LN transformers it can often be short." },
+        "view": "top",
+        "set": { "warm": 0.4, "anneal": 1 }
+      },
+      {
+        "cap": { "1": "The usual recipe: a short climb, then a long glide down to zero. Pick it from a library and tune only the peak.", "2": "Warmup then anneal is the default shape. Schedulers are library calls; sweeps tune the peak rate.", "3": "In practice the schedule's shape is a default and the peak lr is the swept hyperparameter." },
+        "view": "close",
+        "set": { "warm": 0.1, "anneal": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "The loss drops, then hovers in a jittery band that never settles. What is most likely to help?",
+        "options": [{ "t": "Anneal the learning rate towards zero", "ok": true }, { "t": "Raise the learning rate" }],
+        "why": "The jitter is noisy gradients times the step size. Shrinking the step at the end lets the weights settle."
+      },
+      {
+        "q": "A scheduler changes the learning rate. What does it actually touch?",
+        "options": [{ "t": "Each param group's lr, every step", "ok": true }, { "t": "The gradients themselves" }, { "t": "The loss function" }],
+        "why": "The optimizer's rule is unchanged. The scheduler rewrites param_group['lr'] as training goes."
+      },
+      {
+        "q": "In [2.3], what does PPO's learning rate do over training?",
+        "options": [{ "t": "Falls linearly to zero", "ok": true }, { "t": "Stays fixed" }, { "t": "Rises the whole way" }],
+        "why": "Linear annealing to zero is one of the standard PPO details that decides whether CartPole gets solved."
+      }
+    ],
+    "where": "Any coefficient ramped over training: KL warm-up in VAEs, L1 warmup in sparse autoencoders, the learning rate in PPO."
+  }
+}

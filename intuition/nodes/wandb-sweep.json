@@ -1,0 +1,219 @@
+{
+  "id": "wandb-sweep",
+  "title": "Nine random holes beat a grid",
+  "week": 3,
+  "need": "library",
+  "allegory": "A sweep is like digging for treasure buried in a long north-south stripe: nine holes on a 3×3 grid test only three east-west spots, while nine random holes test nine.",
+  "map": [
+    ["the field", "the space of hyperparameter settings"],
+    ["east-west position, which decides whether you hit treasure", "the one hyperparameter that really matters, e.g. learning rate"],
+    ["north-south position, which barely matters", "a hyperparameter the metric hardly depends on"],
+    ["one hole dug", "one training run in the sweep"],
+    ["a flag on each hole noting where and what was found", "wandb.log: every run's config and metrics in one table"]
+  ],
+  "credit": "The 'try random values, don't use a grid' picture and sampling the learning rate on a log scale (lr = 10^r) follow Andrew Ng's framing in the Deep Learning Specialization, Course 2, hyperparameter tuning.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Which run was it?",
+      "need": "library",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "run_final_v2_REAL.pt ... and the lr was?",
+      "actors": [{ "pose": "shrug", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.55, "y": 0.64, "w": 0.2, "h": 0.28, "label": "12 runs", "color": "sky" },
+        { "kind": "card", "x": 0.5, "y": 0.24, "label": "loss.png (which run?)", "color": "cream" },
+        { "kind": "card", "x": 0.8, "y": 0.34, "label": "which lr was the good one?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "Train more than one model and the hard part becomes bookkeeping. Which run had which settings? Which one was actually good?",
+        "2": "W&B is four calls in your loop: <code>wandb.init</code>, <code>watch</code>, <code>log</code>, <code>finish</code>. Every run lands in one table with its config attached, ready to sort and compare.",
+        "3": "init(project, name, config); watch(model, log_freq) for gradient and parameter histograms; log(metrics, step); finish() always, even after a crash. A library call: learn the four, move on."
+      }
+    },
+    {
+      "name": "The treasure field",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "carry", "x": 0.12, "to": 0.28, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.66, "y": 0.55, "w": 0.06, "h": 0.6, "label": "treasure stripe", "color": "butter" },
+        { "kind": "flag", "x": 0.46, "y": 0.68, "label": "hole", "color": "red" },
+        { "kind": "flag", "x": 0.86, "y": 0.42, "label": "hole", "color": "red" },
+        { "kind": "card", "x": 0.42, "y": 0.18, "label": "9 holes. only east-west matters", "color": "cream" }
+      ],
+      "arrows": [[0.3, 0.9, 0.95, 0.9, "east-west: the part that matters"]],
+      "cap": {
+        "1": "You may dig nine holes. The treasure lies in a long north-south stripe, so only how far east you dig matters. Where should the holes go?",
+        "2": "Two hyperparameters, nine runs, and only one of them really moves the metric. That is the usual situation, and it decides how to spend the budget.",
+        "3": "Bergstra and Bengio (JMLR 2012): hyperparameter importance is highly uneven, so the search has low effective dimensionality. The layout of trials should respect that."
+      }
+    },
+    {
+      "name": "Grid versus random",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "3×3 grid", "c": "sky", "lines": ["9 holes", "3 east-west spots", "each dug 3 times"] },
+      "right": { "title": "9 random holes", "c": "orange", "lines": ["9 holes", "9 east-west spots", "far likelier to hit the stripe"] },
+      "verdict": "Same budget, three times the coverage on the axis that matters.",
+      "cap": {
+        "1": "A 3×3 grid digs each east-west spot three times, varying only the direction that does not matter. Nine random holes try nine different spots.",
+        "2": "A grid of k values per axis explores only k distinct values of the important hyperparameter, however many runs it spends. Random sampling gets a fresh value every run.",
+        "3": "Projected onto the important axis, a grid collapses to k points while random trials stay n distinct points. Hence method: 'random' in the ARENA sweep config. A grid is still fine for one or two knobs."
+      }
+    },
+    {
+      "name": "Only one axis matters",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [{ "f": "exp(-pow(x - 0.62, 2)/(2*0.05*0.05))", "c": "orange", "label": "score vs learning rate" }],
+      "x": [0, 1],
+      "y": [0, 1.1],
+      "dot": true,
+      "marks": [
+        { "x": 0.1667, "label": "grid" },
+        { "x": 0.5, "label": "grid" },
+        { "x": 0.8333, "label": "grid" },
+        { "x": 0.62, "label": "sweet spot" }
+      ],
+      "cap": {
+        "1": "Squash the field onto the east-west line. The grid only ever tried three spots, and here the sweet spot sits between them.",
+        "2": "Score against the one hyperparameter that matters. The grid's three values straddle the peak; nine random values would scatter across it.",
+        "3": "Marginalise onto the important axis: the grid's projection is 3 points whatever the budget; a random design's is n points, so the odds of landing near a narrow optimum grow with n."
+      }
+    },
+    {
+      "name": "Sample the magnitude",
+      "need": "exercise",
+      "dur": 9,
+      "type": "equation",
+      "parts": [
+        { "t": "lr = ", "c": "ink", "note": "" },
+        { "t": "10ᵘ", "c": "orange", "note": "a power of ten" },
+        { "t": ",  u ~ ", "c": "ink", "note": "" },
+        { "t": "U(−5, −1)", "c": "sky", "note": "every decade equally likely" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "For learning rates the power of ten is what matters. So pick the power at random, not the number: each decade from 0.00001 to 0.1 gets a fair share.",
+        "2": "In the sweep config: <code>distribution: 'log_uniform_values'</code> with min 1e-5, max 1e-1. Plain uniform sampling would put about 90% of runs above 1e-2.",
+        "3": "log(lr) ~ Uniform(log min, log max) is the natural prior for a scale parameter. Linear-uniform over [1e-5, 1e-1] puts 90% of its mass in the top decade alone."
+      }
+    },
+    {
+      "name": "The sweep that wasn't",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "note": "the table says it varied. the model says it didn't.",
+      "actors": [{ "pose": "recoil", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.5, "y": 0.28, "label": "table: 9 different configs", "color": "mint" },
+        { "kind": "card", "x": 0.8, "y": 0.28, "label": "9 identical loss curves", "color": "pink" },
+        { "kind": "box", "x": 0.64, "y": 0.66, "w": 0.34, "h": 0.2, "label": "train(): args = Args()", "color": "butter" }
+      ],
+      "cap": {
+        "1": "The table lists nine different settings, yet all nine runs draw the same curve. The sweep chose settings; your code never read them.",
+        "2": "The agent writes sampled values to <code>wandb.config</code>, but <code>train()</code> still builds args from a hard-coded dataclass. Call <code>wandb.init()</code>, then build args from <code>wandb.config</code>.",
+        "3": "The logged config is the sampled one; the trained config is the default. Build args from wandb.config after init, assert one sampled value on the first batch, and call finish() in a finally block."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["SAE runs: read L0, explained variance and dead latents together", "Log-uniform for rates, random for the rest", "A sweep needs your judgement to aim it"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Later you will train sparse autoencoders to look inside models, and you will judge each run by three logged curves side by side.",
+        "2": "In [1.3.3] SAE runs log L0, explained variance and dead-latent count to W&B. Reading the three together is how you tell a good dictionary from a bad one.",
+        "3": "SAE quality is a trade-off between sparsity, reconstruction and dead latents, compared across logged runs. That is how you choose the lens you then use to understand and steer models."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Move the sweet spot: which search finds it?",
+    "labels": ["grid 1/6 (×3)", "grid 1/2 (×3)", "grid 5/6 (×3)", "rand 1", "rand 2", "rand 3", "rand 4", "rand 5", "rand 6", "rand 7", "rand 8", "rand 9"],
+    "params": [
+      { "id": "p", "label": "where the sweet spot is (east-west)", "min": 0, "max": 1, "step": 0.01, "value": 0.62 },
+      { "id": "w", "label": "how narrow the sweet spot is", "min": 0.02, "max": 0.2, "step": 0.01, "value": 0.05 }
+    ],
+    "f": "[1/6, 1/2, 5/6, 0.12, 0.93, 0.47, 0.28, 0.71, 0.05, 0.58, 0.36, 0.84].map(v => exp(-pow(v - p, 2)/(2*w*w)))",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "best score from the grid's 9 runs", "f": "max(...[1/6, 1/2, 5/6].map(v => exp(-pow(v - p, 2)/(2*w*w)))).toFixed(2)" },
+      { "label": "best score from the 9 random runs", "f": "max(...[0.12, 0.93, 0.47, 0.28, 0.71, 0.05, 0.58, 0.36, 0.84].map(v => exp(-pow(v - p, 2)/(2*w*w)))).toFixed(2)" },
+      { "label": "distinct learning rates tried", "f": "'grid 3, random 9'" }
+    ],
+    "caption": {
+      "1": "Drag the sweet spot along the field and make it narrower. Which bars light up: the grid's three spots or the nine random ones? Usually random wins, not always.",
+      "2": "Each bar is one distinct learning rate a search tried. The grid spends nine runs on three values; random spends nine on nine. Park the peak on a grid value to watch the grid win.",
+      "3": "Best-of-n along the important axis: the grid gets 3 distinct draws, random gets 9. For narrow optima random's expected best is far higher, though any single layout can lose."
+    }
+  },
+  "where_else": [
+    "Training SAEs in [1.3.3]: L0, explained variance and dead latents logged and compared across runs",
+    "Tuning learning rate and weight decay for AdamW, which its decoupling lets you search independently",
+    "Any experiment log: runs, configs and metrics in one sortable table instead of filenames"
+  ],
+  "hamming": {
+    "what": "Weights & Biases logs every run's config and metrics in one place, and a sweep samples configs and launches the runs for you.",
+    "when": "As soon as you train more than one model, and whenever you tune learning rate, weight decay or batch size.",
+    "why": "Only a few hyperparameters usually matter, so random sampling covers them better than a grid, and logging makes the winner findable and reproducible."
+  },
+  "object": {
+    "title": "The treasure field",
+    "subtitle": "A score landscape with a ridge only one knob controls, pinned with grid holes and random holes.",
+    "kind": "surface",
+    "f": "exp(-pow(x - p, 2)/(2*w*w)) + 0.03*sin(3*y)",
+    "x": [0, 1],
+    "y": [0, 1],
+    "marks": [
+      { "x": 0.1667, "y": 0.1667, "label": "grid" },
+      { "x": 0.1667, "y": 0.5, "label": "grid" },
+      { "x": 0.1667, "y": 0.8333, "label": "grid" },
+      { "x": 0.5, "y": 0.1667, "label": "grid" },
+      { "x": 0.5, "y": 0.5, "label": "grid" },
+      { "x": 0.5, "y": 0.8333, "label": "grid" },
+      { "x": 0.8333, "y": 0.1667, "label": "grid" },
+      { "x": 0.8333, "y": 0.5, "label": "grid" },
+      { "x": 0.8333, "y": 0.8333, "label": "grid" },
+      { "x": 0.12, "y": 0.74, "label": "random" },
+      { "x": 0.93, "y": 0.31, "label": "random" },
+      { "x": 0.47, "y": 0.88, "label": "random" },
+      { "x": 0.28, "y": 0.12, "label": "random" },
+      { "x": 0.71, "y": 0.55, "label": "random" },
+      { "x": 0.05, "y": 0.43, "label": "random" },
+      { "x": 0.58, "y": 0.21, "label": "random" },
+      { "x": 0.36, "y": 0.67, "label": "random" },
+      { "x": 0.84, "y": 0.93, "label": "random" }
+    ],
+    "knobs": [
+      { "id": "p", "label": "Where the sweet spot is", "min": 0.05, "max": 0.95, "step": 0.01, "value": 0.62 },
+      { "id": "w", "label": "How narrow it is", "min": 0.03, "max": 0.2, "step": 0.01, "value": 0.06 }
+    ],
+    "beats": [
+      { "cap": { "1": "A field of settings; height is how well the run scores. The ridge runs front to back, so only the left-right knob matters.", "2": "Score over two hyperparameters. It depends almost entirely on one of them.", "3": "An objective with low effective dimensionality: nearly constant along y, peaked along x." }, "view": "iso", "set": { "p": 0.62, "w": 0.06 } },
+      { "cap": { "1": "From above: nine grid pins in three tidy columns, nine random pins scattered everywhere.", "2": "The two designs, same budget: a 3×3 lattice and nine independent samples.", "3": "Lattice versus i.i.d. uniform design, n = 9 each." }, "view": "top", "set": { "p": 0.62, "w": 0.06 } },
+      { "cap": { "1": "Look straight along the ridge. The grid's nine pins pile onto just three spots; the random nine stay nine different spots.", "2": "Seen end-on, the grid tried three learning rates and random tried nine.", "3": "Projection onto the important axis: 3 distinct grid values versus 9 random ones." }, "view": "front", "set": { "p": 0.62, "w": 0.06 } },
+      { "cap": { "1": "Make the sweet spot narrow. Every grid pin now misses it, while one random pin still lands close.", "2": "A narrow optimum between grid lines is simply invisible to the grid.", "3": "As the optimum narrows, the grid's best-of-3 collapses faster than random's best-of-9." }, "view": "iso", "set": { "p": 0.62, "w": 0.03 } },
+      { "cap": { "1": "Honest caveat: slide the ridge onto a grid column and the grid wins. Random is better on average, not every time.", "2": "When the optimum happens to sit on a grid value, the grid hits it exactly.", "3": "Random dominates in expectation over optimum location, not pointwise; any fixed design has lucky placements." }, "view": "iso", "set": { "p": 0.5, "w": 0.06 } }
+    ],
+    "predict": [
+      { "q": "Nine runs on a 3×3 grid over two hyperparameters. How many distinct learning rates get tried?", "options": [{ "t": "3", "ok": true }, { "t": "9" }], "why": "A grid repeats each value along the other axis. Nine random samples would try nine distinct learning rates." },
+      { "q": "Your sweep table shows nine different configs, but all nine loss curves are identical. Most likely cause?", "options": [{ "t": "train() builds args from a hard-coded dataclass, not wandb.config", "ok": true }, { "t": "W&B averaged the curves together" }], "why": "The agent writes sampled values to wandb.config; if train() never reads them, every run trains the same model." },
+      { "q": "Why sample a learning rate log-uniformly between 1e-5 and 1e-1?", "options": [{ "t": "The order of magnitude is what matters, so each decade should get equal runs", "ok": true }, { "t": "Because smaller learning rates are always better" }], "why": "Uniform sampling would put about 90% of runs above 1e-2; log-uniform gives each of the four decades a quarter." }
+    ],
+    "where": "Any search where few knobs matter: random probes cover the important axis better than a lattice."
+  }
+}

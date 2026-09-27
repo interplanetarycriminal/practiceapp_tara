@@ -5,7 +5,7 @@
    lands on the matching object: #week-NN opens that week's bay in the Model Room,
    a demo, case or map node opens the object that covers it. */
 (function () {
-  var REG = [];
+  var REG = []; var NODES = {};
   function css() {
     if (document.getElementById('dim-toggle-css')) return;
     var s = document.createElement('style'); s.id = 'dim-toggle-css';
@@ -38,7 +38,10 @@
     if (/^#capstone-weeks-12-14/.test(h)) return 'objects/index.html#week-12';
     if ((m = h.match(/^#demo\/([\w-]+)/))) o = find(function (x) { return x.demo === m[1]; });
     else if ((m = h.match(/^#cases\/([\w-]+)/))) o = find(function (x) { return (x.concepts || []).indexOf(m[1]) >= 0; });
-    else if ((m = h.match(/^#map\/node=([\w-]+)/))) o = find(function (x) { return (x.map || []).indexOf(m[1]) >= 0; });
+    else if ((m = h.match(/^#map\/node=([\w-]+)/))) {
+      if (NODES[m[1]]) return 'objects/' + NODES[m[1]];   // the node's own 3D twin
+      o = find(function (x) { return (x.map || []).indexOf(m[1]) >= 0; });
+    }
     else if ((m = h.match(/^#drill\/week-(\d\d)/))) return 'objects/index.html#week-' + m[1];
     return o ? 'objects/' + o.path : 'objects/index.html';
   }
@@ -84,6 +87,8 @@
     }, 100);
     fetch('objects/objects.json').then(function (r) { return r.ok ? r.json() : []; })
       .then(function (j) { REG = Array.isArray(j) ? j : []; }).catch(function () {});
+    fetch('intuition/nodes/index.json').then(function (r) { return r.ok ? r.json() : { nodes: [] }; })
+      .then(function (j) { (j.nodes || []).forEach(function (n) { if (n.object) NODES[n.id] = n.object; }); }).catch(function () {});
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();

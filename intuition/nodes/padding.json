@@ -1,0 +1,232 @@
+{
+  "id": "padding",
+  "title": "A blank margin so the stamp fits",
+  "week": 2,
+  "need": "exercise",
+  "allegory": "Padding is like taping a blank margin round a page so a 3x3 rubber stamp can be centred on every square, corners included, without hanging off the edge.",
+  "map": [
+    ["the 3x3 rubber stamp", "the kernel, size k"],
+    ["squares where the stamp can be centred", "output positions: L - k + 1 with no padding"],
+    ["a blank margin taped round the page", "padding p on every side, so the input becomes L + 2p"],
+    ["blank ink that leaves no mark", "the pad constant: 0 for a sum, -inf for a max"],
+    ["a margin (k-1)/2 squares wide", "the padding that keeps output size equal to input size at stride 1"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The shrinking picture",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "28 ... 26 ... 24 ... where did my picture go?",
+      "actors": [{ "pose": "recoil", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.55, "y": 0.58, "w": 0.2, "h": 0.36, "label": "28x28", "color": "sky" },
+        { "kind": "stack", "x": 0.8, "y": 0.62, "w": 0.13, "h": 0.24, "label": "24x24", "color": "sky" },
+        { "kind": "card", "x": 0.68, "y": 0.2, "label": "x + conv(x): shape mismatch", "color": "pink" }
+      ],
+      "arrows": [[0.66, 0.6, 0.73, 0.62, "two 3x3 layers"]],
+      "cap": {
+        "1": "Every time you slide a 3x3 window over a picture, the result comes out a little smaller. Stack a few layers and the picture quietly shrinks away.",
+        "2": "A 3x3 conv with no padding loses 2 pixels per dimension per layer: 28 becomes 26, then 24. Then <code>x + conv(x)</code> fails, because the shapes no longer match.",
+        "3": "Unpadded ('valid') convolution maps L to L - k + 1. Eight 3x3 layers eat sixteen pixels, and the mismatch only surfaces where a residual add needs equal shapes."
+      }
+    },
+    {
+      "name": "Stamp and margin",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "carry", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.55, "y": 0.58, "w": 0.3, "h": 0.4, "label": "the page", "color": "cream" },
+        { "kind": "box", "x": 0.48, "y": 0.22, "w": 0.1, "h": 0.1, "label": "3x3 stamp", "color": "orange" },
+        { "kind": "crate", "x": 0.86, "y": 0.6, "w": 0.14, "h": 0.2, "label": "blank margin", "color": "chalk" }
+      ],
+      "arrows": [[0.8, 0.52, 0.71, 0.45, "tape round the edge"]],
+      "cap": {
+        "1": "A 3x3 stamp must land fully on the paper, so it can't be centred on an edge square. Tape a blank margin round the page and every square gets stamped.",
+        "2": "Padding adds a ring of constant values around the input before the kernel slides. With a ring 1 wide, a 3x3 kernel can centre on every original pixel, corners included.",
+        "3": "Padding p extends each spatial axis by 2p. For odd k at stride 1, p = (k-1)//2 lets every input position be a kernel centre, so output and input shapes agree."
+      }
+    },
+    {
+      "name": "The size formula",
+      "need": "core",
+      "dur": 11,
+      "type": "equation",
+      "parts": [
+        { "t": "L_out = ⌊(", "c": "ink", "note": "" },
+        { "t": "L", "c": "sky", "note": "input size" },
+        { "t": " + 2p", "c": "green", "note": "margin, both sides" },
+        { "t": " - k", "c": "orange", "note": "stamp width" },
+        { "t": ") / s⌋", "c": "lav", "note": "hop size, rounded down" },
+        { "t": " + 1", "c": "ink", "note": "the first landing" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Count where the stamp can land: start at the left edge, hop along until you reach the right edge. The margin adds room on both sides.",
+        "2": "<code>L_out = floor((L + 2p - k) / s) + 1</code>. With k=3, s=1, p=1 you get (L + 2 - 3) + 1 = L. Same size in, same size out.",
+        "3": "At s=1, p = (k-1)/2 for odd k gives L_out = L. The floor is the second trap: at s=2 an odd size is rounded, so two branches can end up one pixel apart."
+      }
+    },
+    {
+      "name": "Laying the ring",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "3x3 input, ring of zeros: 5x5",
+      "rows": 5,
+      "cols": 5,
+      "values": [[0, 0, 0, 0, 0], [0, 1, 2, 3, 0], [0, 4, 5, 6, 0], [0, 7, 8, 9, 0], [0, 0, 0, 0, 0]],
+      "highlight": [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2], [2, 0], [2, 1], [2, 2]],
+      "cap": {
+        "1": "The ring is just extra squares filled with one constant. The stamp centred on the corner now fits, though five of its nine squares are blank.",
+        "2": "To implement it, make a bigger tensor full of the pad value, then copy the input into the middle slice. The corner window sees 4 real pixels and 5 padding zeros.",
+        "3": "Allocate (H + top + bottom, W + left + right) filled with the pad value and write x into [top:top+H, left:left+W]. Border outputs aggregate fewer real inputs."
+      }
+    },
+    {
+      "name": "Which blank?",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "conv: pad with 0", "c": "mint", "lines": ["weighted sum", "0 times a weight adds nothing", "the margin stays silent"] },
+      "right": { "title": "max pool: pad with -inf", "c": "lav", "lines": ["take the biggest", "a 0 could win the max", "-inf never wins"] },
+      "verdict": "Pick the constant that cannot change the answer.",
+      "cap": {
+        "1": "Blank means different things to different tools. For a sum, blank is 0. For 'pick the biggest', blank must be minus infinity, or the margin could win.",
+        "2": "Zero-pad a convolution: pads times weights add nothing. For max pooling, zeros would beat negative activations, so you pad with <code>-inf</code> instead.",
+        "3": "Choose the identity element of the reduction: 0 for sums, -inf for max. PyTorch's MaxPool2d pads with implicit negative infinity rather than zeros."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "library",
+      "dur": 9,
+      "type": "cards",
+      "items": ["x + conv(x) needs equal shapes", "padding='same' is one argument", "Pad tokens plus a mask"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Keeping sizes steady is what lets you add a layer's output back onto its input. Later you pad sentences too, with a mask so the filler is ignored.",
+        "2": "In practice it is one argument: <code>padding=1</code> or <code>padding='same'</code> on nn.Conv2d. Token batches get padded to one length, with a mask so pads get no attention.",
+        "3": "Residual adds need shape-preserving blocks. When you batch prompts to read or steer a model, knowing which positions are padding keeps you from reading activations off filler."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Start at 28 pixels, stack six layers: find the margin that keeps every bar level",
+    "labels": ["in", "L1", "L2", "L3", "L4", "L5", "L6"],
+    "params": [
+      { "id": "k", "label": "kernel size k", "min": 3, "max": 7, "step": 2, "value": 3 },
+      { "id": "p", "label": "padding p", "min": 0, "max": 3, "step": 1, "value": 0 },
+      { "id": "s", "label": "stride s", "min": 1, "max": 2, "step": 1, "value": 1 }
+    ],
+    "f": "range(7).reduce((acc, i) => acc.concat([i === 0 ? 28 : (acc[i-1] <= 0 ? 0 : max(0, floor((acc[i-1] + 2*p - k)/s) + 1))]), [])",
+    "y": [0, 56],
+    "readouts": [
+      { "label": "size after one layer", "f": "max(0, floor((28 + 2*p - k)/s) + 1)" },
+      { "label": "x + conv(x)?", "f": "floor((28 + 2*p - k)/s) + 1 === 28 ? 'works: shapes match' : 'fails: shapes differ'" },
+      { "label": "padding that keeps size at stride 1", "f": "(k - 1)/2" }
+    ],
+    "caption": {
+      "1": "Set padding to 0 and watch the picture shrink layer by layer. Then find the padding that keeps every bar level, for each kernel size.",
+      "2": "At stride 1 the bars go flat at p = (k-1)/2: 1 for a 3x3, 2 for a 5x5. Now try stride 2: the size roughly halves each layer, which is what a downsample wants.",
+      "3": "Each bar applies floor((L + 2p - k)/s) + 1. Over-pad and the map grows by 2p - k + 1 per layer. At s=2 the floor decides odd sizes: 7 goes to 4 with p=1, k=3."
+    }
+  },
+  "where_else": [
+    "Residual blocks: shape-preserving convolutions are what make x + conv(x) legal",
+    "Causal 1D convolutions, which pad only on the left so no output peeks at the future",
+    "Token batches padded to one length, with an attention mask so the pads are ignored",
+    "Max pooling, which pads with minus infinity so the margin never wins"
+  ],
+  "hamming": {
+    "what": "A ring of constant values added round an input so a sliding window can reach its edges.",
+    "when": "Whenever you slide a window (convolution, pooling) and want to control the output size, most often to keep it unchanged.",
+    "why": "Without it every layer shrinks the map and residual adds break; a constant that is neutral for the operation keeps the margin from changing the answer."
+  },
+  "object": {
+    "title": "The coverage tray",
+    "subtitle": "Each bar shows how much of the stamp lands on real pixels rather than on the blank margin.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "(r - (k-1)/2 >= -p && r + (k-1)/2 <= 7 + p && c - (k-1)/2 >= -p && c + (k-1)/2 <= 7 + p) ? 0.1 + 1.6 * (min(r + (k-1)/2, 7) - max(r - (k-1)/2, 0) + 1) * (min(c + (k-1)/2, 7) - max(c - (k-1)/2, 0) + 1) / (k*k) : 0.02",
+    "c": "data",
+    "knobs": [
+      { "id": "p", "label": "Margin width p", "min": 0, "max": 2, "step": 1, "value": 0 },
+      { "id": "k", "label": "Stamp size k", "min": 3, "max": 5, "step": 2, "value": 3 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "No margin: only the middle 6x6 squares can hold the stamp, so the output shrinks. Every surviving output sees nine real pixels.",
+          "2": "Valid convolution on an 8x8 input: 6x6 out, and every window is fully real.",
+          "3": "p=0, k=3: L_out = L - 2. Uniform coverage, lost border."
+        },
+        "view": "iso",
+        "set": { "p": 0, "k": 3 }
+      },
+      {
+        "cap": {
+          "1": "Tape on a margin one square wide: now all 8x8 squares get an output, but the corners only see four real pixels.",
+          "2": "Same-size padding for a 3x3 gives 8x8 out. Corner windows are 4/9 real, edges 6/9, the interior 9/9.",
+          "3": "p = (k-1)/2 preserves shape at the cost of boundary outputs that aggregate fewer real inputs."
+        },
+        "view": "iso",
+        "set": { "p": 1, "k": 3 }
+      },
+      {
+        "cap": {
+          "1": "From above you can see the rim: a lower ring round the edge where the stamp hangs over the margin.",
+          "2": "The low rim is the edge effect: border outputs are computed partly from padding constants.",
+          "3": "Border outputs sum over fewer real terms, so a network can tell where the edge of the image is."
+        },
+        "view": "top",
+        "set": { "p": 1, "k": 3 }
+      },
+      {
+        "cap": {
+          "1": "A bigger 5x5 stamp needs a margin two squares wide to keep the size. The rim gets wider and the corners see even less.",
+          "2": "k=5 needs p=2 to preserve size. Corner windows are only 9/25 real.",
+          "3": "For odd k at stride 1, p = (k-1)/2, and the partly-real band is (k-1)/2 wide on each side."
+        },
+        "view": "iso",
+        "set": { "p": 2, "k": 5 }
+      },
+      {
+        "cap": {
+          "1": "Take the margin away with the big stamp and the output shrinks to 4x4: four pixels lost per dimension in one layer.",
+          "2": "No padding, k=5: 8 becomes 4. Stack a second one and nothing is left.",
+          "3": "Valid k=5 maps L to L - 4, so two layers take 8 to 0. Per-layer shape bookkeeping is not optional."
+        },
+        "view": "side",
+        "set": { "p": 0, "k": 5 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A 3x3 conv, stride 1, no padding, on a 28x28 image. What size comes out?",
+        "options": [{ "t": "26x26", "ok": true }, { "t": "28x28" }, { "t": "27x27" }],
+        "why": "L - k + 1 = 28 - 3 + 1 = 26. It takes p = 1 to keep 28."
+      },
+      {
+        "q": "You pad a max-pool with zeros, and all the activations are negative. What goes wrong?",
+        "options": [{ "t": "Border outputs become 0: the padding wins the max", "ok": true }, { "t": "Nothing, zero is always neutral" }],
+        "why": "Zero is only neutral for sums. For a max, the neutral blank is minus infinity."
+      },
+      {
+        "q": "Which padding keeps a 5x5 conv at stride 1 the same size?",
+        "options": [{ "t": "p = 2", "ok": true }, { "t": "p = 5" }, { "t": "p = 1" }],
+        "why": "(k-1)/2 = 2 squares on each side gives the stamp room to centre on every pixel."
+      }
+    ],
+    "where": "Anywhere a window slides: image and audio convolutions, pooling, and token batches padded to one length."
+  }
+}

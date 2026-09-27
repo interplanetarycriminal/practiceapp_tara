@@ -1,0 +1,237 @@
+{
+  "id": "as-strided-and-stride-tricks",
+  "title": "New routes down the same street",
+  "week": 2,
+  "need": "exercise",
+  "allegory": "A tensor is one long street of numbered houses; its strides are the postman's route card (skip 5 doors for the next row, 1 for the next column), and as_strided hands him a new card that visits the same houses in a new pattern without moving a single one.",
+  "map": [
+    ["the one long street of numbered houses", "the flat storage buffer under every tensor"],
+    ["the route card: skip 5 doors per row, 1 per column", "strides (5, 1) of a contiguous 4x5 tensor"],
+    ["handing the postman a new card", "as_strided(x, size, stride): a new view, nothing copied"],
+    ["two legs of the route that both step one door", "a sliding-window view: the kernel axis reuses the input's stride"],
+    ["a postman who follows the card and asks nothing", "no check against the shape: wrong strides give wrong numbers, silently"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The black box",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "slide a window with no loop and no copy?",
+      "actors": [{ "pose": "think", "x": 0.28, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.7, "y": 0.58, "w": 0.24, "h": 0.28, "label": "Conv2d", "color": "ink" },
+        { "kind": "card", "x": 0.7, "y": 0.22, "label": "for i in ...: window = x[i:i+k].copy()", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A convolution slides a small window along the data. Loops are slow, and copying every overlapping window wastes memory. There is a sneakier way.",
+        "2": "Naive conv1d loops over positions and copies each window, so a number gets copied once for every window it sits in. We want all the windows at once, with zero copies.",
+        "3": "Materialising overlapping windows duplicates each input element up to k times. A strided view exposes every window as an alias of the original storage instead."
+      }
+    },
+    {
+      "name": "The long street",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "walk", "x": 0.1, "to": 0.62, "label": "postman" }],
+      "props": [
+        { "kind": "door", "x": 0.22, "y": 0.62, "label": "0", "color": "sky" },
+        { "kind": "door", "x": 0.32, "y": 0.62, "label": "1", "color": "sky" },
+        { "kind": "door", "x": 0.42, "y": 0.62, "label": "2", "color": "sky" },
+        { "kind": "door", "x": 0.52, "y": 0.62, "label": "3", "color": "sky" },
+        { "kind": "door", "x": 0.62, "y": 0.62, "label": "4", "color": "sky" },
+        { "kind": "door", "x": 0.72, "y": 0.62, "label": "5", "color": "mint" },
+        { "kind": "door", "x": 0.88, "y": 0.62, "label": "... 19", "color": "sky" },
+        { "kind": "card", "x": 0.5, "y": 0.18, "label": "route card: next row +5, next column +1", "color": "butter" }
+      ],
+      "arrows": [[0.22, 0.4, 0.72, 0.4, "+5 doors = next row"]],
+      "cap": {
+        "1": "Memory is one long street of numbered houses. The shape is a story about it. The route card says how many doors to skip for the next row or column.",
+        "2": "A 4x5 tensor is 20 numbers in a row. <code>x.stride()</code> is (5, 1): skip 5 elements to go down a row, 1 to go along it. The shape is just how you read the line.",
+        "3": "Element [i, j] lives at storage_offset + i*s0 + j*s1. A contiguous (4, 5) tensor has strides (5, 1). A transpose only swaps the strides; no data moves."
+      }
+    },
+    {
+      "name": "Write your own route",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "as_strided(x, ", "c": "ink", "note": "" },
+        { "t": "(4,)", "c": "sky", "note": "how many stops" },
+        { "t": ", ", "c": "ink", "note": "" },
+        { "t": "(6,)", "c": "orange", "note": "doors to skip" },
+        { "t": ")", "c": "ink", "note": "" },
+        { "t": " → 0 6 12 18", "c": "green", "note": "the diagonal" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Hand over a new card: 4 stops, skip 6 doors each time. On the 4-by-5 street that walks straight down the diagonal. Not one house moved.",
+        "2": "<code>as_strided(x, (4,), (6,))</code> on a 4x5 tensor of 0..19 visits 0, 6, 12, 18: the diagonal. Add them up and you have the trace. It is a view, not a copy.",
+        "3": "Stride 6 = s0 + s1, so each step moves one row and one column. trace = view.sum(); matmul is built the same way, as a strided view plus a reduction."
+      }
+    },
+    {
+      "name": "Sliding windows",
+      "need": "exercise",
+      "dur": 11,
+      "type": "grid",
+      "title": "x = 0..5 viewed as size (4, 3), stride (1, 1)",
+      "rows": 4,
+      "cols": 3,
+      "values": [[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5]],
+      "labels": { "rows": ["window 0", "window 1", "window 2", "window 3"], "cols": ["k0", "k1", "k2"] },
+      "highlight": [[0, 2], [1, 1], [2, 0]],
+      "cap": {
+        "1": "Give both legs of the route a step of one door. Each row is a window, and neighbours overlap. House 2 shows up three times but exists once.",
+        "2": "View a length-6 <code>x</code> as size (4, 3), stride (1, 1): four windows of three. Twelve entries, still six numbers in memory. einsum it with the kernel and you have conv1d.",
+        "3": "The kernel axis reuses the stride of the axis it slides along, so windows alias one storage. With channels, einsum 'b ic ow kw, oc ic kw -> b oc ow' is conv1d."
+      }
+    },
+    {
+      "name": "The literal postman",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "strides from x.stride()", "c": "mint", "lines": ["reads the real route", "survives a transpose", "survives a slice", "right windows"] },
+      "right": { "title": "strides from x.shape", "c": "pink", "lines": ["assumes a fresh layout", "transpose swapped the route", "no error raised", "plausible, wrong numbers"] },
+      "verdict": "as_strided asks nothing. Read the route, never guess it.",
+      "cap": {
+        "1": "The postman follows your card to the letter and never asks if it makes sense. A wrong card gets you the wrong houses, not an error.",
+        "2": "Compute window strides from <code>x.shape</code> and conv passes every test, then returns garbage on a transposed or sliced input. Use <code>x.stride()</code>, or call <code>.contiguous()</code> first.",
+        "3": "as_strided ignores the logical shape and indexes storage from storage_offset. After a transpose or step-2 slice, shape-derived strides describe a layout the tensor lacks: wrong reads, no exception."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Conv2d = a strided view times a kernel", "Broadcasting = a stride of 0", "Transpose = swapped strides, no copy"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "You will rarely write as_strided again. But Conv2d stops being magic: it is a clever route over the same houses, then a sum.",
+        "2": "ARENA marks this optional. After it, Conv2d is a view plus einsum, a broadcast is a zero stride, a transpose is swapped strides. Use the library ops; know what is inside.",
+        "3": "Views versus copies comes back when you cache or edit activations inside a model to understand and steer it: always know when two tensors share storage."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Hand the postman a route card",
+    "params": [
+      { "id": "n", "label": "stops (size)", "min": 1, "max": 8, "step": 1, "value": 4 },
+      { "id": "st", "label": "doors to skip (stride)", "min": 0, "max": 8, "step": 1, "value": 6 },
+      { "id": "off", "label": "start house (offset)", "min": 0, "max": 10, "step": 1, "value": 0 }
+    ],
+    "curves": [
+      { "f": "off + st*x", "c": "orange", "label": "house at stop x" },
+      { "f": "19", "c": "red", "label": "last house of this tensor" }
+    ],
+    "x": [0, 7],
+    "y": [0, 70],
+    "readouts": [
+      { "label": "houses visited", "f": "range(n).map(i => off + i*st).join(', ')" },
+      { "label": "(row, col) on the 4x5 grid", "f": "range(n).map(i => off + i*st).map(a => a > 19 ? '??' : '(' + floor(a/5) + ',' + (a % 5) + ')').join(' ')" },
+      { "label": "sum of what you read", "f": "off + (n-1)*st > 19 ? 'not meaningful: you left the tensor' : sum(range(n).map(i => off + i*st))" },
+      { "label": "left the tensor?", "f": "off + (n-1)*st > 19 ? 'yes: you are outside the 20 numbers you meant' : 'no, every stop is inside 0..19'" }
+    ],
+    "caption": {
+      "1": "Skip 6 from house 0 walks the diagonal; the sum is the trace. Skip 5 walks a column. Skip 0 knocks on one door again and again.",
+      "2": "The tensor holds 0..19 with stride (5, 1). Stride 5 is a column, 6 the diagonal, 0 repeats one element: that is how a broadcast costs nothing. Watch the (row, col) readout.",
+      "3": "address(i) = offset + i*stride: a line whose slope is the stride. Stride 0 is expand. Past address 19 you are outside the tensor you meant; the shape is never consulted."
+    }
+  },
+  "where_else": [
+    "Conv2d and max-pooling: a sliding-window view, then a weighted sum or a max",
+    "Broadcasting and expand: a stretched axis is an axis with stride 0",
+    "Transpose and einops patterns: each compiles down to a size and a stride"
+  ],
+  "hamming": {
+    "what": "Setting a tensor's size and stride by hand to get a new view of the same memory, with nothing copied.",
+    "when": "Once, in [0.2], to build convolution from a window view and an einsum; later, whenever a view hands you strange numbers.",
+    "why": "It turns Conv2d, broadcasting and transpose from magic into different routes over one line of numbers."
+  },
+  "object": {
+    "title": "The window rack",
+    "subtitle": "Rows of windows over one strip of houses; each bar's height is the house it points at.",
+    "kind": "bars",
+    "rows": 6,
+    "cols": 3,
+    "f": "0.2 + 0.1*(r*sw + c)",
+    "labels": { "rows": ["win 0", "win 1", "win 2", "win 3", "win 4", "win 5"], "cols": ["k0", "k1", "k2"] },
+    "c": "data",
+    "knobs": [{ "id": "sw", "label": "window step (stride of the window axis)", "min": 0, "max": 3, "step": 1, "value": 1 }],
+    "beats": [
+      {
+        "cap": {
+          "1": "Six windows of three houses each. A bar's height is the house number it points at.",
+          "2": "A (6, 3) window view of one strip. Height = storage address = r*1 + c*1.",
+          "3": "Height encodes the address r*s_w + c*s_k with both strides 1: the standard sliding window."
+        },
+        "view": "iso",
+        "set": { "sw": 1 }
+      },
+      {
+        "cap": {
+          "1": "Look along the slants: equal heights mean the same house, seen by up to three windows. Nothing was copied.",
+          "2": "Equal heights are shared memory. Overlapping windows alias the same numbers, so the view costs nothing.",
+          "3": "Cells with equal r + c alias one storage element. That stride aliasing is why the window view is free."
+        },
+        "view": "front",
+        "set": { "sw": 1 }
+      },
+      {
+        "cap": {
+          "1": "Now each window steps three houses. No overlap: every bar is a different house, like cutting the strip into pieces.",
+          "2": "Window step equal to the kernel size gives non-overlapping windows, the same as reshaping the strip to (6, 3).",
+          "3": "With s_w = k the view maps one-to-one onto 18 contiguous elements: equivalent to reshape(6, 3), no aliasing."
+        },
+        "view": "front",
+        "set": { "sw": 3 }
+      },
+      {
+        "cap": {
+          "1": "Step zero: every window is the same three houses. That is how one row can be repeated for free.",
+          "2": "A zero stride repeats data without copying it. That is exactly how broadcasting and expand work.",
+          "3": "s_w = 0 makes every row alias row 0: expand semantics, a size-6 axis that stores a single copy."
+        },
+        "view": "top",
+        "set": { "sw": 0 }
+      },
+      {
+        "cap": {
+          "1": "Step two: windows overlap by one house. In convolution language, this is a stride-2 convolution.",
+          "2": "Window step 2 skips every other position. A conv's stride argument is just this stride on the window axis.",
+          "3": "Conv stride s multiplies the window-axis stride by s; kernel axes keep the input's own stride."
+        },
+        "view": "close",
+        "set": { "sw": 2 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Six numbers viewed as four overlapping windows of three shows 12 entries. How many numbers are stored?",
+        "options": [{ "t": "Six: the windows share houses", "ok": true }, { "t": "Twelve: each window holds its own copy" }],
+        "why": "as_strided only writes a new route. Overlapping windows point at the same storage, so nothing is duplicated."
+      },
+      {
+        "q": "You transpose x, then build windows with strides computed from x.shape. What happens?",
+        "options": [{ "t": "Wrong numbers, and no error", "ok": true }, { "t": "A clear shape error" }, { "t": "Correct windows: transpose moved the data" }],
+        "why": "Transpose swaps strides and leaves memory alone. Shape-based strides now describe the wrong layout, and as_strided never checks."
+      },
+      {
+        "q": "Which stride repeats one element along an axis for free?",
+        "options": [{ "t": "0", "ok": true }, { "t": "1" }, { "t": "The length of the axis" }],
+        "why": "Stride 0 means 'stay at the same house', which is exactly how broadcasting works."
+      }
+    ],
+    "where": "Anywhere data is viewed rather than copied: transposes, broadcasts, pooling and convolution windows."
+  }
+}

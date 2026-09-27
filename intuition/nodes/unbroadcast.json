@@ -1,0 +1,204 @@
+{
+  "id": "unbroadcast",
+  "title": "Many prints, one stamp to fix",
+  "week": 4,
+  "need": "exercise",
+  "allegory": "Broadcasting is one rubber stamp pressed onto every page; when each page comes back with a red-pen correction, the stamp's fix is all the corrections added together, because nudging the stamp changes every print at once.",
+  "map": [
+    ["the stamp", "the original small tensor, e.g. a bias b of shape (3,)"],
+    ["pressing it onto every page", "broadcasting b up to the batch shape (4, 3)"],
+    ["each page's red-pen correction", "the upstream gradient for each broadcast copy"],
+    ["adding every correction onto the one stamp", "summing the gradient over the broadcast dims"],
+    ["the stamp's shape never changes", "the gradient must match the original shape: prepended dims summed away, stretched size-1 dims summed but kept"]
+  ],
+  "credit": "The 'a value used more than once must add up (+=) its gradients' point follows Andrej Karpathy's micrograd video, The spelled-out intro to neural networks and backpropagation.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The shape clash",
+      "need": "exercise",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "b.grad.shape = (4, 3)?? b is (3,)",
+      "actors": [{ "pose": "shrug", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.55, "y": 0.3, "w": 0.16, "h": 0.08, "label": "b (3,)", "color": "peach" },
+        { "kind": "stack", "x": 0.75, "y": 0.58, "w": 0.24, "h": 0.36, "label": "x + b (4, 3)", "color": "sky" }
+      ],
+      "arrows": [[0.6, 0.35, 0.7, 0.45, "copied to every row"]],
+      "cap": {
+        "1": "You add one small row of numbers to every row of a batch. Going backwards, its gradient comes back batch-sized, too big to fit the thing it belongs to.",
+        "2": "<code>x + b</code> with x of shape (4, 3) and b of shape (3,) broadcasts b to (4, 3). Backward hands you a (4, 3) gradient, but b.grad must be (3,).",
+        "3": "The upstream gradient has the broadcast output's shape. Your autograd must map it back to each input's own shape, or the parameter update fails or silently misaligns."
+      }
+    },
+    {
+      "name": "One stamp, many prints",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "carry", "x": 0.15, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.35, "y": 0.5, "w": 0.12, "h": 0.12, "label": "stamp", "color": "orange" },
+        { "kind": "card", "x": 0.62, "y": 0.28, "label": "print 1", "color": "cream" },
+        { "kind": "card", "x": 0.78, "y": 0.42, "label": "print 2", "color": "cream" },
+        { "kind": "card", "x": 0.62, "y": 0.62, "label": "print 3", "color": "cream" },
+        { "kind": "card", "x": 0.78, "y": 0.76, "label": "print 4", "color": "cream" }
+      ],
+      "arrows": [[0.7, 0.52, 0.42, 0.52, "all corrections, added"]],
+      "cap": {
+        "1": "One stamp pressed onto four pages. Each page comes back with a red-pen correction. To fix the stamp, you add up all four corrections.",
+        "2": "Broadcasting reuses one value in many places. Each place sends back its own gradient, and the value's total gradient is the sum of all of them.",
+        "3": "Multivariable chain rule: if b feeds outputs y₁..yₙ then ∂L/∂b = Σᵢ ∂L/∂yᵢ · ∂yᵢ/∂b. For a broadcast copy each ∂yᵢ/∂b is 1, so it is a plain sum."
+      }
+    },
+    {
+      "name": "Why a sum",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "∂L/∂b", "c": "orange", "note": "the stamp's fix" },
+        { "t": " = Σᵢ ", "c": "ink", "note": "add every page" },
+        { "t": "∂L/∂yᵢ", "c": "sky", "note": "one page's correction" }
+      ],
+      "actor": { "pose": "write", "x": 0.12 },
+      "cap": {
+        "1": "The stamp's fix is every page's correction added together. Nudge the stamp and every print moves at once, so every print gets a say.",
+        "2": "In code, for a bias broadcast over the batch: <code>b.grad = grad_out.sum(dim=0)</code>. A value used n times gets n gradient terms, and they add.",
+        "3": "Broadcasting is a linear copy map; the backward pass of a linear map applies its transpose, and the transpose of copying is summing. Expand forward means sum backward."
+      }
+    },
+    {
+      "name": "Fold the pages",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "grad_out (4, 3), summed down each column",
+      "rows": 4,
+      "cols": 3,
+      "values": [[1, 0, 2], [2, 1, 0], [0, 3, 1], [1, 1, 3]],
+      "labels": { "rows": ["page 0", "page 1", "page 2", "page 3"], "cols": ["b0", "b1", "b2"] },
+      "highlight": [[0, 0], [1, 0], [2, 0], [3, 0], [0, 1], [1, 1], [2, 1], [3, 1], [0, 2], [1, 2], [2, 2], [3, 2]],
+      "cap": {
+        "1": "Four pages of corrections, one column per letter on the stamp. Add each column down and the stamp gets 4, 5 and 6. Four rows fold into one.",
+        "2": "grad_out is (4, 3); summing over dim 0 gives the (3,) gradient for b. The batch dimension only existed because of the broadcast.",
+        "3": "unbroadcast: first sum away the leading dims that were prepended; then sum with keepdim=True over every dim where the original had size 1. The result has the input's exact shape."
+      }
+    },
+    {
+      "name": "Add, never average",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "sum over the copies", "c": "mint", "lines": ["every print's fix counts", "b gets 4, 5, 6", "matches the true gradient"] },
+      "right": { "title": "mean over the copies", "c": "pink", "lines": ["feels fair", "b gets 1, 1.25, 1.5", "4x too small, no error"] },
+      "verdict": "A value used n times gets n gradients, added. Averaging is a silent bug.",
+      "cap": {
+        "1": "Averaging the corrections sounds fair, but it is wrong. The stamp really did cause every print's mistake, so every correction counts in full.",
+        "2": "Using <code>mean</code> instead of <code>sum</code> still gives the right shape, so nothing complains. The parameter just learns n times too slowly.",
+        "3": "mean divides the true gradient by the broadcast extent; shapes agree, so only a numerical gradient check catches it. Compare against finite differences when you write backward functions."
+      }
+    },
+    {
+      "name": "Where it hides",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["A bias shared by every example", "One conv kernel at every position", "One embedding row, many tokens"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "The same rule holds wherever one thing is used many times: a bias added to every example, one stencil slid over a whole image, one word vector reused.",
+        "2": "Bias grads sum over the batch; a conv kernel's grad sums over every position; an embedding row's grad sums over every time its token appears.",
+        "3": "Weight sharing always means gradient accumulation. When you later read gradients to understand a model, a shared weight's gradient is a sum over every use, not any single one."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Tap to raise one page's correction, then see where it lands",
+    "rows": 4,
+    "cols": 3,
+    "init": "(r*c + r + 1) % 4",
+    "click": "inc",
+    "readouts": [
+      { "label": "stamp shaped (3,): sum over dim 0", "f": "G[0].map((_, j) => sum(G.map(r => r[j]))).join(', ')" },
+      { "label": "stamp shaped (4, 1): sum over dim 1, keepdim", "f": "G.map(r => '[' + sum(r) + ']').join(' ')" },
+      { "label": "stamp shaped (): sum of everything", "f": "sum(G.map(r => sum(r)))" },
+      { "label": "the bug: mean over dim 0", "f": "G[0].map((_, j) => mean(G.map(r => r[j])).toFixed(2)).join(', ')" }
+    ],
+    "caption": {
+      "1": "Tap cells to raise one page's correction. Watch where it lands for each stamp shape: a row stamp, a column stamp, a single dot.",
+      "2": "Tap one cell: it adds exactly one to one entry of each summed gradient. The mean row moves only a quarter as far, which is the bug in miniature.",
+      "3": "Each original element's gradient is the sum over the cells it was copied into. The broadcast decides the sum: (3,) sums rows, (4, 1) sums columns with keepdim, () sums all."
+    }
+  },
+  "where_else": [
+    "Bias gradients summed over the batch in every Linear layer",
+    "A conv kernel's gradient, summed over every position it slid to",
+    "Embedding rows looked up by many tokens in one batch",
+    "micrograd's classic bug: a value used twice must += its gradient"
+  ],
+  "hamming": {
+    "what": "The backward half of broadcasting: summing a gradient back down to the shape of the tensor that was stretched.",
+    "when": "Whenever you write the backward pass of an op whose inputs were broadcast, as in [0.4]; after that, autograd does it for you.",
+    "why": "A value copied to many places affects the loss through every copy, so by the chain rule its gradient is the sum over all of them."
+  },
+  "object": {
+    "title": "The stamp and its prints",
+    "subtitle": "Four pages of corrections that fold down onto the one stamp that made them.",
+    "kind": "bars",
+    "rows": 5,
+    "cols": 3,
+    "f": "((T) => r < 4 ? (r < copies ? (fold > 0.5 ? 0.04 : T[r][c]) : 0.01) : (fold > 0.5 ? sum(T.slice(0, copies).map(row => row[c])) : 0.04))([[0.3, 0.1, 0.5], [0.4, 0.3, 0.1], [0.1, 0.6, 0.2], [0.2, 0.2, 0.6]])",
+    "labels": { "rows": ["page 0", "page 1", "page 2", "page 3", "stamp b"], "cols": ["b0", "b1", "b2"] },
+    "c": "grad",
+    "knobs": [
+      { "id": "copies", "label": "Pages stamped (broadcast copies)", "min": 1, "max": 4, "step": 1, "value": 4 },
+      { "id": "fold", "label": "Fold the corrections onto the stamp", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "Four prints of one three-letter stamp. Each print's bars are its red-pen corrections, one per letter.", "2": "grad_out has shape (4, 3): one gradient row per broadcast copy of b, which is (3,).", "3": "Upstream gradient ∂L/∂y for y = x + b, with b broadcast along dim 0." },
+        "view": "iso",
+        "set": { "copies": 4, "fold": 0 }
+      },
+      {
+        "cap": { "1": "Fold the pages onto the stamp: each letter's corrections stack up, and the stamp row now holds the totals.", "2": "unbroadcast sums over dim 0: b.grad = grad_out.sum(0), shape (3,).", "3": "Σᵢ ∂L/∂yᵢ per column gives (1.0, 1.2, 1.4) here: the transpose of the copy." },
+        "view": "front",
+        "set": { "copies": 4, "fold": 1 }
+      },
+      {
+        "cap": { "1": "Stamp only two pages and the stamp's total is smaller: fewer prints, fewer corrections to add.", "2": "The summed gradient grows with the number of copies: a value used more often collects more signal.", "3": "∂L/∂b has one term per copy; with n = 2 only two rows contribute." },
+        "view": "side",
+        "set": { "copies": 2, "fold": 1 }
+      },
+      {
+        "cap": { "1": "Stamp a single page and the fix is exactly that page's correction. No copies, nothing to add.", "2": "With one copy, unbroadcast only squeezes the prepended dim; the numbers pass through unchanged.", "3": "n = 1: the sum has a single term, so unbroadcast reduces to removing the size-1 leading axis." },
+        "view": "close",
+        "set": { "copies": 1, "fold": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A bias of shape (3,) is added to a batch of shape (32, 3). What shape must its gradient be?",
+        "options": [{ "t": "(3,)", "ok": true }, { "t": "(32, 3)" }, { "t": "(32,)" }],
+        "why": "A gradient always has the shape of the thing it belongs to. Sum the (32, 3) upstream gradient over the batch dim."
+      },
+      {
+        "q": "The stamp was pressed on four pages. How do you combine the four corrections?",
+        "options": [{ "t": "Add them", "ok": true }, { "t": "Average them" }, { "t": "Keep the last one" }],
+        "why": "Nudging the stamp moves all four prints, so all four effects add. Averaging learns four times too slowly; keeping one is the overwrite bug."
+      },
+      {
+        "q": "The original was (4, 1) and got stretched to (4, 3). After summing over dim 1 you should:",
+        "options": [{ "t": "keep that dim, giving (4, 1)", "ok": true }, { "t": "drop it, giving (4,)" }],
+        "why": "Stretched size-1 dims are summed with keepdim=True. Only dims prepended at the front are summed away entirely."
+      }
+    ],
+    "where": "Any shared weight: biases over a batch, conv kernels over positions, embedding rows over tokens."
+  }
+}

@@ -1,0 +1,223 @@
+{
+  "id": "einops-reduce",
+  "title": "Cross off a label, pour the shelf",
+  "week": 1,
+  "need": "core",
+  "allegory": "A tensor is a pantry of jars on labelled shelves; reduce is a new floor plan with a label crossed off, so every jar along that shelf is poured together into one, and the last word on the plan says how to pour.",
+  "map": [
+    ["a jar", "one number in the tensor"],
+    ["shelf labels on the door plan", "axis names in the pattern string"],
+    ["a label crossed off the new plan", "an axis missing from the output: it is the one reduced over"],
+    ["how you pour: blend, tip it all in, keep the fullest", "the reduction: 'mean', 'sum', 'max'"],
+    ["fewer jars come out, and you cannot un-pour", "the element count shrinks; reduce is not invertible"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The average picture",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "arr.mean(0) ... or was the batch axis 1?",
+      "actors": [{ "pose": "think", "x": 0.3, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.68, "y": 0.55, "w": 0.26, "h": 0.4, "label": "8 pictures", "color": "sky" },
+        { "kind": "card", "x": 0.68, "y": 0.2, "label": "arr.mean(axis=0)?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You have eight pictures and want one average picture. Old code does it with a bare axis number, and nothing says which axis you just averaged away.",
+        "2": "<code>arr.mean(axis=0)</code> runs, but is axis 0 the batch or the colour? Pick the wrong one and you still get a picture, just the wrong picture.",
+        "3": "Positional reductions like mean(dim=k) name the vanishing axis by index. Nothing checks that index against intent, so the wrong reduction still returns a well-formed tensor."
+      }
+    },
+    {
+      "name": "Pour the shelf",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.45, "y": 0.55, "w": 0.2, "h": 0.36, "label": "b  h  w", "color": "mint" },
+        { "kind": "stack", "x": 0.8, "y": 0.62, "w": 0.16, "h": 0.2, "label": "h  w", "color": "peach" },
+        { "kind": "door", "x": 0.63, "y": 0.2, "label": "'b h w -> h w'", "color": "butter" }
+      ],
+      "arrows": [[0.56, 0.58, 0.7, 0.62, "pour along b"]],
+      "cap": {
+        "1": "Same pantry as before. Now you cross a label off the plan on the door, and every jar along that shelf is poured together into one. Fewer jars come out.",
+        "2": "<code>reduce</code> reads the same pattern string as rearrange. Any axis on the left that is missing on the right is the axis it reduces over.",
+        "3": "reduce(x, 'b h w -> h w', 'mean') averages over b. Axes absent from the output are reduced; the kept axes can be regrouped exactly as in rearrange, all in one validated pattern."
+      }
+    },
+    {
+      "name": "Read the plan",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "reduce(x, ", "c": "ink", "note": "" },
+        { "t": "'b c h w", "c": "sky", "note": "shelves now" },
+        { "t": " -> b c'", "c": "orange", "note": "h and w crossed off" },
+        { "t": ", 'mean'", "c": "green", "note": "how to pour" },
+        { "t": ")", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.12 },
+      "cap": {
+        "1": "Left of the arrow: the shelves now. Right: the shelves you keep. Every label you leave out gets poured. The last word says how to pour.",
+        "2": "<code>'b c h w -> b c', 'mean'</code> averages over height and width, leaving one number per image per channel. That is global average pooling in one line.",
+        "3": "Output axes are kept; input-only axes (h, w) are reduced with the named op: 'mean', 'sum', 'max', 'min' or 'prod'. Composite input axes give pooling: (h h2) with h2=2 and 'max' is a 2x2 max-pool."
+      }
+    },
+    {
+      "name": "Pour one shelf",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "'h w -> h', 'mean'",
+      "rows": 2,
+      "cols": 3,
+      "values": [[1, 2, 3], [4, 5, 6]],
+      "labels": { "rows": ["h0", "h1"], "cols": ["w0", "w1", "w2"] },
+      "highlight": [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2]],
+      "cap": {
+        "1": "Two shelves of three jars. Cross off w and each shelf pours into one jar: 1, 2, 3 blend to 2, and 4, 5, 6 blend to 5. Six jars become two.",
+        "2": "Shape (2, 3) goes to (2,). The count shrinks from 6 to 2, the one thing rearrange can never do. Mean gives [2, 5]; sum would give [6, 15].",
+        "3": "Output size is the product of the kept axes only. Each output cell is many-to-one, so unlike rearrange it cannot be inverted: repeat can copy [2, 5] back out, not restore the six values."
+      }
+    },
+    {
+      "name": "Three ways to pour",
+      "need": "core",
+      "dur": 9,
+      "type": "bars",
+      "title": "shelf h0 = [1, 2, 3]",
+      "labels": ["mean", "sum", "max"],
+      "from": [0, 0, 0],
+      "to": [2, 6, 3],
+      "cap": {
+        "1": "One shelf, three ways to pour. Blend to the average: 2. Tip it all into one jar: 6. Keep only the fullest jar: 3.",
+        "2": "The third argument picks the reduction. Sum grows with the length of the axis you drop; mean does not. That is why losses are usually averaged over the batch.",
+        "3": "sum scales with the reduced axis length, so a summed loss has a batch-size-dependent gradient; mean is length-invariant. max passes gradient only to the argmax element."
+      }
+    },
+    {
+      "name": "Which label, exactly",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "'b c h w -> c h w'", "c": "mint", "lines": ["b crossed off", "eight pictures", "blend into one", "the average picture"] },
+      "right": { "title": "'b c h w -> b h w'", "c": "pink", "lines": ["c crossed off", "three colours", "blend into grey", "eight grey pictures"] },
+      "verdict": "The label you cross off decides what gets blended. Read it before you run it.",
+      "cap": {
+        "1": "Cross off the wrong label and you still get pictures. One pour blends eight pictures into one; the other quietly turns every picture grey.",
+        "2": "Both patterns run. With bare numbers, <code>mean(0)</code> versus <code>mean(1)</code> is a one-character difference; with names, the difference reads as b versus c.",
+        "3": "A reduction over the wrong axis yields a valid tensor, and when two axis sizes coincide even the shape agrees. A named pattern puts the reduced axis in the source, where review can see it."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Global average pooling at the end of a ResNet", "Averaging a loss over batch and positions", "Mean activations for mean-ablation"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "You will pour shelves constantly: squashing an image to one vector, averaging a loss, finding a model's typical activation to compare against.",
+        "2": "ResNets end with <code>'b c h w -> b c', 'mean'</code>. Losses average over batch and sequence. Interpretability starts from mean activations over a dataset.",
+        "3": "Mean activations over a reference distribution underpin mean-ablation and difference-of-means steering vectors: reading and steering a model starts with choosing the right reduction."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Tap jars to fill them, then read what each pour gives",
+    "rows": 3,
+    "cols": 4,
+    "init": "(r*4 + c*3) % 5",
+    "click": "inc",
+    "readouts": [
+      { "label": "cross off w, 'mean' (one jar per shelf)", "f": "G.map(r => mean(r).toFixed(2)).join(', ')" },
+      { "label": "cross off h, 'max' (one jar per column)", "f": "G[0].map((_, j) => G.reduce((m, r) => r[j] > m ? r[j] : m, -Infinity)).join(', ')" },
+      { "label": "cross off both, 'sum' (one jar)", "f": "sum(G.map(r => sum(r)))" },
+      { "label": "jars before -> after crossing off w", "f": "(G.length * G[0].length) + ' -> ' + G.length" }
+    ],
+    "caption": {
+      "1": "Tap jars to add to them. Watch each pour: shelf averages, column maxes, one grand total. Notice how few jars are left.",
+      "2": "Tap one jar many times: its column max jumps once it is the fullest, its shelf mean creeps up by a quarter per tap, and the total rises by exactly your taps.",
+      "3": "Each reduction hears a change differently: sum passes it through (gradient 1), mean divides it by the axis length (1/n), max ignores it unless that element is the argmax."
+    }
+  },
+  "where_else": [
+    "Global average pooling at the end of every ResNet: 'b c h w -> b c', 'mean'",
+    "Max pooling as one reduce over (h h2) (w w2)",
+    "Averaging a loss over batch and sequence positions",
+    "Mean activations over a dataset, the baseline for mean-ablation and steering"
+  ],
+  "hamming": {
+    "what": "A named-axis mean, sum or max: the axes missing from the output are the ones collapsed.",
+    "when": "Whenever you pool an image, average a loss, or summarise activations across a batch.",
+    "why": "Naming the collapsed axis makes the reduction readable and checkable, and since it cannot be undone you want it right first time."
+  },
+  "object": {
+    "title": "The pouring rack",
+    "subtitle": "Twelve jars on three shelves; cross off a label and whole rows pour into one.",
+    "kind": "bars",
+    "rows": 3,
+    "cols": 4,
+    "f": "((T, red) => axis < 0.5 ? T[r][c] : axis < 1.5 ? (c == 0 ? red(T[r]) : 0.03) : (r == 0 ? red(T.map(row => row[c])) : 0.03))([[0.3, 0.9, 0.5, 0.2], [0.7, 0.4, 1.2, 0.6], [0.2, 0.5, 0.4, 0.8]], a => op < 0.5 ? mean(a) : a.reduce((m, v) => v > m ? v : m, 0))",
+    "labels": { "rows": ["h0", "h1", "h2"], "cols": ["w0", "w1", "w2", "w3"] },
+    "c": "data",
+    "knobs": [
+      { "id": "axis", "label": "Cross off: none (0), w (1) or h (2)", "min": 0, "max": 2, "step": 1, "value": 0 },
+      { "id": "op", "label": "Pour by mean (0) or max (1)", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "Twelve jars on three shelves, each filled to its own level.", "2": "A (3, 4) tensor. Bar height is the value in each cell.", "3": "Input x with shape (h=3, w=4); heights are the raw values." },
+        "view": "iso",
+        "set": { "axis": 0, "op": 0 }
+      },
+      {
+        "cap": { "1": "Cross off w. Each shelf pours into its first jar and the rest stand empty: three jars left.", "2": "'h w -> h', 'mean': shape (3, 4) becomes (3,). Each remaining bar is its row's average.", "3": "out[i] = mean over j of x[i, j]. The element count drops from 12 to 3." },
+        "view": "front",
+        "set": { "axis": 1, "op": 0 }
+      },
+      {
+        "cap": { "1": "Same label crossed off, a different pour: keep only the fullest jar on each shelf.", "2": "'h w -> h', 'max'. The middle shelf jumps to 1.2 because one jar dominates it.", "3": "max selects one element per row, so a gradient would flow to that argmax alone." },
+        "view": "front",
+        "set": { "axis": 1, "op": 1 }
+      },
+      {
+        "cap": { "1": "Cross off h instead. Now each column pours toward the front shelf: four jars left.", "2": "'h w -> w', 'mean': (3, 4) becomes (4,). Which label you drop decides the answer.", "3": "Reducing over h gives out[j] = mean over i of x[i, j]: a different axis, a different tensor." },
+        "view": "side",
+        "set": { "axis": 2, "op": 0 }
+      },
+      {
+        "cap": { "1": "From above: three full jars, nine empty. Could you refill the nine from the three? No. Pouring forgets.", "2": "repeat can copy a poured value back along the shelf, but the original levels are gone.", "3": "reduce is many-to-one and not invertible; repeat(reduce(x)) is a broadcast of the summary, not x." },
+        "view": "top",
+        "set": { "axis": 1, "op": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "You cross off w from 'h w' on this rack. How many jars are left?",
+        "options": [{ "t": "3, one per shelf", "ok": true }, { "t": "12, the same as before" }, { "t": "4, one per column" }],
+        "why": "Every jar along w pours together, leaving one jar per h. Crossing off h instead would leave 4."
+      },
+      {
+        "q": "A shelf is poured with 'sum', then made twice as long with similar jars. The poured jar:",
+        "options": [{ "t": "roughly doubles", "ok": true }, { "t": "stays about the same" }],
+        "why": "sum grows with how many jars you pour; mean does not. That is why losses are usually averaged over the batch."
+      },
+      {
+        "q": "After a reduce, can repeat bring the original jars back?",
+        "options": [{ "t": "No, it only copies the poured value back out", "ok": true }, { "t": "Yes, repeat undoes reduce" }],
+        "why": "reduce throws information away; rearrange and repeat never do."
+      }
+    ],
+    "where": "Pooling layers, averaged losses, and the mean activations interpretability compares against."
+  }
+}

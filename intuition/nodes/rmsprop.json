@@ -1,0 +1,230 @@
+{
+  "id": "rmsprop",
+  "title": "Level each channel by its own loudness",
+  "week": 3,
+  "need": "exercise",
+  "allegory": "RMSprop is a sound engineer who turns every channel down by its own recent loudness, so the drums (steep weights) stop blowing the speakers and the flute (flat weights) finally gets heard, all under one master volume.",
+  "map": [
+    ["one musician's channel on the desk", "one parameter (weight)"],
+    ["the sound that musician is making right now", "that parameter's gradient g"],
+    ["the meter's slow-falling needle: how loud lately", "v, a running average of g² with decay α"],
+    ["dividing each channel by its own meter reading", "step = lr · g / (√v + ε): the root of the mean square, hence RMS"],
+    ["one master volume for the whole band", "the single learning rate lr, still yours to set"]
+  ],
+  "credit": "Ravine picture (damp the steep direction, speed up the flat one) borrowed from Andrew Ng, Deep Learning Specialization, Course 2, RMSprop lecture.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "One master volume",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "one learning rate for every weight?",
+      "actors": [{ "pose": "recoil", "x": 0.28, "label": "you" }],
+      "props": [
+        { "kind": "circle", "x": 0.5, "y": 0.5, "w": 0.12, "label": "master lr", "color": "butter" },
+        { "kind": "stack", "x": 0.72, "y": 0.52, "w": 0.12, "h": 0.46, "label": "drums: steep weight", "color": "red" },
+        { "kind": "stack", "x": 0.9, "y": 0.7, "w": 0.08, "h": 0.1, "label": "flute: flat weight", "color": "mint" }
+      ],
+      "cap": {
+        "1": "Plain gradient descent has one volume knob for the whole band. Turn it up and the drums blow the speakers. Turn it down and the flute vanishes.",
+        "2": "SGD uses one learning rate for every weight. Steep weights (big gradients) overshoot and blow up; flat weights (tiny gradients) barely move. No single lr suits both.",
+        "3": "Stability needs lr < 2/λmax, so the steepest direction caps lr for everyone, and progress along flat directions then scales with λmin/λmax. Ill-conditioning in one picture."
+      }
+    },
+    {
+      "name": "The sound engineer",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "reach", "x": 0.18, "label": "RMSprop" },
+        { "pose": "dance", "x": 0.55, "label": "drums" },
+        { "pose": "idle", "x": 0.82, "label": "flute" }
+      ],
+      "props": [
+        { "kind": "stack", "x": 0.55, "y": 0.24, "w": 0.08, "h": 0.28, "label": "meter: loud", "color": "red" },
+        { "kind": "stack", "x": 0.82, "y": 0.3, "w": 0.08, "h": 0.08, "label": "meter: quiet", "color": "mint" },
+        { "kind": "card", "x": 0.18, "y": 0.18, "label": "each channel ÷ its own meter", "color": "butter" }
+      ],
+      "arrows": [[0.26, 0.45, 0.5, 0.32, "turn down"], [0.26, 0.52, 0.77, 0.36, "turn up"]],
+      "cap": {
+        "1": "Hire a sound engineer. Each musician gets a meter showing how loud they have been lately, and each channel is divided by its own meter. Everyone comes out even.",
+        "2": "RMSprop keeps a meter per weight: a running average of its squared gradient. Each step is divided by the root of that meter, so loud weights calm down and quiet ones perk up.",
+        "3": "Per-coordinate normalisation: step_i = lr·g_i/(√v_i + ε). Each coordinate moves roughly lr per step whatever its gradient scale; lr becomes a distance, not a multiplier."
+      }
+    },
+    {
+      "name": "Reading the meter",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "θ -= ", "c": "ink", "note": "" },
+        { "t": "lr", "c": "orange", "note": "master volume" },
+        { "t": " · ", "c": "ink", "note": "" },
+        { "t": "g", "c": "sky", "note": "this weight's signal" },
+        { "t": " / ", "c": "ink", "note": "" },
+        { "t": "(√v + ε)", "c": "green", "note": "its meter, plus a floor" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "The meter is the square root of the recent average of squared gradients: that is what RMS means. Each step divides the gradient by it.",
+        "2": "Update the meter first: <code>v = α·v + (1−α)·g²</code>, elementwise. Then step <code>θ -= lr·g/(√v + ε)</code>. ε only stops a silent weight dividing by zero.",
+        "3": "v is an exponential moving average of g² with decay α; √v is the per-coordinate RMS gradient, so the effective learning rate is lr/(√v + ε). No first moment, no bias correction."
+      }
+    },
+    {
+      "name": "Why the root",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "curves": [
+        { "f": "0.1*x/(abs(x) + 0.02)", "c": "green", "label": "RMSprop: g ÷ √(g²)" },
+        { "f": "0.1*x", "c": "orange", "label": "SGD: no meter" },
+        { "f": "0.1*x/(x*x + 0.02)", "c": "red", "label": "no root: g ÷ g²" }
+      ],
+      "x": [0, 3],
+      "y": [0, 0.4],
+      "dot": true,
+      "marks": [{ "x": 0.25, "label": "whisper" }, { "x": 2.5, "label": "shout" }],
+      "cap": {
+        "1": "Why a square root? Across every volume the green line stays flat: each weight steps about the same distance. Without the root, whispers leap and shouts freeze.",
+        "2": "With a steady gradient g, v settles near g², so √v ≈ |g| and the step ≈ lr. SGD's step grows with g. Dividing by v with no root gives lr/g: tiny gradients take giant steps.",
+        "3": "g/√E[g²] is invariant to rescaling g, so the step is ≈ lr per coordinate. Dividing by E[g²] gives steps ∝ 1/g, over-correcting. The root keeps units: gradient over gradient."
+      }
+    },
+    {
+      "name": "The cold start",
+      "need": "core",
+      "dur": 10,
+      "type": "bars",
+      "title": "step size ÷ lr, steady gradient, α = 0.9",
+      "labels": ["step 1", "step 2", "step 3", "step 5", "step 10", "step 20"],
+      "from": [1, 1, 1, 1, 1, 1],
+      "to": [3.16, 2.29, 1.92, 1.56, 1.24, 1.07],
+      "cap": {
+        "1": "The meters start at zero, so at first every musician looks quiet and gets turned up too far. The first steps come out about three times too big.",
+        "2": "v starts at 0, so √v underestimates the real RMS and early steps overshoot lr: about 3x on step 1 with α = 0.9, 10x with α = 0.99. It fades as the average warms up.",
+        "3": "For stationary g, E[v_t] = (1−α^t)·E[g²], inflating early steps by 1/√(1−α^t). Adam divides by (1−β₂^t) to cancel exactly this; plain RMSprop has no such correction."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Adam = momentum + this meter + a cold-start fix", "lr now sets a distance per weight", "Later: call AdamW, read it as meters"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "RMSprop is half of Adam, which (as AdamW) trains every transformer in the later chapters. Adam adds momentum and fixes the cold start.",
+        "2": "You will rarely call <code>torch.optim.RMSprop</code> yourself. But Adam's denominator is this meter, so when a run stalls or explodes, ask which weights are being turned up or down.",
+        "3": "Anything you train to understand or steer a model, a probe or an SAE, will likely run on Adam, whose per-weight RMS denominator comes straight from RMSprop."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Steep walls, one step size",
+    "params": [
+      { "id": "lr", "label": "learning rate", "min": 0.01, "max": 0.3, "step": 0.01, "value": 0.1 },
+      { "id": "s", "label": "how steep the walls are", "min": 1, "max": 60, "step": 1, "value": 10 }
+    ],
+    "curves": [
+      { "f": "[range(floor(x)).reduce(p => [p[0] - lr*p[0]/(sqrt(0.9*p[2] + 0.1*p[0]*p[0]) + 1e-8), p[1] - lr*s*p[1]/(sqrt(0.9*p[3] + 0.1*s*s*p[1]*p[1]) + 1e-8), 0.9*p[2] + 0.1*p[0]*p[0], 0.9*p[3] + 0.1*s*s*p[1]*p[1]], [3, 1, 0, 0])].map(q => sqrt(q[0]*q[0] + q[1]*q[1])/sqrt(10))[0]", "c": "green", "label": "RMSprop: distance left" },
+      { "f": "sqrt(pow(3*pow(1 - lr, floor(x)), 2) + pow(pow(1 - lr*s, floor(x)), 2))/sqrt(10)", "c": "orange", "label": "SGD: distance left" }
+    ],
+    "x": [0, 60],
+    "y": [0, 1.2],
+    "readouts": [
+      { "label": "SGD after 60 steps", "f": "[sqrt(pow(3*pow(1 - lr, 60), 2) + pow(pow(1 - lr*s, 60), 2))/sqrt(10)].map(d => d > 1 ? 'blew up: further away than it started' : (d*100).toFixed(1) + '% of the way left')[0]" },
+      { "label": "RMSprop after 60 steps", "f": "[range(60).reduce(p => [p[0] - lr*p[0]/(sqrt(0.9*p[2] + 0.1*p[0]*p[0]) + 1e-8), p[1] - lr*s*p[1]/(sqrt(0.9*p[3] + 0.1*s*s*p[1]*p[1]) + 1e-8), 0.9*p[2] + 0.1*p[0]*p[0], 0.9*p[3] + 0.1*s*s*p[1]*p[1]], [3, 1, 0, 0])].map(q => sqrt(q[0]*q[0] + q[1]*q[1])/sqrt(10)).map(d => d > 1 ? 'blew up' : (d*100).toFixed(1) + '% of the way left')[0]" },
+      { "label": "SGD blows up above lr =", "f": "(2/s).toFixed(3)" }
+    ],
+    "caption": {
+      "1": "Drag the walls steeper: the green RMSprop curve never moves, but SGD blows up once its step is too big for the walls. Then shrink the step and watch SGD win.",
+      "2": "SGD is stable only while lr × steepness < 2, so one steep direction caps lr for all. RMSprop divides the steepness back out: same curve at any steepness. At tiny lr, SGD is faster.",
+      "3": "On L = ½(w² + s·b²), g_b/√v_b is invariant to s, so RMSprop's path ignores curvature scale; GD needs lr < 2/λmax. RMSprop steps ≈ lr per coordinate, so it can lose at small lr."
+    }
+  },
+  "where_else": [
+    "Adam and AdamW: the same per-weight RMS denominator, plus momentum",
+    "Automatic gain control in audio: divide a signal by its recent loudness so it comes out even",
+    "LayerNorm-style normalisation: divide by a measured scale so every feature speaks at a similar volume"
+  ],
+  "hamming": {
+    "what": "An optimiser that divides each weight's step by the root of its recent average squared gradient, so every weight gets its own step size.",
+    "when": "You implement it once in [0.3] on the way to Adam; afterwards it lives inside Adam and AdamW whenever you train anything.",
+    "why": "One learning rate cannot suit steep and flat directions at once; dividing by each weight's RMS gradient lets them all move at a similar pace."
+  },
+  "object": {
+    "title": "The self-levelling canyon",
+    "subtitle": "A narrow canyon you can squash into a round bowl: the landscape as RMSprop experiences it.",
+    "kind": "surface",
+    "f": "0.05*(x*x + pow(20, 1 - k)*y*y)",
+    "x": [-3, 3],
+    "y": [-1, 1],
+    "ball": { "x": 2.8, "y": 0.9, "lr": 0.9, "steps": 60 },
+    "marks": [{ "x": 0, "y": 0, "label": "bottom" }],
+    "knobs": [{ "id": "k", "label": "divide out each direction's steepness", "min": 0, "max": 1, "step": 0.25, "value": 0 }],
+    "beats": [
+      {
+        "cap": {
+          "1": "A narrow canyon: steep walls across, a gentle floor along. One step size has to serve both directions.",
+          "2": "Loss ½(w² + 20·b²) (scaled for display): b is 20 times steeper than w. Plain SGD uses the same lr on both.",
+          "3": "Curvature ratio 20 along the axes. GD's lr is capped near 2/λmax, so progress along the flat axis scales with λmin/λmax."
+        },
+        "view": "iso",
+        "set": { "k": 0 }
+      },
+      {
+        "cap": {
+          "1": "From above: the bead zig-zags between the walls while it creeps along the floor.",
+          "2": "Gradient descent overshoots across the steep axis while crawling along the flat one: the ravine problem.",
+          "3": "Iterates oscillate in b since |1 − lr·λ_b| is near 1, while w contracts only by (1 − lr·λ_w) per step."
+        },
+        "view": "top",
+        "set": { "k": 0 }
+      },
+      {
+        "cap": {
+          "1": "Halfway: divide each direction by how steep it has been, and the walls start to flatten.",
+          "2": "Dividing each weight's step by its own RMS gradient is like measuring each axis in its own units.",
+          "3": "Per-coordinate scaling by 1/√v_i acts as a diagonal preconditioner: it rescales each axis independently."
+        },
+        "view": "iso",
+        "set": { "k": 0.5 }
+      },
+      {
+        "cap": {
+          "1": "Fully divided out: a round bowl, and the same bead rolls straight to the bottom. This is the canyon as RMSprop feels it.",
+          "2": "Steeper walls give bigger gradients, but √v grows by the same factor, so RMSprop's path on the canyon matches its path on this bowl.",
+          "3": "For axis-aligned quadratics g_i/√v_i is invariant to per-coordinate scaling, so the RMSprop trajectory equals the isotropic one."
+        },
+        "view": "top",
+        "set": { "k": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "You make the canyon walls 10 times steeper. What happens to RMSprop's path?",
+        "options": [{ "t": "Nothing: it divides the steepness back out", "ok": true }, { "t": "It needs a 10 times smaller learning rate" }],
+        "why": "Steeper walls mean bigger gradients, but √v grows by the same factor, so g/√v is unchanged."
+      },
+      {
+        "q": "Which direction sets the ceiling on plain SGD's learning rate?",
+        "options": [{ "t": "The steepest one", "ok": true }, { "t": "The flattest one" }, { "t": "The average of all of them" }],
+        "why": "Above 2 ÷ steepness, SGD overshoots further every step in the steepest direction and blows up, so that one direction caps lr for all."
+      },
+      {
+        "q": "The canyon runs diagonally, at 45° to both weights. Does RMSprop make it round?",
+        "options": [{ "t": "No: it can stretch each weight's axis, but not rotate", "ok": true }, { "t": "Yes: it fixes any narrow canyon" }],
+        "why": "RMSprop rescales each parameter separately. A diagonal canyon mixes two weights, so no per-weight stretch makes it round."
+      }
+    ],
+    "where": "Adam and AdamW carry this exact per-weight denominator, so it shapes every model you train with them."
+  }
+}

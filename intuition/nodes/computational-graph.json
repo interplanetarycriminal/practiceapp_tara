@@ -1,0 +1,221 @@
+{
+  "id": "computational-graph",
+  "title": "Every bowl remembers its recipe",
+  "week": 4,
+  "need": "core",
+  "allegory": "A computational graph is a kitchen where every bowl gets a card taped on saying which recipe made it and which bowls went in, so when the dish tastes wrong you can follow the cards back and share out the blame.",
+  "map": [
+    ["a bowl on the counter", "a tensor"],
+    ["the card on each bowl: which recipe, which bowls went in", "the tensor's recipe: forward function, arguments, parent tensors"],
+    ["shop-bought ingredients with no card", "leaf tensors, such as weights, whose gradient lands in .grad"],
+    ["the finished dish that tastes wrong", "the loss L, the root the backward pass starts from"],
+    ["following the cards back to share out the blame", "the backward pass walking the recorded graph"]
+  ],
+  "credit": "The use-it-twice bug (add, never overwrite) follows Andrej Karpathy's micrograd video, 'The spelled-out intro to neural networks and backpropagation'.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "A million nudges",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "nudge one weight, rerun everything, repeat forever",
+      "actors": [{ "pose": "slump", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.62, "y": 0.55, "w": 0.3, "h": 0.5, "label": "millions of weights", "color": "sky" },
+        { "kind": "card", "x": 0.62, "y": 0.14, "label": "one full run per weight?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "To learn, a model needs to know how each of its millions of numbers affected the result. Nudging them one at a time would take millions of runs.",
+        "2": "Finite differences needs a forward pass per parameter: fine as a sanity check, hopeless for training. Backprop gets every gradient from one forward and one backward pass.",
+        "3": "Numerical differentiation costs one forward pass per parameter. Reverse-mode AD gets all gradients of one scalar in a single backward sweep, provided the forward pass kept a record."
+      }
+    },
+    {
+      "name": "Cards on bowls",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "write", "x": 0.12, "label": "you" }],
+      "props": [
+        { "kind": "egg", "x": 0.32, "y": 0.35, "label": "a", "color": "cream" },
+        { "kind": "egg", "x": 0.32, "y": 0.72, "label": "b", "color": "cream" },
+        { "kind": "circle", "x": 0.58, "y": 0.45, "w": 0.1, "label": "c", "color": "peach" },
+        { "kind": "card", "x": 0.58, "y": 0.2, "label": "made by mul(a, b)", "color": "butter" },
+        { "kind": "circle", "x": 0.85, "y": 0.58, "w": 0.12, "label": "L", "color": "orange" }
+      ],
+      "arrows": [[0.35, 0.37, 0.54, 0.44, ""], [0.35, 0.7, 0.54, 0.48, ""], [0.62, 0.47, 0.8, 0.56, ""], [0.35, 0.74, 0.8, 0.61, ""]],
+      "cap": {
+        "1": "Picture a kitchen where every bowl gets a card taped on: which recipe made it, and which bowls went in. Shop-bought ingredients have no card.",
+        "2": "That is the computational graph. Each tensor made by an operation carries a recipe: the function, its arguments and its parent tensors. Leaves like weights have none.",
+        "3": "Each non-leaf tensor stores a recipe (func, args, kwargs, parents by argument position). Together the recipes form a DAG from the leaves up to the loss, built as the forward pass runs."
+      }
+    },
+    {
+      "name": "Recording as you go",
+      "need": "exercise",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "a", "label": "a (leaf)", "x": 0.12, "y": 0.3, "c": "sky" },
+        { "id": "b", "label": "b (leaf)", "x": 0.12, "y": 0.74, "c": "sky" },
+        { "id": "c", "label": "c = a·b", "x": 0.5, "y": 0.4, "c": "peach" },
+        { "id": "L", "label": "L = c + b", "x": 0.86, "y": 0.56, "c": "orange" }
+      ],
+      "edges": [["a", "c", "mul"], ["b", "c", "mul"], ["c", "L", "add"], ["b", "L", "add"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Run the forward pass and the cards appear as you go. Each arrow says 'this was made from that'. Nothing is worked out backwards yet; it is only remembered.",
+        "2": "<code>wrap_forward_fn</code> wraps a plain numpy function so its output Tensor comes with a recipe attached. The graph is built as the code runs, one card per operation.",
+        "3": "wrap_forward_fn lifts numpy ops generically: unwrap Tensor args, compute, wrap the output, attach Recipe(func, args, kwargs, parents). The DAG is whatever this run executed."
+      }
+    },
+    {
+      "name": "Walking it back",
+      "need": "core",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "a", "label": "dL/da = b", "x": 0.12, "y": 0.3, "c": "sky" },
+        { "id": "b", "label": "dL/db = a + 1", "x": 0.12, "y": 0.74, "c": "sky" },
+        { "id": "c", "label": "dL/dc = 1", "x": 0.5, "y": 0.4, "c": "peach" },
+        { "id": "L", "label": "L", "x": 0.86, "y": 0.56, "c": "orange" }
+      ],
+      "edges": [["a", "c", "b"], ["b", "c", "a"], ["c", "L", "1"], ["b", "L", "1"]],
+      "flow": "backward",
+      "cap": {
+        "1": "When the dish tastes wrong, follow the cards backwards to share out the blame. Bowl b went into two things, so it collects blame from both.",
+        "2": "The backward pass walks the recorded graph from L to the leaves. Each recipe's backward function splits the incoming gradient among its parents. b gets two pieces, which add.",
+        "3": "dL/db = ∂L/∂c · ∂c/∂b + ∂L/∂b = a + 1, one term per outgoing edge. Walk in topological order so each node's incoming gradient is complete before its backward runs."
+      }
+    },
+    {
+      "name": "Overwrite, not add",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Add", "c": "mint", "lines": ["grads[b] += piece", "both paths counted", "d(x·x)/dx = 2x", "matches PyTorch"] },
+      "right": { "title": "Overwrite", "c": "pink", "lines": ["grads[b] = piece", "last path wins", "d(x·x)/dx = x", "silently half"] },
+      "verdict": "A bowl used twice collects blame twice. Add, never overwrite.",
+      "cap": {
+        "1": "If each new share of blame replaces the last instead of adding to it, a bowl used twice gets only part of its blame. Nothing crashes. It is just wrong.",
+        "2": "Assigning instead of accumulating keeps one path's gradient. For x*x you get x instead of 2x. It looks plausible, so training still seems to work.",
+        "3": "Fan-out requires accumulation: grads[node] = grads.get(node, 0) + contribution. Overwriting returns one term of the sum. Test d(x·x)/dx = 2x, then check against central differences."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["loss.backward() walks this graph for you", "Weights are leaves: their blame lands in .grad", "Attribution walks the same graph from output to insides"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Every time you call loss.backward(), this recorded graph is the map it follows. Knowing it is there explains most autograd surprises.",
+        "2": "Only what was recorded can get a gradient. Leaves such as weights get theirs written to .grad; intermediate tensors only hold theirs temporarily during the walk.",
+        "3": "Gradient-based attribution in interpretability runs this same backward walk from an output to inner activations, so what the graph records bounds what those attributions can mean."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "L = a·b + b uses b twice. Find b's blame.",
+    "params": [
+      { "id": "a", "label": "a", "min": -2, "max": 2, "step": 0.1, "value": 1.5 },
+      { "id": "b", "label": "b", "min": -2, "max": 2, "step": 0.1, "value": 1 }
+    ],
+    "curves": [
+      { "f": "a * x + x", "c": "orange", "label": "L as b varies" },
+      { "f": "(a * b + b) + (a + 1) * (x - b)", "c": "sky", "label": "slope a + 1 (both paths)" },
+      { "f": "(a * b + b) + a * (x - b)", "c": "pink", "label": "slope a (one path only)" }
+    ],
+    "x": [-3, 3],
+    "y": [-9, 9],
+    "readouts": [
+      { "label": "dL/da (one path)", "f": "round(b * 100) / 100" },
+      { "label": "b's two shares", "f": "'via c: ' + round(a * 100) / 100 + ', direct: 1'" },
+      { "label": "dL/db, added", "f": "round((a + 1) * 100) / 100" },
+      { "label": "nudge check on b", "f": "round(((a * (b + 0.001) + (b + 0.001)) - (a * (b - 0.001) + (b - 0.001))) / 0.002 * 100) / 100" }
+    ],
+    "caption": {
+      "1": "Drag a and b. The blue line's slope is b's total blame and always matches the nudge check. The pink line counts one path only and is off by exactly 1.",
+      "2": "b feeds both the product and the sum, so its gradient is the sum of two pieces, a + 1. The nudge check agrees; the one-path slope never does.",
+      "3": "Fan-out sums: dL/db = ∂(ab)/∂b + ∂b/∂b = a + 1, confirmed by central differences. Dropping either term is the overwrite bug."
+    }
+  },
+  "where_else": [
+    "loss.backward() in every PyTorch training loop",
+    "Spreadsheets tracking which cells depend on which, so they recalculate in the right order",
+    "Build tools like make, which record what each file was built from",
+    "Gradient-based attribution in interpretability, walking back from an output to inner activations"
+  ],
+  "hamming": {
+    "what": "A record, made during the forward pass, of which operation produced each tensor and from which parents.",
+    "when": "Every time you compute from tensors that need gradients, which is every training step.",
+    "why": "Backprop needs a route from the loss back to every weight, and recording it as you go gets every gradient in one backward sweep instead of one run per weight."
+  },
+  "object": {
+    "title": "The recipe tree",
+    "subtitle": "Balls are tensors, rods say 'made from'; the loss sits on top, the leaves at the bottom.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "x", "label": "x (input)", "pos": [-1.0, -1.2, 0.3], "c": "data" },
+      { "id": "W", "label": "W (weight)", "pos": [0.3, -1.2, -0.3], "c": "brass" },
+      { "id": "h", "label": "h = W·x", "pos": [-0.2, -0.5, 0.0], "c": "plaster" },
+      { "id": "a", "label": "a = relu(h)", "pos": [-0.2, 0.2, 0.0], "c": "plaster" },
+      { "id": "r", "label": "r = x + a", "pos": [-0.6, 0.8, 0.1], "c": "plaster" },
+      { "id": "L", "label": "L = loss(r)", "pos": [-0.6, 1.35, 0.0], "c": "grad" }
+    ],
+    "edges": [["x", "h"], ["W", "h"], ["h", "a"], ["a", "r"], ["x", "r"], ["r", "L"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": { "1": "Each ball is a tensor and each rod says 'made from'. The loss sits on top; the things it was made from sit below.", "2": "The forward pass built this: every operation recorded its parents. L is the root; W and x are leaves.", "3": "A DAG of recipes: nodes are tensors, edges run parent to child. ARENA calls L the root and the parameters leaves, because backprop starts at L." },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": { "1": "The forward pass climbs upwards, leaving a card at every stop. Nothing is differentiated yet; it is only remembered.", "2": "Recording is cheap bookkeeping during the forward pass. The gradients come later, from walking these rods back down.", "3": "The graph is dynamic: it records exactly the operations this run executed, so control flow in Python shapes the DAG." },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": { "1": "x feeds two places: the product with W and the shortcut. Two rods leave it, so two shares of blame come back and add up.", "2": "Fan-out: x has two consumers, so dL/dx is the sum of the gradient through a and the gradient straight from r.", "3": "The residual r = x + f(x) is the canonical fan-out: dL/dx = dL/dr + J_fᵀ·dL/dr. Overwriting instead of accumulating drops one of the two terms." },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": { "1": "Backward walks down from L. Each ball waits until everything above it has passed its share down.", "2": "Topological order guarantees every consumer of a node has contributed before that node's backward runs.", "3": "Reverse topological traversal from the root makes each node's accumulated grad_out complete before its backward function fires." },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": { "1": "W is a leaf you can change. Its blame lands in W.grad, ready for the optimiser to use.", "2": "Leaves get their gradients written to .grad; intermediates like h and a only hold theirs during the walk.", "3": "is_leaf and requires_grad decide whether a gradient is written to .grad or held in temporary storage and discarded." },
+        "view": "close",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "x feeds both the product and the shortcut. What is its gradient?",
+        "options": [{ "t": "The sum of the pieces from both paths", "ok": true }, { "t": "Whichever path the walk reached last" }],
+        "why": "Each outgoing rod sends back a share, and dL/dx is their sum. Keeping only one is the overwrite bug."
+      },
+      {
+        "q": "Why does the forward pass record anything at all?",
+        "options": [{ "t": "So the backward pass has a route: which op made each tensor, from which parents", "ok": true }, { "t": "To make the forward pass faster" }],
+        "why": "Without the recorded recipes there is nothing to walk backwards along."
+      },
+      {
+        "q": "Where does W's gradient end up?",
+        "options": [{ "t": "In W.grad, because W is a leaf", "ok": true }, { "t": "Stored on the loss tensor" }],
+        "why": "Leaves get their gradients written to .grad; intermediate tensors only hold theirs temporarily."
+      }
+    ],
+    "where": "Any dependency record you can walk backwards: spreadsheets, build tools, provenance logs, autograd."
+  }
+}

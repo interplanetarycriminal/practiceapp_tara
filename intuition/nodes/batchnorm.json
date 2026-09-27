@@ -1,0 +1,204 @@
+{
+  "id": "batchnorm",
+  "title": "Grade the class, remember the curve",
+  "week": 2,
+  "need": "core",
+  "allegory": "BatchNorm is like a teacher who curves each exam question against today's class and jots the class average in a notebook, so a student sitting a make-up exam alone can be graded from the notebook instead.",
+  "map": [
+    ["the class sitting the exam together", "the batch of N images"],
+    ["curving each question against today's class", "per-channel (x − batch mean) / batch std, pooled over N, H, W"],
+    ["the school's own scale applied after the curve", "learned per-channel weight γ and bias β"],
+    ["the teacher's notebook of typical averages", "running_mean and running_var buffers"],
+    ["a lone make-up exam graded from the notebook", "eval mode: normalise with running stats, no update"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Brilliant, then terrible",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "same kind of data. how?!",
+      "actors": [{ "pose": "slump", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.55, "y": 0.35, "label": "train: 95%", "color": "mint" },
+        { "kind": "card", "x": 0.8, "y": 0.35, "label": "validation: near chance", "color": "pink" },
+        { "kind": "stack", "x": 0.68, "y": 0.7, "w": 0.2, "h": 0.25, "label": "ResNet", "color": "sky" }
+      ],
+      "cap": {
+        "1": "Your network aces training and flunks validation on the same kind of data. The weights are fine. One switch was left in the wrong position.",
+        "2": "Train accuracy 95%, validation near chance. The usual culprit is a BatchNorm layer still in training mode because <code>model.eval()</code> was never called.",
+        "3": "Classic symptom: a train/val gap on one distribution, with val accuracy sensitive to loader order. BatchNorm in train mode is normalising by per-batch statistics and overwriting its buffers."
+      }
+    },
+    {
+      "name": "Curving the exam",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "write", "x": 0.2, "label": "teacher" },
+        { "pose": "sit", "x": 0.62 },
+        { "pose": "sit", "x": 0.78 }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.2, "y": 0.2, "label": "Q3: class average 41, spread 9", "color": "butter" },
+        { "kind": "stack", "x": 0.4, "y": 0.72, "w": 0.1, "h": 0.14, "label": "notebook", "color": "lav" },
+        { "kind": "scale", "x": 0.7, "y": 0.28, "label": "curve", "color": "peach" }
+      ],
+      "arrows": [[0.26, 0.28, 0.38, 0.62, "jot it down"]],
+      "cap": {
+        "1": "A teacher curves each exam question against today's class: subtract the class average, divide by the spread. Then she jots the average in a notebook.",
+        "2": "In training, BatchNorm normalises each channel using this batch's mean and variance, then nudges a running average of each. The notebook is those running statistics.",
+        "3": "Train mode: per-channel batch statistics over (N, H, W), plus an exponential moving average update of running_mean and running_var. Eval mode reads the averages instead."
+      }
+    },
+    {
+      "name": "The curve itself",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "y = ", "c": "ink", "note": "" },
+        { "t": "γ·", "c": "orange", "note": "school's scale (learned)" },
+        { "t": "(x − μ)", "c": "sky", "note": "minus today's average" },
+        { "t": "/√(σ² + ε)", "c": "pink", "note": "divided by today's spread" },
+        { "t": " + β", "c": "orange", "note": "school's shift (learned)" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "Subtract today's average, divide by today's spread, and every channel sits on the same scale. Then the network applies its own learned scale and shift.",
+        "2": "μ and σ² are per channel, pooled over batch, height and width. γ and β are learned, one each per channel: 2·C parameters whatever the image size. ε stops a divide by zero.",
+        "3": "γ and β let the layer undo the normalisation if that helps. Learned parameters: 2C. Buffers: running_mean, running_var, num_batches_tracked, registered so they sit in state_dict, not parameters()."
+      }
+    },
+    {
+      "name": "Down the column",
+      "need": "core",
+      "dur": 9,
+      "type": "grid",
+      "title": "One channel, pooled over the whole batch",
+      "rows": 4,
+      "cols": 3,
+      "values": [[0.9, 5.1, -2.0], [1.3, 4.2, -1.1], [0.2, 6.3, -2.8], [1.6, 4.8, -1.5]],
+      "labels": { "rows": ["image 0", "image 1", "image 2", "image 3"], "cols": ["channel 0", "channel 1", "channel 2"] },
+      "highlight": [[0, 0], [1, 0], [2, 0], [3, 0]],
+      "cap": {
+        "1": "BatchNorm pools straight down a column: one channel across every image in the batch. All of them share that column's average and spread.",
+        "2": "Statistics are per channel over N, H and W, so each image's output depends on which other images share its batch. LayerNorm pools along a row instead, inside one example.",
+        "3": "Per-channel reduction over (N, H, W) couples examples within a batch. LayerNorm reduces over features within an example: no batch dependence, so no train/eval split."
+      }
+    },
+    {
+      "name": "The make-up exam",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "model.eval()", "c": "mint", "lines": ["curve from the notebook", "same image, same answer", "notebook left alone"] },
+      "right": { "title": "still in train mode", "c": "pink", "lines": ["curve against whoever is in the room", "sorted loader: one class per batch", "class differences curved away", "notebook overwritten"] },
+      "verdict": "model.eval() before validating, model.train() when training resumes.",
+      "cap": {
+        "1": "A lone make-up exam should be graded from the notebook. Grade it against whoever happens to be in the room and the marks turn to nonsense.",
+        "2": "Eval mode uses the stored running stats. Left in train mode on a class-sorted loader, each batch holds one class, so the very differences between classes get normalised away.",
+        "3": "Train-mode eval uses batch-composition-dependent stats and corrupts the EMA buffers. model.eval() switches module behaviour; t.inference_mode() only switches off autograd. You need both."
+      }
+    },
+    {
+      "name": "The story that failed",
+      "need": "contested",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "shrug", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "scale", "x": 0.6, "y": 0.55, "w": 0.4, "h": 0.3, "color": "chalk" },
+        { "kind": "card", "x": 0.46, "y": 0.28, "label": "2015: reduces internal covariate shift", "color": "pink" },
+        { "kind": "card", "x": 0.76, "y": 0.28, "label": "2018: smoother loss landscape", "color": "mint" }
+      ],
+      "cap": {
+        "1": "For years everyone said BatchNorm worked by stopping layer inputs drifting. In 2018 a team put the drift back on purpose, and training still sped up.",
+        "2": "Ioffe and Szegedy (2015) credited 'internal covariate shift'. Santurkar et al. (NeurIPS 2018) injected shifting noise after BatchNorm and it still beat no normalisation. Their account: a smoother loss landscape.",
+        "3": "The call: the technique holds, the mechanism is contested. Current best account is landscape smoothing permitting larger stable learning rates. What you need is the train/eval split, not the theory."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["model.eval() before every validation pass", "Buffers: saved in state_dict, never trained", "Transformers use LayerNorm: no batch, no modes"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Remember the switch, save the notebook with the weights, and you will spot this bug in seconds for the rest of your career.",
+        "2": "Save with <code>state_dict()</code> so buffers travel with the weights. Transformers swap BatchNorm for LayerNorm, which has no batch dependence and so no modes to forget.",
+        "3": "Interpretability runs happen in eval mode; knowing which layers change behaviour between modes keeps your activation measurements honest when you set out to understand and steer models."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Change who else is in the room",
+    "params": [
+      { "id": "m", "label": "batch average (who else is in the room)", "min": -2, "max": 4, "step": 0.25, "value": 1 },
+      { "id": "s", "label": "batch spread", "min": 0.25, "max": 3, "step": 0.25, "value": 1 }
+    ],
+    "curves": [
+      { "f": "(x - m)/s", "c": "pink", "label": "train mode: curved against today's room" },
+      { "f": "(x - 1)/1", "c": "teal", "label": "eval mode: the notebook (mean 1, std 1)" }
+    ],
+    "x": [-3, 5],
+    "y": [-6, 6],
+    "readouts": [
+      { "label": "an image with value 2, train mode", "f": "((2 - m)/s).toFixed(2)" },
+      { "label": "the same image, eval mode", "f": "((2 - 1)/1).toFixed(2)" },
+      { "label": "how far apart the two grades are", "f": "abs((2 - m)/s - 1).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Drag who else is in the room. The pink train-mode line swings about; the teal eval-mode line never moves. Same image, different grades.",
+      "2": "Train mode normalises by this batch's mean and spread, so one image's output depends on its batchmates. Eval mode uses the stored running stats, here mean 1 and std 1.",
+      "3": "Train: (x − μ_B)/σ_B. Eval: (x − μ_run)/σ_run. A one-class batch drags μ_B towards that class and subtracts away exactly the signal you wanted to classify on."
+    }
+  },
+  "where_else": [
+    "Dropout, the other common layer that behaves differently under model.train() and model.eval()",
+    "LayerNorm in every transformer: the same normalise-then-rescale, pooled inside one example",
+    "Any buffer: state that must travel with a checkpoint but must never be trained"
+  ],
+  "hamming": {
+    "what": "A layer that normalises each channel using the current batch's statistics during training and remembered running averages at evaluation.",
+    "when": "In CNNs such as ResNets, typically between a convolution and its ReLU; transformers use LayerNorm instead.",
+    "why": "It keeps activations in a sane range so deep networks train faster and care less about initialisation, but its batch dependence makes the train/eval switch mandatory."
+  },
+  "object": {
+    "title": "The curving desk",
+    "subtitle": "Four images by four channels of activation bars, with a notebook switch.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 4,
+    "f": "(1 - curve)*([0.5, 1.2, 0.8, 1.6][c] + [0.1, 0.4, 0.25, 0.5][c]*([-1.34, -0.45, 0.45, 1.34][(r + c) % 4] + room)) + curve*(1.2 + 0.3*([-1.34, -0.45, 0.45, 1.34][(r + c) % 4] + mode*room))",
+    "labels": { "rows": ["image 0", "image 1", "image 2", "image 3"], "cols": ["ch 0", "ch 1", "ch 2", "ch 3"] },
+    "c": "data",
+    "knobs": [
+      { "id": "curve", "label": "Raw or curved (normalised)", "min": 0, "max": 1, "step": 0.05, "value": 0 },
+      { "id": "room", "label": "A one-class batch (everyone brighter)", "min": 0, "max": 1, "step": 0.05, "value": 0 },
+      { "id": "mode", "label": "Train mode (0) or eval mode (1)", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      { "cap": { "1": "Four images, four channels. Raw activations: every channel lives on its own scale, some tall, some tiny.", "2": "Raw per-channel activations: different means and spreads per column.", "3": "Unnormalised channels: heterogeneous first and second moments across C." }, "view": "iso", "set": { "curve": 0, "room": 0, "mode": 0 } },
+      { "cap": { "1": "Curve each channel down the batch: every column now has the same average and the same spread.", "2": "Normalised per channel over the batch: each column has mean 0 and unit spread (drawn around a baseline).", "3": "Post-normalisation each channel has zero mean, unit variance over the batch, before γ and β." }, "view": "front", "set": { "curve": 1, "room": 0, "mode": 0 } },
+      { "cap": { "1": "Now a batch where everyone is brighter, say one class. In train mode the bars do not budge: the batch's own average swallows the difference.", "2": "A shifted, one-class batch in train mode normalises to exactly the same bars. The shared shift is subtracted away.", "3": "Batch statistics absorb any batch-wide shift: μ_B moves with it, so (x − μ_B)/σ_B is unchanged." }, "view": "iso", "set": { "curve": 1, "room": 1, "mode": 0 } },
+      { "cap": { "1": "Flip to eval mode: curve from the notebook instead, and the batch's brightness shows up. That difference was the signal.", "2": "Eval mode uses running stats, so the batch-wide shift survives normalisation.", "3": "With fixed μ_run and σ_run the shift passes through as + room. Train-mode evaluation erases it; hence near-chance scores on class-sorted loaders." }, "view": "iso", "set": { "curve": 1, "room": 1, "mode": 1 } },
+      { "cap": { "1": "Peel back to the raw numbers: the one-class batch really was brighter all along. Train mode hid it.", "2": "The raw activations did shift. Only the train-mode normalisation made the shift invisible.", "3": "Raw inputs carry the class-level offset; whether it reaches the next layer depends only on which statistics you normalise by." }, "view": "side", "set": { "curve": 0, "room": 1, "mode": 1 } }
+    ],
+    "predict": [
+      { "q": "A batch of only bright images goes through BatchNorm in train mode. What happens to the brightness they share?", "options": [{ "t": "It is normalised away: the batch's own average absorbs it", "ok": true }, { "t": "It is preserved" }], "why": "Train mode subtracts this batch's mean, so anything the whole batch shares disappears. Eval mode uses the stored running mean, so it survives." },
+      { "q": "Where do running_mean and running_var live?", "options": [{ "t": "In state_dict as buffers, not in parameters()", "ok": true }, { "t": "In parameters(), updated by the optimiser" }], "why": "register_buffer puts them in the checkpoint without letting gradient descent touch them." },
+      { "q": "How many learned parameters does BatchNorm2d have for 64 channels?", "options": [{ "t": "128: one weight and one bias per channel", "ok": true }, { "t": "It depends on the image size" }], "why": "γ and β are per channel, so 2 × channels, whatever the height and width." }
+    ],
+    "where": "Anywhere statistics are pooled over a group: whatever the whole group shares gets erased."
+  }
+}

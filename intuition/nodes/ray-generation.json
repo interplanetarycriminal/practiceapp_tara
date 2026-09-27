@@ -1,0 +1,203 @@
+{
+  "id": "ray-generation",
+  "title": "Every torch gets a stand-and-aim card",
+  "week": 1,
+  "need": "exercise",
+  "allegory": "Making rays is like handing out torches at a doorway: everyone stands on the same spot, each gets a card saying 'stand here, aim at pane k', and the stack of cards in pane order is the tensor.",
+  "map": [
+    ["one torch-bearer", "one ray"],
+    ["the card's two lines: stand here, aim there", "the rayPoints=2 axis: origin, direction"],
+    ["each line written as three numbers", "the dims=3 axis: x, y, z"],
+    ["the stack of cards in window-pane order", "the nrays axis, giving shape (nrays, 2, 3)"],
+    ["panes spaced evenly across the window", "linspace(-y_limit, y_limit, num_pixels) for each direction's y"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "One question per pixel",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "a picture = one little question per pixel",
+      "actors": [{ "pose": "think", "x": 0.12, "label": "you" }],
+      "props": [
+        { "kind": "lamp", "x": 0.28, "y": 0.58, "label": "camera", "color": "butter" },
+        { "kind": "card", "x": 0.55, "y": 0.5, "w": 0.1, "h": 0.5, "label": "screen of pixels", "color": "sky" },
+        { "kind": "box", "x": 0.84, "y": 0.6, "w": 0.16, "h": 0.22, "label": "the scene", "color": "peach" }
+      ],
+      "arrows": [[0.31, 0.56, 0.8, 0.46, "ray"], [0.31, 0.6, 0.8, 0.7, ""]],
+      "cap": {
+        "1": "To draw a 3D scene, send a line from the camera through every pixel and ask what it hits. First you need all those lines, ready at once.",
+        "2": "Ray tracing asks, for every pixel, which object a ray from the camera hits. Before any hit test, <code>make_rays_1d</code> builds the rays themselves as one tensor, no loops.",
+        "3": "Rendering reduces to per-pixel ray queries. The first step is pure tensor construction: emit every ray as a batched (origin, direction) pair so later tests vectorise over nrays."
+      }
+    },
+    {
+      "name": "Torches at the door",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "carry", "x": 0.12, "to": 0.3, "label": "you" },
+        { "pose": "reach", "x": 0.6 }
+      ],
+      "props": [
+        { "kind": "stack", "x": 0.3, "y": 0.66, "w": 0.12, "h": 0.2, "label": "cards", "color": "butter" },
+        { "kind": "card", "x": 0.46, "y": 0.2, "label": "stand: camera / aim: pane 3", "color": "cream" },
+        { "kind": "lamp", "x": 0.66, "y": 0.48, "color": "orange" },
+        { "kind": "door", "x": 0.86, "y": 0.5, "w": 0.16, "h": 0.6, "label": "window of panes", "color": "sky" }
+      ],
+      "arrows": [[0.69, 0.47, 0.8, 0.36, "aim"]],
+      "cap": {
+        "1": "Picture handing out torches. Everyone stands on the same spot. Each card says two things: stand here, aim at that pane. One card per pane.",
+        "2": "Each ray is an origin and a direction. Every origin is the same point, the camera; each direction aims at one pixel. A batch of rays is a stack of these cards.",
+        "3": "A ray is the set O + tD for t ≥ 0. Generation fixes O (the shared camera centre) and one D per pixel; the batch stacks these pairs along a leading nrays axis."
+      }
+    },
+    {
+      "name": "Reading one card",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "O = (0,0,0)", "c": "sky", "note": "stand at the camera" },
+        { "t": "   D = (", "c": "ink", "note": "" },
+        { "t": "1", "c": "orange", "note": "one step to the screen" },
+        { "t": ", ", "c": "ink", "note": "" },
+        { "t": "yᵢ", "c": "pink", "note": "this pane's height" },
+        { "t": ", 0)", "c": "ink", "note": "flat: no z yet" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Every card reads the same way. Stand at the camera. Aim one step forward, then up or down to reach your own pane. Only that height changes.",
+        "2": "In <code>make_rays_1d</code> every origin is zero and every direction is <code>(1, y, 0)</code>: one unit forward to a screen, y the pixel's height on it. z stays 0 in 1D.",
+        "3": "Directions land on the plane x = 1, so D = (1, yᵢ, 0) with yᵢ = linspace(-y_limit, y_limit, num_pixels)[i], both endpoints included. z = 0 makes it a flat fan."
+      }
+    },
+    {
+      "name": "The whole stack",
+      "need": "exercise",
+      "dur": 11,
+      "type": "grid",
+      "title": "make_rays_1d(5, 1.0): shape (5, 2, 3)",
+      "rows": 5,
+      "cols": 6,
+      "values": [
+        [0, 0, 0, 1, -1, 0],
+        [0, 0, 0, 1, -0.5, 0],
+        [0, 0, 0, 1, 0, 0],
+        [0, 0, 0, 1, 0.5, 0],
+        [0, 0, 0, 1, 1, 0]
+      ],
+      "labels": { "rows": ["ray 0", "ray 1", "ray 2", "ray 3", "ray 4"], "cols": ["O.x", "O.y", "O.z", "D.x", "D.y", "D.z"] },
+      "highlight": [[0, 4], [1, 4], [2, 4], [3, 4], [4, 4]],
+      "to": { "rows": 10, "cols": 3 },
+      "cap": {
+        "1": "Five cards, one per pixel. Only one column changes: the heights, evenly spaced from -1 to 1. Unfold the stack and each card is two lines.",
+        "2": "Flat, each ray is six numbers. Only D.y varies, filled by <code>t.linspace(-y_limit, y_limit, num_pixels)</code>. Unfold to (10, 3) and each card shows its two lines of three.",
+        "3": "(nrays, 2, 3) viewed as (nrays, 6), then (2·nrays, 3). One column carries all the information; the rest is constant. Construction is zeros plus two slice assignments."
+      }
+    },
+    {
+      "name": "Right numbers, wrong stack",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "t.stack([O, D], dim=1)", "c": "mint", "lines": ["shape (n, 2, 3)", "one card per ray", "each card: stand, aim"] },
+      "right": { "title": "t.stack([O, D])", "c": "pink", "lines": ["shape (2, n, 3)", "all the 'stand' lines,", "then all the 'aim' lines", "no error on this line"] },
+      "verdict": "Same numbers, wrong stack. Name the axes so the layout is written down.",
+      "cap": {
+        "1": "Write all the 'stand' lines, then all the 'aim' lines, and stack them the lazy way: you get two piles, not one card per torch. Nothing complains.",
+        "2": "<code>t.stack</code> puts its new axis at dim 0 by default, giving (2, n, 3). No error here; the trouble surfaces lines later. Pass <code>dim=1</code> and check <code>rays.shape</code> in the debugger.",
+        "3": "Default stack dim=0 yields (rayPoints, nrays, dims). Shape-valid mistakes surface downstream, not where they were made. Annotate Float[Tensor, 'nrays rayPoints=2 dims=3'] and read shapes at a breakpoint."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Next: test every ray against a triangle at once", "Name your axes: nrays rayPoints=2 dims=3", "Model insides are stacks too: (batch, pos, d_model)"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Once the rays are one neat stack, a single operation can test them all. The same habit lets you read a model's insides later.",
+        "2": "Next you intersect every ray with a triangle in one batched solve. The skill underneath, building a tensor with a known layout, is the one you use on every activation cache.",
+        "3": "Knowing exactly which axis means what is prerequisite to hooking, slicing and patching (batch, pos, d_model) activations when you set out to understand and steer models."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Fan the rays: drag the screen limit and the camera height",
+    "params": [
+      { "id": "L", "label": "y_limit (how far the panes spread)", "min": 0.25, "max": 2.5, "step": 0.25, "value": 1 },
+      { "id": "h", "label": "camera height (shared origin)", "min": -1, "max": 1, "step": 0.25, "value": 0 }
+    ],
+    "curves": [
+      { "f": "h - L*x", "c": "sky", "label": "ray 0" },
+      { "f": "h - 0.5*L*x", "c": "teal", "label": "ray 1" },
+      { "f": "h + 0*x", "c": "ink", "label": "ray 2" },
+      { "f": "h + 0.5*L*x", "c": "orange", "label": "ray 3" },
+      { "f": "h + L*x", "c": "pink", "label": "ray 4" }
+    ],
+    "x": [0, 2],
+    "y": [-4, 4],
+    "readouts": [
+      { "label": "heights where the rays cross the screen (x = 1)", "f": "[-L, -L/2, 0, L/2, L].map(v => (h + v).toFixed(2)).join(', ')" },
+      { "label": "gap between neighbouring rays on the screen", "f": "(L/2).toFixed(2)" },
+      { "label": "tensor shape", "f": "'(5, 2, 3)'" }
+    ],
+    "caption": {
+      "1": "Drag y_limit to fan the rays wider or narrower. Then move the camera: every ray shifts together, because they all share one starting spot.",
+      "2": "y_limit is the linspace range, so it sets the field of view. The camera slider changes O, one point shared by every ray, which is why the whole fan moves at once.",
+      "3": "D = (1, yᵢ, 0) with yᵢ evenly spaced in [-L, L]; O is common to all rays. L sets the angular spread (tan of the half-angle); changing O translates the fan rigidly."
+    }
+  },
+  "where_else": [
+    "Every batch you feed a model: one slot per example along the first axis, the same inner layout in each",
+    "The next exercise: intersecting all rays with a triangle in one batched linear solve",
+    "Activation caches in interpretability, laid out as (batch, position, d_model)"
+  ],
+  "hamming": {
+    "what": "Building a batch of rays as one tensor of shape (nrays, 2, 3), each ray an origin and a direction.",
+    "when": "At the start of any ray tracer, and whenever you turn a loop over items into one batched tensor.",
+    "why": "One well-laid-out tensor lets a single operation handle every ray at once, and a named layout stops the 2 and the 3 being confused."
+  },
+  "object": {
+    "title": "The ray fan",
+    "subtitle": "Nine wires from one brass camera through a 3×3 screen: a batch of rays you can hold.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "cam", "label": "camera (origin)", "pos": [0, 0, -1.3], "c": "brass" },
+      { "id": "p0", "label": "p0", "pos": [-0.9, 0.9, 0.9], "c": "dir" },
+      { "id": "p1", "label": "p1", "pos": [0, 0.9, 0.9], "c": "dir" },
+      { "id": "p2", "label": "p2", "pos": [0.9, 0.9, 0.9], "c": "dir" },
+      { "id": "p3", "label": "p3", "pos": [-0.9, 0, 0.9], "c": "dir" },
+      { "id": "p4", "label": "p4", "pos": [0, 0, 0.9], "c": "dir" },
+      { "id": "p5", "label": "p5", "pos": [0.9, 0, 0.9], "c": "dir" },
+      { "id": "p6", "label": "p6", "pos": [-0.9, -0.9, 0.9], "c": "dir" },
+      { "id": "p7", "label": "p7", "pos": [0, -0.9, 0.9], "c": "dir" },
+      { "id": "p8", "label": "p8", "pos": [0.9, -0.9, 0.9], "c": "dir" }
+    ],
+    "edges": [["cam", "p0"], ["cam", "p1"], ["cam", "p2"], ["cam", "p3"], ["cam", "p4"], ["cam", "p5"], ["cam", "p6"], ["cam", "p7"], ["cam", "p8"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "Nine wires leave one brass camera and pass through a 3×3 screen. Each wire is one card in the stack.", "2": "A 2D batch of rays: nine (origin, direction) pairs, one per pixel.", "3": "make_rays_2d generalises the 1D fan: nrays = num_y · num_z directions sharing one origin." }, "view": "iso", "set": {} },
+      { "cap": { "1": "Look straight down the wires and they pierce the screen in a neat grid: one ray per pixel.", "2": "Down the optical axis the directions tile the screen: the pixel grid, flattened into the nrays axis.", "3": "The direction endpoints form a lattice on the image plane; row-major flattening of that lattice is the nrays ordering." }, "view": "front", "set": {} },
+      { "cap": { "1": "From the side the fan flattens to three heights. That flat fan is the 1D exercise.", "2": "Project out one screen axis and you are back to make_rays_1d: one column of pixels.", "3": "Fixing z = 0 collapses the lattice to the 1D fan: D = (1, yᵢ, 0)." }, "view": "side", "set": {} },
+      { "cap": { "1": "Every wire starts at the same brass camera. The first line of every card is identical; only the aim differs.", "2": "Origins are all equal, so only the directions carry information.", "3": "O is constant across nrays; downstream code can broadcast a single origin instead of reading it per ray." }, "view": "close", "set": {} },
+      { "cap": { "1": "Pulses race along all nine wires at once. That is the point of the stack: every ray handled in one go.", "2": "One tensor means one batched operation tests every ray, no Python loop.", "3": "Batching turns nrays scalar problems into one vectorised op, the pattern the intersection exercise relies on." }, "view": "iso", "set": {} }
+    ],
+    "predict": [
+      { "q": "How many numbers does the stack hold for these 9 rays?", "options": [{ "t": "54: nine cards, two lines, three numbers each", "ok": true }, { "t": "27" }, { "t": "18" }], "why": "Shape (9, 2, 3) holds 9 × 2 × 3 = 54 numbers, even though the origin lines all repeat." },
+      { "q": "You build origins (9, 3) and directions (9, 3), then call t.stack([O, D]) with no dim. What shape comes out?", "options": [{ "t": "(2, 9, 3): the new axis goes at the front", "ok": true }, { "t": "(9, 2, 3)" }, { "t": "An error" }], "why": "torch.stack defaults to dim=0. Pass dim=1 to get one card per ray." },
+      { "q": "Why build every ray into one tensor instead of looping over pixels?", "options": [{ "t": "So one batched operation can test every ray at once", "ok": true }, { "t": "Because loops give different answers" }], "why": "Each ray is a small linear-algebra problem; batching solves them all together instead of one at a time." }
+    ],
+    "where": "Any batched tensor: one slot per item along the first axis, the same inner layout in every slot."
+  }
+}

@@ -1,0 +1,199 @@
+{
+  "id": "backward-function",
+  "title": "An exchange booth at every step",
+  "week": 4,
+  "need": "core",
+  "allegory": "A backward function is like an exchange booth at each step of a road: blame for the result arrives in the output's currency, and the booth converts it at its own local rate into blame for each of its inputs.",
+  "map": [
+    ["an exchange booth at each step of the road", "a backward function registered for each operation"],
+    ["blame arriving in the output's currency", "grad_out: the gradient of the loss with respect to this op's output"],
+    ["the booth's exchange rate, set by what passed through it", "the local derivative, e.g. 1/x for log, computed from saved forward values"],
+    ["a separate rate for each supplier", "one backward function per argument position (for x·y: rate y for x, rate x for y)"],
+    ["converted blame handed to each supplier", "the gradient with respect to each input, passed further back"]
+  ],
+  "credit": "The 'local derivative times the gradient arriving from above' framing follows Andrej Karpathy's micrograd lecture, where each operation stores its own _backward.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Who gets the blame?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "nudge every knob and rerun? a million reruns",
+      "actors": [{ "pose": "shrug", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.5, "y": 0.58, "w": 0.14, "h": 0.38, "label": "a million knobs", "color": "sky" },
+        { "kind": "scale", "x": 0.78, "y": 0.6, "label": "loss: too high", "color": "red" }
+      ],
+      "cap": {
+        "1": "The model's answer is bad. A million knobs made it. Which ones are to blame, and by how much? Nudging each knob and rerunning would take forever.",
+        "2": "Finite differences needs one forward pass per parameter: fine as a check, hopeless for training. Backprop gets every gradient from a single backward sweep.",
+        "3": "Finite differences costs O(#params) forward passes. Reverse-mode AD gets the whole gradient of a scalar loss for a small constant multiple of one forward pass, by composing local derivatives."
+      }
+    },
+    {
+      "name": "A booth per step",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "point", "x": 0.12, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.36, "y": 0.6, "w": 0.16, "h": 0.22, "label": "log booth", "color": "mint" },
+        { "kind": "box", "x": 0.6, "y": 0.6, "w": 0.16, "h": 0.22, "label": "× booth", "color": "mint" },
+        { "kind": "flag", "x": 0.86, "y": 0.62, "label": "loss", "color": "red" }
+      ],
+      "arrows": [[0.82, 0.42, 0.67, 0.42, "blame"], [0.54, 0.42, 0.42, 0.42, "converted blame"]],
+      "cap": {
+        "1": "Instead, every operation keeps an exchange booth. Blame arrives from downstream, gets converted at the booth's own rate, and is handed back to its inputs.",
+        "2": "A backward function takes grad_out (how much the loss cares about this op's output) and returns how much it cares about each input. Each op only needs its own local rate.",
+        "3": "Each forward op registers a backward mapping grad_out to a gradient per argument: a vector-Jacobian product. No op needs global knowledge; the chain rule is assembled from local pieces."
+      }
+    },
+    {
+      "name": "The booth's rule",
+      "need": "core",
+      "dur": 9,
+      "type": "equation",
+      "parts": [
+        { "t": "∂L/∂x", "c": "sky", "note": "blame for my input" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "∂L/∂out", "c": "orange", "note": "blame arriving (grad_out)" },
+        { "t": " · ", "c": "ink", "note": "times" },
+        { "t": "∂out/∂x", "c": "green", "note": "the booth's rate" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Blame for my input = blame for my output × how fast my output moves when my input moves. That speed is the exchange rate.",
+        "2": "In code: <code>grad_in = grad_out * local_derivative</code>. For log the local derivative is 1/x, so <code>log_back</code> returns <code>grad_out / x</code>.",
+        "3": "∂L/∂x = (∂L/∂out)(∂out/∂x). For tensors this is a vector-Jacobian product, computed without materialising the Jacobian (elementwise ops have a diagonal one)."
+      }
+    },
+    {
+      "name": "The rate card",
+      "need": "library",
+      "dur": 9,
+      "type": "grid",
+      "title": "each booth's rule (g = grad_out)",
+      "rows": 4,
+      "cols": 2,
+      "values": [["log x", "g / x"], ["eˣ", "g · out"], ["x · y", "g·y and g·x"], ["x + y", "g and g"]],
+      "labels": { "rows": ["log", "exp", "multiply", "add"], "cols": ["forward", "backward"] },
+      "highlight": [[0, 1], [1, 1], [2, 1], [3, 1]],
+      "cap": {
+        "1": "Each kind of booth has its own rule. Multiply has two suppliers, so two rules. Add simply passes the blame straight through to both.",
+        "2": "exp's rate is its own output, one reason backward functions are handed <code>out</code> too. Two-input ops register one backward per argument position.",
+        "3": "ARENA dispatches (forward_fn, arg_position) to a backward via a lookup table; signatures take (grad_out, out, *args) so a rate can use saved inputs or the output."
+      }
+    },
+    {
+      "name": "The log cliff",
+      "need": "exercise",
+      "dur": 9,
+      "type": "plot",
+      "curves": [
+        { "f": "log(x)", "c": "sky", "label": "log x (forward)" },
+        { "f": "1/x", "c": "orange", "label": "rate 1/x (backward)" }
+      ],
+      "x": [0.05, 4],
+      "y": [-3, 6],
+      "dot": true,
+      "marks": [{ "x": 1, "label": "rate = 1" }],
+      "cap": {
+        "1": "Here is log, the booth in your exercise. Near zero it is a cliff: its rate shoots up, so a little blame arriving becomes a flood leaving.",
+        "2": "<code>log_back</code> is one line, <code>grad_out / x</code>, but that 1/x explodes as x approaches 0. Remember it whenever you take the log of a tiny probability.",
+        "3": "The 1/x factor is why cross-entropy is computed from logits via log-softmax: fusing the ops keeps forward and backward numerically stable instead of dividing by a tiny p."
+      }
+    },
+    {
+      "name": "Copies send blame home",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "Summed back down", "c": "mint", "lines": ["b stretched (3,) → (4, 3)", "blame arrives as (4, 3)", "add up the 4 copies", "b's gradient is (3,)"] },
+      "right": { "title": "Handed back as is", "c": "pink", "lines": ["blame stays (4, 3)", "wrong shape for b", "the copies' blame is never added"] },
+      "verdict": "A value used four times gets blame from all four. Sum it home.",
+      "cap": {
+        "1": "If the forward pass copied a value four times, all four copies send blame back. The booth must add them up before handing blame to the original.",
+        "2": "When the forward pass broadcast an input, its gradient comes back in the bigger shape. The backward must <code>unbroadcast</code>: sum over the stretched axes to match the input.",
+        "3": "Broadcasting is fan-out, so its adjoint is a sum: reduce over the expanded dims (keeping them) and over the prepended ones. Skip it and the gradient comes back the wrong shape for its input."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["loss.backward() runs these booths for you", "Gradients on activations power attribution", "Fused ops exist to tame steep rates"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "You will rarely write one again: PyTorch has a booth for every operation. But knowing what they do tells you why training breaks when it does.",
+        "2": "Every <code>loss.backward()</code> runs these conversions in reverse order. Gradients with respect to activations, not just weights, are also how attribution methods ask which parts of a model mattered.",
+        "3": "Autograd is a library call for life, but reading gradients with respect to activations is a core interpretability tool for understanding, and then steering, what a model relies on."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Run the log booth yourself",
+    "params": [
+      { "id": "x0", "label": "input x", "min": 0.05, "max": 5, "step": 0.05, "value": 1 },
+      { "id": "g", "label": "blame arriving (grad_out)", "min": -2, "max": 2, "step": 0.1, "value": 1 }
+    ],
+    "curves": [
+      { "f": "log(x)", "c": "sky", "label": "log x" },
+      { "f": "log(x0) + (x - x0)/x0", "c": "orange", "label": "tangent at x: its slope is the booth's rate" }
+    ],
+    "x": [0.05, 5],
+    "y": [-3, 2.5],
+    "readouts": [
+      { "label": "forward: log x", "f": "log(x0).toFixed(3)" },
+      { "label": "booth's rate, 1/x", "f": "(1/x0).toFixed(3)" },
+      { "label": "log_back: grad_out / x", "f": "(g/x0).toFixed(3)" },
+      { "label": "check by nudging x (central difference)", "f": "(g*(log(x0 + 1e-4) - log(x0 - 1e-4))/2e-4).toFixed(3)" }
+    ],
+    "caption": {
+      "1": "Slide x and watch the booth's rate, the slope of the orange line. Near zero, log is a cliff: a little blame arriving becomes a lot passed back.",
+      "2": "log_back returns grad_out / x. The last readout nudges x a tiny bit each way and measures the change directly. They match, and that is how you test any backward function.",
+      "3": "∂L/∂x = g/x. The central difference (f(x+h) − f(x−h))/2h agrees to O(h²) and shares no code with your backward, which makes it the reference check. Watch the 1/x blow-up near 0."
+    }
+  },
+  "where_else": [
+    "loss.backward() in every training loop: PyTorch runs one of these per operation, in reverse order",
+    "Attribution methods in interpretability, which read gradients with respect to activations",
+    "Any chain of conversions where rates multiply: currencies, gear trains, unit conversions"
+  ],
+  "hamming": {
+    "what": "A small rule stored with each operation that turns the loss's sensitivity to its output into sensitivity to each of its inputs.",
+    "when": "Every time you call loss.backward(), and whenever you write a custom operation or debug a gradient that is too big, too small or the wrong shape.",
+    "why": "It turns one global question, which knobs matter, into many tiny local ones that each operation can answer on its own."
+  },
+  "object": {
+    "title": "The booth chain",
+    "subtitle": "Two exchange booths on a table, with blame pulsing back from the loss to every input.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "L", "label": "loss L = w · log x (blame 1)", "pos": [1.3, 0.5, 0], "c": "grad" },
+      { "id": "mul", "label": "× booth: rate w for a, rate a for w", "pos": [0.45, 0.5, 0], "c": "aux" },
+      { "id": "w", "label": "w = 3, blame a ≈ −0.69", "pos": [0.45, -0.7, 0.4], "c": "data" },
+      { "id": "log", "label": "log booth: a = log x, rate 1/x = 2", "pos": [-0.45, 0.5, 0], "c": "aux" },
+      { "id": "x", "label": "x = 0.5, blame 3 × 2 = 6", "pos": [-1.3, 0.5, 0], "c": "data" }
+    ],
+    "edges": [["L", "mul"], ["mul", "log"], ["mul", "w"], ["log", "x"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "A loss built from two booths: take the log, then multiply by w. Blame starts at the loss as 1 and flows backwards.", "2": "L = w · log x with x = 0.5 and w = 3. The backward pass starts from dL/dL = 1 and visits each booth in reverse.", "3": "Reverse mode seeds ∂L/∂L = 1 and applies each op's backward function in reverse topological order." }, "view": "iso" },
+      { "cap": { "1": "The multiply booth has two suppliers, so two rates: blame for a is multiplied by w, blame for w by a.", "2": "Multiply's backward is two functions, one per argument: the gradient for a is 1 × w = 3, for w it is 1 × a ≈ −0.69.", "3": "Backward functions are keyed by (op, argument position); for a·w they are g·w and g·a, each unbroadcast to its input's shape." }, "view": "close" },
+      { "cap": { "1": "The log booth's rate is 1/x. At x = 0.5 that is 2, so 3 units of blame arriving become 6 leaving.", "2": "log_back(grad_out, out, x) returns grad_out / x: here 3 / 0.5 = 6. It needs x, which is why the forward pass keeps its inputs.", "3": "log_back needs the saved input x, while exp_back can reuse out. Saved tensors are why autograd memory grows with the activations kept." }, "view": "front" },
+      { "cap": { "1": "No booth knows the whole road, only its own rate. Chain them and the rates multiply: 1 × 3 × 2 = 6.", "2": "The chain rule is exactly this: multiply local rates along the path from the loss to an input.", "3": "∂L/∂x is the product of local derivatives along the path; with fan-out you sum over paths. That is all reverse-mode autodiff does." }, "view": "top" }
+    ],
+    "predict": [
+      { "q": "x = 0.01 enters the log booth and 1 unit of blame arrives. How much blame leaves for x?", "options": [{ "t": "100, because the rate is 1/x", "ok": true }, { "t": "0.01" }, { "t": "About −4.6, the value of log 0.01" }], "why": "log_back returns grad_out / x. Near zero log is steep, so blame is magnified: one reason losses are computed from logits rather than from the log of a tiny probability." },
+      { "q": "Why are backward functions handed the forward output as well as the inputs?", "options": [{ "t": "Some rates are easiest from the output: exp's rate is the output itself", "ok": true }, { "t": "To double-check the forward pass was right" }], "why": "The derivative of eˣ is eˣ, which is exactly out, so passing it saves recomputing." }
+    ],
+    "where": "Any chain of conversions where rates multiply: currency exchanges, gear trains, unit conversions."
+  }
+}

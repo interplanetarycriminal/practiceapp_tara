@@ -1,0 +1,108 @@
+{
+  "id": "backprop-and-topological-order",
+  "title": "Pass the blame back, add it up",
+  "week": 4,
+  "need": "core",
+  "allegory": "Backprop is a kitchen inquest run backwards from the judge's score: each cook waits until every dish they fed into has sent back a note saying how much the score moves per unit of their ingredient, adds those notes up, and only then sends notes on to their own suppliers.",
+  "map": [
+    ["the judge's score on the final dish", "the loss L, the root of the graph"],
+    ["a note: how much the score moves per unit of what you supplied", "the gradient arriving along one edge, dL/d(node)"],
+    ["wait until every dish you fed into has reported", "topological order: every consumer runs its backward before the node does"],
+    ["add up the notes from every dish you supplied", "accumulate: dL/da is the sum over all paths from a to L"],
+    ["the farm at the end of the chain files the final tally", "leaf tensors: the gradient is written into .grad"]
+  ],
+  "credit": "Accumulate-don't-overwrite bug and the topological walk framed as in Andrej Karpathy's micrograd video, The spelled-out intro to neural networks and backpropagation.",
+  "linked_film": "films/deep-w04-backprop.html",
+  "linked_object": null,
+  "where_else": [
+    "loss.backward() in every training loop: this exact walk, done for you by autograd",
+    "Build systems and spreadsheets: compute a cell only once everything it depends on is ready",
+    "Gradient-based attribution in interpretability: the same backward walk from a logit to an activation"
+  ],
+  "hamming": {
+    "what": "Getting every weight's gradient in one backward sweep, walking the graph from the loss outwards so each node's incoming gradient is complete, and adding where a value was used twice.",
+    "when": "Every time you call loss.backward(); you build it by hand once in [0.4], then let autograd do it forever after.",
+    "why": "Nudging each weight and re-running the model needs one full run per weight; backprop gets them all from one forward and one backward pass."
+  },
+  "object": {
+    "title": "The blame relay",
+    "subtitle": "A small computation graph where pulses of gradient run from the loss back to the weights, adding up where paths meet.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "L", "label": "L (loss, the root)", "pos": [1.3, 0, 0], "c": "grad" },
+      { "id": "c", "label": "c = a + b", "pos": [0.6, 0, 0], "c": "data" },
+      { "id": "b", "label": "b = f(a)", "pos": [0.05, 0.75, 0.2], "c": "data" },
+      { "id": "a", "label": "a = w·x (used twice)", "pos": [-0.45, 0, 0], "c": "data" },
+      { "id": "w", "label": "w (leaf: .grad lands here)", "pos": [-1.2, 0.6, -0.3], "c": "brass" },
+      { "id": "x", "label": "x (input)", "pos": [-1.2, -0.6, 0.3], "c": "data" }
+    ],
+    "edges": [["L", "c"], ["c", "a"], ["c", "b"], ["b", "a"], ["a", "w"], ["a", "x"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "Every step of the calculation left a node, with a link back to what it was made from. The loss sits at the root.",
+          "2": "The forward pass records a recipe per tensor: which op made it and from which parents. That record is the graph backprop walks.",
+          "3": "A DAG of recorded ops: each non-leaf holds its function, args and parents. L is the root; parameters and inputs are the leaves."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Blame starts at the loss and flows back. A node may only pass it on once everyone who used it has reported in.",
+          "2": "Topologically sort from L outwards, then walk that order. Each node's backward turns grad-wrt-output into grad-wrt-each-input.",
+          "3": "Topological order guarantees every consumer has deposited its contribution before a node's backward runs; violate it and a partial grad propagates silently."
+        },
+        "view": "front",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "a was used twice, by f and by the plus. Two notes of blame arrive, and a must add them. Keep only one and you often get exactly half.",
+          "2": "Fan-out means one gradient per path, and the answer is their sum. Assign instead of add and d(x·x)/dx comes out as x, not 2x.",
+          "3": "dL/da = dL/dc · (1 + f'(a)): the identity path plus the branch. Accumulate with +=; addition commutes, so sibling order does not matter."
+        },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "At the far end, the weight files its tally. That number is what the optimiser will use to take a step.",
+          "2": "At leaves, the gradient is written into <code>.grad</code> instead of being passed further. Backprop fills .grad; the optimiser decides what to do with it.",
+          "3": "Leaves with requires_grad get .grad written; intermediate grads are held temporarily. Broadcast ops need unbroadcast: sum over stretched dims."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "One walk back gives every weight its number at once. Nudging each weight one at a time would need a whole new run per weight.",
+          "2": "Finite differences need a forward pass per parameter, fine only as a check. Backprop gets all gradients from one forward and one backward pass.",
+          "3": "Reverse-mode AD suits one scalar output and many inputs. Check against central differences on a small function: no shared failure mode."
+        },
+        "view": "side",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "In c = a + f(a), a feeds both f and the plus. What is dL/da?",
+        "options": [{ "t": "The sum of the gradients from both paths", "ok": true }, { "t": "Whichever path's gradient arrives last" }, { "t": "The average of the two" }],
+        "why": "Each path carries its own share of a's influence on L, and the chain rule adds them. Overwriting keeps one term of a two-term sum."
+      },
+      {
+        "q": "Your backprop matches PyTorch on a straight chain but gives exactly half on x * x. Most likely bug?",
+        "options": [{ "t": "Assigning each gradient instead of adding it", "ok": true }, { "t": "Floating-point error" }, { "t": "The forward pass is wrong" }],
+        "why": "x * x uses x twice, and each use sends back x. The true gradient is x + x = 2x; overwriting keeps only one x."
+      },
+      {
+        "q": "Why sort the graph before walking it?",
+        "options": [{ "t": "So each node's incoming gradient is complete before its backward runs", "ok": true }, { "t": "To make the forward pass faster" }, { "t": "So the leaves are processed first" }],
+        "why": "Run a node early and it passes on a partial gradient. Nothing errors; the numbers are just quietly too small."
+      }
+    ],
+    "where": "Any dependency graph handled in reverse order: autograd engines, build systems, spreadsheet recalculation."
+  }
+}

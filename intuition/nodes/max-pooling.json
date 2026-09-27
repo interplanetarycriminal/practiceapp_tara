@@ -1,0 +1,172 @@
+{
+  "id": "max-pooling",
+  "title": "Only the loudest in each square",
+  "week": 2,
+  "need": "library",
+  "allegory": "Max pooling is like a scout reporting from a map cut into 2x2 squares: from each square she radios back only the strongest signal, so the map shrinks to a quarter but no strong signal is lost, only its exact spot.",
+  "map": [
+    ["the map of signal strengths", "a feature map: how strongly a detector fired at each position"],
+    ["one 2x2 square, stepping two squares at a time", "a pooling window with kernel 2 and stride 2"],
+    ["radioing back only the strongest signal", "taking the max of each window"],
+    ["the scout carries no notebook of weights", "no learned parameters, unlike a convolution"],
+    ["only the signal she reported gets thanked afterwards", "only the max element receives gradient"]
+  ],
+  "credit": "The 'was this feature detected anywhere in the window?' reading follows Andrew Ng, Deep Learning Specialization, Convolutional Neural Networks, 'Pooling Layers'.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Too big to carry",
+      "need": "library",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "most neighbours say the same thing",
+      "actors": [{ "pose": "carry", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.66, "y": 0.56, "w": 0.3, "h": 0.42, "label": "feature map", "color": "sky" },
+        { "kind": "card", "x": 0.66, "y": 0.18, "label": "next layer: smaller, please", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A detector has scored every pixel for 'is there an edge here?'. The map is big, and neighbouring scores mostly say the same thing.",
+        "2": "After a conv layer each channel is a full-size feature map. You want it smaller before the next layer, without learning anything new to do it.",
+        "3": "Feature maps are spatially redundant. Downsampling cuts work for later layers and widens each later unit's receptive field, and a fixed rule can do it with zero parameters."
+      }
+    },
+    {
+      "name": "The scout's report",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "walk", "x": 0.12, "to": 0.5, "label": "scout" }],
+      "props": [
+        { "kind": "box", "x": 0.3, "y": 0.58, "w": 0.14, "h": 0.2, "label": "0 5 3 1", "color": "mint" },
+        { "kind": "box", "x": 0.46, "y": 0.58, "w": 0.14, "h": 0.2, "label": "3 1 6 4", "color": "mint" },
+        { "kind": "flag", "x": 0.3, "y": 0.4, "label": "5", "color": "red" },
+        { "kind": "flag", "x": 0.46, "y": 0.4, "label": "6", "color": "red" },
+        { "kind": "card", "x": 0.82, "y": 0.3, "label": "report: 5, 6", "color": "butter" }
+      ],
+      "arrows": [[0.56, 0.42, 0.72, 0.32, "loudest only"]],
+      "cap": {
+        "1": "A scout crosses a map cut into small squares. From each square she radios back one number: the strongest signal in it. The map shrinks, the peaks survive.",
+        "2": "Max pooling slides a window, usually 2x2 with stride 2, across the map and outputs each window's maximum. Height and width halve; three of every four numbers are dropped.",
+        "3": "MaxPool2d(kernel_size=2, stride=2): non-overlapping windows, output = window max. It keeps the strongest activation per region and forgets where inside the window it was."
+      }
+    },
+    {
+      "name": "Four squares, four winners",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "4x4 in, 2x2 out: keep each square's max",
+      "rows": 4,
+      "cols": 4,
+      "values": [[0, 5, 3, 1], [3, 1, 6, 4], [6, 4, 2, 0], [2, 0, 5, 3]],
+      "highlight": [[0, 1], [1, 2], [2, 0], [3, 2]],
+      "cap": {
+        "1": "Sixteen numbers, four 2x2 squares. The lit cell in each square is its biggest number, and only those four go on to the next layer.",
+        "2": "Each 2x2 window reports its max: 5, 6, 6, 5. The output is 2x2. The other twelve values are simply not passed on.",
+        "3": "Input (4, 4), output (2, 2): out[i, j] = max over x[2i:2i+2, 2j:2j+2]. Twelve of sixteen activations are discarded; the backward pass only needs the argmax positions."
+      }
+    },
+    {
+      "name": "View, then max",
+      "need": "exercise",
+      "dur": 11,
+      "type": "equation",
+      "parts": [
+        { "t": "out[i,j]", "c": "ink", "note": "one report" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "max", "c": "orange", "note": "keep the biggest" },
+        { "t": "(", "c": "ink", "note": "" },
+        { "t": "x[2i:2i+2, 2j:2j+2]", "c": "sky", "note": "one 2x2 square, stepping 2" },
+        { "t": ")", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Each output cell is the biggest number in its own little square. Step two cells, take the max, repeat. There is nothing to learn.",
+        "2": "In [0.2] you build it from the stride trick: <code>as_strided</code> makes a view of every 2x2 window without copying, then you take the max over the two window axes.",
+        "3": "View sizes (B, C, H_out, W_out, k, k) with strides (sB, sC, s·sH, s·sW, sH, sW), then amax over the last two dims. H_out = floor((H + 2p - k)/s + 1), the same formula as conv."
+      }
+    },
+    {
+      "name": "The padding trap",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "pad with 0", "c": "pink", "lines": ["edge window: -3, -1, pad, pad", "max = 0", "a value that was never there"] },
+      "right": { "title": "pad with -inf", "c": "mint", "lines": ["edge window: -3, -1, -inf, -inf", "max = -1", "padding can never win"] },
+      "verdict": "For a max, padding must be a value that can never win.",
+      "cap": {
+        "1": "At the edge the scout counts empty squares too. If empty counts as 0 and every real signal is negative, she reports 0, a signal nobody sent.",
+        "2": "Padding a max pool with zeros invents values when activations are negative. Pad with <code>-inf</code> so padding can never be the max. <code>nn.MaxPool2d</code> does this for you.",
+        "3": "Zero padding biases border maxima upward whenever every real value in the window is below 0. The identity for max is -inf, as 0 is for sum: pad with the identity of the reduction."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "library",
+      "dur": 9,
+      "type": "cards",
+      "items": ["nn.MaxPool2d: a library call from here on", "Pooling picks, it never learns", "Gradient flows only to each window's winner"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "After this exercise it is one library call. Keep the idea: pooling picks, it never learns, and only the winners get credit when the model updates.",
+        "2": "<code>nn.MaxPool2d</code> from now on. For understanding a model: pooling has no weights, so the learned features live in the convolutions; the pool only selects.",
+        "3": "Max is piecewise linear, so gradient reaches only each window's argmax: attributions through a pool are sparse and snapped to winners. Learned features live in the kernels, not the pool."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Tap cells to raise them and watch the pooled 2x2 report",
+    "rows": 4,
+    "cols": 4,
+    "init": "(r*3 + c*5) % 7",
+    "click": "inc",
+    "readouts": [
+      { "label": "pooled 2x2 (top row | bottom row)", "f": "[0,2].map(i => [0,2].map(j => Math.max(G[i][j], G[i][j+1], G[i+1][j], G[i+1][j+1])).join(' ')).join('  |  ')" },
+      { "label": "winners (the only cells that get gradient)", "f": "[0,2].flatMap(i => [0,2].map(j => { let b = [i, j]; for (const [a, e] of [[i, j], [i, j+1], [i+1, j], [i+1, j+1]]) { if (G[a][e] > G[b[0]][b[1]]) b = [a, e]; } return '(' + b[0] + ',' + b[1] + ')'; })).join(' ')" }
+    ],
+    "caption": {
+      "1": "Tap a cell to raise it. Raise a small one: the report does not move. Keep going until it beats its square's winner, then watch it take over.",
+      "2": "Only the max of each 2x2 window survives. Bumping a non-winner changes nothing, which is exactly why its gradient is zero. The winners list is where gradient flows.",
+      "3": "The output is flat in every non-argmax input (zero gradient) until that input crosses the current max, then tracks it 1:1. Ties aside, each window routes all of dL/dy to one cell."
+    }
+  },
+  "where_else": [
+    "Global max pooling: one number per channel saying whether a feature fired anywhere in the image",
+    "Max-activating examples for a neuron or SAE latent: the max over positions, 'did it fire anywhere here?'",
+    "Greedy decoding: keep the single top-scoring token, drop the rest"
+  ],
+  "hamming": {
+    "what": "A parameter-free way to shrink a feature map by keeping the largest value in each small window.",
+    "when": "Between convolution layers in a CNN, when you want smaller maps and do not care exactly where inside a window a feature fired.",
+    "why": "The max keeps the strongest evidence that a pattern appeared while cutting the map to a quarter and forgiving small shifts."
+  },
+  "object": {
+    "title": "The pooling tray",
+    "subtitle": "A 4x4 tray of bars that collapses to one height per square, where only the tallest bar in each square is wired backwards.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 4,
+    "f": "((R, C, v) => { const m = Math.max(v(R, C), v(R, C+1), v(R+1, C), v(R+1, C+1)); return view < 0.5 ? v(r, c) : view < 1.5 ? m : (v(r, c) === m ? 1 : 0.05); })(Math.floor(r/2)*2, Math.floor(c/2)*2, (i, j) => ((i*3 + j*5) % 7)/4 + 0.2)",
+    "labels": { "rows": ["r0", "r1", "r2", "r3"], "cols": ["c0", "c1", "c2", "c3"] },
+    "c": "data",
+    "knobs": [{ "id": "view", "label": "Raw, pooled, or gradient path", "min": 0, "max": 2, "step": 1, "value": 0 }],
+    "beats": [
+      { "cap": { "1": "Sixteen bars: a detector's scores on a small patch. Tall means it fired strongly there.", "2": "A 4x4 feature map. Bar height = activation.", "3": "One channel of a feature map, 4x4, before pooling." }, "view": "iso", "set": { "view": 0 } },
+      { "cap": { "1": "Pool: each 2x2 square becomes one flat block, as tall as its tallest bar.", "2": "Max pool, kernel 2, stride 2: every window collapses to its max. Four values survive.", "3": "Each plateau is out[i, j] = max over its window, drawn at full size to show which inputs it covers." }, "view": "iso", "set": { "view": 1 } },
+      { "cap": { "1": "From above: four squares, four numbers. A quarter of the data, and no peak lost.", "2": "Height and width halve, so the next layer has a quarter of the positions to process.", "3": "(4, 4) -> (2, 2). Each surviving value summarises a 2x2 region, so later layers cover more of the image per unit." }, "view": "top", "set": { "view": 1 } },
+      { "cap": { "1": "Now run it backwards. Only the tallest bar in each square still stands: it alone gets the credit or the blame.", "2": "Backward pass: gradient goes only to each window's argmax. The other twelve get exactly zero.", "3": "d out / d x is 1 at the argmax and 0 elsewhere in each window: max pooling is a sparse router of gradient." }, "view": "iso", "set": { "view": 2 } },
+      { "cap": { "1": "Nudge a short bar up a little and its pooled block would not move. Only the winner matters.", "2": "Small changes to non-max inputs leave the output alone, and so does moving the peak within its square.", "3": "Local invariance: the output ignores perturbations below the window max and moves of the max within its window." }, "view": "close", "set": { "view": 0 } }
+    ],
+    "predict": [
+      { "q": "How many learned weights does a 2x2 max pool have?", "options": [{ "t": "None: it only picks the biggest", "ok": true }, { "t": "Four, one per cell in the window" }], "why": "Max pooling is a fixed rule. Convolution is the one with a learned kernel." },
+      { "q": "During backprop, which cells in a 2x2 window get gradient?", "options": [{ "t": "Only the one that was the max", "ok": true }, { "t": "All four, a quarter each" }], "why": "Nudging a non-max cell does not change the output, so its gradient is zero. Sharing equally is what average pooling does." },
+      { "q": "You pad with zeros and every real value in an edge window is negative. What does the pool report?", "options": [{ "t": "0, a value that was never in the data", "ok": true }, { "t": "The largest real value" }], "why": "Zero padding can win the max. Pad with -inf so padding never can." }
+    ],
+    "where": "Anywhere you ask 'did it happen somewhere in this region?': global max pooling, max over positions for max-activating examples."
+  }
+}

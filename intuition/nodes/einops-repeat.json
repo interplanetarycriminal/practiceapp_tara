@@ -1,0 +1,222 @@
+{
+  "id": "einops-repeat",
+  "title": "A photocopier with a collate switch",
+  "week": 1,
+  "need": "library",
+  "allegory": "einops repeat is like a photocopier: you name the tray the copies land in and how many you want, and the bracket order is the collate switch that decides whether you get whole sets or each page clumped with its twins.",
+  "map": [
+    ["the original document, never altered", "the input tensor x"],
+    ["the copy count you type in", "the new axis length, e.g. c=3"],
+    ["the named tray the copies land in", "a name right of the arrow that is missing on the left"],
+    ["collated: whole sets, 1 2 3 1 2 3", "(2 h): copy index outside, the whole axis tiles (np.tile)"],
+    ["uncollated: 1 1 2 2 3 3", "(h 2): copy index inside, each row doubled in place (np.repeat)"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "One sheet, many needs",
+      "need": "library",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "img is (h, w) ... but it wants (h, w, 3)",
+      "actors": [{ "pose": "shrug", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.58, "y": 0.55, "w": 0.18, "h": 0.26, "label": "one grey image", "color": "chalk" },
+        { "kind": "stack", "x": 0.85, "y": 0.55, "w": 0.18, "h": 0.36, "label": "wants 3 channels", "color": "sky" }
+      ],
+      "arrows": [[0.68, 0.55, 0.76, 0.55, "?"]],
+      "cap": {
+        "1": "You have one thing and need several identical copies of it, lined up along a new direction. Doing it by hand is fiddly and easy to get wrong.",
+        "2": "A grey image is (h, w) but the next step wants (h, w, 3). You could <code>torch.stack</code> three copies, but the code no longer says which axis is new.",
+        "3": "Adding an axis by copying is everywhere: channels, batches, pairing every ray with every object. Positional tools (stack, expand, tile) create it by position, not by name."
+      }
+    },
+    {
+      "name": "The photocopier",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "push", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.42, "y": 0.55, "w": 0.18, "h": 0.28, "label": "copier", "color": "cream" },
+        { "kind": "stack", "x": 0.74, "y": 0.55, "w": 0.2, "h": 0.36, "label": "tray c: 3 copies", "color": "mint" },
+        { "kind": "card", "x": 0.42, "y": 0.2, "label": "'h w -> h w c', c=3", "color": "butter" }
+      ],
+      "arrows": [[0.52, 0.55, 0.63, 0.55, "identical"]],
+      "cap": {
+        "1": "Think of a photocopier. You name the tray the copies land in and type how many. Every copy is identical, and the original is untouched.",
+        "2": "<code>repeat(x, 'h w -> h w c', c=3)</code>: the name after the arrow that was not there before is the new tray. You must say how many, because x cannot tell you.",
+        "3": "repeat adds or lengthens axes by duplication only. A new axis has no length to infer from the input, so it comes as a keyword (c=3) or a literal ('h w -> h w 3')."
+      }
+    },
+    {
+      "name": "Reading the pattern",
+      "need": "library",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "repeat(x, ", "c": "ink", "note": "" },
+        { "t": "'h w", "c": "sky", "note": "the original" },
+        { "t": " -> ", "c": "ink", "note": "copy" },
+        { "t": "h w c'", "c": "orange", "note": "c is the new tray" },
+        { "t": ", c=3)", "c": "green", "note": "how many" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Left of the arrow: the original. Right: the same names plus a new one, the tray. The number at the end says how many copies go in it.",
+        "2": "Any name on the right that is missing on the left is a new axis. Old names keep their data; the new axis only holds copies, so <code>y[..., 0]</code> equals <code>y[..., 2]</code>.",
+        "3": "Output is (h, w, 3) with y[i, j, k] = x[i, j] for every k. The same values as x[..., None].expand(h, w, 3): broadcasting made explicit, with the new axis named."
+      }
+    },
+    {
+      "name": "Whole sets",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "'h w -> (2 h) w'",
+      "rows": 4,
+      "cols": 3,
+      "values": [["a", "b", "c"], ["d", "e", "f"], ["a", "b", "c"], ["d", "e", "f"]],
+      "labels": { "rows": ["set 1 h0", "set 1 h1", "set 2 h0", "set 2 h1"], "cols": ["w0", "w1", "w2"] },
+      "highlight": [[2, 0], [2, 1], [2, 2], [3, 0], [3, 1], [3, 2]],
+      "cap": {
+        "1": "Put the copy count outside, (2 h), and you get whole sets: the full picture, then the full picture again. Collated copies.",
+        "2": "In <code>(2 h)</code> the copy index is the slow, outer one, so the whole h axis runs before the next copy starts. That is numpy's <code>np.tile</code>.",
+        "3": "Composite axes unravel row-major, leftmost slowest: output row k*H + i holds x[i]. Copy index outermost means tiling, the same as np.tile(x, (2, 1))."
+      }
+    },
+    {
+      "name": "Collate or clump",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "(2 h): collated", "c": "mint", "lines": ["copy index outside", "abc / def / abc / def", "two pictures stacked", "like np.tile"] },
+      "right": { "title": "(h 2): clumped", "c": "peach", "lines": ["copy index inside", "abc / abc / def / def", "one picture stretched tall", "like np.repeat"] },
+      "verdict": "Same shape, different picture. Bracket order is the collate switch.",
+      "cap": {
+        "1": "Swap to (h 2) and each row is copied twice in place: one picture stretched tall. Same size, no error, a very different result.",
+        "2": "<code>(h 2)</code> makes the copy index the fast one, so each row appears twice in a row. Shapes match either way; only looking at the picture or a tiny test array catches it.",
+        "3": "(h 2) gives row 2i + k = x[i], i.e. np.repeat(x, 2, axis=0): nearest-neighbour upsampling. Same shape as tiling, so no shape assert tells them apart. Test on arange."
+      }
+    },
+    {
+      "name": "Where copies go",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Pair every ray with every triangle", "One grey image to three channels", "One steering vector at every position"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Whenever one thing has to meet many, you copy it along a new axis. Naming that axis is how you keep track of what got copied where.",
+        "2": "A batched ray tracer pairs every ray with every triangle; attention can share one key head across several query heads. Each is one repeat, or broadcasting doing it silently.",
+        "3": "Adding one steering vector at every token position is this same copy along an axis. Knowing exactly what was broadcast where is part of reading and steering a model."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "A 3-row picture, copied: set the count, flip the collate switch",
+    "labels": ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11"],
+    "params": [
+      { "id": "n", "label": "copies", "min": 1, "max": 4, "step": 1, "value": 2 },
+      { "id": "inside", "label": "collate switch: 0 = (n h) sets, 1 = (h n) clumps", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "f": "range(12).map(i => i < 3*n ? (inside > 0.5 ? floor(i/n) + 1 : (i % 3) + 1) : 0)",
+    "y": [0, 3.5],
+    "readouts": [
+      { "label": "output rows", "f": "3*n" },
+      { "label": "pattern", "f": "inside > 0.5 ? \"'h w -> (h \" + n + \") w'\" : \"'h w -> (\" + n + \" h) w'\"" },
+      { "label": "numpy twin", "f": "inside > 0.5 ? 'np.repeat(x, ' + n + ', axis=0)' : 'np.tile(x, (' + n + ', 1))'" }
+    ],
+    "caption": {
+      "1": "Each bar is one output row; its height says which of the 3 original rows it copies. Flip the switch: 1 2 3 1 2 3 becomes 1 1 2 2 3 3.",
+      "2": "Drag copies up. Collated sets repeat the whole 1-2-3 run; clumps make each step wider. The output length is identical either way, which is why the mix-up is silent.",
+      "3": "Height = source row + 1. Copy index outside: row i comes from i mod H. Copy index inside: from floor(i / n). Both are valid row-major unravellings of one H*n axis."
+    }
+  },
+  "where_else": [
+    "Pairing every ray with every triangle when you batch the [0.1] ray tracer",
+    "Nearest-neighbour upsampling: 'h w -> (h 2) (w 2)' turns each pixel into a 2x2 block",
+    "Grouped-query attention, where each key/value head is repeated to serve several query heads",
+    "Adding one steering vector at every token position, which broadcasting does as a silent repeat"
+  ],
+  "hamming": {
+    "what": "A way to add a new named axis, or lengthen an existing one, by copying what is already there.",
+    "when": "Whenever one thing must meet many: one image for three channels, one origin for every ray, one vector at every position.",
+    "why": "Broadcasting copies silently by position; naming the new axis and its length makes the copy readable, and bracket order makes tile versus stretch explicit."
+  },
+  "object": {
+    "title": "The collating copier",
+    "subtitle": "Rows of identical copies along a new axis, with a switch for whole sets or clumps.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 6,
+    "f": "r < n ? 0.35 + 0.35*(inside > 0.5 ? floor(c/2) : c % 3) : 0.04",
+    "labels": { "rows": ["copy 0", "copy 1", "copy 2", "copy 3"], "cols": ["p0", "p1", "p2", "p3", "p4", "p5"] },
+    "c": "data",
+    "knobs": [
+      { "id": "n", "label": "Copies along the new axis", "min": 1, "max": 4, "step": 1, "value": 1 },
+      { "id": "inside", "label": "(2 w) sets or (w 2) clumps", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "One strip of three values, short, middle, tall, copied end to end: short, middle, tall, short, middle, tall.",
+          "2": "'w -> (2 w)' on a 3-value strip. The copy index sits outside, so the whole strip repeats.",
+          "3": "Copy index outermost: position p holds x[p mod 3]. This is tiling."
+        },
+        "view": "iso",
+        "set": { "n": 1, "inside": 0 }
+      },
+      {
+        "cap": {
+          "1": "Flip the switch: now each value is doubled where it stands. Same six bars, a stretched strip.",
+          "2": "'w -> (w 2)': the copy index is inside, so each element repeats in place, like np.repeat.",
+          "3": "Copy index innermost: position p holds x[floor(p / 2)]. Nearest-neighbour upsampling along w."
+        },
+        "view": "front",
+        "set": { "n": 1, "inside": 1 }
+      },
+      {
+        "cap": {
+          "1": "Now add a whole new direction: four identical rows. That is a brand-new axis made only of copies.",
+          "2": "'w -> c (w 2)', c=4: a new axis c holding four copies. Every row is the same.",
+          "3": "Along the new axis every slice is identical: y[k] equals y[0] for all k. Its length had to be supplied (c=4)."
+        },
+        "view": "iso",
+        "set": { "n": 4, "inside": 1 }
+      },
+      {
+        "cap": {
+          "1": "From above: copies never differ along the new axis. The switch only changes the order inside each row.",
+          "2": "Two decisions in one pattern: which new axes to add, and where the copy index sits inside the brackets.",
+          "3": "repeat = add axes of the given lengths, then merge row-major; the merge order picks tile versus repeat, as for any composite axis."
+        },
+        "view": "top",
+        "set": { "n": 4, "inside": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "repeat(x, 'w -> (2 w)') on [1, 2, 3] gives?",
+        "options": [{ "t": "[1, 2, 3, 1, 2, 3]", "ok": true }, { "t": "[1, 1, 2, 2, 3, 3]" }],
+        "why": "The 2 is written first, so it is the slow index: the whole strip runs, then runs again. (w 2) would give 1 1 2 2 3 3."
+      },
+      {
+        "q": "You write repeat(x, 'h w -> h w c') and forget c=3. What happens?",
+        "options": [{ "t": "einops raises an error asking for c's length", "ok": true }, { "t": "It quietly uses c = 1" }, { "t": "It guesses c from the input" }],
+        "why": "A new axis has nothing in the input to measure, so einops refuses until you give its length."
+      },
+      {
+        "q": "After repeat, are the slices along the new axis all identical?",
+        "options": [{ "t": "Yes, repeat only duplicates", "ok": true }, { "t": "No, each copy varies a little" }],
+        "why": "repeat never changes values. If each slice needs different values, you want a different operation."
+      }
+    ],
+    "where": "Tiled wallpaper, upsampled pixels, one key head shared by many query heads: one pattern, two orders."
+  }
+}

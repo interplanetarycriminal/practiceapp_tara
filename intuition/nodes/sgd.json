@@ -1,0 +1,182 @@
+{
+  "id": "sgd",
+  "title": "Feel the slope, take a stride",
+  "week": 3,
+  "need": "core",
+  "allegory": "SGD is like walking down a hillside in thick fog: you cannot see the valley, so you feel which way the ground rises under your boots and take one stride the other way, again and again.",
+  "map": [
+    ["where you stand on the hill", "the weights θ"],
+    ["your altitude", "the loss L(θ)"],
+    ["the slope felt under your boots, pointing uphill", "the gradient ∇L(θ); you step against it"],
+    ["your stride length", "the learning rate η"],
+    ["loose scree making each reading a little off", "the minibatch gradient: a noisy estimate of the full one"]
+  ],
+  "credit": "Hillside picture borrowed from Andrew Ng's Machine Learning course (baby steps downhill); 3Blue1Brown's Neural Networks ch.2 uses the same ball-rolling-downhill framing.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Lost in fog",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "note": "somewhere down there is a good model",
+      "actors": [{ "pose": "think", "x": 0.28, "label": "you" }],
+      "props": [
+        { "kind": "cloud", "x": 0.55, "y": 0.3, "w": 0.5, "h": 0.2, "label": "fog", "color": "chalk" },
+        { "kind": "flag", "x": 0.85, "y": 0.75, "label": "lowest loss", "color": "green" }
+      ],
+      "cap": {
+        "1": "Training is a walk in thick fog. Somewhere below is the valley floor, where the model's mistakes are smallest, and you cannot see it.",
+        "2": "The loss is your altitude and the weights are your position. You never see the whole landscape; you can only measure the loss and its slope where you stand.",
+        "3": "The loss surface over millions of parameters is never seen globally. Each step has only local information: L(θ) and ∇L(θ) at the current θ, estimated on one minibatch."
+      }
+    },
+    {
+      "name": "Feel, then stride",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "walk", "x": 0.25, "to": 0.5, "label": "you" }],
+      "props": [
+        { "kind": "cloud", "x": 0.5, "y": 0.18, "w": 0.6, "h": 0.14, "color": "chalk" },
+        { "kind": "card", "x": 0.8, "y": 0.35, "label": "stride = learning rate", "color": "butter" },
+        { "kind": "flag", "x": 0.88, "y": 0.78, "label": "valley", "color": "green" }
+      ],
+      "arrows": [[0.42, 0.55, 0.3, 0.4, "uphill (gradient)"], [0.45, 0.6, 0.62, 0.72, "your step"]],
+      "cap": {
+        "1": "So you feel the ground under your boots, find which way is uphill, and take one stride the other way. Then you feel again. That is the whole method.",
+        "2": "The gradient points uphill, so you step against it; the learning rate is your stride. Each reading comes from a random batch of data, so it is a little off: that is the 'stochastic'.",
+        "3": "SGD: θ ← θ − η·ĝ, where ĝ is the minibatch gradient, an unbiased but noisy estimate of ∇L. Each step is cheap; η sets how far each local reading is trusted."
+      }
+    },
+    {
+      "name": "The whole rule",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "θ", "c": "sky", "note": "where you stand" },
+        { "t": " ← ", "c": "ink", "note": "becomes" },
+        { "t": "θ", "c": "sky", "note": "" },
+        { "t": " − ", "c": "ink", "note": "against the slope" },
+        { "t": "η", "c": "orange", "note": "stride length" },
+        { "t": "·∇L", "c": "red", "note": "slope underfoot" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Where you stand next = where you stand now, minus stride times slope. Minus, because the slope points uphill and you want to go down.",
+        "2": "<code>p -= lr * p.grad</code> for every parameter, inside <code>torch.no_grad()</code> so the update itself is not tracked for backprop. That line is the heart of the exercise.",
+        "3": "θ ← θ − η∇L(θ), applied in place under no_grad or inference_mode. Momentum, weight decay, RMSprop and Adam each modify the gradient or the step size; the skeleton stays."
+      }
+    },
+    {
+      "name": "Stride length matters",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "pow(0.5, x)", "c": "green", "label": "just right" },
+        { "f": "pow(0.92, x)", "c": "sky", "label": "too short: crawls" },
+        { "f": "pow(-0.85, floor(x))", "c": "red", "label": "too long: zigzags" }
+      ],
+      "x": [0, 12],
+      "y": [-1.2, 1.2],
+      "dot": true,
+      "marks": [{ "x": 0, "label": "start" }],
+      "cap": {
+        "1": "Distance from the valley floor, step by step. Short strides crawl, a good stride slides straight in, and a long stride bounces from wall to wall.",
+        "2": "On a simple bowl, every step multiplies your distance from the bottom by the same number, 1 − η·a. Small η: close to 1, slow. Too big: negative, so you land on the far side.",
+        "3": "For L = ½aθ², θₖ = (1 − ηa)ᵏθ₀: monotone for η < 1/a, oscillating for 1/a < η < 2/a, divergent beyond 2/a. Curvature, not the loss value, sets the safe step."
+      }
+    },
+    {
+      "name": "The forgotten reset",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "zero_grad() every step", "c": "mint", "lines": ["slope from this batch only", "steps stay sized by η", "loss falls"] },
+      "right": { "title": "forgot zero_grad()", "c": "pink", "lines": [".grad adds up every step", "old slopes keep pushing", "steps grow, loss wobbles or explodes"] },
+      "verdict": "PyTorch adds new gradients to old ones. Reset every step.",
+      "cap": {
+        "1": "A classic slip: forgetting to clear the last slope reading. Now every slope ever felt gets added up, so strides grow longer and point the wrong way.",
+        "2": "PyTorch accumulates <code>.grad</code> across backward calls. Skip <code>optimizer.zero_grad()</code> and each step uses the sum of all past gradients. No error; training just goes strange.",
+        "3": "Without zeroing, the step is η·Σₜ gₜ: momentum with μ = 1 and no damping, so it overshoots and oscillates. Accumulation is deliberate only for gradient accumulation over micro-batches."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Momentum, RMSprop, Adam: SGD plus one tweak", "Learning rate: the first knob to sweep", "Fine-tuning and RLHF run this same step"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Every fancier optimiser is this step with one tweak. Master the plain version and the rest are small changes.",
+        "2": "Momentum averages past slopes, RMSprop scales each parameter's stride, Adam does both, and AdamW adds clean weight decay. The learning rate is always the first knob to sweep.",
+        "3": "Fine-tuning, RLHF and SAE training all move weights this way, so knowing what one step does is the base layer for understanding, and steering, how training changes a model."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Pick a stride for a bowl-shaped valley",
+    "params": [
+      { "id": "lr", "label": "learning rate η (stride)", "min": 0.05, "max": 2.5, "step": 0.05, "value": 0.3 },
+      { "id": "a", "label": "steepness of the bowl a", "min": 0.5, "max": 3, "step": 0.1, "value": 1 }
+    ],
+    "curves": [
+      { "f": "pow(1 - lr*a, floor(x))", "c": "orange", "label": "distance from the bottom after x steps" }
+    ],
+    "x": [0, 20],
+    "y": [-2, 2],
+    "readouts": [
+      { "label": "each step multiplies distance by", "f": "(1 - lr*a).toFixed(2)" },
+      { "label": "largest safe stride for this bowl, 2/a", "f": "(2/a).toFixed(2)" },
+      { "label": "verdict", "f": "abs(1 - lr*a) < 1 ? (1 - lr*a < 0 ? 'zigzags in' : 'slides in') : 'blows up'" }
+    ],
+    "caption": {
+      "1": "Drag the stride. Small: you crawl. Medium: you slide straight in. Too big: you bounce across the valley, and past a point you fly out of it.",
+      "2": "Each step multiplies your distance from the bottom by (1 − η·a). Below 2/a you converge; above it you diverge. Now make the bowl steeper and watch the safe stride shrink.",
+      "3": "For L = ½aθ², θ ← (1 − ηa)θ converges iff 0 < η < 2/a. With many directions the steepest curvature sets the limit, one motivation for per-parameter scaling in RMSprop and Adam."
+    }
+  },
+  "where_else": [
+    "Every optimiser you will use (momentum, RMSprop, Adam, AdamW) is this step plus a correction",
+    "Fine-tuning, RLHF and SAE training all run the same loop: compute a loss, step against its gradient",
+    "Fitting any curve by nudging its knobs against the error, from a straight-line fit to a frontier model"
+  ],
+  "hamming": {
+    "what": "The basic learning step: move every weight a little in the direction that lowers the loss, scaled by the learning rate.",
+    "when": "On every training step of every network you train, either directly or inside a fancier optimiser like Adam.",
+    "why": "The gradient only tells you which way is downhill right here, so small steps trust that local reading only as far as it stays true."
+  },
+  "object": {
+    "title": "The foggy ravine",
+    "subtitle": "A valley with one steep pair of walls and a gentle floor, and a bead that can only feel the slope where it sits.",
+    "kind": "surface",
+    "f": "0.25*(x*x + steep*y*y)",
+    "x": [-1.5, 1.5],
+    "y": [-1.5, 1.5],
+    "ball": { "x": -1.4, "y": 1.0, "lr": "lr", "steps": 60 },
+    "marks": [{ "x": 0, "y": 0, "label": "lowest loss" }],
+    "knobs": [
+      { "id": "lr", "label": "learning rate (stride)", "min": 0.05, "max": 0.7, "step": 0.05, "value": 0.3 },
+      { "id": "steep", "label": "how steep the walls are", "min": 1, "max": 10, "step": 1, "value": 6 }
+    ],
+    "beats": [
+      { "cap": { "1": "A round bowl. The bead feels the slope, steps downhill, and rolls straight to the bottom.", "2": "Equal curvature in every direction: every step points at the minimum, so plain SGD is at its best.", "3": "Isotropic quadratic: the gradient points at the minimum, and one η suits every direction." }, "view": "iso", "set": { "lr": 0.3, "steep": 1 } },
+      { "cap": { "1": "Now a narrow ravine. The bead zigzags between the steep walls, then crawls along the gentle floor.", "2": "Steep walls, gentle floor: the step that suits the walls is too small for the floor. That zigzag is SGD's signature.", "3": "Ill-conditioned: per-step factors 1 − ηλ differ by direction; the steep axis oscillates while the shallow axis converges slowly." }, "view": "iso", "set": { "lr": 0.4, "steep": 8 } },
+      { "cap": { "1": "Tiny strides: no zigzag, but after 60 steps the bead is still far from the bottom.", "2": "Too small a learning rate is safe and slow. The floor direction barely moves.", "3": "Small η gives 1 − ηλ near 1 on the shallow axis: stable but slow, since convergence is limited by the smallest curvature." }, "view": "side", "set": { "lr": 0.05, "steep": 8 } },
+      { "cap": { "1": "Strides too long for the steep walls: every bounce is bigger than the last, and the bead flies out.", "2": "Past the safe limit for the steepest direction, each step overshoots further. This is a loss that suddenly shoots to NaN.", "3": "η > 2/λ_max makes |1 − ηλ_max| > 1 on the steep axis: divergence, however gentle the other directions are." }, "view": "iso", "set": { "lr": 0.55, "steep": 8 } },
+      { "cap": { "1": "From above, the zigzag is plain to see. Momentum and Adam, the next ideas, exist to smooth it out.", "2": "Momentum averages the zigzag away; RMSprop and Adam give each direction its own stride.", "3": "Momentum damps the oscillating component; RMSprop and Adam rescale per parameter, which acts on axis-aligned differences in gradient scale." }, "view": "top", "set": { "lr": 0.4, "steep": 8 } }
+    ],
+    "predict": [
+      { "q": "The bowl gets twice as steep. What happens to the largest safe learning rate?", "options": [{ "t": "It halves", "ok": true }, { "t": "It doubles" }, { "t": "It stays the same" }], "why": "Each step multiplies your distance by 1 − η·a, so you need η < 2/a. Twice as steep means half the stride." },
+      { "q": "You forget optimizer.zero_grad(). What happens to each step?", "options": [{ "t": "It uses the sum of every past gradient, so steps grow", "ok": true }, { "t": "Nothing: PyTorch clears gradients by itself" }], "why": "PyTorch adds each new gradient into .grad. Without a reset, old slopes keep pushing, like momentum with no friction." }
+    ],
+    "where": "Any valley that is much steeper one way than another: badly scaled input features, and the loss surface of nearly every deep network."
+  }
+}

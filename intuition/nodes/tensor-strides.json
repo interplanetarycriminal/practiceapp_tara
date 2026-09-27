@@ -1,0 +1,213 @@
+{
+  "id": "tensor-strides",
+  "title": "One street, many directions cards",
+  "week": 2,
+  "need": "exercise",
+  "allegory": "A tensor is one long street of numbered houses plus a directions card; the card (the stride) says how many doors to walk per step along each axis, so a new card gives a new shape without moving a single house.",
+  "map": [
+    ["one long street of 20 numbered houses", "the flat storage buffer behind a (4, 5) tensor"],
+    ["the directions card: 5 doors per row, 1 door per column", "the stride (5, 1)"],
+    ["the house where your route starts", "storage_offset"],
+    ["writing a new card while every house stays put", "transpose, reshape and slicing: new size and stride over the same memory"],
+    ["a card that says walk 0 doors: stay at the same house", "stride 0: broadcasting and expand repeat an element for free"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The long street",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "which house is row 2, column 3?",
+      "actors": [{ "pose": "shrug", "x": 0.12, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.3, "y": 0.55, "w": 0.16, "h": 0.3, "label": "4 × 5", "color": "sky" },
+        { "kind": "door", "x": 0.5, "y": 0.62, "w": 0.06, "h": 0.2, "label": "0", "color": "cream" },
+        { "kind": "door", "x": 0.58, "y": 0.62, "w": 0.06, "h": 0.2, "label": "1", "color": "cream" },
+        { "kind": "door", "x": 0.66, "y": 0.62, "w": 0.06, "h": 0.2, "label": "2", "color": "cream" },
+        { "kind": "door", "x": 0.74, "y": 0.62, "w": 0.06, "h": 0.2, "label": "3", "color": "cream" },
+        { "kind": "door", "x": 0.82, "y": 0.62, "w": 0.06, "h": 0.2, "label": "…", "color": "cream" },
+        { "kind": "door", "x": 0.9, "y": 0.62, "w": 0.06, "h": 0.2, "label": "19", "color": "cream" }
+      ],
+      "arrows": [[0.39, 0.55, 0.46, 0.6, "really"]],
+      "cap": {
+        "1": "You see 4 rows of 5 numbers. The computer sees one long street of 20 houses, numbered 0 to 19. So which house is row 2, column 3?",
+        "2": "A (4, 5) tensor looks 2-D, but its storage is one flat buffer of 20 numbers. Something has to turn the index [2, 3] into a position in that buffer.",
+        "3": "A tensor is a view over flat 1-D storage. Indexing maps an index tuple to a storage offset, fully determined by size, stride and storage_offset."
+      }
+    },
+    {
+      "name": "The directions card",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "walk", "x": 0.14, "to": 0.8, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.5, "y": 0.16, "label": "5 doors per row · 1 door per column", "color": "butter" },
+        { "kind": "door", "x": 0.3, "y": 0.62, "w": 0.06, "h": 0.2, "label": "0", "color": "cream" },
+        { "kind": "door", "x": 0.5, "y": 0.62, "w": 0.06, "h": 0.2, "label": "5", "color": "cream" },
+        { "kind": "door", "x": 0.7, "y": 0.62, "w": 0.06, "h": 0.2, "label": "10", "color": "cream" },
+        { "kind": "door", "x": 0.88, "y": 0.62, "w": 0.06, "h": 0.2, "label": "13", "color": "orange" }
+      ],
+      "arrows": [[0.32, 0.44, 0.48, 0.44, "row +1"], [0.52, 0.44, 0.68, 0.44, "row +1"], [0.72, 0.44, 0.86, 0.44, "3 columns"]],
+      "cap": {
+        "1": "A card in your pocket says: walk 5 doors for every row down, 1 door for every column across. Row 2, column 3 is door 2×5 + 3 = 13.",
+        "2": "That card is the stride. <code>x.stride()</code> on a fresh (4, 5) tensor gives <code>(5, 1)</code>: skip 5 elements to move one row, 1 to move one column.",
+        "3": "stride[k] is the number of storage elements skipped per unit step in dim k. A contiguous (4, 5) tensor has strides (5, 1): row-major, last axis fastest."
+      }
+    },
+    {
+      "name": "The address rule",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "house = ", "c": "ink", "note": "" },
+        { "t": "start", "c": "sky", "note": "where this view begins" },
+        { "t": " + i·5", "c": "orange", "note": "5 doors per row" },
+        { "t": " + j·1", "c": "green", "note": "1 door per column" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The whole trick is one line. Begin where your view starts, walk 5 doors per row and 1 per column. The exercise is just filling in this card.",
+        "2": "offset = storage_offset + i·stride[0] + j·stride[1]. Size says how far each index may run; stride says how far each step jumps in memory.",
+        "3": "In general offset = storage_offset + Σₖ iₖ·strideₖ. Contiguous row-major means each strideₖ is the product of all later sizes; any other pattern is a non-contiguous view."
+      }
+    },
+    {
+      "name": "Same houses, new card",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "size (4, 5), stride (5, 1) → size (2, 10), stride (10, 1)",
+      "rows": 4,
+      "cols": 5,
+      "values": [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19]],
+      "labels": { "rows": ["i0", "i1", "i2", "i3"], "cols": ["j0", "j1", "j2", "j3", "j4"] },
+      "highlight": [[2, 0], [2, 1], [2, 2], [2, 3], [2, 4]],
+      "to": { "rows": 2, "cols": 10 },
+      "cap": {
+        "1": "Reshape into 2 rows of 10 and no house moves. You just get a new card: 10 doors per row, 1 per column. Same street, new shape.",
+        "2": "<code>x.view(2, 10)</code> copies nothing. It returns size (2, 10) and stride (10, 1) over the same storage. Old row 2 (houses 10 to 14) is still one unbroken run.",
+        "3": "A view shares storage: only size, stride and offset change, so making one is O(1) and in-place writes show up in the original. Cheap, and occasionally surprising."
+      }
+    },
+    {
+      "name": "Walk zero doors",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "carry", "x": 0.3, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.5, "y": 0.14, "label": "0 doors per row · 1 door per column", "color": "butter" },
+        { "kind": "card", "x": 0.14, "y": 0.34, "label": "row 0", "color": "mint" },
+        { "kind": "card", "x": 0.14, "y": 0.46, "label": "row 1", "color": "mint" },
+        { "kind": "card", "x": 0.14, "y": 0.58, "label": "row 2", "color": "mint" },
+        { "kind": "card", "x": 0.14, "y": 0.7, "label": "row 3", "color": "mint" },
+        { "kind": "door", "x": 0.54, "y": 0.62, "w": 0.06, "h": 0.2, "label": "0", "color": "cream" },
+        { "kind": "door", "x": 0.63, "y": 0.62, "w": 0.06, "h": 0.2, "label": "1", "color": "cream" },
+        { "kind": "door", "x": 0.72, "y": 0.62, "w": 0.06, "h": 0.2, "label": "2", "color": "cream" },
+        { "kind": "door", "x": 0.81, "y": 0.62, "w": 0.06, "h": 0.2, "label": "3", "color": "cream" },
+        { "kind": "door", "x": 0.9, "y": 0.62, "w": 0.06, "h": 0.2, "label": "4", "color": "cream" }
+      ],
+      "arrows": [[0.22, 0.52, 0.5, 0.6, "all four rows, same 5 houses"]],
+      "cap": {
+        "1": "Now the card says walk 0 doors per row. Every row visits the same five houses. You see four rows, but nothing was copied.",
+        "2": "Stride 0 is how broadcasting and <code>expand</code> work: a stretched axis never moves in memory, so repeating a row costs nothing at all.",
+        "3": "A size-n axis with stride 0 aliases one element n times (stride aliasing). expand and broadcasting build exactly this view, so they allocate no new memory."
+      }
+    },
+    {
+      "name": "Read the real card",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "strides from x.stride()", "c": "mint", "lines": ["reads the card the", "tensor actually carries", "still right after .T", "still right after slicing"] },
+      "right": { "title": "strides from x.shape", "c": "pink", "lines": ["assumes a fresh card", "passes every test", "after .T: wrong numbers", "no error, ever"] },
+      "verdict": "as_strided trusts your card blindly. Read the real one.",
+      "cap": {
+        "1": "Transpose rewrites the card and leaves the houses alone. Work out directions from the shape instead of the card and you walk to wrong doors. Nobody stops you.",
+        "2": "Your as_strided conv passes on fresh inputs, then returns garbage on a transposed or sliced one. Fix: build strides from <code>x.stride()</code>, or call <code>x.contiguous()</code> first.",
+        "3": "as_strided indexes raw storage from storage_offset with no bounds check. After a transpose or step-2 slice, shape-derived strides describe a layout the tensor no longer has."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Convolution = strided window + sum", "Broadcast = stride 0, free", "einops patterns compile to size + stride"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Sliding windows, broadcasting, reshapes: all new cards for the same street. Knowing that makes the layers inside a model feel less like magic.",
+        "2": "A convolution is a strided window view times a kernel. Broadcasting is stride 0. You will rarely write as_strided yourself, but it explains everything built on top.",
+        "3": "Linear through Conv2d all rest on views over storage. Knowing view from copy keeps internals legible when you read and edit activations to understand and steer models."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Rewrite the directions card and count how often each house gets read",
+    "labels": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"],
+    "params": [
+      { "id": "s0", "label": "row stride (doors per row)", "min": 0, "max": 7, "step": 1, "value": 5 },
+      { "id": "s1", "label": "column stride (doors per column)", "min": 1, "max": 3, "step": 1, "value": 1 },
+      { "id": "n1", "label": "columns in the view", "min": 1, "max": 5, "step": 1, "value": 5 }
+    ],
+    "f": "range(20).map(h => sum(range(4).map(i => sum(range(n1).map(j => i*s0 + j*s1 === h ? 1 : 0)))))",
+    "y": [0, 4],
+    "readouts": [
+      { "label": "your view", "f": "'size (4, ' + n1 + '), stride (' + s0 + ', ' + s1 + ')'" },
+      { "label": "reads past house 19 (no error raised)", "f": "sum(range(4).map(i => sum(range(n1).map(j => i*s0 + j*s1 > 19 ? 1 : 0))))" },
+      { "label": "element [2, 3] lives at house", "f": "n1 > 3 ? 2*s0 + 3*s1 : 'no column 3 in this view'" }
+    ],
+    "caption": {
+      "1": "Start at (5, 1): every house read once. Drop row stride to 0 and watch the rows pile onto the same five houses. That pile is broadcasting.",
+      "2": "Set 1 column and row stride 6: you read houses 0, 6, 12, 18, the diagonal. Then crank the strides until reads run past house 19. Nothing stops you.",
+      "3": "Each bar counts (i, j) with i·s₀ + j·s₁ = h. Stride 0 aliases; size (4, 1) with s₀ = 6 is the base's diagonal; offsets past numel - 1 are read unchecked."
+    }
+  },
+  "where_else": [
+    "Convolution: the sliding window is a strided view of the input, contracted with a kernel",
+    "Broadcasting: a stretched axis is just an axis with stride 0",
+    "einops: the readable pattern string compiles down to a size and a stride",
+    "NumPy arrays carry strides too: the same flat buffer plus a rule"
+  ],
+  "hamming": {
+    "what": "A tensor is one flat run of memory plus a stride per axis saying how far to jump for each index step.",
+    "when": "Whenever you transpose, slice, broadcast or build a sliding window, and whenever a view returns numbers that look plausible but wrong.",
+    "why": "It lets many shapes share one block of memory for free, which is why transposes and broadcasts cost nothing and why a wrong stride fails silently."
+  },
+  "object": {
+    "title": "The street of pillars",
+    "subtitle": "A 4 × 5 window onto one street of 20 houses; each pillar stands as tall as the house number it reads.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 5,
+    "f": "0.2 + 0.09*(r*s0 + c*s1)",
+    "labels": { "rows": ["i0", "i1", "i2", "i3"], "cols": ["j0", "j1", "j2", "j3", "j4"] },
+    "c": "data",
+    "knobs": [
+      { "id": "s0", "label": "Row stride (doors per row)", "min": 0, "max": 6, "step": 1, "value": 5 },
+      { "id": "s1", "label": "Column stride (doors per column)", "min": 0, "max": 2, "step": 1, "value": 1 }
+    ],
+    "beats": [
+      { "cap": { "1": "Each pillar is one slot in your 4 × 5 view. Its height is the house number it reads from the street.", "2": "Bar height = storage offset of index [i, j] under stride (5, 1).", "3": "Height encodes i·s₀ + j·s₁ with storage_offset 0; the default is the contiguous row-major layout." }, "view": "iso", "set": { "s0": 5, "s1": 1 } },
+      { "cap": { "1": "With the card (5, 1), heights climb in one smooth run: each row picks up exactly where the last one ended.", "2": "Contiguous: the last axis moves 1 house at a time, and each row starts 5 houses after the one before.", "3": "Row-major contiguity: stride₁ = 1 and stride₀ = size₁ = 5, so index order equals memory order." }, "view": "front", "set": { "s0": 5, "s1": 1 } },
+      { "cap": { "1": "Set row stride to 0. Every row reads the same five houses. Four rows, zero copies.", "2": "Stride 0 along rows is a broadcast row. This is the view <code>expand</code> builds.", "3": "A stride-0 axis aliases storage: all four rows point at offsets 0 to 4." }, "view": "front", "set": { "s0": 0, "s1": 1 } },
+      { "cap": { "1": "Now row stride 1 and column stride 0: each row repeats one house all the way across. A column, stretched sideways.", "2": "Stride (1, 0) broadcasts a column: row i reads house i five times.", "3": "Stride (1, 0) is a length-4 vector expanded along dim 1: aliasing along the zero-stride axis." }, "view": "side", "set": { "s0": 1, "s1": 0 } },
+      { "cap": { "1": "Push the strides too far and the tallest pillars point past house 19. Real code would read garbage and never complain.", "2": "With stride (6, 2), index [3, 4] reads house 26 of a 20-house buffer. as_strided allows it silently.", "3": "Max offset Σ(sizeₖ - 1)·strideₖ = 3·6 + 4·2 = 26 exceeds numel - 1 = 19, and as_strided performs no bounds check." }, "view": "iso", "set": { "s0": 6, "s1": 2 } }
+    ],
+    "predict": [
+      { "q": "You transpose a (4, 5) tensor. How many numbers move in memory?", "options": [{ "t": "None: the stride card flips from (5, 1) to (1, 5)", "ok": true }, { "t": "All 20 get copied into the new order" }], "why": "Transpose only permutes strides and leaves memory alone. A copy happens only when you ask for one, for example with .contiguous()." },
+      { "q": "An axis has stride 0. What do you see along it?", "options": [{ "t": "The same element repeated, at no memory cost", "ok": true }, { "t": "A row of zeros" }], "why": "Stride 0 means walk zero doors: every index along that axis reads the same house. That is why broadcasting is free." },
+      { "q": "Your as_strided strides are too big for the buffer. What happens?", "options": [{ "t": "You silently read wrong numbers, even past the end", "ok": true }, { "t": "PyTorch raises an IndexError" }], "why": "as_strided does no bounds checking. It walks exactly the card you hand it." }
+    ],
+    "where": "Transposes, broadcasts, sliding windows and einops patterns are all this: one street, a new directions card."
+  }
+}

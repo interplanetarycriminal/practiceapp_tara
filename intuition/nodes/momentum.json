@@ -1,0 +1,181 @@
+{
+  "id": "momentum",
+  "title": "The heavy ball in the ravine",
+  "week": 3,
+  "need": "core",
+  "allegory": "Momentum is a heavy ball rolling down a narrow ravine: each gradient is a shove, the ball's velocity remembers past shoves, so shoves that keep agreeing (along the valley) pile up while shoves that flip side to side (across it) cancel.",
+  "map": [
+    ["each step's shove", "the gradient g at this step"],
+    ["the ball's velocity, remembering old shoves", "the momentum buffer v, a decaying running sum of past gradients"],
+    ["how little friction there is", "the momentum coefficient μ, e.g. 0.9: the share of velocity kept each step"],
+    ["the ball moving along its velocity", "the update θ ← θ − η·v instead of θ ← θ − η·g"],
+    ["a ravine: steep walls, gentle floor", "pathological curvature: steep in one direction, shallow in another"]
+  ],
+  "credit": "Ball, velocity and friction framing, and the idea that side-to-side wobbles average out, borrowed from Andrew Ng's 'Gradient descent with momentum' (Deep Learning Specialization, Course 2).",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The zig-zag",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "note": "why is it bouncing instead of rolling?",
+      "actors": [{ "pose": "think", "x": 0.08, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.56, "y": 0.3, "w": 0.76, "h": 0.04, "label": "steep wall", "color": "peach" },
+        { "kind": "box", "x": 0.56, "y": 0.82, "w": 0.76, "h": 0.04, "label": "steep wall", "color": "peach" },
+        { "kind": "circle", "x": 0.22, "y": 0.38, "w": 0.04, "h": 0.04, "label": "plain SGD", "color": "sky" },
+        { "kind": "flag", "x": 0.92, "y": 0.56, "label": "bottom", "color": "green" }
+      ],
+      "arrows": [[0.23, 0.4, 0.31, 0.78], [0.31, 0.78, 0.39, 0.36], [0.39, 0.36, 0.47, 0.78], [0.47, 0.78, 0.55, 0.36, "inch by inch"]],
+      "cap": {
+        "1": "Picture a long, narrow ravine. Plain gradient descent points mostly at the nearest wall, so it bounces side to side and only inches towards the bottom.",
+        "2": "In a narrow valley the gradient is big across it and tiny along it. Plain SGD follows each gradient, so it zig-zags. This is the [0.3] pathological-curvature plot.",
+        "3": "Under ill-conditioned curvature the gradient is dominated by the steep axes. The learning rate must stay small enough to be stable there, so progress along the shallow axes crawls."
+      }
+    },
+    {
+      "name": "The heavy ball",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "push", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "circle", "x": 0.3, "y": 0.57, "w": 0.09, "h": 0.09, "label": "heavy ball", "color": "orange" },
+        { "kind": "flag", "x": 0.92, "y": 0.56, "label": "bottom", "color": "green" }
+      ],
+      "arrows": [[0.36, 0.57, 0.8, 0.57, "velocity builds"], [0.3, 0.48, 0.3, 0.38, "shove"], [0.3, 0.66, 0.3, 0.76, "shove back"]],
+      "cap": {
+        "1": "Swap the pebble for a heavy ball. Each slope is a shove, but the ball keeps most of its speed. Shoves that agree add up; shoves that flip cancel.",
+        "2": "Momentum keeps a running velocity: each step, keep most of the old velocity, add the new gradient, and move along the velocity instead of the raw gradient.",
+        "3": "The classic heavy-ball update: v ← μv + g, θ ← θ − ηv. The step is an exponentially weighted sum of past gradients: a low-pass filter over the gradient sequence."
+      }
+    },
+    {
+      "name": "The velocity rule",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "v ← ", "c": "ink", "note": "" },
+        { "t": "μ·v", "c": "orange", "note": "keep most of the old speed" },
+        { "t": " + g", "c": "sky", "note": "add today's shove" },
+        { "t": ";  θ ← θ − η·v", "c": "green", "note": "move along the speed" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Each step: keep a fraction μ of your old speed (say 0.9), add the new slope, then move along that speed. Friction is the part of speed you lose.",
+        "2": "PyTorch's SGD does <code>b = μ·b + g</code>, then <code>θ -= lr·b</code>. Set μ = 0 and it is plain SGD. That buffer b is the only extra memory momentum needs.",
+        "3": "Unrolled, v_t = Σₖ μᵏ g_{t−k}. A constant gradient g gives terminal velocity g/(1−μ), 10× at μ = 0.9; a sign-flipping one is damped towards g/(1+μ)."
+      }
+    },
+    {
+      "name": "Agree or cancel",
+      "need": "core",
+      "dur": 11,
+      "type": "plot",
+      "curves": [
+        { "f": "0.2*(1 - pow(0.9, floor(x)))/(1 - 0.9)", "c": "green", "label": "along the valley, μ = 0.9" },
+        { "f": "(1 - pow(-0.9, floor(x)))/1.9", "c": "orange", "label": "across the valley, μ = 0.9" },
+        { "f": "x < 1 ? 0 : 0.2", "c": "ink", "label": "along, plain SGD" }
+      ],
+      "x": [0, 25],
+      "y": [0, 2.2],
+      "dot": true,
+      "marks": [{ "x": 1, "label": "step 1" }, { "x": 20, "label": "along ≈ 9× the shove" }],
+      "cap": {
+        "1": "A toy ravine: along the valley the shove is small but always the same; across it, big but flipping sides. The along speed builds; the across speed shrinks.",
+        "2": "μ = 0.9, along-gradient 0.2 every step, across ±1 alternating. Along velocity climbs towards 2.0; across settles near 0.53. The zig-zag turns into a roll.",
+        "3": "Consistent components are amplified by up to 1/(1−μ) = 10; alternating ones are attenuated to 1/(1+μ) ≈ 0.53. Momentum reweights directions without ever measuring curvature."
+      }
+    },
+    {
+      "name": "Too little friction",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "μ = 0.9", "c": "mint", "lines": ["top speed ≈ 10× a shove", "rolls down the valley", "settles at the bottom"] },
+      "right": { "title": "μ = 0.99, same lr", "c": "pink", "lines": ["top speed ≈ 100× a shove", "steps 10× bigger", "overshoots, swings back"] },
+      "verdict": "Raising μ raises your step size. Retune lr with it.",
+      "cap": {
+        "1": "A heavier ball is not always better. With too little friction it flies past the bottom, swings back, and flies past again.",
+        "2": "Speed builds to about gradient/(1−μ): 10× at μ = 0.9, 100× at 0.99. Bumping μ secretly multiplies your step size, so retune the learning rate with it.",
+        "3": "Effective step ≈ η/(1−μ) on consistent directions; near μ = 1 the dynamics are underdamped and ring around the minimum. Adam's m averages with (1−β₁), so it has no such terminal-velocity blow-up."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["In code: SGD(momentum=0.9), or just Adam", "Adam's first moment is this velocity", "Any decaying running average is this rule"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Momentum is why training rolls instead of rattles. Adam, the optimiser behind the transformers you will open up and steer, carries this same memory.",
+        "2": "In code it is one argument, <code>SGD(momentum=0.9)</code>, and Adam's first moment is the same idea. Any running average that decays then adds, like BatchNorm's running stats, is this rule.",
+        "3": "Adam = a momentum-style first moment divided by an RMS of gradients, and AdamW trains every transformer later in the course. Its dynamics shape the models you will interpret and steer."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Roll a ball down a toy ravine: pick the learning rate and the momentum",
+    "params": [
+      { "id": "mu", "label": "momentum μ (less friction →)", "min": 0, "max": 0.99, "step": 0.01, "value": 0 },
+      { "id": "lr", "label": "learning rate", "min": 0.1, "max": 1.2, "step": 0.05, "value": 0.9 }
+    ],
+    "curves": [
+      { "f": "range(floor(x)).reduce(s => [s[0] - lr*(mu*s[1] + 2*s[0]), mu*s[1] + 2*s[0]], [1, 0])[0]", "c": "orange", "label": "across the valley, your μ" },
+      { "f": "pow(1 - 2*lr, floor(x))", "c": "sky", "label": "across the valley, plain SGD" }
+    ],
+    "x": [0, 40],
+    "y": [-1.5, 1.5],
+    "readouts": [
+      { "label": "distance along the valley after 40 steps, your μ", "f": "range(40).reduce(s => [s[0] + lr*(mu*s[1] + 0.1), mu*s[1] + 0.1], [0, 0])[0].toFixed(1)" },
+      { "label": "same, plain SGD", "f": "(40*lr*0.1).toFixed(1)" },
+      { "label": "sway left in steps 30 to 40", "f": "(m => m > 9 ? 'exploding' : m.toFixed(2))(max(...range(40).reduce(h => h.concat([[h[h.length-1][0] - lr*(mu*h[h.length-1][1] + 2*h[h.length-1][0]), mu*h[h.length-1][1] + 2*h[h.length-1][0]]]), [[1, 0]]).slice(30).map(s => abs(s[0]))))" }
+    ],
+    "caption": {
+      "1": "Start at μ = 0: plain descent flips wall to wall and inches along. Slide μ to 0.9: it goes about 8× further. Push μ to 0.99 and the sway never settles.",
+      "2": "Same lr, μ = 0.9 travels about 8× further along the valley, and above lr = 1 plain SGD explodes while momentum stays stable. The price: a slower sway that takes longer to die.",
+      "3": "Across: heavy ball on Ky²/2 with K = 2, stable for ηK < 2(1+μ), sway shrinking like √μ per step when underdamped. Along: a constant slope amplified towards 1/(1−μ)."
+    }
+  },
+  "where_else": [
+    "Adam and AdamW: the first moment is a momentum-style running average of gradients",
+    "BatchNorm's running mean and variance: decay the old, add the new (PyTorch even names the knob momentum)",
+    "Any noisy signal you smooth with an exponential moving average, from loss curves to metrics"
+  ],
+  "hamming": {
+    "what": "Step along a decaying running sum of past gradients instead of the latest gradient alone.",
+    "when": "Whenever the loss surface is a narrow valley or the gradients are noisy, which is nearly always; in practice it arrives built into Adam.",
+    "why": "Directions that agree step after step get amplified and directions that flip get damped, so the optimiser rolls along the valley instead of rattling across it."
+  },
+  "object": {
+    "title": "The velocity ledger",
+    "subtitle": "Ten steps of a ball in a ravine: its speed across the valley (front row) and along it (back row).",
+    "kind": "bars",
+    "rows": 2,
+    "cols": 10,
+    "f": "r == 0 ? (1 - pow(-mu, c + 1))/(1 + mu) : 0.2*(1 - pow(mu, c + 1))/(1 - mu)",
+    "labels": { "rows": ["across (shoves flip)", "along (shoves agree)"], "cols": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"] },
+    "c": "grad",
+    "knobs": [{ "id": "mu", "label": "Momentum μ (less friction)", "min": 0, "max": 0.95, "step": 0.05, "value": 0 }],
+    "beats": [
+      { "cap": { "1": "Two rows of stacks: the ball's speed across the valley (front) and along it (back), step by step. No momentum yet: each speed is just that step's shove.", "2": "μ = 0 is plain SGD: velocity = gradient. Across: 1 every step, flipping sides. Along: 0.2 every step.", "3": "Bars show |v_t| per component for a fixed gradient sequence: across alternates ±1, along is a constant 0.2." }, "view": "iso", "set": { "mu": 0 } },
+      { "cap": { "1": "Give the ball some memory. The along stacks grow as agreeing shoves pile up; the across stacks start to shrink.", "2": "μ = 0.5: along climbs to 0.4 (2× the shove); across settles near 0.67.", "3": "Consistent components converge to g/(1−μ); alternating ones to g/(1+μ). The gain depends on how fast the gradient flips." }, "view": "front", "set": { "mu": 0.5 } },
+      { "cap": { "1": "A heavy ball. The along stacks tower over the across stacks now: the ball is rolling down the valley, not bouncing between walls.", "2": "μ = 0.9: along reaches 1.3 by step 10 and keeps climbing towards 2.0 (10× the shove); across hovers around 0.5.", "3": "Gain 1/(1−μ) = 10 at zero frequency versus 1/(1+μ) ≈ 0.53 for a gradient flipping every step: a low-pass filter on gradients." }, "view": "front", "set": { "mu": 0.9 } },
+      { "cap": { "1": "Less friction still. Along keeps building, and the across stacks swing high and low for longer. Too heavy and the ball overshoots.", "2": "μ = 0.95: terminal along speed would be 20× the shove. Speeds this big overshoot the minimum unless the learning rate comes down.", "3": "As μ → 1 the effective step η/(1−μ) grows without bound and the transient (−μ)ᵗ decays slowly; retune η whenever you raise μ." }, "view": "side", "set": { "mu": 0.95 } },
+      { "cap": { "1": "Adam carries this same memory as its first moment, then divides by a running size of the shoves.", "2": "Adam's m is a momentum-style average scaled by (1−β₁), so it averages rather than sums; Adam then divides by √v.", "3": "Adam's m_t = β₁m + (1−β₁)g has unit gain at zero frequency, so there is no terminal-velocity blow-up; the step is m̂/(√v̂ + ε)." }, "view": "close", "set": { "mu": 0.9 } }
+    ],
+    "predict": [
+      { "q": "Along the valley the gradient points the same way every step. With μ = 0.9, how big does the velocity get?", "options": [{ "t": "About 10× a single gradient", "ok": true }, { "t": "About the same as one gradient" }], "why": "Agreeing shoves pile up: a constant gradient g drives the velocity towards g/(1−μ) = 10g." },
+      { "q": "Across the valley the gradient flips sign every step. What does momentum do to that part?", "options": [{ "t": "Shrinks it: the flips partly cancel", "ok": true }, { "t": "Doubles it: momentum amplifies everything" }], "why": "Alternating shoves cancel in the running sum, so the across speed settles near g/(1+μ), about half." },
+      { "q": "You raise μ from 0.9 to 0.99 and keep the learning rate. What happens?", "options": [{ "t": "Steps get about 10× bigger and the ball overshoots", "ok": true }, { "t": "Training becomes more careful and stable" }], "why": "Terminal speed goes from 10× to 100× the gradient. Raising μ is secretly raising the step size." }
+    ],
+    "where": "Any decay-and-add running average: Adam's first moment, BatchNorm's running statistics, smoothed metrics."
+  }
+}

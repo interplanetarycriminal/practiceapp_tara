@@ -19,7 +19,7 @@
  *                              fail visibly rather than be masked by the worker.
  */
 
-const VERSION = '0daf9600ab2a';
+const VERSION = 'nodefilms-01';
 const SHELL_CACHE = 'tara-shell-' + VERSION;
 const ASSET_CACHE = 'tara-assets-' + VERSION;
 

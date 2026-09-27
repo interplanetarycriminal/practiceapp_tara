@@ -1,0 +1,210 @@
+{
+  "id": "resnet34",
+  "title": "Right seats, right sheet music",
+  "week": 2,
+  "need": "exercise",
+  "allegory": "Building ResNet34 and loading pretrained weights is like seating an orchestra on chairs you built yourself, then handing out a famous orchestra's sheet music in seat order: if every chair is in the right place, it plays the same song as the original.",
+  "map": [
+    ["sections of the orchestra", "BlockGroups, each a run of residual blocks at one width"],
+    ["the chairs you place, in the order you place them", "your modules, in registration order"],
+    ["the famous orchestra's sheet music, one folder per chair", "torchvision's pretrained tensors, one per state_dict entry"],
+    ["handing out folders by seat number, never reading names", "copy_weights zipping the two state_dicts' keys by position"],
+    ["playing the same piece and listening side by side", "running both models on the same images and comparing the argmax"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Deeper got worse",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "worse on data it has already seen?",
+      "actors": [{ "pose": "think", "x": 0.16, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.46, "y": 0.62, "w": 0.14, "h": 0.22, "label": "20 layers", "color": "mint" },
+        { "kind": "stack", "x": 0.72, "y": 0.5, "w": 0.14, "h": 0.52, "label": "56 layers", "color": "pink" },
+        { "kind": "card", "x": 0.6, "y": 0.14, "label": "higher training error", "color": "butter" }
+      ],
+      "cap": {
+        "1": "Researchers stacked a network 56 layers deep and it did worse than a 20-layer one, even on data it had already seen. More layers made it harder to train.",
+        "2": "He, Zhang, Ren and Sun found a 56-layer plain net had higher training error than a 20-layer one on CIFAR-10. Not overfitting: it could not even fit. Residual blocks fixed it.",
+        "3": "The degradation problem: extra layers could be identity, so this is optimisation failure, not capacity. The residual fix reached 152 layers, 3.57% ImageNet error, ILSVRC 2015 first place."
+      }
+    },
+    {
+      "name": "Blocks that correct",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "x", "label": "x", "x": 0.08, "y": 0.5, "c": "sky" },
+        { "id": "c1", "label": "3x3 conv + BN", "x": 0.33, "y": 0.28, "c": "peach" },
+        { "id": "c2", "label": "3x3 conv + BN", "x": 0.6, "y": 0.28, "c": "peach" },
+        { "id": "add", "label": "+", "x": 0.8, "y": 0.5, "c": "butter" },
+        { "id": "out", "label": "x + F(x)", "x": 0.94, "y": 0.72, "c": "mint" }
+      ],
+      "edges": [["x", "c1", ""], ["c1", "c2", ""], ["c2", "add", "F(x)"], ["x", "add", "skip"], ["add", "out", ""]],
+      "flow": "forward",
+      "cap": {
+        "1": "Each block hands on what it received plus a small correction. If the best move is to change nothing, the block only has to learn zeros.",
+        "2": "A ResidualBlock is two 3x3 convs with batchnorm, then the input is added back. The add needs equal shapes, so a downsampling block gets a 1x1 stride-2 conv on its skip.",
+        "3": "H(x) = F(x) + x makes identity the zero of F and gives gradients an additive path. Where a block downsamples, the identity branch needs a 1x1 stride-2 conv plus BN."
+      }
+    },
+    {
+      "name": "Seat the orchestra",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "note": "every chair is a module you wrote",
+      "actors": [{ "pose": "carry", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.4, "y": 0.58, "w": 0.14, "h": 0.3, "label": "BlockGroup", "color": "mint" },
+        { "kind": "stack", "x": 0.6, "y": 0.58, "w": 0.14, "h": 0.3, "label": "BlockGroup", "color": "sky" },
+        { "kind": "stack", "x": 0.8, "y": 0.58, "w": 0.14, "h": 0.3, "label": "BlockGroup", "color": "lav" },
+        { "kind": "card", "x": 0.6, "y": 0.18, "label": "seat order = registration order", "color": "butter" }
+      ],
+      "arrows": [[0.47, 0.58, 0.53, 0.58, ""], [0.67, 0.58, 0.73, 0.58, ""]],
+      "cap": {
+        "1": "Picture seating an orchestra on chairs you built yourself: players in sections, sections in a fixed order. That is ResNet34, built from your own modules.",
+        "2": "ResNet34 stacks BlockGroups, each a run of ResidualBlocks at one width where only the first block may change shape. You build it from your own modules, then check the parameter count.",
+        "3": "Assemble ResidualBlock, BlockGroup, ResNet34, then check against print_param_count and torchinfo.summary. Module registration order silently fixes the state_dict key order."
+      }
+    },
+    {
+      "name": "Hand out music",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "dict(", "c": "ink", "note": "" },
+        { "t": "zip(", "c": "ink", "note": "pair by position" },
+        { "t": "my keys", "c": "sky", "note": "your seat order" },
+        { "t": ", ", "c": "ink", "note": "" },
+        { "t": "their tensors", "c": "orange", "note": "torchvision's order" },
+        { "t": "))", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "reach", "x": 0.1 },
+      "cap": {
+        "1": "Now hand out a famous orchestra's sheet music: walk down both seating lists together, first folder to first chair. Nobody reads the names.",
+        "2": "<code>copy_weights</code> builds your state_dict by zipping your keys against torchvision's tensors in order. It pairs by position, never by name.",
+        "3": "The copy is a positional zip of two ordered state_dicts, not a name match. Your registration order, including branch order inside blocks, must mirror torchvision's."
+      }
+    },
+    {
+      "name": "One seat off",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Chairs in order", "c": "mint", "lines": ["each folder lands", "on its own chair", "same predictions", "as torchvision"] },
+      "right": { "title": "Two chairs swapped", "c": "pink", "lines": ["folders land on", "the wrong chairs", "shapes often still fit", "confident nonsense"] },
+      "verdict": "Loading without an error proves nothing. Compare the predictions.",
+      "cap": {
+        "1": "Swap two chairs and folders land on the wrong seats. Many parts still fit the stand, so nobody complains. The music is just wrong.",
+        "2": "ResNet repeats the same kernel and batchnorm shapes, so a misordered copy often loads with no error. The model runs and predicts confident nonsense.",
+        "3": "Repeated (64,64,3,3) kernels and equal-width BN vectors make misalignment shape-valid. Print the zipped key pairs, match torchinfo.summary, then compare argmax end to end."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Count parameters with torchinfo.summary first", "Print both key lists side by side", "Compare predictions, not 'it loaded'"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Loading without an error proves nothing. Getting the same answers as the original does. You will reuse this check on every model you rebuild.",
+        "2": "Counts catch missing layers, key pairs catch order, and matching argmax on real images catches the rest. The same recipe validates any reimplementation.",
+        "3": "When you study a real model inside code you can read and hook, matching the reference outputs is what lets you draw conclusions about that model, not your copy of it."
+      }
+    }
+  ],
+  "coda": {
+    "type": "match",
+    "title": "Match each symptom to what went wrong",
+    "pairs": [
+      ["Parameter count differs from torchinfo.summary", "A layer is missing or extra"],
+      ["Loads without error, predicts confident nonsense", "Modules registered in the wrong order"],
+      ["Can't add x to F(x) in a downsampling block", "The skip needs a 1x1 stride-2 conv and batchnorm"],
+      ["Good in training, bad at eval time", "BatchNorm left in training mode"],
+      ["A deeper plain net has higher training error", "The degradation problem"],
+      ["Same argmax as torchvision on the sample images", "The end-to-end check passed"]
+    ],
+    "caption": {
+      "1": "Match each symptom to its cause. The sneaky one is the model that loads fine and still gets everything wrong.",
+      "2": "Each symptom points at a different check: counts catch missing layers, key pairs catch order, and predictions catch everything else.",
+      "3": "Arity, ordering, shape and mode errors fail in different ways; only an end-to-end argmax comparison against the reference covers them all at once."
+    }
+  },
+  "where_else": [
+    "Porting any model between frameworks: load the original weights, then compare outputs",
+    "Interpretability tools that load a real model's weights into code you can read and hook",
+    "The transformer residual stream, the same add-it-back structure at the heart of chapter 1",
+    "Any refactor: the new code should give the old code's outputs on the same inputs"
+  ],
+  "hamming": {
+    "what": "ResNet34 is residual blocks grouped into BlockGroups, and loading real pretrained weights into your own copy is the test that you built it exactly right.",
+    "when": "Whenever you reimplement a known model: match its parameter count first, then its predictions.",
+    "why": "A wrong architecture rarely raises an error, so agreeing with a trusted reference is the only proof that you have the same model."
+  },
+  "object": {
+    "title": "The seating plan",
+    "subtitle": "Two rows of pegs: the slots your model offers, and the tensors that land in them.",
+    "kind": "bars",
+    "rows": 2,
+    "cols": 12,
+    "f": "((r == 0 ? c : (c + s) % 12) % 3 == 0 ? 1.3 : 0.45) + 0.07 * floor((r == 0 ? c : (c + s) % 12) / 3)",
+    "labels": { "rows": ["your slot expects", "tensor that lands"], "cols": ["k", "bn", "bn", "k", "bn", "bn", "k", "bn", "bn", "k", "bn", "bn"] },
+    "c": "data",
+    "knobs": [{ "id": "s", "label": "Registration mistake: shift by", "min": 0, "max": 3, "step": 1, "value": 0 }],
+    "beats": [
+      {
+        "cap": { "1": "Front row: the slot each of your modules offers. Back row: the tensor that gets handed over. Lined up, every peg matches.", "2": "Tall pegs are conv kernels, short ones batchnorm vectors. Height also creeps up a little per layer, so each tensor is unique.", "3": "Big height = shape class; the small per-layer increment = tensor identity. With shift 0 the positional zip pairs every key correctly." },
+        "view": "iso",
+        "set": { "s": 0 }
+      },
+      {
+        "cap": { "1": "Shift by one: a tall kernel lands in a short batchnorm slot. This mistake is loud. Loading fails straight away.", "2": "Off by one, shapes clash and load_state_dict raises a size mismatch. Annoying, but at least you are told.", "3": "A misalignment that breaks shape agreement is caught by load_state_dict; these are the cheap bugs." },
+        "view": "front",
+        "set": { "s": 1 }
+      },
+      {
+        "cap": { "1": "Shift by a whole layer: every tall peg lands on a tall slot again. No error at all. Yet each one came from the wrong layer.", "2": "Shift by one repeating unit and every shape matches again. Loading succeeds silently with every tensor in the wrong place.", "3": "Because ResNet repeats identical shapes, a shift by one period is shape-valid: the failure mode no size check can see." },
+        "view": "front",
+        "set": { "s": 3 }
+      },
+      {
+        "cap": { "1": "That small height difference is the whole bug: right shape, wrong tensor. Only comparing answers with the original catches it.", "2": "Look at the small steps between rows. Printing zipped key pairs shows this at once; comparing argmax proves the fix.", "3": "Identity mismatch under shape agreement is detectable only by name diffing the zipped keys or by end-to-end output comparison." },
+        "view": "close",
+        "set": { "s": 3 }
+      },
+      {
+        "cap": { "1": "Back in order. Now your model gives the same predictions as the original, which is the real test.", "2": "The fix: register modules in torchvision's order, check counts, print pairs, and compare predictions on the sample images.", "3": "Once order mirrors the reference, predictions match; the same end-to-end check validates any reimplementation, framework port or hooked model copy." },
+        "view": "iso",
+        "set": { "s": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "copy_weights ran and load_state_dict raised nothing. Is your ResNet34 right?",
+        "options": [{ "t": "Not necessarily: same-shaped tensors can land in the wrong slots", "ok": true }, { "t": "Yes: any mistake would raise a shape error" }],
+        "why": "ResNet repeats the same kernel and batchnorm shapes, so a misordered copy can be perfectly shape-valid."
+      },
+      {
+        "q": "Which check covers ordering, shapes and buffers all at once?",
+        "options": [{ "t": "Running both models on the same images and comparing the argmax", "ok": true }, { "t": "Checking the parameter count" }],
+        "why": "The count catches missing or extra layers. Only matching predictions proves everything lines up."
+      },
+      {
+        "q": "When a block downsamples, why does its skip path need a 1x1 conv?",
+        "options": [{ "t": "The stride-2 downsample changes the shape, so x cannot be added to F(x) as it is", "ok": true }, { "t": "To give the block more parameters" }],
+        "why": "The addition needs matching shapes. The 1x1 stride-2 conv plus batchnorm reshapes the skip to fit."
+      }
+    ],
+    "where": "Any rebuild checked against a reference: framework ports, refactors, hooked copies of real models."
+  }
+}

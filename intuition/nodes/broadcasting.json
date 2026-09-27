@@ -1,0 +1,215 @@
+{
+  "id": "broadcasting",
+  "title": "Line up right, mirror the ones",
+  "week": 1,
+  "need": "core",
+  "allegory": "Broadcasting is two dance troupes pairing up one to one: they line up from the right, a troupe with a lone dancer on a line stands before a mirror and is seen as many times as needed, and if both have several dancers but different counts the show stops.",
+  "map": [
+    ["a dancer", "one element of a tensor"],
+    ["formation cards lined up from the right", "shapes compared from the last axis backwards"],
+    ["a missing line counts as one dancer", "the shorter shape is left-padded with size-1 axes"],
+    ["a lone dancer seen many times in a mirror", "a size-1 axis stretched as a stride-0 view, nothing copied"],
+    ["3 dancers facing 4: the show stops", "sizes differ and neither is 1: an error"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Sixteen, not four",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "(4,1) + (4,) ... why are there sixteen?",
+      "actors": [{ "pose": "shrug", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.46, "y": 0.55, "w": 0.08, "h": 0.4, "label": "(4,1)", "color": "sky" },
+        { "kind": "card", "x": 0.6, "y": 0.3, "label": "(4,)", "color": "peach" },
+        { "kind": "crate", "x": 0.82, "y": 0.6, "w": 0.22, "h": 0.32, "label": "16 numbers", "color": "butter" }
+      ],
+      "arrows": [[0.6, 0.45, 0.72, 0.58, "no error"]],
+      "cap": {
+        "1": "You add two lists of four numbers and get sixteen back. No error, no warning. Something quietly stretched them.",
+        "2": "<code>x</code> has shape (4,1) and <code>y</code> has shape (4,). <code>x + y</code> hands back a (4,4), not four numbers. PyTorch followed its rules exactly; the rules make this mistake legal.",
+        "3": "(4,1) + (4,) left-pads y to (1,4), then both expand to (4,4). The result is well-typed everywhere downstream, so the bug surfaces far from the line that caused it."
+      }
+    },
+    {
+      "name": "The dance hall",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.14, "label": "you" },
+        { "pose": "dance", "x": 0.42, "label": "lone dancer" }
+      ],
+      "props": [
+        { "kind": "door", "x": 0.6, "y": 0.45, "w": 0.12, "h": 0.5, "label": "mirror", "color": "sky" },
+        { "kind": "stack", "x": 0.84, "y": 0.55, "w": 0.16, "h": 0.4, "label": "troupe of 4", "color": "peach" }
+      ],
+      "arrows": [[0.48, 0.3, 0.78, 0.3, "seen 4 times"]],
+      "cap": {
+        "1": "Two troupes pair up one to one, lined up from the right. A lone dancer stands before a mirror and is seen as many times as the other troupe needs.",
+        "2": "Elementwise ops pair elements one to one. Shapes are compared from the last axis backwards; a missing axis counts as size 1, and any size-1 axis is repeated to match its partner.",
+        "3": "Align shapes at the trailing axis, left-pad the lower-rank operand with 1s, and expand each singleton axis to its partner's extent. The expansion is a stride-0 view: nothing is copied."
+      }
+    },
+    {
+      "name": "Read from the right",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "(3,1,5)", "c": "sky", "note": "lone on the middle line" },
+        { "t": " + ", "c": "ink", "note": "" },
+        { "t": "(1,4,5)", "c": "orange", "note": "lone on the front line" },
+        { "t": " → ", "c": "ink", "note": "" },
+        { "t": "(3,4,5)", "c": "green", "note": "both mirrored" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Line the shapes up from the right. Wherever one side says 1, it gets mirrored to match the other. Here both troupes stretch, and you get a 3 by 4 by 5 block.",
+        "2": "<code>(3,1,5) + (1,4,5)</code> gives <code>(3,4,5)</code>. Right to left: 5 matches 5, the 1 stretches to 4, and 3 stretches the other 1. Both operands expand, not just the smaller one.",
+        "3": "Per aligned axis the output extent is the larger size when the sizes are equal or one is 1; otherwise it raises. Each operand here has one singleton axis, so both expand into (3,4,5)."
+      }
+    },
+    {
+      "name": "When it refuses",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "(3,1,5) + (1,4,5)", "c": "mint", "lines": ["5 meets 5", "1 meets 4: mirror", "3 meets 1: mirror", "runs: (3,4,5)"] },
+      "right": { "title": "(8,2,6) + (8,2)", "c": "pink", "lines": ["line up from the right", "6 meets 2: clash", "2 meets 8: clash", "raises an error"] },
+      "verdict": "Shapes line up from the right, never from the left.",
+      "cap": {
+        "1": "The warm-up quiz asks which pairs break. The trap is lining shapes up from the left. Line them up from the right and 6 meets 2: the show stops.",
+        "2": "<code>(8,2,6) + (8,2)</code> looks like it should fit, but alignment starts at the last axis, so (2,6) sits against (8,2). Two clashes, so it raises. The [0.0] quiz is built from pairs like these.",
+        "3": "Left-padding turns (8,2) into (1,8,2), so the trailing comparisons are 6 vs 2, then 2 vs 8. Both fail. An intuition that aligns shapes from the left predicts success here and is wrong."
+      }
+    },
+    {
+      "name": "The unwanted square",
+      "need": "core",
+      "dur": 11,
+      "type": "grid",
+      "title": "(4,1) + (4,) → (4,4)",
+      "rows": 4,
+      "cols": 4,
+      "values": [
+        ["a+1", "a+2", "a+3", "a+4"],
+        ["b+1", "b+2", "b+3", "b+4"],
+        ["c+1", "c+2", "c+3", "c+4"],
+        ["d+1", "d+2", "d+3", "d+4"]
+      ],
+      "labels": { "rows": ["a", "b", "c", "d"], "cols": ["1", "2", "3", "4"] },
+      "highlight": [[0, 0], [1, 1], [2, 2], [3, 3]],
+      "cap": {
+        "1": "The column of four meets the row of four. Mirrors fill the whole square: sixteen pairings. The four you actually wanted sit on the diagonal.",
+        "2": "y is left-padded to (1,4), then both stretch to (4,4): every x meets every y. You meant <code>x[i] + y[i]</code>, which is only the lit diagonal. The other twelve are silent garbage.",
+        "3": "A mismatched MSE, preds (N,1) against targets (N,), averages all N² pairs: the loss falls far too slowly and memory grows with the square of the batch. Fix: assert preds.shape == targets.shape."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Assert the shape you meant", "Backprop sums the mirrors back down", "Every bias, batch and mask leans on it"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Broadcasting sits under almost every line of tensor maths you will write. Know the rules, check the shape you meant, and silent bugs stop being silent.",
+        "2": "Adding a bias to a batch, batching ray tracing, masking attention: all broadcasting. In backprop the stretched copies are summed back down (unbroadcast). Assert shapes at boundaries.",
+        "3": "When you read or edit activations to understand and steer a model, a silently broadcast (N,N) is a wrong answer that still looks like data. Shape asserts or jaxtyping at boundaries catch it."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Shape A is (a, b) and shape B is (n,). How many numbers come out?",
+    "labels": ["A holds", "B holds", "result holds"],
+    "params": [
+      { "id": "a", "label": "A rows (a)", "min": 1, "max": 5, "step": 1, "value": 4 },
+      { "id": "b", "label": "A columns (b)", "min": 1, "max": 5, "step": 1, "value": 1 },
+      { "id": "n", "label": "B length (n)", "min": 1, "max": 5, "step": 1, "value": 4 }
+    ],
+    "f": "[a*b, n, (b==n || b==1 || n==1) ? a*max(b,n) : 0]",
+    "y": [0, 25],
+    "readouts": [
+      { "label": "A + B", "f": "'(' + a + ',' + b + ') + (' + n + ',)'" },
+      { "label": "B after left-padding", "f": "'(1,' + n + ')'" },
+      { "label": "result", "f": "(b==n || b==1 || n==1) ? 'shape (' + a + ',' + max(b,n) + ')' : 'raises: ' + b + ' meets ' + n" }
+    ],
+    "caption": {
+      "1": "Start at A = 4 by 1 and B = 4 long: four and four go in, sixteen come out. Now set A's columns to 3 and watch it refuse.",
+      "2": "B is left-padded to (1, n), then every 1 stretches. a = 1, b = 4 gives the four matched sums you meant; a = 4, b = 1 gives sixteen; b = 3 against n = 4 raises.",
+      "3": "Each aligned axis takes the larger size when the sizes match or one is 1. The result can dwarf both inputs: 8 stored numbers in, 16 out, and nothing in the type system notices."
+    }
+  },
+  "where_else": [
+    "Adding a bias vector to every row of a batch",
+    "Unbroadcast in backprop: the gradient sums the stretched copies back down",
+    "Batched ray tracing in [0.1]: many rays tested in one expression",
+    "sum(dim=1) without keepdim=True, then dividing: the sums line up as a row, not a column"
+  ],
+  "hamming": {
+    "what": "The rule that lets tensors of different shapes combine, by lining shapes up from the right and stretching size-1 axes.",
+    "when": "Every elementwise operation between tensors whose shapes are not identical, which is most lines of tensor code.",
+    "why": "It saves copies and loops, but it also makes the commonest shape mistake legal, so the habit that matters is asserting the shape you meant."
+  },
+  "object": {
+    "title": "The mirror box",
+    "subtitle": "A column and a row that a mirror turns into a square of sixteen.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 4,
+    "f": "(wanted > 0.5 && r != c) ? 0.03 : (c < reach ? 0.2 + 0.25*r + 0.12*c : 0.03)",
+    "labels": { "rows": ["a", "b", "c", "d"], "cols": ["1", "2", "3", "4"] },
+    "c": "data",
+    "knobs": [
+      { "id": "reach", "label": "How far the mirror stretches", "min": 1, "max": 4, "step": 1, "value": 4 },
+      { "id": "wanted", "label": "Show only the pairs you meant", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "One column of four towers: the troupe with a lone dancer on each line, shape (4,1). Nothing is stretched yet.", "2": "x has shape (4,1): four rows, one column. Before broadcasting, it is just this.", "3": "A (4,1) operand: extent 4 on axis 0, a singleton on axis 1 waiting to be expanded." },
+        "view": "iso",
+        "set": { "reach": 1, "wanted": 0 }
+      },
+      {
+        "cap": { "1": "The mirror stretches the column across four places, and the row of four rides on top. Sixteen towers from eight numbers.", "2": "(4,1) + (4,) gives (4,4). Tower (i, j) is x[i] + y[j]: an outer sum, not four matched sums.", "3": "Both singleton axes expand, then the add materialises a full (4,4): sixteen outputs from eight stored inputs." },
+        "view": "front",
+        "set": { "reach": 4, "wanted": 0 }
+      },
+      {
+        "cap": { "1": "Look along any row: it climbs the same staircase as every other row. That staircase is y, mirrored down four rows.", "2": "Every row repeats y and every column repeats x. The repeats are views of one stored copy, not new data.", "3": "The broadcast axis has stride 0, so every index along it reads the same memory. Only the output of the add allocates." },
+        "view": "close",
+        "set": { "reach": 4, "wanted": 0 }
+      },
+      {
+        "cap": { "1": "Keep only the diagonal: these four are the sums you meant. The other twelve are the bug.", "2": "Matched pairs x[i] + y[i] are the diagonal. The silent broadcast computed the whole square.", "3": "In an MSE with (N,1) against (N,), the mean runs over all N² entries instead of the N diagonal ones, so the gradient is averaged over wrong pairs." },
+        "view": "top",
+        "set": { "reach": 4, "wanted": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "x is (4,1) and y is (4,). What does x + y give?",
+        "options": [{ "t": "A (4,4) grid, with no error", "ok": true }, { "t": "Four matched sums, shape (4,)" }, { "t": "An error, because the shapes differ" }],
+        "why": "y is left-padded to (1,4), then both size-1 axes stretch. Legal, silent, sixteen numbers."
+      },
+      {
+        "q": "Does (8,2,6) + (8,2) run?",
+        "options": [{ "t": "No: lined up from the right, 6 meets 2", "ok": true }, { "t": "Yes: the 8s and the 2s line up" }],
+        "why": "Shapes align at the last axis, so (8,2) sits under (2,6). Aligning from the left gets this wrong."
+      },
+      {
+        "q": "When a size-1 axis is stretched, is the data copied?",
+        "options": [{ "t": "No: it is a stride-0 view of the same memory", "ok": true }, { "t": "Yes: copies are tiled into new memory" }],
+        "why": "The stretch is a view. Only the result of the operation takes new memory."
+      }
+    ],
+    "where": "Any outer sum or pairwise table: distance matrices, a bias added to every row, a mask laid over every attention score."
+  }
+}

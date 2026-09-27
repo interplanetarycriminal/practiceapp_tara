@@ -1,0 +1,170 @@
+{
+  "id": "einops-rearrange",
+  "title": "Relabel the shelves, never the jars",
+  "week": 1,
+  "need": "core",
+  "allegory": "A tensor is a pantry of jars on numbered shelves; rearrange rewrites the shelf labels and walks the jars into the new layout, but never opens a jar.",
+  "map": [
+    ["a jar", "one number in the tensor"],
+    ["shelf labels like (row, col)", "axis names like (h w)"],
+    ["the new floor plan written on the door", "the pattern string 'h w -> w h'"],
+    ["jars never opened, none added or lost", "rearrange keeps every element; only the layout changes"],
+    ["two labels taped together, (h d)", "merging axes: order inside the brackets matters"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The mess",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "shape (2, 3, 4) ... wait, which one was height?",
+      "actors": [{ "pose": "shrug", "x": 0.3, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.68, "y": 0.55, "w": 0.26, "h": 0.4, "label": "tensor", "color": "sky" },
+        { "kind": "card", "x": 0.68, "y": 0.2, "label": "x.transpose(1, 2).reshape(2, 12)?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You have a block of numbers and need it in a different layout. Old code does this with bare axis numbers, and it is easy to get wrong.",
+        "2": "<code>x.transpose(1,2).reshape(2,12)</code> works, but nothing says which axis is which. Change the input shape and it silently does the wrong thing.",
+        "3": "Positional permute/reshape chains encode layout implicitly. Nothing is checked against intent, so shape-compatible mistakes pass silently."
+      }
+    },
+    {
+      "name": "The pantry",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.45, "y": 0.55, "w": 0.2, "h": 0.36, "label": "h  w", "color": "mint" },
+        { "kind": "stack", "x": 0.78, "y": 0.55, "w": 0.2, "h": 0.36, "label": "w  h", "color": "peach" },
+        { "kind": "door", "x": 0.62, "y": 0.2, "label": "'h w -> w h'", "color": "butter" }
+      ],
+      "arrows": [[0.56, 0.55, 0.67, 0.55, "same jars"]],
+      "cap": {
+        "1": "Picture a pantry of jars on labelled shelves. You write the new floor plan on the door, and the jars walk to their new places. No jar is opened.",
+        "2": "einops makes you name every axis on both sides of an arrow. The library works out the permute and reshape, and checks the names add up.",
+        "3": "rearrange(x, 'h w -> w h') is a permutation of axes described by name; the pattern is validated against x.shape, so intent is explicit and checked."
+      }
+    },
+    {
+      "name": "The floor plan",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "rearrange(x, ", "c": "ink", "note": "" },
+        { "t": "'b h w", "c": "sky", "note": "shelves now" },
+        { "t": " -> ", "c": "ink", "note": "walk" },
+        { "t": "b (h w)'", "c": "orange", "note": "shelves after" },
+        { "t": ")", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.12 },
+      "cap": {
+        "1": "Left of the arrow: how the shelves are labelled now. Right: how you want them. Brackets tape two labels into one long shelf.",
+        "2": "<code>'b h w -> b (h w)'</code> flattens each image into one row. The brackets say: merge h and w, with h as the slow-moving outer index.",
+        "3": "Parenthesised groups compose axes row-major: (h w) has size h*w with index i*w + j. Unnamed sizes are inferred; ambiguous splits need a keyword, e.g. h=4."
+      }
+    },
+    {
+      "name": "Walk the jars",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "(2, 3) -> (3, 2)",
+      "rows": 2,
+      "cols": 3,
+      "values": [["a", "b", "c"], ["d", "e", "f"]],
+      "labels": { "rows": ["h0", "h1"], "cols": ["w0", "w1", "w2"] },
+      "highlight": [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2]],
+      "to": { "rows": 3, "cols": 2 },
+      "cap": {
+        "1": "Six jars, two shelves of three. Same six jars afterwards, in a new layout. Nothing added, nothing lost, nothing opened.",
+        "2": "Rearrange only moves elements. The count is always the same before and after, which is exactly what makes it safe to reason about.",
+        "3": "Element count is invariant (prod of sizes). This is the contrast with einops.reduce (which drops axes) and repeat (which adds them)."
+      }
+    },
+    {
+      "name": "The silent bug",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "(h d)", "c": "mint", "lines": ["heads outside", "each head gets a", "contiguous slice", "model learns"] },
+      "right": { "title": "(d h)", "c": "pink", "lines": ["heads inside", "each 'head' gets", "every h-th number", "shapes match, model never learns"] },
+      "verdict": "Same shape, different meaning. Only the names catch it.",
+      "cap": {
+        "1": "Taping labels in the wrong order still fits on the shelf. The shapes match, the code runs, and the model quietly learns nothing.",
+        "2": "In attention you split d_model into heads with <code>'b s (h d) -> b h s d'</code>. Writing (d h) instead gives the same shape and scrambled heads.",
+        "3": "Axis-merge order fixes which elements are contiguous. (d h) interleaves heads, so every 'head' mixes all heads' channels; no shape check can catch it."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Split attention heads in [1.1]", "Flatten images before a linear layer", "Read activations by name in interpretability"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "You will do this dozens of times: splitting attention heads, flattening images, reading model insides. Naming the axes is how you stay sure.",
+        "2": "Every transformer you build splits heads with one rearrange, and interpretability code reads activations with named axes. Clear layout is clear thinking.",
+        "3": "Named-axis layout is how you keep head, position and batch semantics straight when you start hooking and patching activations to understand and steer models."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Tap cells to mark jars, then read how they land after 'h w -> (w h)'",
+    "rows": 3,
+    "cols": 4,
+    "init": "0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "marked jars", "f": "sum(G.map(r => sum(r)))" },
+      { "label": "positions after 'h w -> (h w)'", "f": "G.flatMap((r,i)=>r.map((v,j)=>v? i*4+j : -1)).filter(v=>v>=0).join(', ') || 'none'" },
+      { "label": "positions after 'h w -> (w h)'", "f": "G.flatMap((r,i)=>r.map((v,j)=>v? j*3+i : -1)).filter(v=>v>=0).sort((a,b)=>a-b).join(', ') || 'none'" }
+    ],
+    "caption": {
+      "1": "Tap a few jars. Then compare where they land when the labels are taped as (h w) versus (w h). Same jars, different order.",
+      "2": "Mark a row: under (h w) it stays contiguous, under (w h) it spreads out with stride 3. That spread is the head-scrambling bug in miniature.",
+      "3": "(h w) index = i*W + j; (w h) index = j*H + i. A row is contiguous in the first and strided in the second: the same fact as (h d) vs (d h)."
+    }
+  },
+  "where_else": [
+    "Splitting and merging attention heads in every transformer",
+    "Patches in vision transformers: 'b c (h p1) (w p2) -> b (h w) (p1 p2 c)'",
+    "Reading and writing activation caches by named axis in TransformerLens"
+  ],
+  "hamming": {
+    "what": "A way to change a tensor's layout by naming its axes instead of numbering them.",
+    "when": "Whenever you permute, flatten, split or merge axes, which is most days in ML code.",
+    "why": "Names make intent checkable, so shape-compatible mistakes stop being silent."
+  },
+  "object": {
+    "title": "The relabelling crate",
+    "subtitle": "A crate of numbered jars you can re-shelve without ever opening one.",
+    "kind": "bars",
+    "rows": 3,
+    "cols": 4,
+    "f": "0.3 + 0.12*(r*cols + c) * (order > 0.5 ? 1 : 0) + 0.12*(c*rows + r) * (order > 0.5 ? 0 : 1)",
+    "labels": { "rows": ["h0", "h1", "h2"], "cols": ["w0", "w1", "w2", "w3"] },
+    "c": "data",
+    "knobs": [{ "id": "order", "label": "Tape as (h w) or (w h)", "min": 0, "max": 1, "step": 1, "value": 1 }],
+    "beats": [
+      { "cap": { "1": "Twelve jars on three shelves. Each jar's height is its position in the flat line after rearranging.", "2": "A (3, 4) tensor. Bar height = flat index after 'h w -> (h w)'.", "3": "Height encodes the flattened index i*W + j under row-major merge." }, "view": "iso", "set": { "order": 1 } },
+      { "cap": { "1": "Taped as (h w): heights rise along each shelf. Each shelf is one unbroken run.", "2": "(h w): rows stay contiguous. Neighbours along w are neighbours in memory.", "3": "(h w) keeps w as the fast axis: stride 1 along w, stride W along h." }, "view": "front", "set": { "order": 1 } },
+      { "cap": { "1": "Now taped as (w h). Same jars, but the heights rise down the columns instead.", "2": "(w h): columns are contiguous now. The same shape, a different meaning.", "3": "(w h) makes h the fast axis: index j*H + i. Shapes agree; semantics do not." }, "view": "front", "set": { "order": 0 } },
+      { "cap": { "1": "This is the attention-head bug: split in the wrong order and each head gets a mix of everyone's numbers.", "2": "Splitting d_model as (d h) instead of (h d) interleaves heads exactly like this.", "3": "With (d h), head k receives channels k, k+H, k+2H...: an interleave that no shape assert detects." }, "view": "top", "set": { "order": 0 } }
+    ],
+    "predict": [
+      { "q": "After 'h w -> (h w)', how many jars change count?", "options": [{ "t": "None: rearrange never adds or drops elements", "ok": true }, { "t": "It depends on the shape" }], "why": "Rearrange only moves elements. Reduce drops them, repeat copies them." },
+      { "q": "(h d) and (d h) give the same shape. Do they give the same heads?", "options": [{ "t": "No, the heads are interleaved differently", "ok": true }, { "t": "Yes, same shape means same data" }], "why": "Merge order decides which elements are neighbours. Same shape, different grouping." }
+    ],
+    "where": "Every layout change in ML code: attention heads, image patches, activation caches."
+  }
+}

@@ -1,0 +1,174 @@
+{
+  "id": "batched-raytracing",
+  "title": "A clerk at every desk",
+  "week": 1,
+  "need": "core",
+  "allegory": "Batched raytracing is like an exam hall with a desk for every (ray, triangle) pair, rays down the side and triangles along the top, because every pair needs the same small worksheet and all of them can be written at the same moment.",
+  "map": [
+    ["one clerk walking through every pair in turn", "a nested Python loop over rays and triangles"],
+    ["rows of desks for rays, columns for triangles", "new batch axes: rays (nrays, 1, ...) meet triangles (1, ntri, ...)"],
+    ["the same worksheet on every desk", "one 3x3 solve per pair, stacked into (nrays, ntri, 3, 3)"],
+    ["the seating plan drawn before anyone sits", "the shape chain (nrays 2 3), (ntri 3 3) -> (nrays ntri), written before the code"],
+    ["a hit or miss stamp on each desk", "the boolean (nrays, ntri) result"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Pair by pair",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "for each ray... for each triangle... still going",
+      "actors": [{ "pose": "type", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.55, "y": 0.58, "w": 0.14, "h": 0.36, "label": "rays", "color": "sky" },
+        { "kind": "stack", "x": 0.78, "y": 0.58, "w": 0.14, "h": 0.36, "label": "triangles", "color": "peach" },
+        { "kind": "card", "x": 0.66, "y": 0.18, "label": "for ray in rays: for tri in tris: ...", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You want to know which rays hit which triangles. The obvious way is to check one pair at a time, and it takes forever.",
+        "2": "Two nested Python loops run the same small solve once per (ray, triangle) pair. It is correct, but every pair pays Python overhead and the GPU sits idle.",
+        "3": "A per-pair loop issues nrays·ntri tiny operations; the arithmetic is trivial, the interpreter overhead dominates, and no parallelism is exposed to the hardware."
+      }
+    },
+    {
+      "name": "A desk per pair",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.36, "y": 0.6, "w": 0.08, "h": 0.44, "label": "rays", "color": "sky" },
+        { "kind": "stack", "x": 0.66, "y": 0.2, "w": 0.4, "h": 0.08, "label": "triangles", "color": "peach" },
+        { "kind": "box", "x": 0.66, "y": 0.6, "w": 0.4, "h": 0.44, "label": "a desk for every pair", "color": "cream" }
+      ],
+      "arrows": [[0.41, 0.6, 0.46, 0.6, "copy across"], [0.66, 0.25, 0.66, 0.37, "copy down"]],
+      "cap": {
+        "1": "Picture a hall of desks: rays down the side, triangles along the top. Every desk gets one pair and the same worksheet, and everyone writes at once.",
+        "2": "Give the rays a triangle axis and the triangles a ray axis. Both become (nrays, ntri, ...), and one tensor operation fills every desk together.",
+        "3": "Insert singleton axes (rays[:, None], triangles[None]) and expand or einops.repeat to (nrays, ntri, ...). Each (i, j) slice is an independent problem, so the grid is one batched call."
+      }
+    },
+    {
+      "name": "The same worksheet",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "O + sD", "c": "sky", "note": "walk s along the ray" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "A", "c": "orange", "note": "start at corner A" },
+        { "t": " + u(B−A)", "c": "orange", "note": "u of the way to B" },
+        { "t": " + v(C−A)", "c": "orange", "note": "v of the way to C" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Each desk asks one question: can you walk along the ray and land inside the triangle? It is a hit if u and v are not negative and add up to at most 1.",
+        "2": "Solve for s, u, v: the matrix has columns <code>-D, B-A, C-A</code> and the right side is <code>O-A</code>. Hit when u ≥ 0, v ≥ 0 and u + v ≤ 1.",
+        "3": "Batched: mat (nrays, ntri, 3, 3), vec (nrays, ntri, 3), one t.linalg.solve. Parallel rays make mat singular, so mask |det| < 1e-8, swap in the identity, and count them as misses."
+      }
+    },
+    {
+      "name": "The whole hall",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "(nrays 2 3) & (ntri 3 3) → (nrays ntri)",
+      "rows": 4,
+      "cols": 3,
+      "values": [["✓", "·", "·"], ["✓", "✓", "·"], ["·", "✓", "·"], ["·", "·", "✓"]],
+      "labels": { "rows": ["ray 0", "ray 1", "ray 2", "ray 3"], "cols": ["tri 0", "tri 1", "tri 2"] },
+      "highlight": [[0, 0], [1, 0], [1, 1], [2, 1], [3, 2]],
+      "cap": {
+        "1": "Here is the hall after one go: a table with a row for every ray and a column for every triangle. Each cell is one pair's answer.",
+        "2": "Write the shape chain before any code: rays <code>(nrays 2 3)</code>, triangles <code>(ntri 3 3)</code>, answer <code>(nrays ntri)</code>. If you cannot write it yet, you are not ready to code.",
+        "3": "The (nrays, ntri) mask is the batched object; raytrace_mesh then reduces over the triangle axis to one value per ray. Every later chapter assumes this shape-first habit."
+      }
+    },
+    {
+      "name": "The missing axis",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Axes added", "c": "mint", "lines": ["rays (8, 1, ...)", "triangles (1, 8, ...)", "answer (8, 8)", "every ray meets every triangle"] },
+      "right": { "title": "Axes forgotten", "c": "pink", "lines": ["rays (8, ...)", "triangles (8, ...)", "answer (8,)", "ray i only meets triangle i"] },
+      "verdict": "Equal counts pair up without complaint. Only the shape chain catches it.",
+      "cap": {
+        "1": "Forget to give each list its own direction and the desks shrink to one line: ray 1 with triangle 1, ray 2 with triangle 2, and nobody else.",
+        "2": "With 8 rays, 8 triangles and no new axes, broadcasting pairs them one-to-one. No error, just 8 answers instead of 64. Unequal counts would at least crash.",
+        "3": "Broadcasting aligns dims from the right; when nrays == ntri the leading batch dims match elementwise and you get the (n,) diagonal instead of (n, n). Assert the output shape, or read it in the debugger."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Shape chain first, every chapter", "Attention: every query against every key", "Debug by reading shapes, not prints"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Drawing the table before filling it comes back everywhere. Attention itself is a table of every word scored against every word.",
+        "2": "Attention scores are the same move: queries <code>(q d)</code> against keys <code>(k d)</code> give a <code>(q k)</code> table in one op. When a shape is wrong, read it in the debugger, not with prints.",
+        "3": "All-pairs tables recur: QKᵀ attention scores, (layer × position) patching grids. Reading those shapes fluently is how you come to understand, and then steer, what a model computes."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Tap to mark hits: rows are rays, columns are triangles",
+    "rows": 6,
+    "cols": 5,
+    "init": "(c == 1 && r >= 1 && r <= 4) || (c == 3 && r >= 2 && r <= 3) ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "pair tests in one batched call", "f": "G.length * G[0].length" },
+      { "label": "rays that hit something", "f": "G.filter(row => row.some(v => v)).length" },
+      { "label": "the picture, one pixel per ray", "f": "G.map(row => row.some(v => v) ? '#' : '.').join(' ')" }
+    ],
+    "caption": {
+      "1": "Each row is a ray, each column a triangle. Tap cells to mark hits and watch the picture: a pixel lights up if its ray hits anything.",
+      "2": "This is the (nrays, ntri) table. The picture is that table squashed along the triangle axis, one value per ray, which is the reduce step at the end of raytrace_mesh.",
+      "3": "One batched solve fills all nrays·ntri cells; rendering reduces over ntri (any for coverage, min over s for depth). A loop does the same work nrays·ntri times in Python."
+    }
+  },
+  "where_else": [
+    "Attention scores: every query against every key in one (q, k) table",
+    "Pairwise distances, such as every point against every cluster centre",
+    "Running a whole batch of prompts through a model in one forward pass"
+  ],
+  "hamming": {
+    "what": "Testing every ray against every triangle in one tensor operation, by giving each list its own axis of a shared table.",
+    "when": "Whenever you catch yourself writing a nested loop that does the same small calculation for every pair from two lists.",
+    "why": "One batched call keeps the GPU busy instead of paying Python overhead per pair, and a written shape chain makes the plan checkable before it runs."
+  },
+  "object": {
+    "title": "The pairing tray",
+    "subtitle": "An ice-cube tray with one cell per ray and triangle pair, filled in a single pour.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 6,
+    "f": "abs(r/7 - ((c + 0.5)/6 + slide)) < size ? 1.7 - 0.2*c : 0.12",
+    "labels": { "rows": ["ray 0", "ray 1", "ray 2", "ray 3", "ray 4", "ray 5", "ray 6", "ray 7"], "cols": ["tri 0", "tri 1", "tri 2", "tri 3", "tri 4", "tri 5"] },
+    "c": "data",
+    "knobs": [
+      { "id": "slide", "label": "Slide the triangles sideways", "min": -0.4, "max": 0.4, "step": 0.05, "value": 0 },
+      { "id": "size", "label": "Triangle width", "min": 0.05, "max": 0.4, "step": 0.05, "value": 0.15 }
+    ],
+    "beats": [
+      { "cap": { "1": "Eight rays down one side, six triangles along the other. Each cell is one pair; a tall bar means that ray hits that triangle.", "2": "An (8, 6) tray. Triangles are numbered near to far; a hit stands taller the nearer it is, and a miss is a stub.", "3": "The boolean (nrays, ntri) mask with depth folded in: height encodes hit and nearness, so the render is a per-row reduction." }, "view": "iso", "set": { "slide": 0, "size": 0.15 } },
+      { "cap": { "1": "Read one row: one ray, checked against every triangle in the same instant.", "2": "A row is one ray broadcast against all the triangles: the new triangle axis at work.", "3": "Row i is mask[i, :], produced by broadcasting ray i along the inserted ntri axis." }, "view": "front", "set": { "slide": 0 } },
+      { "cap": { "1": "Read one column: one triangle, checked against every ray.", "2": "A column is one triangle broadcast against all the rays: the new ray axis at work.", "3": "Column j is mask[:, j]: triangle j broadcast along the inserted nrays axis. Rays and triangles play symmetric roles." }, "view": "side", "set": { "slide": 0 } },
+      { "cap": { "1": "Slide the triangles. The whole tray changes in one pour, not cell by cell.", "2": "Move the geometry and rerun: one batched call recomputes all 48 pairs together.", "3": "Recomputing the grid is one batched operation; cost still scales with nrays·ntri, but it runs in parallel rather than in a Python loop." }, "view": "iso", "set": { "slide": 0.25 } },
+      { "cap": { "1": "Wider triangles overlap, so some rays hit several. The ray sees the nearest one: the tallest bar in its row.", "2": "Where hits overlap, the picture keeps the nearest per row: a min over the triangle axis.", "3": "Overlaps are why the reduction matters: take the minimum s along ntri per ray, turning (nrays, ntri) into (nrays,)." }, "view": "top", "set": { "slide": 0, "size": 0.3 } }
+    ],
+    "predict": [
+      { "q": "You double the number of triangles. How many extra Python loop steps does the batched version need?", "options": [{ "t": "None: the tray just gets twice as wide", "ok": true }, { "t": "Twice as many as before" }], "why": "The work doubles, but it all happens inside one tensor operation. Only a Python loop pays per pair." },
+      { "q": "Rays (8, 2, 3) and triangles (8, 3, 3), with no new axes added. What comes out?", "options": [{ "t": "8 answers: ray i against triangle i only", "ok": true }, { "t": "An 8 by 8 table of every pair" }, { "t": "A shape error" }], "why": "Without a triangle axis on the rays and a ray axis on the triangles, equal counts line up one-to-one. It runs silently, which is why you write the shape chain first." }
+    ],
+    "where": "Any all-pairs table: attention scores, pairwise distances, similarity matrices."
+  }
+}

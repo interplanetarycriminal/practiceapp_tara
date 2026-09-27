@@ -1,0 +1,181 @@
+{
+  "id": "autoencoder",
+  "title": "A telegram with a word limit",
+  "week": 4,
+  "need": "core",
+  "allegory": "An autoencoder is like a sender and a receiver who may pass only a five-word telegram: to let the receiver redraw the picture, they invent a private shorthand that keeps only what matters.",
+  "map": [
+    ["the sender squeezing the picture into words", "the encoder, mapping x to a small vector z"],
+    ["the word limit on the telegram", "the bottleneck: z is much narrower than x"],
+    ["the receiver redrawing from the telegram", "the decoder, mapping z back to x̂"],
+    ["scoring how different the redraw looks", "the reconstruction loss, e.g. ‖x − x̂‖²"],
+    ["a shorthand that only works for telegrams they actually sent", "a latent space that is only trained where real inputs land"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "What is the gist?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "most pixels are predictable from the rest",
+      "actors": [{ "pose": "think", "x": 0.28, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.68, "y": 0.5, "w": 0.24, "h": 0.34, "label": "a handwritten 7", "color": "cream" },
+        { "kind": "cloud", "x": 0.4, "y": 0.2, "label": "the short version?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A picture of a handwritten digit is hundreds of numbers, but most are predictable from the rest. What is the short version, and who decides?",
+        "2": "You want a compact code for each image with no labels saying what matters. The trick: make a network find the code by forcing it to rebuild the image from it.",
+        "3": "Unsupervised representation learning: no labels, just a reconstruction objective. Compression through a bottleneck forces the code to keep what best predicts the input."
+      }
+    },
+    {
+      "name": "The telegram",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "write", "x": 0.14, "label": "encoder" },
+        { "pose": "reach", "x": 0.86, "label": "decoder" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.3, "y": 0.52, "w": 0.12, "h": 0.2, "label": "7", "color": "cream" },
+        { "kind": "card", "x": 0.5, "y": 0.3, "label": "telegram: 5 words", "color": "butter" },
+        { "kind": "card", "x": 0.7, "y": 0.52, "w": 0.12, "h": 0.2, "label": "7?", "color": "peach" }
+      ],
+      "arrows": [[0.36, 0.45, 0.43, 0.34, ""], [0.57, 0.34, 0.64, 0.45, ""]],
+      "cap": {
+        "1": "A sender may use only five words to describe a drawing, and a receiver must redraw it from them. Practise together and they invent a shorthand.",
+        "2": "Encoder: image to a small vector z. Decoder: z back to an image. Train both so the output matches the input. The narrow z is the telegram's word limit.",
+        "3": "x → encoder → z, with d_latent ≪ d_input, → decoder → x̂, trained end to end. The bottleneck rules out the identity map, so z must be a compressed code."
+      }
+    },
+    {
+      "name": "The only score",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "loss = ", "c": "ink", "note": "" },
+        { "t": "‖x", "c": "sky", "note": "the original" },
+        { "t": " − ", "c": "ink", "note": "compare" },
+        { "t": "dec(", "c": "green", "note": "redraw" },
+        { "t": "enc(x)", "c": "orange", "note": "the telegram" },
+        { "t": ")‖²", "c": "ink", "note": "squared miss" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "The pair is scored only on how different the redraw is from the original. Nobody tells them what the words should mean.",
+        "2": "The loss is reconstruction error, for example mean squared error per pixel. Backprop runs through decoder and encoder together, so the code is learned, not designed.",
+        "3": "L = ‖x − D(E(x))‖². With linear E, D and squared error, the learned code spans the same subspace as the top principal components; nonlinear E, D learn a curved version."
+      }
+    },
+    {
+      "name": "The hourglass",
+      "need": "core",
+      "dur": 9,
+      "type": "bars",
+      "title": "Width of each stage (relative)",
+      "labels": ["input", "encoder", "code z", "decoder", "output"],
+      "from": [1, 1, 1, 1, 1],
+      "to": [1, 0.45, 0.1, 0.45, 1],
+      "cap": {
+        "1": "Wide, then narrow, then wide again. The middle is the telegram: too small to copy the picture, so it must keep only what matters.",
+        "2": "Encoder layers shrink, the code is smallest, decoder layers grow back to image size. Make the middle as wide as the input and the network can simply copy.",
+        "3": "If d_latent is large enough to pass x through losslessly, the identity is reachable and nothing is learned. The bottleneck, or another constraint, is what forces structure."
+      }
+    },
+    {
+      "name": "The messy map",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "codes of real images", "c": "mint", "lines": ["decode to crisp digits", "compress well"] },
+      "right": { "title": "a random point in code space", "c": "pink", "lines": ["often decodes to junk", "neighbours can mean unrelated digits"] },
+      "verdict": "A good compressor is not a good generator. That gap is why VAEs exist.",
+      "cap": {
+        "1": "The shorthand only works for telegrams they actually sent. Make one up and the receiver draws nonsense. Similar telegrams can mean unrelated things.",
+        "2": "Nothing asks the encoder to use the code space sensibly, so a random z often decodes to junk and neighbouring codes can decode to unrelated digits. ARENA shows this with a latent grid.",
+        "3": "The objective only constrains z where real inputs land; the rest of latent space is unregularised, so you cannot sample from it. VAEs add a KL term to fix that (Kingma and Welling, 2014)."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["A compressed code the model invented itself", "VAEs and GANs start from this shape", "SAEs flip it: wider, not narrower, plus sparsity"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "This shape returns in interpretability: sparse autoencoders rebuild a model's insides, but go wider instead of narrower and allow only a few active words.",
+        "2": "Sparse autoencoders reuse encode-then-rebuild on a model's activations. They swap the narrow bottleneck for a wide layer with a sparsity penalty, to find readable features.",
+        "3": "Encode, reconstruct, penalise: the SAE keeps this objective but trades the bottleneck for overcompleteness plus L1 sparsity, the course's tool for pulling features out of superposition."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Choose the telegram length and see how much of the picture survives",
+    "labels": ["d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8"],
+    "params": [
+      { "id": "k", "label": "code width (the bottleneck)", "min": 0, "max": 8, "step": 1, "value": 3 },
+      { "id": "r", "label": "how fast detail fades", "min": 0.3, "max": 1, "step": 0.05, "value": 0.6 }
+    ],
+    "f": "range(8).map(i => i < k ? pow(r, i) : 0)",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "picture rebuilt", "f": "Math.round(100 * sum(range(8).map(i => i < k ? pow(r, i) : 0)) / sum(range(8).map(i => pow(r, i)))) + '%'" },
+      { "label": "reconstruction error left", "f": "sum(range(8).map(i => i < k ? 0 : pow(r, i))).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Each bar is one kind of detail the code keeps. Slide the width, then slide how fast detail fades: when it fades fast, three numbers rebuild nearly everything.",
+      "2": "Real data has a few big directions of variation and many small ones. A narrow code keeps the big ones. When detail does not fade (far right), every cut costs the same.",
+      "3": "For a linear AE with squared error, the best k-dim code spans the top-k variance directions and the error is the sum of the dropped variances. Nonlinear AEs bend this; same logic."
+    }
+  },
+  "where_else": [
+    "VAEs and GANs, which turn the decoder half into a generator",
+    "Sparse autoencoders on model activations: the same encode-and-rebuild, but wider and sparse",
+    "Transcoders: the same shape trained to rebuild an MLP's output from its input",
+    "Compression in general: a code is good if the receiver can rebuild the message from it"
+  ],
+  "hamming": {
+    "what": "A network trained to rebuild its own input through a narrow middle layer, which forces that layer to become a compressed code.",
+    "when": "When you want a compact representation without labels, or as the starting shape for VAEs and sparse autoencoders.",
+    "why": "Rebuilding through a bottleneck means the code has to keep what matters most about the input and drop the rest."
+  },
+  "object": {
+    "title": "The information hourglass",
+    "subtitle": "Wide in, a narrow neck, wide out: everything the redraw needs has to squeeze through the neck.",
+    "kind": "blocks",
+    "items": [
+      { "label": "image x", "h": 1.8, "c": "data" },
+      { "label": "encoder", "h": 1.1, "c": "dir" },
+      { "label": "code z", "h": 0.3, "c": "prob" },
+      { "label": "decoder", "h": 1.1, "c": "dir" },
+      { "label": "redraw x̂", "h": 1.8, "c": "data" }
+    ],
+    "axis": "x",
+    "stream": true,
+    "gap": 0.3,
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "Wide in, narrow middle, wide out: an hourglass for information.", "2": "Encoder, code, decoder. The tube is the path every image takes.", "3": "E: x → z, D: z → x̂, with dim z ≪ dim x." }, "view": "iso", "set": {} },
+      { "cap": { "1": "The neck is a handful of numbers. Everything the redraw needs has to fit through here.", "2": "The code z is the bottleneck. Its size is the telegram's word limit.", "3": "The bottleneck caps the information z can carry, so the code keeps the highest-value directions of variation." }, "view": "close", "set": {} },
+      { "cap": { "1": "Both halves are trained together, scored only on how well the redraw matches the original.", "2": "One loss, reconstruction error, trains encoder and decoder end to end.", "3": "Joint optimisation of E and D on ‖x − D(E(x))‖²; the code's meaning is whatever makes decoding easiest." }, "view": "side", "set": {} },
+      { "cap": { "1": "Picture the neck as wide as the ends: the sand pours straight through and nothing is learned.", "2": "No bottleneck means the network can learn to copy. The squeeze is what makes the code useful.", "3": "Remove the constraint and the identity is optimal: zero loss, no structure. Some constraint is always required." }, "view": "front", "set": {} },
+      { "cap": { "1": "Now imagine a bulge where the neck was: that is a sparse autoencoder, kept honest by using only a few words at once.", "2": "SAEs make the middle wider than the input and add a sparsity penalty instead of a bottleneck.", "3": "Overcomplete dictionary plus L1: sparsity, not width, supplies the constraint that forces structure." }, "view": "top", "set": {} }
+    ],
+    "predict": [
+      { "q": "You make the code as wide as the input. What does the autoencoder learn?", "options": [{ "t": "Possibly nothing useful: it can just copy", "ok": true }, { "t": "An even better compressed code" }], "why": "Without a bottleneck, or another constraint like sparsity, copying is allowed, so there is no pressure to find structure." },
+      { "q": "You decode a random point from a plain autoencoder's code space. What do you usually get?", "options": [{ "t": "Often junk: that region was never trained", "ok": true }, { "t": "A new, realistic digit" }], "why": "Only the codes of real images were trained. VAEs regularise the whole space so random points decode sensibly." },
+      { "q": "A sparse autoencoder's hidden layer is...", "options": [{ "t": "Wider than its input, with a sparsity penalty", "ok": true }, { "t": "Narrower than its input, like this one" }], "why": "SAEs trade the bottleneck for sparsity: many possible words, only a few used at once." }
+    ],
+    "where": "Any encode, squeeze, decode pipeline: codecs, VAEs, and sparse autoencoders on model activations."
+  }
+}

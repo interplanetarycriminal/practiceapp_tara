@@ -1,0 +1,194 @@
+{
+  "id": "weight-decay",
+  "title": "A rubber band back to zero",
+  "week": 3,
+  "need": "core",
+  "allegory": "Weight decay is like tying every weight to zero with a weak rubber band: the data drags each weight out to where it is useful, the band tugs it back in proportion to how far it has gone, and the weight rests where the two pulls balance.",
+  "map": [
+    ["how far a weight is stretched from the post", "the weight's value θ"],
+    ["the band's tug, stronger the further it stretches", "the decay term λθ, the gradient of (λ/2)θ²"],
+    ["the band's stiffness", "the weight decay coefficient λ"],
+    ["the data dragging the weight outwards", "the loss gradient g"],
+    ["resting where the two pulls balance", "the regularised optimum, where g = −λθ"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Leaning too hard",
+      "need": "core",
+      "dur": 8,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "push", "x": 0.28, "label": "training" }],
+      "props": [
+        { "kind": "scale", "x": 0.66, "y": 0.58, "w": 0.3, "h": 0.3, "label": "one huge weight", "color": "peach" },
+        { "kind": "crate", "x": 0.58, "y": 0.4, "w": 0.1, "h": 0.12, "label": "w = 40", "color": "red" }
+      ],
+      "cap": {
+        "1": "Left alone, training can push a few weights to huge values and lean on them hard. We want a gentle, constant pull back towards small.",
+        "2": "Nothing in the plain loss stops a weight growing if growing helps a little on the training data. Weight decay adds a steady pull towards zero on every weight.",
+        "3": "An unregularised objective is indifferent to weight norm except through the data fit. Weight decay imposes a prior towards small-norm solutions, applied at every optimiser step."
+      }
+    },
+    {
+      "name": "The rubber band",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "pull", "x": 0.76, "label": "the data" }],
+      "props": [
+        { "kind": "flag", "x": 0.16, "y": 0.6, "label": "0", "color": "ink" },
+        { "kind": "circle", "x": 0.52, "y": 0.6, "w": 0.08, "label": "θ", "color": "butter" }
+      ],
+      "arrows": [[0.47, 0.52, 0.22, 0.52, "band tugs back"], [0.57, 0.66, 0.7, 0.66, "data pulls"]],
+      "cap": {
+        "1": "Tie each weight to zero with a weak rubber band. The data drags it out to where it helps. The band tugs back harder the further it goes.",
+        "2": "Weight decay adds a pull of size λ·θ towards zero on every weight, every step. Far-out weights feel a strong tug, small ones barely any. λ is the band's stiffness.",
+        "3": "The decay force is linear in θ: Hooke's law with stiffness λ. It is the negative gradient of (λ/2)‖θ‖², so decay and an L2 penalty are the same pull under plain SGD."
+      }
+    },
+    {
+      "name": "One line",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "θ ← ", "c": "ink", "note": "" },
+        { "t": "(1 − γλ)", "c": "orange", "note": "shrink a little" },
+        { "t": "·θ", "c": "sky", "note": "every weight" },
+        { "t": " − γ·g", "c": "green", "note": "the data's pull" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Each step, shrink every weight by a tiny fraction, then let the data drag it. That fraction is the band: bigger weights lose more.",
+        "2": "SGD on loss + (λ/2)·θ² steps by −γ(g + λθ). Regroup it and you get (1 − γλ)θ − γg: shrink by a fixed fraction, then take the usual step.",
+        "3": "With the L2 term folded into the gradient, SGD gives θ ← (1−γλ)θ − γg, identical to decoupled decay. With g = 0, θ_t = (1−γλ)^t θ_0: geometric decay."
+      }
+    },
+    {
+      "name": "Where it rests",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "exp(-0.05*x)", "c": "pink", "label": "ignored by the data" },
+        { "f": "0.6 + 0.4*exp(-0.05*x)", "c": "green", "label": "pulled by the data" }
+      ],
+      "x": [0, 80],
+      "y": [0, 1.1],
+      "dot": true,
+      "marks": [{ "x": 14, "label": "half gone" }],
+      "cap": {
+        "1": "A weight the data ignores slowly slides back to zero. A weight the data keeps pulling settles where the pull matches the band.",
+        "2": "No gradient: θ decays geometrically to 0. A steady gradient g: θ settles where the pulls cancel, at |θ| = |g|/λ. Stiffer band, smaller resting weights.",
+        "3": "The fixed point of θ ← (1−γλ)θ − γg is θ* = −g/λ. Decay turns 'grow without limit along a useful direction' into a finite balance."
+      }
+    },
+    {
+      "name": "Adam's weak band",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Adam + L2", "c": "pink", "lines": ["band's tug added to g", "then divided by √v", "busy weights barely feel it"] },
+      "right": { "title": "AdamW", "c": "mint", "lines": ["tug applied to θ directly", "outside the adaptive step", "every weight feels the same band"] },
+      "verdict": "Where you apply the decay is the whole difference.",
+      "cap": {
+        "1": "Adam rescales each weight's step by how busy it has been. Route the band through that and busy weights barely feel it. AdamW ties the band to the weight itself.",
+        "2": "Adam divides the gradient by √v per parameter. Hide λθ inside the gradient and it is divided too, so high-gradient weights decay least. AdamW subtracts γλθ from θ directly.",
+        "3": "L2 and decay coincide only without per-parameter rescaling. Loshchilov and Hutter (ICLR 2019) decoupled them; AdamW is now the default optimiser for training transformers."
+      }
+    },
+    {
+      "name": "Two quiet traps",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "check the defaults",
+      "actors": [{ "pose": "recoil", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.48, "y": 0.28, "label": "Adam: weight_decay=0", "color": "cream" },
+        { "kind": "card", "x": 0.8, "y": 0.28, "label": "AdamW: weight_decay=0.01", "color": "peach" },
+        { "kind": "crate", "x": 0.64, "y": 0.68, "w": 0.24, "h": 0.2, "label": "biases, norm scales", "color": "mint" }
+      ],
+      "cap": {
+        "1": "Trap one: swapping Adam for AdamW quietly switches the band on. Trap two: banding biases and norm scales to zero is rarely what you want.",
+        "2": "PyTorch's Adam defaults to weight_decay=0 and AdamW to 0.01, so a swap silently adds decay. Use parameter groups: decay weights, not biases or normalisation scales.",
+        "3": "Set weight_decay explicitly on both. Exclude biases and norm affine parameters via param groups; pulling a norm's scale towards 0 fights its purpose. Re-tune lr per optimiser."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 8,
+      "type": "cards",
+      "items": ["A knob on every run: AdamW(weight_decay=...)", "Decay weights, not biases or norm scales", "What survives decay is what the data pays for"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "You will set this knob on most models you train. Weights the data stops pulling fade, so what survives tells you what the model needed.",
+        "2": "Every AdamW run has a weight_decay knob. It decides which weights stay big: only the ones the data keeps pulling. When you inspect a trained model, you are reading that balance.",
+        "3": "Decay sets the equilibrium between data fit and weight norm, shaping which solution training settles into. The weights you later probe, patch and steer are that equilibrium."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Stiffen the band and watch where weights come to rest",
+    "params": [
+      { "id": "lam", "label": "band stiffness λ", "min": 0.005, "max": 0.1, "step": 0.005, "value": 0.03 },
+      { "id": "push", "label": "data's steady pull", "min": 0, "max": 0.05, "step": 0.005, "value": 0.015 }
+    ],
+    "curves": [
+      { "f": "pow(1 - lam, x)", "c": "pink", "label": "ignored by the data" },
+      { "f": "push/lam + (1 - push/lam) * pow(1 - lam, x)", "c": "green", "label": "pulled by the data" }
+    ],
+    "x": [0, 150],
+    "y": [0, 2.5],
+    "readouts": [
+      { "label": "resting size, pull / λ", "f": "(push/lam).toFixed(2)" },
+      { "label": "steps for an ignored weight to halve", "f": "Math.round(log(0.5)/log(1 - lam))" }
+    ],
+    "caption": {
+      "1": "Drag λ up: ignored weights snap back to zero faster, and even useful ones rest smaller. Drag the pull up: the useful weight rests further out.",
+      "2": "The green weight rests at pull / λ, where the data's pull matches the band. The pink one gets no pull and decays to 0. Only weights the data keeps paying for stay big.",
+      "3": "θ ← (1−λ)θ + pull, with γ folded into λ. Fixed point pull/λ, approached at rate (1−λ)^t. An ignored weight's half-life is about ln 2 / λ steps for small λ."
+    }
+  },
+  "where_else": [
+    "Ridge regression: the same L2 pull in classic statistics",
+    "The KL penalty in RLHF: a leash back to a reference model instead of back to zero",
+    "Every AdamW run you launch has this knob"
+  ],
+  "hamming": {
+    "what": "A steady pull of every weight towards zero, applied by the optimiser at each step.",
+    "when": "On almost every training run, as AdamW's weight_decay setting, applied to weights but not to biases or norm scales.",
+    "why": "It keeps each weight only as big as the data keeps paying for, so the model cannot lean on a few huge weights."
+  },
+  "object": {
+    "title": "The banded bowl",
+    "subtitle": "A marble in the data's bowl, tied to the zero post by a rubber band you can stiffen.",
+    "kind": "surface",
+    "f": "0.5*(x-1)**2 + 1.5*(y-0.7)**2 + 0.5*lam*(x*x + y*y)",
+    "x": [-0.5, 1.5],
+    "y": [-0.5, 1.5],
+    "ball": { "x": -0.4, "y": 1.3, "lr": 0.2, "steps": 60 },
+    "marks": [{ "x": 1, "y": 0.7, "label": "data's favourite" }, { "x": 0, "y": 0, "label": "zero post" }],
+    "knobs": [{ "id": "lam", "label": "band stiffness λ", "min": 0, "max": 3, "step": 0.25, "value": 0 }],
+    "beats": [
+      { "cap": { "1": "A marble in a bowl: the lowest point is where the data wants these two weights.", "2": "The data loss over two weights. Its minimum sits at (1, 0.7).", "3": "Unregularised loss over (w1, w2): minimum at (1, 0.7), curvature 1 along w1 and 3 along w2." }, "view": "iso", "set": { "lam": 0 } },
+      { "cap": { "1": "Tie the marble to zero with a band. The lowest point slides towards the zero post.", "2": "Add (λ/2)(w1² + w2²) with λ = 1. The minimum moves to about (0.5, 0.53), pulled towards the origin.", "3": "For a quadratic loss the regularised optimum is w* = H(H + λI)⁻¹ w_data: each eigen-direction shrinks by h/(h + λ)." }, "view": "iso", "set": { "lam": 1 } },
+      { "cap": { "1": "From above: the band pulled the loose direction in a lot and the steep direction only a little.", "2": "w1 (shallow, curvature 1) halved; w2 (steep, curvature 3) shrank by only a quarter. Decay hits what the data cares least about.", "3": "Shrinkage h/(h + λ): 1/2 along the low-curvature axis, 3/4 along the high-curvature one. Weak-evidence directions are suppressed most." }, "view": "top", "set": { "lam": 1 } },
+      { "cap": { "1": "Too stiff a band and the marble sits almost at zero: the model can no longer fit the data.", "2": "λ = 3 puts the minimum at (0.25, 0.35). Too much decay underfits.", "3": "As λ grows the regulariser dominates and w* tends to 0: the underfitting limit." }, "view": "iso", "set": { "lam": 3 } },
+      { "cap": { "1": "The sweet spot is a light band: weights the data really needs stay out, the rest are reined in.", "2": "λ is a knob you tune, like the learning rate. Small values are the norm: AdamW's default is 0.01.", "3": "λ trades fit against norm; with decoupled decay (AdamW) it can be tuned independently of the learning rate." }, "view": "close", "set": { "lam": 0.5 } }
+    ],
+    "predict": [
+      { "q": "A weight gets no gradient at all for many steps. What does weight decay do to it?", "options": [{ "t": "Shrinks it steadily towards zero", "ok": true }, { "t": "Leaves it alone, since nothing is pushing it" }], "why": "Decay acts every step regardless of the data: with no gradient, θ is multiplied by (1 − γλ) each step." },
+      { "q": "Under Adam with L2 folded into the gradient, which weights get the least decay?", "options": [{ "t": "The ones with the biggest gradient history", "ok": true }, { "t": "The ones with the smallest gradient history" }], "why": "Adam divides everything, decay included, by √v. Big history, big divisor, weak decay. AdamW fixes this." },
+      { "q": "You swap Adam for AdamW in PyTorch and change nothing else. What changes?", "options": [{ "t": "Decay switches on, because AdamW defaults to 0.01", "ok": true }, { "t": "Nothing, they share the same defaults" }], "why": "PyTorch's Adam defaults to weight_decay=0 and AdamW to 0.01." }
+    ],
+    "where": "Any spring back to a default: ridge regression, and the RLHF KL leash back to a reference model."
+  }
+}

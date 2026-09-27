@@ -1,0 +1,263 @@
+{
+  "id": "ray-object-intersection",
+  "title": "Where the two walkers meet",
+  "week": 1,
+  "need": "exercise",
+  "allegory": "Finding where a ray hits a segment is like sending two walkers, one along the torch beam and one along the plank, and solving for how far each must go to meet; if their paths are parallel they never meet, and that is an answer, not a crash.",
+  "map": [
+    ["the torch and the way it points", "ray origin O and direction D"],
+    ["the plank from one post to the other", "segment from L₁ to L₂"],
+    ["steps the beam walker takes", "u, the ray parameter (a hit needs u ≥ 0)"],
+    ["fraction of the plank walked", "v, the segment parameter (a hit needs 0 ≤ v ≤ 1)"],
+    ["walkers on parallel paths never meet", "singular matrix, det ≈ 0: mark the ray as a miss"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The dark field",
+      "need": "exercise",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "a million beams, one question each",
+      "actors": [{ "pose": "point", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "lamp", "x": 0.28, "y": 0.6, "label": "torch O", "color": "butter" },
+        { "kind": "bridge", "x": 0.72, "y": 0.5, "w": 0.3, "h": 0.08, "label": "plank L₁ to L₂", "color": "peach" }
+      ],
+      "arrows": [[0.32, 0.58, 0.64, 0.5, "ray"]],
+      "cap": {
+        "1": "You point a torch into the dark. Somewhere out there is a plank. Does the beam hit it, and where? Now ask that for a million beams at once.",
+        "2": "A ray is an origin O plus a direction D. A segment runs from L₁ to L₂. For every ray you want to know: does it cross the segment, and where? No Python loops allowed.",
+        "3": "Rays live in a (nrays, 2, 3) tensor: an origin and a direction, each a 3D point. The job is a vectorised hit test against segments, and then triangles."
+      }
+    },
+    {
+      "name": "Two walkers",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [
+        { "pose": "walk", "x": 0.15, "to": 0.46, "label": "u" },
+        { "pose": "walk", "x": 0.86, "to": 0.56, "label": "v" }
+      ],
+      "props": [
+        { "kind": "lamp", "x": 0.08, "y": 0.62, "label": "O", "color": "butter" },
+        { "kind": "bridge", "x": 0.7, "y": 0.58, "w": 0.34, "h": 0.08, "label": "plank", "color": "peach" },
+        { "kind": "flag", "x": 0.51, "y": 0.36, "label": "meet here?", "color": "mint" }
+      ],
+      "cap": {
+        "1": "Send out two walkers. One strides along the beam, one walks along the plank. If they can meet, the beam hits. Each only needs one number: how far they went.",
+        "2": "Walker one stands at O + u·D after u steps along the ray. Walker two stands at L₁ + v·(L₂ − L₁), a fraction v of the way along the segment. A hit is a (u, v) where they coincide.",
+        "3": "Parametrise both: the ray as O + uD, the segment as L₁ + v(L₂ − L₁). Intersection means equal points: two scalar unknowns and, in 2D, two scalar equations."
+      }
+    },
+    {
+      "name": "The meeting equation",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "O + u·D", "c": "sky", "note": "beam walker" },
+        { "t": " = ", "c": "ink", "note": "same spot" },
+        { "t": "L₁ + v·(L₂−L₁)", "c": "orange", "note": "plank walker" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Write where each walker stands and demand the spots match. Across and up give two equations for two unknowns: a tiny puzzle a solver cracks instantly.",
+        "2": "Move the unknowns left: u·D + v·(L₁ − L₂) = L₁ − O. That is a 2x2 matrix with columns D and L₁ − L₂. <code>torch.linalg.solve</code> returns u and v; you never solve it by hand.",
+        "3": "[D | L₁−L₂]·[u, v]ᵀ = L₁ − O, using the x and y coordinates only. Batched, you stack one 2x2 matrix per (ray, segment) pair and call linalg.solve once over the stack."
+      }
+    },
+    {
+      "name": "The two checks",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "hit iff u ≥ 0 and 0 ≤ v ≤ 1",
+      "rows": 4,
+      "cols": 3,
+      "values": [["1.5", "0.5", "hit"], ["1.2", "1.4", "miss"], ["-0.8", "0.3", "miss"], ["none", "none", "miss"]],
+      "labels": { "rows": ["beam A", "beam B", "beam C", "beam D"], "cols": ["u", "v", "verdict"] },
+      "highlight": [[0, 2], [1, 1], [2, 0], [3, 2]],
+      "cap": {
+        "1": "Two checks decide it. The beam walker must go forwards (u at least 0). The plank walker must stay on the plank (v from 0 to 1). Beam D never meets at all.",
+        "2": "Hit = <code>(u >= 0) & (v >= 0) & (v <= 1)</code>. B crosses the line past L₂. C crosses behind the torch. D is parallel, so there is no solution to check.",
+        "3": "The solve finds where two infinite lines cross; the inequalities restrict it to the half-line u ≥ 0 and the segment v ∈ [0, 1]. For triangles the same idea becomes u, v ≥ 0 and u + v ≤ 1."
+      }
+    },
+    {
+      "name": "Parallel is an answer",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Crash", "c": "pink", "lines": ["beam parallel to plank", "matrix is singular", "linalg.solve throws", "the whole batch dies"] },
+      "right": { "title": "Geometry", "c": "mint", "lines": ["check the determinant", "near zero means parallel", "swap in the identity, solve", "mark those rays as misses"] },
+      "verdict": "Walkers on parallel paths never meet. That is a miss, not an error.",
+      "cap": {
+        "1": "If the beam runs parallel to the plank, the walkers never meet. The solver panics and throws. Nothing is broken: it is telling you 'miss'.",
+        "2": "Parallel means the 2x2 matrix is singular (determinant ≈ 0), and <code>torch.linalg.solve</code> raises. Detect near-zero determinants first and mark those rays as misses.",
+        "3": "Mask degenerate rows: where |det| < 1e-8, substitute the identity so the batched solve succeeds, then force those entries to False. It is the course's first degenerate batch element to handle rather than crash on."
+      }
+    },
+    {
+      "name": "The wrong picture",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "note": "rays.shape = (nrays, 2, 3)",
+      "actors": [{ "pose": "shrug", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.64, "y": 0.24, "label": "O, D = rays.unbind(-1)", "color": "pink" },
+        { "kind": "stack", "x": 0.66, "y": 0.62, "w": 0.24, "h": 0.34, "label": "2 x 3", "color": "sky" }
+      ],
+      "cap": {
+        "1": "A classic slip: pull origins and directions apart along the wrong side. Nothing complains. The picture just comes out wrong, so trust shapes, not silence.",
+        "2": "<code>rays.unbind(-1)</code> splits the size-3 axis, not the size-2 one. Both are small, nothing raises, and the solve happily eats scrambled O and D. Use <code>unbind(1)</code> and read shapes in the debugger.",
+        "3": "Shape-valid, semantics-wrong: any traceback lands lines later, on linalg.solve. A jaxtyping signature like Float[Tensor, 'nrays rayPoints=2 dims=3'] makes the right axis readable before you run anything."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Batch a million small solves, no loops", "A degenerate case is an answer, not a crash", "Read shapes in the debugger, not prints"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "The torch and plank are a warm-up. The habits stick: do it all at once, treat odd cases as answers, check shapes. You need all three to study AI models.",
+        "2": "Interpretability code runs the same op over thousands of prompts. One degenerate row must be masked, not allowed to crash the batch, and every axis must mean what you think.",
+        "3": "Masked batched ops over (batch, pos, d_model) caches, with named axes and debugger-checked shapes, are the daily mechanics of probing and patching models to understand and steer them."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Aim the torch, tilt the plank",
+    "params": [
+      { "id": "slope", "label": "beam slope (rise per step)", "min": -1, "max": 1.5, "step": 0.05, "value": 0.3 },
+      { "id": "tilt", "label": "plank tilt (rise from L₁ to L₂)", "min": -1, "max": 1.5, "step": 0.05, "value": 0.5 },
+      { "id": "aim", "label": "aim: 1 forwards, -1 backwards", "min": -1, "max": 1, "step": 2, "value": 1 }
+    ],
+    "curves": [
+      { "f": "slope*x", "c": "orange", "label": "the beam's line (torch at 0, 0)" },
+      { "f": "0.2 + tilt*(x - 1)", "c": "sky", "label": "the plank's line (the plank runs x = 1 to 2)" }
+    ],
+    "x": [0, 3],
+    "y": [-1, 2.5],
+    "readouts": [
+      { "label": "determinant", "f": "(aim*(slope - tilt)).toFixed(3)" },
+      { "label": "u, steps along the beam", "f": "abs(slope - tilt) < 1e-9 ? 'no solution' : (aim*(1 + (0.2 - slope)/(slope - tilt))).toFixed(2)" },
+      { "label": "v, fraction along the plank", "f": "abs(slope - tilt) < 1e-9 ? 'no solution' : ((0.2 - slope)/(slope - tilt)).toFixed(2)" },
+      { "label": "verdict", "f": "abs(slope - tilt) < 1e-9 ? 'MISS: parallel, singular matrix' : ((0.2 - slope)/(slope - tilt) >= 0 && (0.2 - slope)/(slope - tilt) <= 1 && aim*(1 + (0.2 - slope)/(slope - tilt)) >= 0 ? 'HIT' : 'MISS')" }
+    ],
+    "caption": {
+      "1": "Tilt the plank until it matches the beam's slope: the answer becomes 'no solution'. Flip aim to -1: same line, but the plank is now behind you.",
+      "2": "Push slope up until v passes 1: the lines still cross, but past the plank's far end. Set slope equal to tilt and the determinant hits 0. With aim at -1, u goes negative: a crossing behind the torch.",
+      "3": "det = aim·(slope − tilt), zero exactly when D is parallel to L₂ − L₁. v = (0.2 − slope)/(slope − tilt) explodes near parallel; exactly parallel, linalg.solve raises, so mask small |det| first."
+    }
+  },
+  "where_else": [
+    "Ray-triangle hits: the same solve with three unknowns, read as barycentric coordinates",
+    "Collision detection in games and physics engines",
+    "Any batch of linear solves where a few matrices are singular: mask them, don't crash"
+  ],
+  "hamming": {
+    "what": "Turning 'does this ray hit this segment?' into a 2x2 linear system whose two unknowns say how far along each line the crossing is.",
+    "when": "Whenever you need geometric answers for many rays at once; in [0.1] it is the first real batched computation.",
+    "why": "One batched solve replaces a loop of if-statements, and a parallel ray becomes a clean miss instead of a crash."
+  },
+  "object": {
+    "title": "The pegboard of beams",
+    "subtitle": "Every peg is one beam paired with one plank; tall pegs are hits.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "r == c ? 0.1 : ((pole + 0.4 - 0.2*r) / (0.2*(r - c)) > -1e-9 && (pole + 0.4 - 0.2*r) / (0.2*(r - c)) < 1 + 1e-9 ? 1.2 : 0.3)",
+    "labels": {
+      "rows": ["-0.4", "-0.2", "0", "0.2", "0.4", "0.6", "0.8", "1.0"],
+      "cols": ["-0.4", "-0.2", "0", "0.2", "0.4", "0.6", "0.8", "1.0"]
+    },
+    "c": "good",
+    "knobs": [{ "id": "pole", "label": "height of the plank's near end", "min": -0.4, "max": 1.0, "step": 0.2, "value": 0.2 }],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each peg is one beam paired with one plank. Rows are beam slopes, columns are plank tilts. A tall peg means that beam hits that plank.",
+          "2": "One peg per (ray, segment) pair: rows are ray slopes, columns are segment tilts. The whole board is one batched solve plus the u and v checks.",
+          "3": "An (nrays, nsegments) boolean table; each entry is one 2x2 solve followed by u ≥ 0 and 0 ≤ v ≤ 1."
+        },
+        "view": "iso",
+        "set": { "pole": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "Look down the diagonal: a line of flat pegs. There the beam runs parallel to the plank, so the walkers never meet. A miss, not a crash.",
+          "2": "On the diagonal, beam slope equals plank tilt and the matrix is singular. It is masked as a miss instead of letting linalg.solve throw.",
+          "3": "det = slope − tilt vanishes on r = c. Masking |det| < ε before the solve keeps the batch alive and labels those pairs False."
+        },
+        "view": "top",
+        "set": { "pole": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "One whole row stands tall: that beam aims straight at the plank's near end, so it touches every plank except the parallel one.",
+          "2": "When the beam passes exactly through L₁, v = 0 for every tilt. The hit sits on the endpoint, and it counts because the check is v ≥ 0.",
+          "3": "For slope equal to L₁'s height, v = (a − s)/(s − t) = 0 for all t ≠ s. Endpoint inclusivity (≥, not >) decides whether these count."
+        },
+        "view": "front",
+        "set": { "pole": 0.2 }
+      },
+      {
+        "cap": {
+          "1": "Raise the plank's near end. The tall row slides up to steeper beams: the hits follow the plank.",
+          "2": "Moving L₁ moves every intersection, so the pattern of hits shifts to rays that point higher.",
+          "3": "Hit set: (s − a)(2s − a − t) ≤ 0 with s ≠ t, i.e. the beam passes between the plank's ends at x = 1 and x = 2. Raising a shifts it."
+        },
+        "view": "front",
+        "set": { "pole": 0.6 }
+      },
+      {
+        "cap": {
+          "1": "Raise it to the top and the shallow beams all miss; only the steep ones reach. Every peg was answered at once, with no loop over beams.",
+          "2": "All 64 answers come from one vectorised pass. That is the real lesson of [0.1]: batch the small solves, mask the odd ones.",
+          "3": "Batched linear algebra with degenerate-case masking: the same pattern as any vectorised op where a few rows are ill-conditioned."
+        },
+        "view": "iso",
+        "set": { "pole": 1.0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A beam runs exactly parallel to a plank. What should your code return for it?",
+        "options": [
+          { "t": "A miss, caught by checking the determinant first", "ok": true },
+          { "t": "Whatever error linalg.solve throws" },
+          { "t": "A hit, infinitely far away" }
+        ],
+        "why": "Parallel lines never meet, so the matrix is singular. Detect the near-zero determinant and mark it a miss."
+      },
+      {
+        "q": "The solver says u = 1.2, v = 1.4. Hit or miss?",
+        "options": [
+          { "t": "Miss: v above 1 is past the plank's far end", "ok": true },
+          { "t": "Hit: the solver found a crossing" }
+        ],
+        "why": "The lines do cross, but beyond L₂. The plank only covers v from 0 to 1."
+      },
+      {
+        "q": "The solver says u = -0.8, v = 0.3. Hit or miss?",
+        "options": [
+          { "t": "Miss: the crossing is behind the torch", "ok": true },
+          { "t": "Hit: v is inside the plank" }
+        ],
+        "why": "A ray only goes forwards from its origin, so u must be at least 0."
+      }
+    ],
+    "where": "Every batched geometry test: collision checks, mesh rendering, and any batch of solves where a few rows are singular."
+  }
+}

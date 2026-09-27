@@ -1,0 +1,107 @@
+{
+  "id": "convolution",
+  "title": "One stencil, slid everywhere",
+  "week": 2,
+  "need": "core",
+  "allegory": "A convolution is like sliding one small stencil across a photo and scoring, at every spot, how well the patch underneath matches it; because the same stencil is reused everywhere, it needs few weights and only ever looks at neighbours.",
+  "map": [
+    ["the stencil", "the kernel: a small grid of learned weights, shape (in_channels, k, k)"],
+    ["scoring one spot: multiply the overlapping pairs and add", "a dot product of the kernel with one patch of the input"],
+    ["the same stencil carried to every spot", "weight sharing: one kernel applied at every position"],
+    ["a ring of blank paper, and how far each hop goes", "padding and stride, which set the output size"],
+    ["a second stencil makes a second score sheet", "each out_channel is its own kernel with its own feature map"]
+  ],
+  "credit": "",
+  "linked_film": "films/deep-w02-conv.html",
+  "linked_object": null,
+  "where_else": [
+    "Every vision network since AlexNet, ResNet included",
+    "Max pooling: the same sliding window and size formula, with no learned weights",
+    "Transposed convolutions in a GAN generator, doubling the size instead of halving it",
+    "The edge and curve detectors interpretability finds in early vision layers"
+  ],
+  "hamming": {
+    "what": "Sliding one small learned grid of weights across an input and taking a dot product at every position.",
+    "when": "Whenever the input has spatial structure, where nearby values belong together, as in photographs.",
+    "why": "Reusing one kernel everywhere means far fewer weights and a built-in assumption of locality, which is how AlexNet beat a decade of hand-built features."
+  },
+  "object": {
+    "title": "The stencil press",
+    "subtitle": "A sheet of score tiles: each one is a spot the stencil visited, raised by how hard it fired.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "((L, I) => (r < L && c < L) ? 0.08 + abs(sum([0, 1, 2].map(a => sum([0, 1, 2].map(b => I(r*stride + a - pad, c*stride + b - pad) * (kernel < 0.5 ? b - 1 : a - 1)))))) / 3 : 0.01)(floor((8 + 2*pad - 3)/stride) + 1, (y, x) => (y >= 4 && y < 8 && x >= 4 && x < 8) ? 1 : 0)",
+    "c": "data",
+    "knobs": [
+      { "id": "kernel", "label": "Stencil: side edges (0) or top edges (1)", "min": 0, "max": 1, "step": 1, "value": 0 },
+      { "id": "pad", "label": "Padding (ring of zeros)", "min": 0, "max": 1, "step": 1, "value": 0 },
+      { "id": "stride", "label": "Stride (hop size)", "min": 1, "max": 2, "step": 1, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "The photo is dark with a bright square in one corner. Each tile is a spot the stencil visited; tall tiles mean it fired hard.",
+          "2": "An 8x8 input, a 3x3 side-edge kernel, no padding, stride 1: a 6x6 feature map. The tall tiles trace the square's left side.",
+          "3": "out[i,j] = Σ_a Σ_b x[i+a, j+b]·w[a,b] with w = [-1, 0, 1] in each row, so L_out = 8 - 3 + 1 = 6. Height is |out|/3."
+        },
+        "view": "iso",
+        "set": { "kernel": 0, "pad": 0, "stride": 1 }
+      },
+      {
+        "cap": {
+          "1": "Swap in a different stencil, one that looks for top edges. Same photo, but now the square's top side lights up instead.",
+          "2": "A second out_channel is a second kernel with its own weights, producing its own feature map from the same input.",
+          "3": "Each output channel owns a kernel of shape (in_channels, k, k); stacking them gives the weight tensor (out, in, k, k)."
+        },
+        "view": "front",
+        "set": { "kernel": 1, "pad": 0, "stride": 1 }
+      },
+      {
+        "cap": {
+          "1": "Back to the side-edge stencil, now with a ring of blank paper round the photo. The sheet grows back to 8 by 8.",
+          "2": "padding=1 with a 3x3 kernel at stride 1 keeps the size: 8 + 2 - 3 + 1 = 8. That is what makes x + conv(x) legal.",
+          "3": "p = (k-1)//2 at s = 1 is shape-preserving, the precondition for the additive skip in a residual block."
+        },
+        "view": "top",
+        "set": { "kernel": 0, "pad": 1, "stride": 1 }
+      },
+      {
+        "cap": {
+          "1": "Look at the far border: the bright square meets the blank ring, so the stencil fires there too. The padding itself looks like an edge.",
+          "2": "Zero padding is dark. Where a bright region touches the border, an edge detector responds to an edge that is not in the photo.",
+          "3": "Zero padding creates boundary responses wherever the input is non-zero at the border: a known side effect of padding with zeros."
+        },
+        "view": "close",
+        "set": { "kernel": 0, "pad": 1, "stride": 1 }
+      },
+      {
+        "cap": {
+          "1": "Now hop two spaces at a time. Half the spots are skipped in each direction, so the sheet comes out 4 by 4.",
+          "2": "stride=2 with a 3x3 kernel and padding 1 halves the map: floor((8 + 2 - 3)/2) + 1 = 4. ResNet downsamples this way.",
+          "3": "L_out = floor((L_in + 2p - k)/s) + 1. The floor silently drops a last partial window, the usual cause of one-pixel mismatches at a skip."
+        },
+        "view": "iso",
+        "set": { "kernel": 0, "pad": 1, "stride": 2 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "An 8x8 photo, a 3x3 stencil, no padding, hop 1. How wide is the score sheet?",
+        "options": [{ "t": "6", "ok": true }, { "t": "8" }, { "t": "3" }],
+        "why": "The stencil must fit inside the photo: 8 - 3 + 1 = 6 spots per row. Padding 1 would give 8 back."
+      },
+      {
+        "q": "You shuffle every photo's pixels with the same fixed shuffle, then train. Which network gets worse?",
+        "options": [{ "t": "The convolutional network", "ok": true }, { "t": "A dense, fully connected network" }, { "t": "Neither" }],
+        "why": "A dense layer never knew which pixels were neighbours. The CNN's advantage was locality, and the shuffle destroys it."
+      },
+      {
+        "q": "Max-pooling slides a window too. What does it lack that a convolution has?",
+        "options": [{ "t": "Learned weights", "ok": true }, { "t": "A size formula" }],
+        "why": "Pooling uses the same window and the same L_out formula, but it just keeps the loudest value. There is nothing to learn."
+      }
+    ],
+    "where": "Every vision network since AlexNet, and the edge detectors interpretability finds in their early layers."
+  }
+}

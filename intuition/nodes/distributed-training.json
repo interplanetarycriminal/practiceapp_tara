@@ -1,0 +1,251 @@
+{
+  "id": "distributed-training",
+  "title": "Taste apart, adjust together",
+  "week": 3,
+  "need": "library",
+  "allegory": "Data-parallel training is like a team of cooks with identical recipe books, each tasting a different tray from the same batch, who phone in and average their suggested tweaks so every book gets exactly the same edit.",
+  "map": [
+    ["a cook with an identical recipe book", "a GPU process holding a full model replica"],
+    ["each cook's own tray of spoonfuls", "that rank's slice of the batch (batch_size / N)"],
+    ["each cook's suggested tweak", "the local gradient on that slice"],
+    ["the phone call that averages every tweak", "all_reduce, then divide by world_size"],
+    ["everyone copies the head cook's book on day one", "broadcast param.data from rank 0 at init"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "One cook, one spoon",
+      "need": "library",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "note": "thousands of examples per step?",
+      "actors": [{ "pose": "carry", "x": 0.3, "label": "one GPU" }],
+      "props": [
+        { "kind": "crate", "x": 0.62, "y": 0.6, "w": 0.3, "h": 0.3, "label": "the batch", "color": "peach" },
+        { "kind": "stack", "x": 0.87, "y": 0.55, "w": 0.1, "h": 0.4, "label": "recipe", "color": "cream" }
+      ],
+      "cap": {
+        "1": "Training tastes thousands of examples per step. One cook with one spoon takes forever. Could eight cooks share the work without their recipes drifting apart?",
+        "2": "One GPU can only push so many examples through forward and backward per second. Data parallelism puts a full copy of the model on each GPU and splits every batch between them.",
+        "3": "Data parallelism: N replicas, each on batch_size/N examples. Model parallelism (tensor or pipeline) splits the model itself instead; you need it only once a model no longer fits on one GPU."
+      }
+    },
+    {
+      "name": "Taste apart",
+      "need": "library",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "note": "same recipe, different spoonfuls",
+      "actors": [
+        { "pose": "sit", "x": 0.2, "label": "rank 0" },
+        { "pose": "sit", "x": 0.5, "label": "rank 1" },
+        { "pose": "sit", "x": 0.8, "label": "rank 2" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.2, "y": 0.3, "label": "slice 0", "color": "mint" },
+        { "kind": "card", "x": 0.5, "y": 0.3, "label": "slice 1", "color": "sky" },
+        { "kind": "card", "x": 0.8, "y": 0.3, "label": "slice 2", "color": "lav" }
+      ],
+      "cap": {
+        "1": "Every cook gets an identical recipe book and a different tray of spoonfuls. Each tastes their own tray and writes down how they'd tweak the recipe.",
+        "2": "Each rank runs forward and backward on its own sub-batch, independently. <code>DistributedSampler</code> hands every rank a disjoint slice; call <code>set_epoch(epoch)</code> so the shuffle changes each epoch.",
+        "3": "Per-rank gradients are estimates from disjoint sub-batches. Replicas must start bit-identical: broadcast param.data from rank 0 at init, because the collectives take plain tensors, not nn.Parameters."
+      }
+    },
+    {
+      "name": "Adjust together",
+      "need": "exercise",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "r0", "label": "rank 0", "x": 0.15, "y": 0.25, "c": "mint" },
+        { "id": "r1", "label": "rank 1", "x": 0.85, "y": 0.25, "c": "sky" },
+        { "id": "r2", "label": "rank 2", "x": 0.15, "y": 0.78, "c": "lav" },
+        { "id": "r3", "label": "rank 3", "x": 0.85, "y": 0.78, "c": "peach" },
+        { "id": "avg", "label": "sum ÷ 4", "x": 0.5, "y": 0.5, "c": "butter" }
+      ],
+      "edges": [
+        ["r0", "avg", "grad"], ["r1", "avg", "grad"], ["r2", "avg", "grad"], ["r3", "avg", "grad"],
+        ["avg", "r0"], ["avg", "r1"], ["avg", "r2"], ["avg", "r3"]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "Then everyone phones in their tweak, the tweaks are averaged, and every cook gets the same average back. Same start, same update: the recipes never drift.",
+        "2": "<code>all_reduce</code> sums each parameter's .grad across ranks and leaves the result on every rank; divide by world_size to average. Then every rank steps its optimizer and the replicas stay identical.",
+        "3": "With equal disjoint sub-batches, the mean of per-rank mean gradients is exactly the full-batch gradient. ARENA builds all_reduce from send/recv (gather, then broadcast); ring all-reduce avoids the root bottleneck."
+      }
+    },
+    {
+      "name": "Same clock, worse score",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Buggy run", "c": "pink", "lines": ["all_reduce sums, no ÷ 4", "effective LR is 4x", "plain DataLoader on every rank", "4 copies of the same work"] },
+      "right": { "title": "Fixed run", "c": "mint", "lines": ["divide by world_size", "grad equals the single-GPU grad", "DistributedSampler + set_epoch", "disjoint slices, real speedup"] },
+      "verdict": "Four GPUs, same wall clock, worse accuracy? Check the divide and the sampler.",
+      "cap": {
+        "1": "Two classic slips: the cooks add up their tweaks instead of averaging, or they all taste the very same tray. Either way, extra cooks buy you nothing.",
+        "2": "Forgot ÷ world_size? Every gradient is 4x too big: an effective LR of 4x, worse accuracy, no divergence. Plain DataLoader on each rank? All four do the same examples: 4x the work, no speedup.",
+        "3": "SUM without the divide scales the effective LR by world_size; a non-distributed loader makes N gradients N copies of one. Check one param's grad matches across ranks and equals the single-GPU grad on the combined batch."
+      }
+    },
+    {
+      "name": "Bigger batch, bigger step",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [
+        { "f": "8*min(x/5, 1)", "c": "orange", "label": "8x the batch: 8x the LR, warmed up" },
+        { "f": "1", "c": "sky", "label": "small batch: base LR" }
+      ],
+      "x": [0, 12],
+      "y": [0, 9],
+      "dot": true,
+      "marks": [{ "x": 5, "label": "warmup ends (epoch 5)" }],
+      "cap": {
+        "1": "More cooks means a bigger combined tray and a better guess at the right tweak, so you can take a bigger step. But not on day one: ease into it.",
+        "2": "Goyal et al. (2017) trained ResNet-50 on ImageNet in one hour: batch 8192 on 256 GPUs, no accuracy lost. Their rules: scale the LR linearly with batch size, and warm it up gradually over the first five epochs.",
+        "3": "Linear scaling rests on the bigger batch's lower-variance gradient; warmup is needed because that assumption fails early, while the network changes fastest. They reported ~90% scaling efficiency from 8 to 256 GPUs."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "library",
+      "dur": 9,
+      "type": "cards",
+      "items": ["In practice: one library call (DDP)", "Batch size and learning rate move together", "The big models you'll study were trained this way"],
+      "actor": { "pose": "wave", "x": 0.86 },
+      "cap": {
+        "1": "You'll rarely write this yourself: a library wraps it in one line. Keep the picture, and the rule that batch size and step size move together.",
+        "2": "PyTorch's <code>DistributedDataParallel</code> does the broadcast and gradient all-reduce for you. Knowing the four changes lets you debug a run that is slow or oddly worse.",
+        "3": "DDP is a library call; what you keep is averaged gradients = full-batch gradient, and LR-batch coupling. Large models you'll probe and steer are trained this way, usually combined with model parallelism."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Four GPUs, one gradient",
+    "labels": ["rank 0", "rank 1", "rank 2", "rank 3", "one GPU, full batch"],
+    "params": [
+      { "id": "reduce", "label": "all_reduce: off / on", "min": 0, "max": 1, "step": 1, "value": 0 },
+      { "id": "divide", "label": "divide by world_size: off / on", "min": 0, "max": 1, "step": 1, "value": 1 },
+      { "id": "sampler", "label": "DistributedSampler: off / on", "min": 0, "max": 1, "step": 1, "value": 1 }
+    ],
+    "f": "(sampler ? [0.9, 0.3, 0.6, 0.2] : [0.9, 0.9, 0.9, 0.9]).map((v, i, g) => reduce ? sum(g) / (divide ? 4 : 1) : v).concat([0.5])",
+    "y": [0, 4],
+    "readouts": [
+      { "label": "rank 0 holds (true full-batch grad is 0.50)", "f": "(reduce ? sum(sampler ? [0.9, 0.3, 0.6, 0.2] : [0.9, 0.9, 0.9, 0.9]) / (divide ? 4 : 1) : 0.9).toFixed(2)" },
+      { "label": "replicas in sync?", "f": "reduce ? 'yes: every rank holds the same gradient' : 'no: each rank would step differently'" },
+      { "label": "verdict", "f": "!reduce ? 'not averaged yet' : (!sampler ? 'wasted: four copies of one slice' : (!divide ? 'summed, not averaged: LR effectively 4x' : 'correct: equals the full-batch gradient'))" }
+    ],
+    "caption": {
+      "1": "Switch all_reduce on and watch four different opinions become one. Then switch off the divide, or the sampler, and see each classic bug appear.",
+      "2": "Correct run: sampler on, sum then ÷ world_size, and every rank holds 0.50, what one GPU gets on the whole batch. No divide: 4x too big. No sampler: four copies of one slice's opinion.",
+      "3": "The mean of per-rank mean gradients over equal disjoint slices is exactly the full-batch gradient. Summing scales the effective LR by world_size; duplicated data averages N copies of one estimate."
+    }
+  },
+  "where_else": [
+    "Gradient accumulation: several small batches on one GPU, averaged before one step (the same maths, spread over time instead of GPUs)",
+    "Federated averaging: devices train on their own data and a server averages the updates",
+    "Every large training run, combined with tensor and pipeline parallelism once the model outgrows one GPU"
+  ],
+  "hamming": {
+    "what": "Run identical model copies on different slices of each batch and average their gradients so every copy takes the same step.",
+    "when": "When one GPU is too slow for your data but the model still fits on a single GPU.",
+    "why": "N GPUs act like one bigger batch with four small additions to an unchanged training loop, which is how large models get trained in reasonable time."
+  },
+  "object": {
+    "title": "The pin board of gradients",
+    "subtitle": "Four rows of pins, one per GPU; pull the all-reduce lever and every row snaps to the same shape.",
+    "kind": "bars",
+    "rows": 4,
+    "cols": 6,
+    "f": "reduced < 0.5 ? [[0.45, 0.1, 0.3, 0.4, 0.15, 0.25], [0.25, 0.2, 0.1, 0.3, 0.25, 0.45], [0.35, 0.05, 0.2, 0.5, 0.1, 0.35], [0.15, 0.15, 0.3, 0.3, 0.2, 0.15]][r][c] : sum([[0.45, 0.1, 0.3, 0.4, 0.15, 0.25], [0.25, 0.2, 0.1, 0.3, 0.25, 0.45], [0.35, 0.05, 0.2, 0.5, 0.1, 0.35], [0.15, 0.15, 0.3, 0.3, 0.2, 0.15]].map(row => row[c])) / (divide > 0.5 ? 4 : 1)",
+    "labels": { "rows": ["GPU 0", "GPU 1", "GPU 2", "GPU 3"], "cols": ["w1", "w2", "w3", "w4", "w5", "w6"] },
+    "c": "grad",
+    "knobs": [
+      { "id": "reduced", "label": "all_reduce lever", "min": 0, "max": 1, "step": 1, "value": 0 },
+      { "id": "divide", "label": "divide by world_size", "min": 0, "max": 1, "step": 1, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Four GPUs, four rows of pins. Each row is one GPU's suggested nudge for six weights, worked out from its own slice of the batch.",
+          "2": "Rows are ranks, columns are parameters, pin height is that rank's local gradient before any communication.",
+          "3": "Per-rank gradients from disjoint sub-batches: unbiased but noisy estimates of the full-batch gradient."
+        },
+        "view": "iso",
+        "set": { "reduced": 0, "divide": 1 }
+      },
+      {
+        "cap": {
+          "1": "From the front the rows clearly disagree: each slice of data tells a slightly different story.",
+          "2": "If each rank stepped on its own gradient now, the four replicas would drift apart after one update.",
+          "3": "Unsynchronised local steps would desynchronise the replicas; data parallelism forbids that by construction."
+        },
+        "view": "front",
+        "set": { "reduced": 0, "divide": 1 }
+      },
+      {
+        "cap": {
+          "1": "Pull the all-reduce lever: every row snaps to the same profile, the average. Now every GPU takes the identical step.",
+          "2": "After all_reduce and the divide, every rank holds the column mean, which equals the gradient one GPU would get on the whole batch.",
+          "3": "The column mean over equal disjoint slices is exactly the full-batch mean-loss gradient, so N replicas stepping on it equal one big-batch model."
+        },
+        "view": "iso",
+        "set": { "reduced": 1, "divide": 1 }
+      },
+      {
+        "cap": {
+          "1": "Forget to divide and every pin is four times too tall. The model still trains, just with steps four times bigger than you asked for.",
+          "2": "all_reduce sums. Without ÷ world_size the effective learning rate is 4x: accuracy degrades quietly and nothing diverges to warn you.",
+          "3": "SUM-reduced gradients scale the effective LR by world_size, a silent hyperparameter change rather than a crash."
+        },
+        "view": "side",
+        "set": { "reduced": 1, "divide": 0 }
+      },
+      {
+        "cap": {
+          "1": "From above all four rows match. Same start, same update, every step: the copies stay identical forever.",
+          "2": "Identical updates keep identical models identical, which is why the weights are broadcast from rank 0 at the very start.",
+          "3": "Replica consistency is an invariant: bit-identical init (broadcast) plus identical reduced updates."
+        },
+        "view": "top",
+        "set": { "reduced": 1, "divide": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "After all_reduce and the divide, what does each GPU hold?",
+        "options": [
+          { "t": "The same averaged gradient on every GPU", "ok": true },
+          { "t": "Its own gradient, slightly corrected" },
+          { "t": "Only GPU 0 holds the answer" }
+        ],
+        "why": "all_reduce leaves the aggregate on every rank; dividing by world_size turns the sum into the average."
+      },
+      {
+        "q": "A 4-GPU run is no faster than 1 GPU and a little less accurate. Most likely cause?",
+        "options": [
+          { "t": "No DistributedSampler, and no divide by world_size", "ok": true },
+          { "t": "The GPUs are too slow" },
+          { "t": "all_reduce itself is broken" }
+        ],
+        "why": "Without a sampler every rank repeats the same work; without the divide the effective learning rate is 4x."
+      },
+      {
+        "q": "Why broadcast the weights from rank 0 before training starts?",
+        "options": [
+          { "t": "Averaging only keeps copies identical if they start identical", "ok": true },
+          { "t": "To save GPU memory" }
+        ],
+        "why": "Identical updates on different starting weights still leave different models."
+      }
+    ],
+    "where": "Anywhere many workers compute on different data and must agree on one update: data parallelism, gradient accumulation, federated averaging."
+  }
+}
