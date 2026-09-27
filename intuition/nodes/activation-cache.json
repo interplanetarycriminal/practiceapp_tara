@@ -1,0 +1,186 @@
+{
+  "id": "activation-cache",
+  "title": "A labelled photo at every station",
+  "week": 6,
+  "need": "library",
+  "allegory": "An activation cache is an assembly line with a camera at every station: run the line once and you get an album with one labelled photo of every in-between step, which you can flip through as often as you like.",
+  "map": [
+    ["the assembly line", "the model's forward pass"],
+    ["a camera at every station", "a HookPoint at every named activation"],
+    ["the album of labelled photos", "the ActivationCache: a dictionary from hook names to tensors"],
+    ["the album index: which kind of photo, which station", "the shorthand cache['pattern', 0] for 'blocks.0.attn.hook_pattern'"],
+    ["scribbling on a photo does not change the product", "the cache only reads; a hook can write back and change the forward pass"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "What happened inside?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "I only see what comes out",
+      "actors": [{ "pose": "think", "x": 0.14, "label": "you" }],
+      "props": [
+        { "kind": "crate", "x": 0.5, "y": 0.58, "w": 0.22, "h": 0.26, "label": "the model", "color": "peach" },
+        { "kind": "cloud", "x": 0.5, "y": 0.2, "w": 0.26, "h": 0.14, "label": "what happened in here?", "color": "chalk" },
+        { "kind": "card", "x": 0.86, "y": 0.58, "label": "logits", "color": "butter" }
+      ],
+      "arrows": [[0.62, 0.58, 0.78, 0.58, "answer"]],
+      "cap": {
+        "1": "You ask the model something and an answer comes out. But the interesting part happened in the middle, and it is gone the moment the run ends.",
+        "2": "A plain forward pass returns logits and throws every intermediate tensor away. Interpretability needs those in-between values: attention patterns, residual streams, head outputs.",
+        "3": "Intermediate activations are transient in a standard forward pass. Mech interp needs them materialised and addressable by name, per layer and per component."
+      }
+    },
+    {
+      "name": "The photo album",
+      "need": "library",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "carry", "x": 0.9, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.12, "y": 0.64, "w": 0.1, "h": 0.12, "label": "embed", "color": "sky" },
+        { "kind": "box", "x": 0.3, "y": 0.64, "w": 0.1, "h": 0.12, "label": "attn 0", "color": "lav" },
+        { "kind": "box", "x": 0.48, "y": 0.64, "w": 0.1, "h": 0.12, "label": "mlp 0", "color": "teal" },
+        { "kind": "box", "x": 0.66, "y": 0.64, "w": 0.1, "h": 0.12, "label": "attn 1", "color": "lav" },
+        { "kind": "card", "x": 0.12, "y": 0.38, "label": "photo", "color": "cream" },
+        { "kind": "card", "x": 0.3, "y": 0.38, "label": "photo", "color": "cream" },
+        { "kind": "card", "x": 0.48, "y": 0.38, "label": "photo", "color": "cream" },
+        { "kind": "card", "x": 0.66, "y": 0.38, "label": "photo", "color": "cream" },
+        { "kind": "stack", "x": 0.84, "y": 0.3, "w": 0.1, "h": 0.14, "label": "album (cache)", "color": "butter" }
+      ],
+      "arrows": [[0.17, 0.64, 0.25, 0.64], [0.35, 0.64, 0.43, 0.64], [0.53, 0.64, 0.61, 0.64], [0.7, 0.36, 0.79, 0.32, "all labelled"]],
+      "cap": {
+        "1": "Picture an assembly line with a camera at every station. Run the line once and you get an album: one labelled photo of every in-between step.",
+        "2": "<code>logits, cache = model.run_with_cache(tokens)</code> runs once and hands back every intermediate activation, stored in a dictionary under its name.",
+        "3": "run_with_cache attaches a caching function at every HookPoint and returns an ActivationCache: a dict-like map from hook names to tensors for that one forward pass."
+      }
+    },
+    {
+      "name": "The album index",
+      "need": "library",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "cache[", "c": "ink", "note": "" },
+        { "t": "'pattern'", "c": "orange", "note": "which kind of photo" },
+        { "t": ", ", "c": "ink", "note": "" },
+        { "t": "0", "c": "sky", "note": "which station (layer)" },
+        { "t": "]", "c": "ink", "note": "= blocks.0.attn.hook_pattern" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "Every photo has a full label, like blocks.0.attn.hook_pattern. You can ask for it the short way: which kind of photo, at which station.",
+        "2": "The cache is keyed by hook names. <code>cache['pattern', 0]</code> is shorthand that <code>utils.get_act_name</code> expands to <code>'blocks.0.attn.hook_pattern'</code>.",
+        "3": "Names follow one scheme across 140+ architecture families, so code written for GPT-2 small transfers. For a single sequence, remove_batch_dim=True drops the batch axis."
+      }
+    },
+    {
+      "name": "Check the photos",
+      "need": "exercise",
+      "dur": 11,
+      "type": "grid",
+      "title": "a layer-0 attention pattern (toy values): does it pass the checks?",
+      "rows": 4,
+      "cols": 4,
+      "values": [[1, 0, 0, 0], [0.3, 0.7, 0, 0], [0.2, 0.5, 0.3, 0], [0.1, 0.2, 0.3, 0.4]],
+      "labels": { "rows": ["dest 0", "dest 1", "dest 2", "dest 3"], "cols": ["src 0", "src 1", "src 2", "src 3"] },
+      "highlight": [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]],
+      "cap": {
+        "1": "Trust, but check. Rebuild one photo from the others and see that it matches. Here: every row adds up to 1, and no word looks at the future.",
+        "2": "Verifying activations: recompute one (say layer 0's pattern from the cached queries and keys) and compare with the cached tensor. Rows sum to 1; the upper triangle is 0.",
+        "3": "A pattern is softmax over scaled, causally masked QKᵀ, so rows are distributions and entries above the diagonal vanish. Recomputing from hook_q and hook_k should reproduce hook_pattern."
+      }
+    },
+    {
+      "name": "Photos change nothing",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "the cache", "c": "mint", "lines": ["reads and stores", "one labelled copy per name", "the run is unchanged"] },
+      "right": { "title": "a hook", "c": "peach", "lines": ["can write back", "changes the forward pass", "clear it with reset_hooks()"] },
+      "verdict": "The cache observes; a hook intervenes.",
+      "cap": {
+        "1": "Scribbling on a photo does not change what came off the line. To change the product you need a hand on the line itself, not a camera.",
+        "2": "Editing a cached tensor changes nothing about the model's output. To intervene, use <code>run_with_hooks</code> with a function that writes a new value during the run.",
+        "3": "The cache is a post hoc, read-only record. Causal methods (ablation, activation patching, steering) need hooks that return modified activations mid-forward."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Every attention pattern you plot comes from here", "Patching: cache a clean run, write it into another", "Look first, then intervene"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Almost every look inside a model starts with one cached run. It is the album you flip through to understand what the model did, before you try to steer it.",
+        "2": "Attention patterns, the logit lens and direct logit attribution all read from the cache. Activation patching caches a clean run, then hooks write those values into a corrupted one.",
+        "3": "The cache is the observational layer of mech interp; causal methods pair it with hooks that write back. Understanding a model comes before steering it."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Rows are layers 0 to 3; columns are resid_pre, q, pattern, z, mlp_out. Tap to look a photo up.",
+    "rows": 4,
+    "cols": 5,
+    "labels": { "rows": ["layer 0", "layer 1", "layer 2", "layer 3"], "cols": ["resid_pre", "q", "pattern", "z", "mlp_out"] },
+    "init": "0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "full hook names", "f": "G.flatMap((row, L) => row.map((v, k) => v ? 'blocks.' + L + '.' + ['hook_resid_pre', 'attn.hook_q', 'attn.hook_pattern', 'attn.hook_z', 'hook_mlp_out'][k] : '')).filter(s => s).join(', ') || 'tap a cell'" },
+      { "label": "cache shorthand", "f": "G.flatMap((row, L) => row.map((v, k) => v ? \"cache['\" + ['resid_pre', 'q', 'pattern', 'z', 'mlp_out'][k] + \"', \" + L + ']' : '')).filter(s => s).join(', ') || 'tap a cell'" },
+      { "label": "photos picked", "f": "G.flat().filter(v => v).length + ' of 20, all from one run'" }
+    ],
+    "caption": {
+      "1": "Rows are layers, columns are kinds of photo. Tap a few cells and read the exact labels you would look them up by. Spot the pattern in the names.",
+      "2": "Each tap shows the full hook name and its cache shorthand. The recipe is blocks.<layer>.<where>.hook_<what>, the same for every model TransformerLens loads.",
+      "3": "Names compose layer, submodule and activation, and get_act_name maps (name, layer) onto them. q, pattern and z sit under attn; resid_pre and mlp_out hang off the block."
+    }
+  },
+  "where_else": [
+    "Activation patching: cache a clean run, then write its values into a corrupted run with hooks",
+    "Attention-pattern plots: read straight out of cache['pattern', layer]",
+    "Logit lens and direct logit attribution: unembed cached residual streams and head outputs",
+    "Outside ML: flight recorders and request tracing keep every stage of one run for later"
+  ],
+  "hamming": {
+    "what": "One forward pass that also returns every intermediate activation, stored in a dictionary under its hook name.",
+    "when": "At the start of almost every interpretability experiment, whenever you want to see what happened inside a run.",
+    "why": "The in-between values are where the model's mechanism lives, and having them all by name turns 'what did the model do?' into a lookup."
+  },
+  "object": {
+    "title": "The camera line",
+    "subtitle": "A forward pass as a line of stations on one stream, with a named camera at every junction.",
+    "kind": "blocks",
+    "items": [
+      { "label": "embed", "h": 0.6, "c": "data" },
+      { "label": "blocks.0.attn", "h": 1.2, "c": "dir" },
+      { "label": "blocks.0.mlp", "h": 1.0, "c": "aux" },
+      { "label": "blocks.1.attn", "h": 1.2, "c": "dir" },
+      { "label": "blocks.1.mlp", "h": 1.0, "c": "aux" },
+      { "label": "unembed", "h": 0.6, "c": "prob" }
+    ],
+    "axis": "x",
+    "stream": true,
+    "gap": 0.35,
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "One run down the line. The tube is the stream every station reads from and writes to, and a camera sits at every junction.", "2": "Blocks are components; junctions are named HookPoints; run_with_cache photographs every one of them.", "3": "HookPoints wrap each activation (resid_pre, q, k, v, pattern, z, attn_out, mlp_out, resid_post), all captured in one cached forward." }, "view": "iso", "set": {} },
+      { "cap": { "1": "Zoom into a station: inside attention there are more cameras, for the queries, the keys, the pattern and each head's output.", "2": "blocks.0.attn holds hook_q, hook_k, hook_v, hook_pattern and hook_z, so you can see inside a layer, not just between layers.", "3": "Hooking activations rather than modules, inspired by Anthropic's Garcon ProbePoints, is what lets you read values computed partway through a layer." }, "view": "close", "set": {} },
+      { "cap": { "1": "Every photo gets its label from the same recipe, so you can find any of them later without running the line again.", "2": "One naming scheme across 140+ architecture families: code written against GPT-2 transfers to other models.", "3": "HookedTransformer normalises architectures onto one activation-naming scheme; ActivationCache keys resolve through utils.get_act_name." }, "view": "side", "set": {} },
+      { "cap": { "1": "The album is a record, not a remote control. Scribbling on a photo changes nothing that came off the line.", "2": "Editing a cached tensor leaves the run untouched. To intervene, attach a hook that writes back during the forward pass.", "3": "The cache is read-only with respect to the computation; interventions need run_with_hooks with functions that return modified activations." }, "view": "top", "set": {} }
+    ],
+    "predict": [
+      { "q": "You edit cache['pattern', 0] in place. Does the model's output change?", "options": [{ "t": "No: the cache is a record of a finished run", "ok": true }, { "t": "Yes: the cache feeds back into the model" }], "why": "The cache reads and stores. To change a forward pass you need a hook that writes back while it runs." },
+      { "q": "What does cache['pattern', 0] expand to?", "options": [{ "t": "blocks.0.attn.hook_pattern", "ok": true }, { "t": "layer0.pattern" }], "why": "utils.get_act_name turns ('pattern', 0) into the full hook name blocks.0.attn.hook_pattern." },
+      { "q": "How many forward passes does run_with_cache need to capture every layer?", "options": [{ "t": "One", "ok": true }, { "t": "One per layer" }], "why": "It attaches a caching function at every hook point and records them all during a single run." }
+    ],
+    "where": "Any instrumented pipeline: flight recorders, request tracing, logging every stage of a data pipeline."
+  }
+}

@@ -1,0 +1,152 @@
+{
+  "id": "transformerlens",
+  "title": "A labelled tap on every belt",
+  "week": 6,
+  "need": "library",
+  "allegory": "TransformerLens turns a real model into a glass-walled factory with a labelled tap on every belt: one run fills a labelled jar at each tap on a single shelf, and any tap can also swap what flows through.",
+  "map": [
+    ["the factory machinery, bought ready-made", "a real pretrained model, e.g. gpt2-small via HookedTransformer.from_pretrained"],
+    ["a labelled tap on every belt", "a named HookPoint at every activation, e.g. blocks.0.attn.hook_pattern"],
+    ["one run fills a jar at every tap, all on one shelf", "run_with_cache returns logits plus an ActivationCache keyed by name"],
+    ["the shelf's short labels, like 'pattern, 0'", "cache shorthand, resolved by utils.get_act_name"],
+    ["the machines were tidied before delivery", "default weight processing: fold_ln, center_writing_weights, center_unembed"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": "o/d06-shelf.html",
+  "chapters": [
+    {
+      "name": "A sealed machine",
+      "need": "library",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "great for using models, useless for opening them",
+      "actors": [{ "pose": "push", "x": 0.3, "label": "Neel" }],
+      "props": [
+        { "kind": "crate", "x": 0.66, "y": 0.55, "w": 0.3, "h": 0.36, "label": "a trained model, sealed", "color": "ink" },
+        { "kind": "card", "x": 0.66, "y": 0.16, "label": "what happens in here?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "Open-source tools were great for using and training models, and had almost nothing for opening one up and watching it think. So Neel Nanda wrote one.",
+        "2": "After leaving Anthropic's interpretability team, Neel Nanda found tooling for using and training models but little for digging inside. TransformerLens filled the gap.",
+        "3": "TransformerLens (Nanda, 2022), heavily inspired by Anthropic's internal Garcon, aims for the shortest loop from experiment idea to result. It loads 15,000+ models across 140+ architecture families."
+      }
+    },
+    {
+      "name": "Taps on belts",
+      "need": "library",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.12, "label": "you" }],
+      "props": [
+        { "kind": "bridge", "x": 0.55, "y": 0.62, "w": 0.7, "label": "the forward pass", "color": "sky" },
+        { "kind": "circle", "x": 0.35, "y": 0.45, "w": 0.06, "label": "tap", "color": "orange" },
+        { "kind": "circle", "x": 0.58, "y": 0.45, "w": 0.06, "label": "tap", "color": "orange" },
+        { "kind": "circle", "x": 0.81, "y": 0.45, "w": 0.06, "label": "tap", "color": "orange" },
+        { "kind": "stack", "x": 0.58, "y": 0.18, "w": 0.5, "h": 0.14, "label": "the shelf of jars (cache)", "color": "butter" }
+      ],
+      "arrows": [[0.35, 0.41, 0.42, 0.25, ""], [0.58, 0.41, 0.58, 0.25, ""], [0.81, 0.41, 0.74, 0.25, ""]],
+      "cap": {
+        "1": "Picture the model as a glass-walled factory with a labelled tap on every belt. Run it once and a jar at every tap fills up, all lined up on one shelf.",
+        "2": "A HookedTransformer is a normal transformer with a named HookPoint at every activation. run_with_cache runs it once and hands back every activation by name.",
+        "3": "Every intermediate tensor passes a HookPoint with a stable name. The naming scheme is shared across architectures, so an experiment written for GPT-2 small transfers."
+      }
+    },
+    {
+      "name": "One run, every jar",
+      "need": "library",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "run_with_cache", "c": "orange", "note": "one run, every tap" },
+        { "t": " → ", "c": "ink", "note": "" },
+        { "t": "cache['pattern', 0]", "c": "sky", "note": "layer 0's attention jar" }
+      ],
+      "actor": { "pose": "reach", "x": 0.1 },
+      "cap": {
+        "1": "One run fills every jar. Then you lift jars off the shelf by a short label: which kind of value, and which layer.",
+        "2": "<code>logits, cache = model.run_with_cache(tokens)</code>, then <code>cache['pattern', 0]</code> is layer 0's attention pattern. The shorthand expands to <code>blocks.0.attn.hook_pattern</code>.",
+        "3": "run_with_cache returns an ActivationCache keyed by hook name; utils.get_act_name('pattern', 0) gives 'blocks.0.attn.hook_pattern'. Pass remove_batch_dim=True for one sequence."
+      }
+    },
+    {
+      "name": "Tidied before delivery",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Defaults on: analysing", "c": "mint", "lines": ["LayerNorm folded in", "ln1.w all ones, ln1.b zeros", "same predictions", "cleaner circuit maths"] },
+      "right": { "title": "Defaults off: reimplementing", "c": "sky", "lines": ["fold_ln=False and", "both centring flags False", "weights as downloaded", "matches your own model"] },
+      "verdict": "Same predictions, different parameters. Pick one mode per notebook.",
+      "cap": {
+        "1": "The factory tidies its machines before handing them over. What comes out is identical, but the parts inside no longer match the original blueprints.",
+        "2": "from_pretrained folds LayerNorm into the next linear layer and centres some weights by default. Predictions are unchanged, parameters are not, so ln1.w prints as all ones.",
+        "3": "fold_ln absorbs LayerNorm's scale and bias into W_Q/W_K/W_V, W_in or W_U; centring removes directions invisible after LayerNorm or softmax. Disable all three to check a reimplementation."
+      }
+    },
+    {
+      "name": "Read or swap",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "tok", "label": "tokens", "x": 0.06, "y": 0.4, "c": "chalk" },
+        { "id": "emb", "label": "embed", "x": 0.22, "y": 0.4, "c": "sky" },
+        { "id": "b0", "label": "block 0", "x": 0.42, "y": 0.4, "c": "peach" },
+        { "id": "b1", "label": "block 1", "x": 0.62, "y": 0.4, "c": "peach" },
+        { "id": "out", "label": "logits", "x": 0.86, "y": 0.4, "c": "orange" },
+        { "id": "cache", "label": "cache (read)", "x": 0.42, "y": 0.8, "c": "butter" },
+        { "id": "hook", "label": "hook (edit)", "x": 0.72, "y": 0.8, "c": "pink" }
+      ],
+      "edges": [["tok", "emb", ""], ["emb", "b0", ""], ["b0", "b1", ""], ["b1", "out", ""], ["b0", "cache", "copy"], ["b1", "cache", "copy"], ["hook", "b1", "swap in"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Every tap works both ways: read what flows past, or swap in something else and watch what changes downstream. Reading comes first; changing comes next.",
+        "2": "The cache is for reading. Hooks, the next node, let a function edit an activation mid-run, which is how you test whether a part actually causes a behaviour.",
+        "3": "Hook points support caching, editing, ablating or replacing any activation during the forward pass: the substrate for every patching and ablation experiment that follows."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Every chapter 1 exercise starts here", "Print ln1.w early: which mode did you load?", "Too big to fit? nnsight, same idea remotely"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "This is the instrument for the rest of the course. Every look inside a model in chapter 1 starts with loading it here and running it once.",
+        "2": "Loading gpt2-small, caching and hooking is the setup step from [1.2] to [1.5]. For models too big for your machine, nnsight does the same job over a remote backend.",
+        "3": "Understanding and steering a model starts with reliable access to its internals under stable names, and knowing what preprocessing did to the weights keeps conclusions about the real model."
+      }
+    }
+  ],
+  "coda": {
+    "type": "match",
+    "title": "Match each label to what it does",
+    "pairs": [
+      ["cache['pattern', 0]", "blocks.0.attn.hook_pattern"],
+      ["run_with_cache", "one run, every activation kept by name"],
+      ["fold_ln=True", "LayerNorm's scale and bias folded into the next linear layer"],
+      ["remove_batch_dim=True", "drops the length-1 batch dimension for a single sequence"],
+      ["ln1.w prints as all ones", "weight processing was left on"],
+      ["HookPoint", "a named tap on one activation"]
+    ],
+    "caption": {
+      "1": "Match each label to what it does. Picture the factory as you go: taps on belts, jars on a shelf, and the tidy-up before delivery.",
+      "2": "These six cover most of what you type in chapter 1: load, run with cache, index by shorthand, and know which weight mode you are in.",
+      "3": "Shorthand indexing, cache semantics and the weight-processing flags. The ln1.w check tells you in one line which weight mode you actually loaded."
+    }
+  },
+  "where_else": [
+    "nnsight: the same reach-inside idea for models too big for your machine, over a remote backend",
+    "Every interpretability exercise from [1.2] to [1.5]: caching, patching, circuits",
+    "Debuggers in ordinary software: named probes on a running program",
+    "Hooks in web frameworks: named points where your code can watch or change the flow"
+  ],
+  "hamming": {
+    "what": "A library that loads real models with a named tap on every internal activation, so you can read or change them during a forward pass.",
+    "when": "At the start of every interpretability experiment in chapter 1, whenever the model fits on your machine.",
+    "why": "Stable names and one-line caching keep the loop from idea to result short, which is what makes exploratory interpretability feasible."
+  }
+}

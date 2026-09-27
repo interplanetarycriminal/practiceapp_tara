@@ -1,0 +1,182 @@
+{
+  "id": "hooks",
+  "title": "A worker at a named window",
+  "week": 6,
+  "need": "core",
+  "allegory": "A hook is like a worker you station at a named window beside a conveyor belt: every tray passing that window can be noted down or swapped for another, and the belt carries on with whatever the worker hands back.",
+  "map": [
+    ["the conveyor belt carrying trays through the factory", "the forward pass carrying activations through the model"],
+    ["the nameplate on each window, like blocks.0.attn.hook_z", "a HookPoint: an activation with a name"],
+    ["a worker you station at a window", "a hook function fn(activation, hook)"],
+    ["the worker notes the tray, or hands back a different one", "return None to read (or edit in place); return a tensor to replace it downstream"],
+    ["a worker still stationed from yesterday's shift", "a stale hook: global model state until model.reset_hooks()"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Watching is not enough",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "I can see everything... but what actually matters?",
+      "actors": [{ "pose": "think", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.62, "y": 0.55, "w": 0.2, "h": 0.4, "label": "cached activations", "color": "sky" },
+        { "kind": "card", "x": 0.62, "y": 0.16, "label": "what if this head were silent?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You can already watch every step inside a model, but that only shows what happened. To learn what matters, change something mid-run and see what breaks.",
+        "2": "<code>run_with_cache</code> reads and stores every activation, but it cannot answer 'what if this head were silent?'. For that you need to write back into the forward pass.",
+        "3": "Observation gives correlation; causal claims need intervention. The cache is read-only, while a hook can replace an activation so every downstream computation uses the edited value."
+      }
+    },
+    {
+      "name": "Workers at windows",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.12, "label": "you" },
+        { "pose": "reach", "x": 0.55, "label": "hook" }
+      ],
+      "props": [
+        { "kind": "bridge", "x": 0.55, "y": 0.74, "w": 0.8, "h": 0.05, "label": "forward pass", "color": "chalk" },
+        { "kind": "door", "x": 0.55, "y": 0.32, "label": "blocks.0.attn.hook_z", "color": "butter" },
+        { "kind": "crate", "x": 0.34, "y": 0.64, "label": "activation", "color": "sky" },
+        { "kind": "crate", "x": 0.78, "y": 0.64, "label": "edited", "color": "peach" }
+      ],
+      "arrows": [[0.4, 0.62, 0.71, 0.62, "belt carries on"]],
+      "cap": {
+        "1": "Picture the model as a conveyor belt with named windows. Station a worker at one: they note what goes past, or swap it, and the belt carries on with the swap.",
+        "2": "A hook is a function attached to a named activation. It receives <code>(activation, hook)</code>; return nothing to just read, or return a tensor to replace it for everything downstream.",
+        "3": "TransformerLens puts a HookPoint (an identity nn.Module) at every named activation, so a hook binds to a tensor by name rather than to a layer, which is all PyTorch's own hooks can do."
+      }
+    },
+    {
+      "name": "Window, then worker",
+      "need": "library",
+      "dur": 9,
+      "type": "equation",
+      "parts": [
+        { "t": "fwd_hooks=[(", "c": "ink", "note": "" },
+        { "t": "name", "c": "sky", "note": "which window" },
+        { "t": ", ", "c": "ink", "note": "" },
+        { "t": "fn", "c": "orange", "note": "which worker" },
+        { "t": ")]", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Your instructions are a list of pairs: which window, and which worker. Hand the list over and the model runs once with your workers in place.",
+        "2": "<code>model.run_with_hooks(tokens, fwd_hooks=[(name, fn)])</code>. The name can be a string, <code>utils.get_act_name('z', layer)</code>, or a filter like <code>lambda n: n.endswith('pattern')</code>.",
+        "3": "Names pick one activation; filters pick many. return_type='loss' measures the effect; None runs purely for side effects, such as a hook writing induction scores into an outer tensor."
+      }
+    },
+    {
+      "name": "Three jobs, one hook",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "every causal tool is a hook",
+      "rows": 3,
+      "cols": 2,
+      "values": [["set it to zero", "is this part needed?"], ["swap in another run's value", "does this carry the answer?"], ["add a vector", "can I push the behaviour?"]],
+      "labels": { "rows": ["ablation", "patching", "steering"], "cols": ["the worker's job", "the question"] },
+      "highlight": [[0, 0], [1, 0], [2, 0]],
+      "cap": {
+        "1": "Almost every experiment later is just a different worker at a window: one empties the tray, one swaps in a tray from another run, one adds something.",
+        "2": "Ablation zeroes an activation, activation patching overwrites it from another run, steering adds a vector to it. Learn the hook API once and all three come free.",
+        "3": "Ablation, activation patching, path patching and steering vectors are all hook functions with different bodies; the experimental design lives in what you return, and where."
+      }
+    },
+    {
+      "name": "The leftover worker",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "reset_hooks() first", "c": "mint", "lines": ["clean baseline is clean", "score = ablated − clean", "the heads that matter stand out"] },
+      "right": { "title": "a hook left over", "c": "pink", "lines": ["baseline already ablated", "scores near 0, a few negative", "'no head matters'"] },
+      "verdict": "Hooks are global model state. Reset before you measure.",
+      "cap": {
+        "1": "A worker from an earlier attempt is still at their window, quietly swapping trays. Now your 'normal' run is not normal, and every comparison comes out flat.",
+        "2": "If a hook raised an error, <code>run_with_hooks</code> never cleaned up, and <code>add_hook</code> persists by design. Call <code>model.reset_hooks()</code> before the clean baseline, every time.",
+        "3": "reset_hooks_end=True only runs if the pass completes. A stale ablation makes loss_no_ablation itself ablated, so the (n_layers, n_heads) scores are differences of two ablated runs."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Read with the cache, intervene with hooks", "Ablate, patch, steer: one API", "Reset hooks before every baseline"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Hooks turn watching into experimenting. Every 'does this part matter?' question later in the course is a hook doing a different job.",
+        "2": "Ablation, patching, steering, activation capping and probe interventions are all hooks. nnsight offers the same read-and-intervene idea with a different syntax.",
+        "3": "Hooks are the mechanism behind every causal claim in interpretability and every activation-level steering method: the lever that turns understanding a model into steering it."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "One window, four jobs: pick what the worker does",
+    "labels": ["dim 0", "dim 1", "dim 2", "dim 3", "dim 4"],
+    "params": [
+      { "id": "job", "label": "job: 0 read, 1 zero, 2 patch, 3 steer", "min": 0, "max": 3, "step": 1, "value": 0 },
+      { "id": "alpha", "label": "steering strength α", "min": 0, "max": 3, "step": 0.1, "value": 1 }
+    ],
+    "f": "(a => job == 0 ? a : job == 1 ? a.map(() => 0) : job == 2 ? [-0.6, 0.4, -0.2, 0.9, 0.1] : a.map((v, i) => v + alpha * [0.5, -0.5, 0.3, 0, 0][i]))([1.0, -0.5, 0.8, 0.2, -0.3])",
+    "y": [-2.5, 2.5],
+    "readouts": [
+      { "label": "the worker's job", "f": "['read only: nothing changes', 'ablate: set to zero', 'patch: value from another run', 'steer: add α × a vector'][job]" },
+      { "label": "downstream score (clean run gives 2.30)", "f": "dot((a => job == 0 ? a : job == 1 ? a.map(() => 0) : job == 2 ? [-0.6, 0.4, -0.2, 0.9, 0.1] : a.map((v, i) => v + alpha * [0.5, -0.5, 0.3, 0, 0][i]))([1.0, -0.5, 0.8, 0.2, -0.3]), [1, -1, 1, 0, 0]).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Bars show what leaves the window. Switch jobs: reading changes nothing, zeroing empties it, patching swaps it, steering pushes it. Watch the score.",
+      "2": "Same hook point, four hook bodies. The score is what a later layer reads from this activation. Ablation removes this spot's contribution; patching imports the other run's; steering shifts it along a vector.",
+      "3": "Here the downstream readout is linear, so the effect of each intervention is its change in projection. Steering moves the score by α times the vector's projection (1.3 per unit α)."
+    }
+  },
+  "where_else": [
+    "Ablation, activation patching and path patching: a hook that zeroes or swaps an activation",
+    "Steering vectors and activation capping: a hook that adds to or clamps the residual stream",
+    "Outside ML: debugger watchpoints and web middleware, code that intercepts a value at a named point"
+  ],
+  "hamming": {
+    "what": "A function attached to a named activation inside a running model, which can read it or hand back a replacement.",
+    "when": "Whenever you ask a model 'what if': ablate a head, patch in another run, add a steering vector, or record a statistic mid-run.",
+    "why": "Watching only shows correlation; changing an activation mid-run and seeing what happens downstream is how you get causal evidence."
+  },
+  "object": {
+    "title": "The belt of named windows",
+    "subtitle": "A forward pass laid out as a conveyor, with a worker stationed at one window and a note-taker at another.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "tok", "label": "tokens", "pos": [-1.4, 0, 0], "c": "data" },
+      { "id": "emb", "label": "hook_embed", "pos": [-0.9, 0, 0], "c": "data" },
+      { "id": "z0", "label": "blocks.0.attn.hook_z", "pos": [-0.35, 0, 0], "c": "data" },
+      { "id": "r0", "label": "blocks.0.hook_resid_post", "pos": [0.2, 0, 0], "c": "data" },
+      { "id": "p1", "label": "blocks.1.attn.hook_pattern", "pos": [0.75, 0, 0], "c": "data" },
+      { "id": "out", "label": "logits", "pos": [1.35, 0, 0], "c": "good" },
+      { "id": "fn", "label": "your hook: reads and hands back", "pos": [-0.35, 0.9, 0.3], "c": "grad" },
+      { "id": "cache", "label": "cache: copies only", "pos": [0.75, -0.9, 0.3], "c": "prob" }
+    ],
+    "edges": [["tok", "emb"], ["emb", "z0"], ["z0", "r0"], ["r0", "p1"], ["p1", "out"], ["z0", "fn"], ["fn", "z0"], ["p1", "cache"]],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "The forward pass as a belt of named windows, from tokens to logits.", "2": "Every intermediate activation has a name, like blocks.0.attn.hook_z. Hooks attach to names, not to layers.", "3": "HookPoints (identity modules) sit at every named activation, so you address tensors, not modules." }, "view": "iso" },
+      { "cap": { "1": "A worker at hook_z reads each head's output and hands back an edited version. Everything after the window uses the edit.", "2": "Returning a tensor replaces the activation for the rest of the forward pass. That is how ablation and patching work.", "3": "A forward hook's return value substitutes the HookPoint's output, so all downstream computation is conditioned on the intervention." }, "view": "close" },
+      { "cap": { "1": "Below, the cache only copies what passes. It never sends anything back.", "2": "run_with_cache is read-only: store and inspect. A hook can also write back and change what the model computes.", "3": "Caching is observational, hooks are interventional; causal claims need the second." }, "view": "side" },
+      { "cap": { "1": "Leave a worker stationed and they keep editing every future run until you dismiss them.", "2": "add_hook persists, and a crashed run skips cleanup. model.reset_hooks() dismisses every stationed worker.", "3": "Hook registration is global model state: reset before every baseline so the 'clean' run really is clean." }, "view": "top" }
+    ],
+    "predict": [
+      { "q": "Your hook function returns nothing. What does the model use downstream?", "options": [{ "t": "The original activation, plus any in-place edits", "ok": true }, { "t": "A tensor of zeros" }], "why": "Returning None leaves the activation in place, so the hook only reads (or edits in place). Return a tensor to replace it." },
+      { "q": "Your ablation sweep says no head matters: every score is about zero. What should you check first?", "options": [{ "t": "A stale hook left over from an earlier run", "ok": true }, { "t": "The model is too small to have important heads" }], "why": "If a hook is still attached, the 'clean' baseline is already ablated, so every comparison comes out flat. Call model.reset_hooks() first." }
+    ],
+    "where": "Anywhere you instrument a running system at named points: debugger watchpoints, network taps, web middleware."
+  }
+}

@@ -1,0 +1,279 @@
+{
+  "id": "beam-search",
+  "title": "Keep a few trails alive",
+  "week": 6,
+  "need": "library",
+  "allegory": "Beam search is like a small search party on a branching trail: at every fork each hiker looks down every path, then only the few routes with the best total score keep walking, instead of betting everything on the path that looks best right now.",
+  "map": [
+    ["a hiker partway along a route", "a partial sequence (one beam)"],
+    ["the size of the search party", "num_beams, the beam width"],
+    ["a route's running score: chances multiplied, kept as a sum of logs", "summed log-probabilities from log_softmax"],
+    ["every hiker checks every fork, then only the best few routes go on", "expand to num_beams × d_vocab candidates, keep the top num_beams"],
+    ["reaching the hut", "emitting EOS: the beam moves to the finished list"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The greedy trap",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "walk", "x": 0.15, "to": 0.4, "label": "greedy" }],
+      "props": [
+        { "kind": "flag", "x": 0.52, "y": 0.3, "label": "cat 0.5", "color": "butter" },
+        { "kind": "flag", "x": 0.52, "y": 0.7, "label": "dog 0.4", "color": "mint" },
+        { "kind": "cloud", "x": 0.82, "y": 0.26, "label": "best next: 0.3", "color": "chalk" },
+        { "kind": "flag", "x": 0.82, "y": 0.7, "label": "barked 0.9", "color": "green" }
+      ],
+      "arrows": [[0.42, 0.45, 0.5, 0.33, "grabs the likeliest"]],
+      "cap": {
+        "1": "Writing one word at a time, always grabbing the likeliest next word, is like a hiker who always takes the nicest-looking fork. Sometimes it leads nowhere good.",
+        "2": "Greedy decoding takes the argmax at every step. 'cat' (0.5) beats 'dog' (0.4), but 'cat' is followed at best by 0.3, while 'dog barked' scores 0.4 × 0.9 = 0.36 against 0.15.",
+        "3": "Greedy maximises each conditional p(tₙ | t<ₙ) in turn, not the joint probability. A locally worse token can open a far likelier continuation, which greedy can never go back for."
+      }
+    },
+    {
+      "name": "A search party",
+      "need": "core",
+      "dur": 10,
+      "type": "graph",
+      "nodes": [
+        { "id": "root", "label": "The", "x": 0.08, "y": 0.5, "c": "sky" },
+        { "id": "cat", "label": "cat 0.5", "x": 0.36, "y": 0.24, "c": "mint" },
+        { "id": "dog", "label": "dog 0.4", "x": 0.36, "y": 0.6, "c": "mint" },
+        { "id": "a", "label": "a 0.1 (cut)", "x": 0.36, "y": 0.88, "c": "chalk" },
+        { "id": "catsat", "label": "sat: 0.15", "x": 0.72, "y": 0.12, "c": "mint" },
+        { "id": "catran", "label": "ran: 0.10 (cut)", "x": 0.72, "y": 0.34, "c": "chalk" },
+        { "id": "dogbark", "label": "barked: 0.36", "x": 0.72, "y": 0.56, "c": "green" },
+        { "id": "dogsat", "label": "sat: 0.01 (cut)", "x": 0.72, "y": 0.8, "c": "chalk" }
+      ],
+      "edges": [["root", "cat"], ["root", "dog"], ["root", "a"], ["cat", "catsat"], ["cat", "catran"], ["dog", "dogbark"], ["dog", "dogsat"]],
+      "flow": "forward",
+      "cap": {
+        "1": "Instead, send a small search party. At every fork each hiker looks down every path, then only the best two routes overall keep walking. 'dog barked' survives.",
+        "2": "With num_beams = 2: keep the 2 best partial sequences, extend each over the whole vocabulary, score every extension, keep the best 2 again. Here that recovers 'The dog barked' (0.36).",
+        "3": "Beam search is width-limited breadth-first search over the sequence tree: each step expands num_beams × d_vocab candidates and prunes to the top num_beams by joint probability."
+      }
+    },
+    {
+      "name": "Scores add in logs",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "score", "c": "ink", "note": "a route's total" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "Σ ", "c": "orange", "note": "add every step" },
+        { "t": "log p(tᵢ | t<ᵢ)", "c": "sky", "note": "one step's chance" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "A route's score is all its chances multiplied. Multiplying tiny numbers gets too tiny, so we add their logs instead: same ranking, nothing vanishes.",
+        "2": "Score each beam by summed <code>log_softmax</code> outputs, never summed logits: logits can shift by an arbitrary constant per step, so two beams' logit sums are not comparable.",
+        "3": "log turns the joint-probability product into a sum and avoids underflow. Softmax is invariant to adding a constant to all logits, so only normalised log-probs compare across beams."
+      }
+    },
+    {
+      "name": "Pool, then prune",
+      "need": "exercise",
+      "dur": 9,
+      "type": "grid",
+      "title": "2 beams × 4 words = 8 candidates, keep the best 2",
+      "rows": 2,
+      "cols": 4,
+      "values": [["0.15", "0.10", "0.05", "0.10"], ["0.01", "0.02", "0.36", "0.01"]],
+      "labels": { "rows": ["The cat", "The dog"], "cols": ["sat", "ran", "barked", "slept"] },
+      "highlight": [[1, 2], [0, 0]],
+      "cap": {
+        "1": "Pool every hiker's options into one list and keep the best few overall. Sometimes both survivors come from the same hiker, and that is fine.",
+        "2": "Rank all num_beams × d_vocab candidates at once. Picking each beam's own top option would just be several greedy searches. Beams that emit EOS move to a finished list and leave the tree.",
+        "3": "The top num_beams length-(n+1) sequences may all descend from one length-n beam, so the prune must be global. Terminated beams leave the frontier and are kept as outputs."
+      }
+    },
+    {
+      "name": "The loop trap",
+      "need": "exercise",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "note": "I think I think I think I think...",
+      "actors": [
+        { "pose": "walk", "x": 0.3 },
+        { "pose": "walk", "x": 0.55 }
+      ],
+      "props": [
+        { "kind": "circle", "x": 0.43, "y": 0.58, "w": 0.4, "h": 0.3, "label": "the pleasant loop", "color": "lav" },
+        { "kind": "card", "x": 0.83, "y": 0.3, "label": "no_repeat_ngram_size = 2", "color": "butter" }
+      ],
+      "cap": {
+        "1": "On open-ended text the party finds a pleasant little circle and walks it forever, because every lap scores well. Wider parties find these loops even faster.",
+        "2": "Summed log-prob is maximised by repeating a likely phrase at near-zero cost. <code>no_repeat_ngram_size=2</code> or <code>3</code> bans any token that would repeat an n-gram already in the beam, before the topk.",
+        "3": "Raising num_beams finds high-scoring loops more reliably: the search works, the objective is wrong. The n-gram ban is a hard constraint inside generate, not a penalty added to the score."
+      }
+    },
+    {
+      "name": "Bad search, good text",
+      "need": "contested",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Exact search", "c": "pink", "lines": ["finds the single likeliest sequence", "often low-quality output"] },
+      "right": { "title": "Beam search", "c": "mint", "lines": ["misses the likeliest most of the time", "better translations anyway", "spreads information evenly"] },
+      "verdict": "Beam for one right answer (translation); sampling for open-ended text.",
+      "cap": {
+        "1": "A puzzle: searching harder for the likeliest sentence gives worse text. Beam search usually misses it and wins anyway. For open-ended text, sample instead.",
+        "2": "Meister, Vieira and Cotterell (EMNLP 2020): beam search exactly solves a different objective, one that spreads information evenly (uniform information density), and UID adherence tracked BLEU closely.",
+        "3": "Current practice: beam search for translation or summarisation, top-p sampling for open-ended generation. Research reframes beam's search error as an implicit UID regulariser. What you need: pick the decoder by the task."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "library",
+      "dur": 9,
+      "type": "cards",
+      "items": ["In practice: one library flag (num_beams)", "Decoding is a modelling choice", "Report which decoder you used"],
+      "actor": { "pose": "wave", "x": 0.86 },
+      "cap": {
+        "1": "In practice it's one library flag. The lesson stays: how you pick words changes what a model seems to say, which matters when you judge its behaviour.",
+        "2": "The <code>transformers</code> library's <code>generate(num_beams=...)</code> does all of this. Greedy, beam and sampled outputs from one model can differ, so evals and interpretability work should say which decoder they used.",
+        "3": "Decoding is part of the system you evaluate or steer: a behaviour seen under beam search may vanish under sampling. Beams also share prefixes, which is where KV caching gets interesting."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "When does greedy lose?",
+    "labels": ["The cat + its best next word", "The dog + its best next word"],
+    "params": [
+      { "id": "pcat", "label": "p(cat) as first word (dog gets the rest)", "min": 0.05, "max": 0.95, "step": 0.05, "value": 0.55 },
+      { "id": "q", "label": "best next word after 'cat'", "min": 0.05, "max": 1, "step": 0.05, "value": 0.3 },
+      { "id": "r", "label": "best next word after 'dog'", "min": 0.05, "max": 1, "step": 0.05, "value": 0.9 }
+    ],
+    "f": "[pcat*q, (1 - pcat)*r]",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "greedy picks", "f": "pcat >= 0.5 ? 'The cat ... (' + (pcat*q).toFixed(2) + ')' : 'The dog ... (' + ((1 - pcat)*r).toFixed(2) + ')'" },
+      { "label": "beam search, 2 beams, picks", "f": "pcat*q >= (1 - pcat)*r ? 'The cat ... (' + (pcat*q).toFixed(2) + ')' : 'The dog ... (' + ((1 - pcat)*r).toFixed(2) + ')'" },
+      { "label": "probability greedy threw away", "f": "(max(pcat*q, (1 - pcat)*r) - (pcat >= 0.5 ? pcat*q : (1 - pcat)*r)).toFixed(2)" },
+      { "label": "winning score in logs (what beams add up)", "f": "log(max(pcat*q, (1 - pcat)*r)).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Make 'cat' slightly likelier than 'dog', then give 'dog' a great next word. Greedy grabs 'cat' and loses; a party of two keeps 'dog' alive and wins.",
+      "2": "Greedy commits to the argmax first word. Beam search keeps both first words and compares whole-route scores, p(first) × p(next). Find the settings where greedy's pick is worse.",
+      "3": "Greedy fails exactly when p(cat) > p(dog) but p(cat)·q < p(dog)·r. With width 2 and two first tokens this beam search is exact over two-token routes; in general beam search is not exact."
+    }
+  },
+  "where_else": [
+    "Machine translation and summarisation, where there is roughly one right answer",
+    "Speech recognition, which keeps several candidate transcriptions alive at once",
+    "Any pruned search that keeps the few most promising partial solutions and drops the rest"
+  ],
+  "hamming": {
+    "what": "A decoder that keeps the num_beams highest-scoring partial sequences at every step instead of committing to a single one.",
+    "when": "When there is roughly one right output, like translation; for open-ended text, sampling works better.",
+    "why": "One greedy choice can lock you out of a far likelier sentence; a few parallel candidates buy lookahead cheaply."
+  },
+  "object": {
+    "title": "The bonsai of sentences",
+    "subtitle": "A little tree where the gardener lets only the best two branches grow at every level.",
+    "kind": "graph",
+    "nodes": [
+      { "id": "root", "label": "The", "pos": [-1.4, 0, 0], "c": "data" },
+      { "id": "cat", "label": "cat", "pos": [-0.5, 0.9, 0.3], "c": "good" },
+      { "id": "dog", "label": "dog", "pos": [-0.5, 0.3, -0.3], "c": "good" },
+      { "id": "a", "label": "a", "pos": [-0.5, -0.3, 0.3], "c": "plaster" },
+      { "id": "my", "label": "my", "pos": [-0.5, -0.9, -0.3], "c": "plaster" },
+      { "id": "catsat", "label": "sat", "pos": [0.4, 1.2, 0.5], "c": "good" },
+      { "id": "catran", "label": "ran", "pos": [0.4, 0.75, 0.05], "c": "plaster" },
+      { "id": "dogbark", "label": "barked", "pos": [0.4, 0.3, -0.5], "c": "good" },
+      { "id": "dogsat", "label": "sat", "pos": [0.4, -0.2, -0.2], "c": "plaster" },
+      { "id": "catsatdown", "label": "down", "pos": [1.3, 1.1, 0.6], "c": "plaster" },
+      { "id": "dogbarkloud", "label": "loudly", "pos": [1.3, 0.45, -0.4], "c": "good" },
+      { "id": "dogbarkeos", "label": "(end)", "pos": [1.3, -0.1, -0.7], "c": "prob" }
+    ],
+    "edges": [
+      ["root", "cat"], ["root", "dog"], ["root", "a"], ["root", "my"],
+      ["cat", "catsat"], ["cat", "catran"], ["dog", "dogbark"], ["dog", "dogsat"],
+      ["catsat", "catsatdown"], ["dogbark", "dogbarkloud"], ["dogbark", "dogbarkeos"]
+    ],
+    "flow": true,
+    "knobs": [],
+    "beats": [
+      {
+        "cap": {
+          "1": "A bonsai of sentences. The trunk is the prompt; every branch is one possible next word.",
+          "2": "Each node is a partial sequence and its children are one-token extensions. Only a few are allowed to keep growing.",
+          "3": "The sequence tree branches d_vocab ways per step; beam search explores a width-num_beams slice of it."
+        },
+        "view": "iso",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "Look along one level: many buds, but only two (green) grow on. The rest (plaster) are snipped.",
+          "2": "At each depth the top num_beams partial sequences by summed log-prob survive; every other candidate is pruned.",
+          "3": "A global top-k over num_beams × d_vocab candidates per step; pruned subtrees are never revisited, so search error is possible."
+        },
+        "view": "side",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "'dog' looked worse than 'cat' at first, but its branch grew the best fruit: 'dog barked'. Greedy would have snipped it.",
+          "2": "Keeping a second beam let a lower-scoring first token win on the joint score: 0.4 × 0.9 = 0.36 beats 0.5 × 0.3 = 0.15.",
+          "3": "Lookahead through a width-2 frontier recovers a sequence whose prefix was not the argmax, the core advantage over greedy."
+        },
+        "view": "close",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "The amber tip is a finished sentence: it reached the end marker, so it leaves the tree and waits in the finished pile.",
+          "2": "A beam that emits EOS moves to the finished list; the rest keep searching until enough finish or max_new_tokens is hit.",
+          "3": "Finished hypotheses are removed from the frontier; the final ranking is over completed sequences."
+        },
+        "view": "top",
+        "set": {}
+      },
+      {
+        "cap": {
+          "1": "A tidy tree, but not the whole forest: the very best sentence may have been snipped early. That is search error, and oddly it often helps.",
+          "2": "Beam search usually misses the true most-likely sequence, and still tends to give better translations than exact search.",
+          "3": "High search error, better BLEU: Meister et al. (2020) read beam search as exactly optimising a UID-regularised objective."
+        },
+        "view": "iso",
+        "set": {}
+      }
+    ],
+    "predict": [
+      {
+        "q": "'cat' has 0.5 and 'dog' 0.4. After 'dog', 'barked' has 0.9; after 'cat', the best word has 0.3. Which two-word start has the higher total?",
+        "options": [
+          { "t": "dog barked (0.36)", "ok": true },
+          { "t": "cat plus its best word (0.15)" }
+        ],
+        "why": "Multiply along the route: 0.4 × 0.9 = 0.36 beats 0.5 × 0.3 = 0.15. Keeping a second beam finds it."
+      },
+      {
+        "q": "You raise num_beams from 4 to 16 on open-ended text and the repetition gets worse. Why?",
+        "options": [
+          { "t": "A wider search finds high-scoring loops more reliably", "ok": true },
+          { "t": "The beams interfere with each other" },
+          { "t": "Your filter has a bug" }
+        ],
+        "why": "Summed log-prob rewards repeating a likely phrase. The search is working; the objective is the problem."
+      },
+      {
+        "q": "Why score beams with log_softmax rather than raw logits?",
+        "options": [
+          { "t": "Logits can shift by a constant, so their sums don't compare across beams", "ok": true },
+          { "t": "Adding logits is too slow" }
+        ],
+        "why": "Softmax ignores a constant added to every logit, so only normalised log-probs give comparable scores."
+      }
+    ],
+    "where": "Any search too big to do exhaustively: translation, speech recognition, pruned planning trees."
+  }
+}

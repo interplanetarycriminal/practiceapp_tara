@@ -1,0 +1,157 @@
+{
+  "id": "qk-circuit",
+  "title": "Who wants to listen to whom",
+  "week": 7,
+  "need": "core",
+  "allegory": "A head's QK circuit is a preference chart printed before any party: for every pair of guests it says how keen the first is to turn and listen to the second, and on the night each guest reads their own row for the guests already there and shares out their attention.",
+  "map": [
+    ["the guest who is looking around", "the query token, at the destination position"],
+    ["a guest who might be listened to", "a key token, at an earlier source position"],
+    ["the chart, printed before anyone arrives", "the full QK circuit W_E W_Q W_Kᵀ W_Eᵀ, fixed in the weights"],
+    ["reading your row for the guests present, then sharing attention", "one prompt's scores: masked, scaled by 1/√d_head, softmaxed per row"],
+    ["a huge chart made from two thin lists", "rank at most d_head, so kept as a FactoredMatrix"]
+  ],
+  "credit": "The QK/OV split is from Elhage et al., 'A Mathematical Framework for Transformer Circuits' (Anthropic, 2021); 'the query asks, the key offers' echoes 3Blue1Brown's attention chapter (Deep Learning, chapter 6).",
+  "linked_film": null,
+  "linked_object": "o/d05-circuits.html",
+  "chapters": [
+    {
+      "name": "Four opaque grids",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "which of these says where it looks?",
+      "actors": [{ "pose": "shrug", "x": 0.16, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.42, "y": 0.4, "label": "W_Q", "color": "orange" },
+        { "kind": "card", "x": 0.58, "y": 0.4, "label": "W_K", "color": "mint" },
+        { "kind": "card", "x": 0.74, "y": 0.4, "label": "W_V", "color": "lav" },
+        { "kind": "card", "x": 0.9, "y": 0.4, "label": "W_O", "color": "lav" }
+      ],
+      "cap": {
+        "1": "An attention head has four grids of weights. Stare at any one of them and it tells you nothing. The trick is that they never act alone.",
+        "2": "W_Q, W_K, W_V and W_O are each unreadable alone. But W_Q and W_K only ever appear multiplied together, and so do W_V and W_O. Read the products, not the parts.",
+        "3": "Elhage et al. (2021): W_Q and W_K only appear as W_QK = W_Q W_Kᵀ, and W_V, W_O only as W_OV. The individual factors are not separately meaningful."
+      }
+    },
+    {
+      "name": "The preference chart",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [
+        { "pose": "think", "x": 0.2, "label": "sat" },
+        { "pose": "idle", "x": 0.45, "label": "the" },
+        { "pose": "wave", "x": 0.65, "label": "cat" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.86, "y": 0.26, "w": 0.22, "h": 0.3, "label": "chart: who wants to hear whom", "color": "butter" }
+      ],
+      "arrows": [[0.24, 0.4, 0.61, 0.42, "keen"], [0.24, 0.46, 0.42, 0.48, "meh"]],
+      "cap": {
+        "1": "Picture a chart printed before any party: for every pair of guests, how keen the first is to turn and listen to the second. It exists before anyone arrives.",
+        "2": "The QK circuit is that chart for one head: a vocabulary-by-vocabulary table of how much a query token wants to attend to a key token. It lives in the weights, not in any prompt.",
+        "3": "W_E W_QK W_Eᵀ gives the scores a head assigns from token identity alone (the direct path), readable with no forward pass. Positions and earlier heads contribute other terms."
+      }
+    },
+    {
+      "name": "Two thin lists",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "W_E", "c": "sky", "note": "the looking word" },
+        { "t": " W_Q", "c": "orange", "note": "what it asks for" },
+        { "t": " W_Kᵀ", "c": "mint", "note": "what each word offers" },
+        { "t": " W_Eᵀ", "c": "sky", "note": "the word looked at" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Read it left to right: the looking word, what it asks for, what each other word offers, and that other word. Out comes one number per pair: how keen.",
+        "2": "Row = query token, column = key token, entry = attention score before softmax. The table is huge but low-rank, so TransformerLens keeps it as a FactoredMatrix.",
+        "3": "Rank ≤ d_head (64) against a ~50k vocabulary, so FactoredMatrix holds the factors and gets SVD, norms and top-k without materialising the d_vocab² product."
+      }
+    },
+    {
+      "name": "Reading head 0.7",
+      "need": "exercise",
+      "dur": 11,
+      "type": "grid",
+      "title": "Head 0.7, positions not words (illustrative)",
+      "rows": 6,
+      "cols": 6,
+      "values": [
+        ["●", "×", "×", "×", "×", "×"],
+        ["●", "·", "×", "×", "×", "×"],
+        ["·", "●", "·", "×", "×", "×"],
+        ["·", "·", "●", "·", "×", "×"],
+        ["·", "·", "·", "●", "·", "×"],
+        ["·", "·", "·", "·", "●", "·"]
+      ],
+      "labels": { "rows": ["q0", "q1", "q2", "q3", "q4", "q5"], "cols": ["k0", "k1", "k2", "k3", "k4", "k5"] },
+      "highlight": [[1, 0], [2, 1], [3, 2], [4, 3], [5, 4]],
+      "cap": {
+        "1": "For head 0.7 the chart is about seats, not names. Every position listens hardest to the one just before it: a bright band just under the diagonal.",
+        "2": "Build the positional version, W_pos W_QK W_posᵀ, then mask, scale and softmax. Head 0.7 shows a clean previous-token band, read from the weights alone.",
+        "3": "The prev-token circuit for 0.7 is computed over positional embeddings; after causal masking, 1/√d_head scaling and softmax it shows the sub-diagonal band, with no prompt at all."
+      }
+    },
+    {
+      "name": "One path, not all",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Direct QK chart", "c": "sky", "lines": ["words in, words looked at", "read from weights alone", "misses notes that earlier", "heads wrote into the keys"] },
+      "right": { "title": "With K-composition", "c": "mint", "lines": ["1.4's keys built from", "head 0.7's output", "this term dominates", "the induction head"] },
+      "verdict": "A weights-only chart covers one path. Check it is the whole path.",
+      "cap": {
+        "1": "The printed chart knows guests only by name. If an earlier head pinned a note on each guest, a later head may read the note, and the plain chart misses it.",
+        "2": "The direct QK circuit uses token embeddings only. A layer-1 head's keys can be built from a layer-0 head's output (K-composition), a path the direct chart leaves out.",
+        "3": "Weights-only analysis is a claim about a path. Decomposing 1.4's scores by (query source, key source) shows the (embed, head 0.7) term dominating: K-composition, not the direct path."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Behaviour read from weights, not one prompt", "QK: where it looks. OV: what it writes", "Induction circuits become whiteboard-sized"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "You can read where a head wants to look straight off its weights, before it sees any text. That is a fact about the model, not about one example.",
+        "2": "Splitting a head into QK and OV turns it into two readable tables. That factoring is what makes circuits like induction heads small enough to draw on a whiteboard.",
+        "3": "Weight-based circuit reading gives prompt-independent claims about behaviour, which is what you want before trusting an explanation to predict or steer a model."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Print your own chart. Rows: the looking word (the, cat, sat, mat). Columns: the word looked at.",
+    "rows": 4,
+    "cols": 4,
+    "init": "0",
+    "click": "inc",
+    "readouts": [
+      { "label": "in 'the cat sat', sat listens to", "f": "softmax([G[2][0], G[2][1], G[2][2]].map(v => min(v, 8))).map((p, i) => ['the', 'cat', 'sat'][i] + ' ' + round(p * 100) + '%').join(', ')" },
+      { "label": "in 'the mat sat', sat listens to", "f": "softmax([G[2][0], G[2][3], G[2][2]].map(v => min(v, 8))).map((p, i) => ['the', 'mat', 'sat'][i] + ' ' + round(p * 100) + '%').join(', ')" },
+      { "label": "in 'the cat', cat listens to", "f": "softmax([G[1][0], G[1][1]].map(v => min(v, 8))).map((p, i) => ['the', 'cat'][i] + ' ' + round(p * 100) + '%').join(', ')" }
+    ],
+    "caption": {
+      "1": "Tap the cell where the sat row meets the cat column a few times. Only the prompt that contains 'cat' changes. One chart serves every sentence.",
+      "2": "Each cell is a score before softmax. A prompt's attention just reads the looking word's row for the words present, then softmaxes. Nothing depends on the sentence except which cells get read.",
+      "3": "Attention for any context is a softmax over the query token's row restricted to the keys present (causal mask). The direct-path chart is prompt-independent; positions and composition add terms."
+    }
+  },
+  "where_else": [
+    "The OV circuit: the same trick for what a head writes once it has looked",
+    "K-composition: a later head's keys built from an earlier head's output",
+    "Recommender systems scoring every user-item pair with a low-rank product of two thin tables"
+  ],
+  "hamming": {
+    "what": "A vocabulary-by-vocabulary table, made by multiplying a head's weights, saying how much each token wants to attend to each other token.",
+    "when": "When you want to know where a head looks as a property of the model, before running any prompt.",
+    "why": "Only the product W_Q W_Kᵀ affects attention, so reading it directly turns an opaque head into a table you can inspect."
+  }
+}

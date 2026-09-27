@@ -1,0 +1,175 @@
+{
+  "id": "top-p-sampling",
+  "title": "Fill to the line, biggest jugs first",
+  "week": 6,
+  "need": "library",
+  "allegory": "Top-p is like pouring jugs of water into a bucket, biggest first, until the water reaches a line, then holding a raffle among only the jugs you poured, weighted by their water.",
+  "map": [
+    ["jugs lined up biggest first", "tokens sorted by probability, descending"],
+    ["pouring until the water reaches the line", "adding probabilities until the running total reaches p"],
+    ["the jug that crosses the line still counts", "inclusive cutoff: keep the token where the total first reaches p"],
+    ["a raffle among the poured jugs, weighted by water", "renormalise the kept probabilities and sample"],
+    ["one huge jug fills it fast; tiny jugs take many pours", "the nucleus shrinks when the model is confident and grows when it is unsure"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Bland or bonkers",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "actors": [{ "pose": "think", "x": 0.5, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.2, "y": 0.35, "label": "always the likeliest: 'I don't know. I don't know.'", "color": "chalk" },
+        { "kind": "card", "x": 0.8, "y": 0.35, "label": "anything goes: 'the cat sat on the quantum'", "color": "pink" }
+      ],
+      "cap": {
+        "1": "Always pick the likeliest next word and text turns bland and loops. Pick from everything and weird rare words sneak in. You want the sensible middle.",
+        "2": "Holtzman et al. (ICLR 2020): likelihood is a great training objective and a poor decoding one. Maximising it gives bland, repetitive text; the unreliable tail gives nonsense. Trim, then sample.",
+        "3": "Degeneration: maximisation-style decoding from an excellent model yields repetitive text, and human text doesn't look like high-likelihood text. Truncating the tail keeps diversity without the junk."
+      }
+    },
+    {
+      "name": "The bucket line",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "carry", "x": 0.14, "to": 0.3, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.42, "y": 0.72, "w": 0.1, "h": 0.2, "label": "0.4", "color": "sky" },
+        { "kind": "box", "x": 0.54, "y": 0.75, "w": 0.09, "h": 0.15, "label": "0.3", "color": "sky" },
+        { "kind": "box", "x": 0.65, "y": 0.78, "w": 0.08, "h": 0.1, "label": "0.2", "color": "sky" },
+        { "kind": "box", "x": 0.75, "y": 0.8, "w": 0.06, "h": 0.06, "label": "0.1", "color": "chalk" },
+        { "kind": "crate", "x": 0.6, "y": 0.35, "w": 0.2, "h": 0.28, "label": "line at p", "color": "butter" }
+      ],
+      "arrows": [[0.44, 0.6, 0.55, 0.45, "pour"]],
+      "cap": {
+        "1": "Line up jugs of water, biggest first. Pour them into a bucket until the water reaches the line. Then hold a raffle among the jugs you poured.",
+        "2": "Sort tokens by probability, add them up until the running total reaches p, keep those, renormalise and sample. The line is p; the poured jugs are the nucleus.",
+        "3": "Nucleus = the smallest top-ranked set with cumulative mass ≥ p; sample from it renormalised. Its size is decided afresh each step by the shape of the distribution."
+      }
+    },
+    {
+      "name": "The worked example",
+      "need": "exercise",
+      "dur": 10,
+      "type": "bars",
+      "title": "p = 0.8: keep three, renormalise by 0.9",
+      "labels": ["token A", "token B", "token C", "token D"],
+      "from": [0.4, 0.3, 0.2, 0.1],
+      "to": [0.444, 0.333, 0.222, 0],
+      "cap": {
+        "1": "Jugs of 0.4, 0.3, 0.2 and 0.1, line at 0.8. Two jugs reach only 0.7, so the third is poured too. The last jug sits out; the raffle is among three.",
+        "2": "ARENA's example: (0.4, 0.3, 0.2, 0.1) with p = 0.8 keeps three tokens, because two only reach 0.7. You then sample from (0.4, 0.3, 0.2) / 0.9.",
+        "3": "Kept mass 0.9 ≥ 0.8. Renormalised: 0.444, 0.333, 0.222. The fourth token's mass is dropped and the survivors scale up by 1/0.9."
+      }
+    },
+    {
+      "name": "Confident or unsure",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "confident step", "c": "mint", "lines": ["one jug holds most of the water", "two pours reach the line", "tight, safe choice"] },
+      "right": { "title": "unsure step", "c": "sky", "lines": ["hundreds of little jugs", "hundreds of pours", "wide, varied choice"] },
+      "verdict": "Top-k keeps a fixed count; top-p keeps a fixed mass, so its cutoff moves with confidence.",
+      "cap": {
+        "1": "When one jug is huge, a couple of pours fill the bucket. When every jug is small, you need many. The raffle sizes itself to how sure the model is.",
+        "2": "Top-k keeps a fixed count; top-p keeps a fixed mass, so its cutoff moves with the model's confidence. On a flat distribution a fixed k cuts far too much.",
+        "3": "Nucleus size tracks the distribution's spread: peaked steps keep a handful, flat steps can keep hundreds. Lower temperature sharpens probabilities before the cumsum, so it shrinks the nucleus too."
+      }
+    },
+    {
+      "name": "The crossing jug",
+      "need": "exercise",
+      "dur": 11,
+      "type": "equation",
+      "parts": [
+        { "t": "keep i if ", "c": "ink", "note": "" },
+        { "t": "(sum before i)", "c": "sky", "note": "water already in the bucket" },
+        { "t": " < p", "c": "pink", "note": "line not yet reached" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "The jug that crosses the line still counts. Check the water already in before each pour, and the first jug always gets poured: never an empty raffle.",
+        "2": "Keep token i if the total before it is below p. The first token always qualifies, so the set is never empty. Test: GPT-2 on 'John and Mary went to the' at p = 0.1 keeps ' church' and ' house'.",
+        "3": "Inclusive: keep up to the first index where cumsum ≥ p. The exclusive version is empty whenever p_max > p (any p below 0.0648 on that prompt) and crashes Categorical. Add min_tokens_to_keep as a floor."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "library",
+      "dur": 9,
+      "type": "cards",
+      "items": ["top_p is a slider in every generation API", "Same model, new decoder, different text", "Record sampling settings with every result"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "You'll meet top_p as a slider in almost every AI tool. Now you know what it does: it trims the unlikely tail, by mass, afresh at every word.",
+        "2": "Decoding alone changes output quality from the same model, so many 'bad model' complaints are really 'bad decoder' ones. Top-p is a library knob: know what it does, set it, move on.",
+        "3": "When you evaluate or steer behaviour, sampling settings are part of the measurement: the same weights under different decoders give different behaviour. Log them with every result."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "The cat sat on the ___: drag p and the temperature",
+    "labels": ["mat", "sofa", "rug", "floor", "bed", "roof", "piano", "moon"],
+    "params": [
+      { "id": "p", "label": "p (where the line is)", "min": 0.05, "max": 1, "step": 0.01, "value": 0.8 },
+      { "id": "T", "label": "temperature", "min": 0.2, "max": 3, "step": 0.05, "value": 1 }
+    ],
+    "f": "(() => { const q = softmax([3, 2.2, 1.6, 1.1, 0.7, 0.4, 0.1, -0.2].map(v => v/T)); let before = 0; const keep = q.map(v => { const k = before < p; before += v; return k; }); const Z = sum(q.filter((v, i) => keep[i])); return q.map((v, i) => keep[i] ? v/Z : 0); })()",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "words in the raffle (the nucleus)", "f": "(() => { const q = softmax([3, 2.2, 1.6, 1.1, 0.7, 0.4, 0.1, -0.2].map(v => v/T)); let before = 0, n = 0; q.forEach(v => { if (before < p) n++; before += v; }); return n; })()" },
+      { "label": "water poured before renormalising", "f": "(() => { const q = softmax([3, 2.2, 1.6, 1.1, 0.7, 0.4, 0.1, -0.2].map(v => v/T)); let before = 0, m = 0; q.forEach(v => { if (before < p) m += v; before += v; }); return m.toFixed(3); })()" },
+      { "label": "chance of 'mat' before trimming", "f": "softmax([3, 2.2, 1.6, 1.1, 0.7, 0.4, 0.1, -0.2].map(v => v/T))[0].toFixed(3)" }
+    ],
+    "caption": {
+      "1": "Drag p and watch words join or leave the raffle. Then drag the temperature: a confident model needs fewer words to reach the same line.",
+      "2": "Bars show the renormalised nucleus. Low p or low temperature keeps few words; high p or high temperature keeps many. 'mat' is always in: the cutoff is inclusive.",
+      "3": "Nucleus size depends on both p and T: lowering T sharpens the softmax before the cumsum and shrinks the support. The inclusive cut guarantees at least one token for any p > 0."
+    }
+  },
+  "where_else": [
+    "The top_p setting in LLM APIs and playgrounds",
+    "Keeping the fewest PCA components that explain, say, 90% of the variance",
+    "Top-k, its sibling: truncate by count instead of by mass",
+    "Beam search, the maximisation strategy the nucleus paper argued against"
+  ],
+  "hamming": {
+    "what": "A sampling rule that keeps the smallest set of top tokens whose probabilities reach p, renormalises them, and samples.",
+    "when": "Whenever you generate text and want variety without the unreliable tail, usually as a top_p setting.",
+    "why": "Likelihood is a poor decoding objective, and cutting by mass adapts to the model's confidence where a fixed count cannot."
+  },
+  "object": {
+    "title": "The nucleus terrace",
+    "subtitle": "Six moments in a sentence, each a row of next-word chances; words outside the nucleus sink to stubs.",
+    "kind": "bars",
+    "rows": 6,
+    "cols": 10,
+    "f": "(() => { const q = softmax(range(cols).map(k => -k*[1.6, 1.0, 0.6, 0.35, 0.18, 0.06][r]/T)); let before = 0; for (let i = 0; i < c; i++) before += q[i]; return before < p ? 0.08 + 2.2*q[c] : 0.02; })()",
+    "labels": { "rows": ["sure", "fairly sure", "leaning", "torn", "unsure", "clueless"], "cols": ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "p", "label": "p (the line)", "min": 0.1, "max": 1, "step": 0.01, "value": 0.9 },
+      { "id": "T", "label": "Temperature", "min": 0.3, "max": 3, "step": 0.05, "value": 1 }
+    ],
+    "beats": [
+      { "cap": { "1": "Six moments in a sentence, one per row, from sure to clueless. Each row's bars are the next-word chances, biggest first. Stubs are words cut from the raffle.", "2": "Each row is one step's sorted distribution; stubs are tokens outside the nucleus.", "3": "Rows vary in entropy; the nucleus at p = 0.9 is the tall prefix of each row." }, "view": "iso", "set": { "p": 0.9, "T": 1 } },
+      { "cap": { "1": "Same p for every row, yet the sure row keeps 2 words and the clueless row keeps 9.", "2": "At p = 0.9 the nucleus sizes run 2, 3, 4, 6, 8, 9 from the most to the least confident row.", "3": "Fixed mass, variable count: |nucleus| rises monotonically with the row's entropy." }, "view": "front", "set": { "p": 0.9, "T": 1 } },
+      { "cap": { "1": "Lower the line to 0.5: every row keeps fewer words, and the two surest rows keep just one.", "2": "p = 0.5 gives sizes 1, 1, 2, 2, 4, 5.", "3": "Small p approaches greedy decoding on peaked rows while leaving flat rows some diversity." }, "view": "iso", "set": { "p": 0.5, "T": 1 } },
+      { "cap": { "1": "Back to 0.9, but cool the temperature: the chances sharpen and most rows need fewer words to reach the same line.", "2": "T = 0.5 at p = 0.9 shrinks sizes to 1, 2, 2, 4, 6, 9.", "3": "Temperature rescales logits before the cumsum, so T and p jointly set the effective support." }, "view": "iso", "set": { "p": 0.9, "T": 0.5 } },
+      { "cap": { "1": "Push the line to 0.99 and nearly everything is back in, junk tail included.", "2": "p near 1 approaches plain sampling: sizes 3, 5, 8, 10, 10, 10.", "3": "As p → 1 the truncation vanishes and the unreliable tail returns." }, "view": "top", "set": { "p": 0.99, "T": 1 } }
+    ],
+    "predict": [
+      { "q": "Probabilities (0.4, 0.3, 0.2, 0.1) and p = 0.8. How many tokens are kept?", "options": [{ "t": "3", "ok": true }, { "t": "2" }, { "t": "4" }], "why": "Two only reach 0.7, below 0.8, so the third is kept too: the crossing token counts." },
+      { "q": "Your sample_top_p crashes, but only for tiny p. Most likely bug?", "options": [{ "t": "The cutoff is exclusive, so the kept set can be empty", "ok": true }, { "t": "The temperature is too high" }], "why": "If the top token alone exceeds p, an exclusive cut keeps nothing. Keep up to and including the token where the total first reaches p." },
+      { "q": "Same p, but the model is very unsure. What happens to the nucleus?", "options": [{ "t": "It grows: many small chances are needed to reach p", "ok": true }, { "t": "It stays the same size" }], "why": "Top-p fixes the mass, not the count, so a flat distribution needs more tokens." }
+    ],
+    "where": "Any 'fewest items covering p of the total' rule, such as picking how many PCA components to keep."
+  }
+}

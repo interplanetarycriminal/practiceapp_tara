@@ -1,0 +1,209 @@
+{
+  "id": "ablation",
+  "title": "Mute one player, hear what breaks",
+  "week": 6,
+  "need": "core",
+  "allegory": "Ablation is muting one player in an orchestra and listening to how much worse the piece gets; pure silence throws everyone off, so a fairer test has a stand-in play that player's usual part.",
+  "map": [
+    ["the orchestra playing a piece", "the model doing a task, scored by its loss"],
+    ["one player", "one component, such as one head's output z"],
+    ["muting them outright: sudden silence", "zero-ablation, which is off-distribution and overstates the damage"],
+    ["a stand-in who plays their usual part", "mean-ablation over a reference distribution"],
+    ["a neighbour quietly covering the part", "backup heads, which make single ablations understate importance"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Who carries this?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "pretty attention patterns ... but are they doing it?",
+      "actors": [{ "pose": "think", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.62, "y": 0.56, "w": 0.3, "h": 0.4, "label": "all the heads", "color": "lav" },
+        { "kind": "card", "x": 0.62, "y": 0.18, "label": "which ones do the trick?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A model can repeat a pattern it saw earlier in the text. It has dozens of little parts. Which ones are actually doing the trick?",
+        "2": "Your two-layer model predicts the second copy of a repeated random sequence almost perfectly. Attention patterns suggest suspects; you still need a causal test.",
+        "3": "Attention patterns and direct logit attribution are correlational, and DLA misses indirect paths entirely: the previous-token head's contribution never reaches the logits directly."
+      }
+    },
+    {
+      "name": "Mute one player",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "wave", "x": 0.14, "label": "you" },
+        { "pose": "sit", "x": 0.5, "label": "head 1.4" },
+        { "pose": "sit", "x": 0.8, "label": "head 0.7" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.5, "y": 0.28, "label": "muted", "color": "red" },
+        { "kind": "cloud", "x": 0.72, "y": 0.14, "w": 0.3, "label": "the tune falls apart", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "To find out who matters, mute one player at a time and listen. If the piece falls apart, that player was carrying something important.",
+        "2": "Ablation: remove one component's output with a hook, rerun, and measure how much the loss goes up. Do it for every head and you get a map of importance.",
+        "3": "ARENA hooks z, the per-head output before W_O, zeroes one head at a time across all layers and heads, and records each loss increase in an (n_layers, n_heads) score."
+      }
+    },
+    {
+      "name": "The damage score",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "score", "c": "ink", "note": "how much it mattered" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "L(ablated)", "c": "red", "note": "loss with the head muted" },
+        { "t": " - ", "c": "ink", "note": "" },
+        { "t": "L(clean)", "c": "green", "note": "loss with everyone playing" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "The score is simple: how much worse it sounds with the player muted, compared with everyone playing. A big gap means an important player.",
+        "2": "Compute <code>loss_no_ablation</code> first from a clean run, then one ablated run per head. The difference, head by head, fills the score tensor.",
+        "3": "Ablation measures necessity for this metric under this intervention. The baseline must be genuinely unablated: call model.reset_hooks() before computing it."
+      }
+    },
+    {
+      "name": "Silence or stand-in",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "zero-ablation", "c": "pink", "lines": ["the chair goes silent", "a sound the band never heard", "damage overstated"] },
+      "right": { "title": "mean-ablation", "c": "mint", "lines": ["a stand-in plays the usual part", "stays on-distribution", "measures what was specific"] },
+      "verdict": "Replace with the mean over a reference set, not with zero.",
+      "cap": {
+        "1": "Pure silence is strange for a band that has always heard that part, so everyone stumbles. A stand-in playing the usual part is a fairer test.",
+        "2": "Zeroing an activation puts the model somewhere it has never been, which overstates the damage. Mean-ablation over a reference distribution keeps it on-distribution.",
+        "3": "Zero is rarely a typical value for an activation; mean-ablation removes only the input-specific information. [1.2] has you implement both and compare them."
+      }
+    },
+    {
+      "name": "Fooled both ways",
+      "need": "core",
+      "dur": 11,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "shrug", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.55, "y": 0.3, "label": "sheet-music player muted: all breaks", "color": "pink" },
+        { "kind": "card", "x": 0.72, "y": 0.62, "label": "star muted: understudy covers", "color": "sky" }
+      ],
+      "cap": {
+        "1": "Ablation can fool you both ways. Mute the player who hands out the sheet music and everything breaks. Mute a star and an understudy quietly covers.",
+        "2": "Knocking out MLP0 in GPT-2 small wrecks almost any task because it acts like an extended embedding. In IOI, backup name movers take over when the main ones are ablated.",
+        "3": "Big damage need not mean task-specific (MLP0); small damage need not mean unimportant (backup heads). Under redundancy, single-head ablation systematically understates importance."
+      }
+    },
+    {
+      "name": "Which test, when",
+      "need": "contested",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Now: mean-ablation over a reference set", "Sharper: patch in a specific alternative", "Cheaper at scale: attribution patching"],
+      "actor": { "pose": "point", "x": 0.86 },
+      "cap": {
+        "1": "Muting is the bluntest test. Swapping in what a player did on a different song asks a sharper question. For a huge band, estimate every seat at once.",
+        "2": "Current method: mean-ablation. Activation patching replaces with a specific alternative, a sharper causal question. Attribution patching approximates it with gradients, far cheaper.",
+        "3": "Ablation turns 'this head looks important' into a causal claim. Use mean-ablation for [1.2], patching when you have a clean/corrupted pair, attribution patching to triage, then verify the top hits."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "A toy band: tap seats to mute players and listen to the loss",
+    "rows": 2,
+    "cols": 4,
+    "init": "0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "loss (toy numbers)", "f": "((sheet, star, under, others) => sheet ? 4.0 : 0.5 + (star && under ? 2.5 : (star ? 0.3 : 0)) + 0.05*others)(G[0][0], G[1][1], G[1][2], G[0][1] + G[0][2] + G[0][3] + G[1][0] + G[1][3]).toFixed(2)" },
+      { "label": "damage vs everyone playing", "f": "(((sheet, star, under, others) => sheet ? 4.0 : 0.5 + (star && under ? 2.5 : (star ? 0.3 : 0)) + 0.05*others)(G[0][0], G[1][1], G[1][2], G[0][1] + G[0][2] + G[0][3] + G[1][0] + G[1][3]) - 0.5).toFixed(2)" },
+      { "label": "what happened", "f": "G[0][0] ? 'sheet music gone: everything breaks, which says nothing task-specific' : (G[1][1] && G[1][2] ? 'star and understudy both muted: the part is lost' : (G[1][1] ? 'the understudy covers, so the star looks minor on its own' : (G[1][2] ? 'understudy muted: the star plays on' : 'small or no damage')))" }
+    ],
+    "caption": {
+      "1": "Tap seats to mute. Top-left hands out the sheet music; bottom row, seats 2 and 3 are a star and her understudy. Mute the star alone, then both.",
+      "2": "Muting the star alone barely hurts because the understudy covers: single ablations understate. Muting the sheet-music seat breaks everything: big damage, nothing task-specific.",
+      "3": "Toy numbers mirroring two real effects: backup name movers in IOI make single-head ablation understate importance, and MLP0 in GPT-2 small wrecks any task, so large damage is not task specificity."
+    }
+  },
+  "where_else": [
+    "Finding a minimal circuit: ablate everything outside it and check performance survives",
+    "Activation patching: the same surgery with a specific replacement instead of a blank",
+    "Ablation studies in ML papers: drop one design choice and compare",
+    "Gene knockouts in biology, with the same trap of redundant backups"
+  ],
+  "hamming": {
+    "what": "Removing one component's output, by zeroing it or replacing it with its mean, and measuring how much performance drops.",
+    "when": "When you have a suspect component and want a first causal test of whether the model needs it.",
+    "why": "Attention patterns only show correlation; knocking a part out shows necessity, as long as you watch for off-distribution shock and for backups covering."
+  },
+  "object": {
+    "title": "The damage map",
+    "subtitle": "One bar per player: how much worse the piece gets when that player alone is muted.",
+    "kind": "bars",
+    "rows": 2,
+    "cols": 4,
+    "f": "((S) => (r == 1 && c == 1 && under > 0.5 ? 1.5 : S[r][c]) + (method < 0.5 ? 0.3 : 0))([[1.8, 0.05, 0.1, 0.05], [0.05, 0.3, 0.05, 0.1]])",
+    "labels": { "rows": ["layer 0", "layer 1"], "cols": ["seat 1", "seat 2", "seat 3", "seat 4"] },
+    "c": "grad",
+    "knobs": [
+      { "id": "method", "label": "Zero-ablation (0) or mean-ablation (1)", "min": 0, "max": 1, "step": 1, "value": 1 },
+      { "id": "under", "label": "Understudy also muted", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "Each bar is how much worse the music gets when that one player is muted. A few tall bars, many short ones.", "2": "A (layers, heads) score map: the loss increase when each head alone is mean-ablated. Toy values.", "3": "score[l, h] = L(ablate l.h) - L(clean), replacing with the mean over a reference distribution." },
+        "view": "iso",
+        "set": { "method": 1, "under": 0 }
+      },
+      {
+        "cap": { "1": "Mute with pure silence instead of a stand-in and every bar grows: the band is thrown by a sound it has never heard.", "2": "Zero-ablation inflates scores: zero is off-distribution, so part of the damage is shock, not the head.", "3": "The uniform offset is a toy; real zero-ablation bias varies with how far 0 sits from each component's typical values." },
+        "view": "front",
+        "set": { "method": 0, "under": 0 }
+      },
+      {
+        "cap": { "1": "The tallest bar is the player who hands out the sheet music. Mute them and everything breaks, whatever the piece.", "2": "Like MLP0 in GPT-2 small, which acts as an extended embedding: huge damage on any task, so not task-specific.", "3": "Necessity across every task signals infrastructure, not circuit membership. Compare against other tasks before concluding." },
+        "view": "top",
+        "set": { "method": 1, "under": 0 }
+      },
+      {
+        "cap": { "1": "Now mute the understudy as well, and the star's bar shoots up. Alone, the star looked minor only because someone covered.", "2": "Backup heads mask importance: in IOI, backup name movers take over when the primary movers are ablated.", "3": "Redundancy makes single-component ablation understate importance; ablate sets of components to expose it." },
+        "view": "close",
+        "set": { "method": 1, "under": 1 }
+      },
+      {
+        "cap": { "1": "Tall bars point to suspects, not verdicts. Next, swap in specific alternatives to ask sharper questions.", "2": "Ablation is a first pass. Activation patching and path patching ask narrower causal questions.", "3": "Treat the score map as triage; confirm with patching, and check for both over- and under-statement before naming a circuit." },
+        "view": "iso",
+        "set": { "method": 1, "under": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "Zero-ablating a head gives a big loss jump; mean-ablating it gives a small one. Which is the fairer estimate?",
+        "options": [{ "t": "The mean-ablation number", "ok": true }, { "t": "The zero-ablation number" }],
+        "why": "Zero is a value the model has never seen there, so part of the damage is shock. Mean-ablation removes only the input-specific part."
+      },
+      {
+        "q": "Muting the star barely hurts. Muting star and understudy together wrecks the piece. What does that say about the star?",
+        "options": [{ "t": "It matters; its backup was hiding that", "ok": true }, { "t": "It never mattered" }],
+        "why": "Backups cover for ablated components, so single ablations understate importance, as with backup name movers in IOI."
+      },
+      {
+        "q": "Your head-ablation sweep returns almost all zeros with a few small negatives. Most likely?",
+        "options": [{ "t": "A stale hook is still attached, so the baseline was already ablated", "ok": true }, { "t": "No head in the model matters" }],
+        "why": "Hooks are global model state. Call model.reset_hooks() before computing the clean baseline."
+      }
+    ],
+    "where": "Any system with redundant parts: knocking one out tests necessity, never sufficiency, and backups can hide it."
+  }
+}

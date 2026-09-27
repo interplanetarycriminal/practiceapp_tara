@@ -1,0 +1,211 @@
+{
+  "id": "activation-patching",
+  "title": "Swap one baton from the good race",
+  "week": 8,
+  "need": "core",
+  "allegory": "Activation patching is running two identical relay races, one with the right message and one with a single word changed, then handing one runner in the broken race the baton from the same lane and leg of the good race, and seeing whether the right answer reaches the finish.",
+  "map": [
+    ["two identical relay races: right message vs one word changed", "the clean and corrupted runs of the same model"],
+    ["one lane and one leg of the race", "one token position and one layer"],
+    ["handing one runner the good race's baton", "a hook overwriting one activation with its cached clean value"],
+    ["the rest of the broken race runs on as normal", "everything downstream recomputes from the patched value"],
+    ["how much of the right answer reaches the finish, 0 to 1", "(patched − corrupted) / (clean − corrupted) on the logit difference"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Where's the fact?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "'The Space Needle is in downtown...' Seattle. But where inside?",
+      "actors": [{ "pose": "think", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "crate", "x": 0.64, "y": 0.55, "w": 0.3, "h": 0.36, "label": "the model", "color": "ink" },
+        { "kind": "lamp", "x": 0.52, "y": 0.3, "label": "lights up", "color": "butter" },
+        { "kind": "lamp", "x": 0.76, "y": 0.3, "label": "lights up", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A model finishes 'The Space Needle is in downtown...' correctly. Something inside carries that fact. Watching shows what lights up, not what matters.",
+        "2": "Caching shows which activations are large, not which ones cause the answer. To find causes you have to intervene: change one internal value and see if the output changes.",
+        "3": "Correlational reads of activations cannot localise a computation. Patching is an interventional test on a single node of the computational graph, scored at the output."
+      }
+    },
+    {
+      "name": "Two relay races",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "run", "x": 0.3, "label": "good race" },
+        { "pose": "run", "x": 0.55, "label": "broken race" },
+        { "pose": "reach", "x": 0.8, "label": "you" }
+      ],
+      "props": [
+        { "kind": "flag", "x": 0.93, "y": 0.3, "label": "finish: which name?", "color": "red" },
+        { "kind": "card", "x": 0.42, "y": 0.18, "label": "same lane, same leg", "color": "butter" }
+      ],
+      "arrows": [[0.33, 0.5, 0.52, 0.5, "baton swap"]],
+      "cap": {
+        "1": "Run two identical relay races: one carries the right message, one has a single word changed. Hand one runner in the broken race the baton from the good race.",
+        "2": "Cache the clean run. Run the corrupted prompt with a hook that overwrites one activation with its clean value. Everything after that point recomputes normally.",
+        "3": "Two inputs x_clean and x_corrupt, one node, one metric: set the node to its clean value inside the corrupted pass and let all downstream computation proceed."
+      }
+    },
+    {
+      "name": "Scoring the finish",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "(patched − corrupt)", "c": "orange", "note": "how far the swap moved it" },
+        { "t": " / ", "c": "ink", "note": "" },
+        { "t": "(clean − corrupt)", "c": "sky", "note": "the whole gap" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Score how much of the right answer came back: 0 means the swap did nothing, 1 means it restored everything. Every swap then sits on the same scale.",
+        "2": "Measure with the logit difference (correct name minus wrong name), normalised so the corrupted run reads 0 and the clean run reads 1.",
+        "3": "Logit difference stays linear in the residual stream where probability saturates. Put the normalisation in a function named for its direction, e.g. denoising_metric."
+      }
+    },
+    {
+      "name": "The heatmap",
+      "need": "core",
+      "dur": 11,
+      "type": "grid",
+      "title": "Patching resid_pre in the IOI task (illustrative)",
+      "rows": 4,
+      "cols": 4,
+      "values": [
+        ["·", "·", "●", "·"],
+        ["·", "·", "●", "·"],
+        ["·", "·", "·", "●"],
+        ["·", "·", "·", "●"]
+      ],
+      "labels": { "rows": ["early", "middle", "~layer 7", "late"], "cols": ["Mary", "John", "John (S2)", "to (END)"] },
+      "highlight": [[0, 2], [1, 2], [2, 3], [3, 3]],
+      "cap": {
+        "1": "Swap every baton in turn and paint how much each one fixes. The message first lives on the repeated name, then jumps to the last word around layer 7.",
+        "2": "Patching resid_pre over every (layer, position) in the IOI task: the signal sits at the second 'John' in early layers and moves to the final position around layer 7.",
+        "3": "The resid_pre map is S2-localised early and END-localised from about layer 7: mid-layer heads move the signal forward. Next, narrow to attn_out, mlp_out, heads, then q, k, v."
+      }
+    },
+    {
+      "name": "Which way round?",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Denoising", "c": "mint", "lines": ["broken run, clean patch", "high score: sufficient", "the stronger evidence"] },
+      "right": { "title": "Noising", "c": "pink", "lines": ["clean run, broken patch", "high effect: necessary", "weaker: knocking out MLP0", "breaks almost anything"] },
+      "verdict": "Say which way you patched. Sufficient is not the same as necessary.",
+      "cap": {
+        "1": "You can also swap the other way: put a broken baton into the good race. That shows what the race cannot do without, which is a weaker clue.",
+        "2": "Denoising (corrupted run, clean patch) tests sufficiency; noising (clean run, corrupted patch) tests necessity. Swapping the direction flips the sign of your heatmap.",
+        "3": "Noising is easier to misread: knocking out MLP0 in GPT-2 small wrecks nearly any task because it acts as an extended embedding. Never compare the two on one colour scale."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["Facts traced to mid-layer MLPs, then edited", "The first move in any circuit hunt", "Patching finds nodes; path patching finds edges"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Researchers used this to find where a model keeps a fact, then edited it so the model believed the Eiffel Tower is in Rome. Finding the spot let them steer it.",
+        "2": "Meng et al. (NeurIPS 2022) traced facts to mid-layer MLPs at the subject token, then edited those weights with ROME. In ARENA it opens the IOI circuit hunt.",
+        "3": "Patching gives causal localisation, the precondition for editing and steering; path patching then restricts effects to single routes, turning important nodes into a circuit graph."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "A toy relay: rows are layers 0 to 5, columns are Mary, John (S1), John (S2), to (END). Tap a cell to patch it.",
+    "rows": 6,
+    "cols": 4,
+    "init": "0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "right answer restored", "f": "G.some((row, r) => (r < 3 && row[2]) || (r >= 3 && row[3])) ? '100%: the right name is back' : (G.some(row => row.some(v => v)) ? '0%: that baton carried nothing' : 'tap a cell to patch it')" },
+      { "label": "carrier cells found", "f": "G.reduce((n, row, r) => n + ((r < 3 && row[2]) ? 1 : 0) + ((r >= 3 && row[3]) ? 1 : 0), 0) + ' of 6'" },
+      { "label": "cells patched", "f": "sum(G.map(r => sum(r)))" }
+    ],
+    "caption": {
+      "1": "Tap cells one at a time and clear them again. Most swaps do nothing; six bring the answer back. Find them all and you have drawn the heatmap.",
+      "2": "In this toy, as in GPT-2's IOI map, the name signal rides on John (S2) in early layers and jumps to the last word halfway up. Patch anywhere else and nothing returns.",
+      "3": "A toy denoising sweep with all-or-nothing restoration at the nodes carrying the signal. Real sweeps are graded, and you then refine by component: attn_out, mlp_out, heads."
+    }
+  },
+  "where_else": [
+    "Debugging by swapping one part from a working machine into a broken one",
+    "Knockout and rescue experiments in biology: necessity and sufficiency again",
+    "Path patching and attribution patching, its narrower and faster cousins",
+    "Locating a stored fact in a language model, then editing it (ROME)"
+  ],
+  "hamming": {
+    "what": "A causal test: run on a corrupted prompt, overwrite one activation with its clean-run value, and measure how much of the right behaviour returns.",
+    "when": "As the first move in a circuit investigation, once you have a matched clean and corrupted prompt pair and a signed metric.",
+    "why": "Reading activations shows correlation; swapping them one at a time shows which ones actually carry the behaviour."
+  },
+  "object": {
+    "title": "The patching heatmap",
+    "subtitle": "A toy sweep in solid form: each bar is how much one swapped baton restores.",
+    "kind": "bars",
+    "rows": 6,
+    "cols": 4,
+    "f": "r <= sweep ? (((c == 2 && r < 3) || (c == 3 && r >= 3)) ? 1.4 : 0.15) : 0.03",
+    "labels": { "rows": ["L0", "L1", "L2", "L3", "L4", "L5"], "cols": ["Mary", "John (S1)", "John (S2)", "to (END)"] },
+    "c": "good",
+    "knobs": [{ "id": "sweep", "label": "Swept up to layer", "min": 0, "max": 5, "step": 1, "value": 0 }],
+    "beats": [
+      {
+        "cap": { "1": "Each bar is one swap: one layer, one word. Its height is how much of the right answer that swap brings back. The sweep starts at the bottom.", "2": "A toy six-layer version of the resid_pre sweep. Height = normalised logit difference after patching that (layer, position).", "3": "Denoising restoration per (layer, position) node on a toy model; real maps are graded rather than binary." },
+        "view": "iso",
+        "set": { "sweep": 0 }
+      },
+      {
+        "cap": { "1": "In the early layers only the repeated name, John (S2), matters. Swap its baton and the answer returns; every other word does nothing.", "2": "Early on, the information that decides the answer lives at the S2 position.", "3": "Early-layer restoration is S2-localised: the corruption's signal has not yet been moved anywhere else." },
+        "view": "front",
+        "set": { "sweep": 2 }
+      },
+      {
+        "cap": { "1": "Higher up the message has jumped to the last word. Some part of the model moved it forward.", "2": "In GPT-2 small's real IOI map the jump happens around layer 7; this toy jumps at layer 3.", "3": "The S2 to END transition marks where attention heads move the signal across positions: the candidates for the next, head-level patch." },
+        "view": "front",
+        "set": { "sweep": 5 }
+      },
+      {
+        "cap": { "1": "From above, the bright bars trace a route: along the S2 lane, then across to the last word.", "2": "The heatmap is a route map: where the deciding information sits at each depth.", "3": "Read as a trajectory of the task-relevant signal through (layer, position), constrained by the causal mask." },
+        "view": "top",
+        "set": { "sweep": 5 }
+      },
+      {
+        "cap": { "1": "Now you know where to look next: split these layers into attention and MLP parts, then into single heads.", "2": "Refine: patch attn_out and mlp_out, then each head's output, then its queries, keys and values separately.", "3": "Granularity is a choice: resid_pre, then attn_out vs mlp_out, then hook_z per head, then q/k/v to separate where a head looks from what it receives." },
+        "view": "close",
+        "set": { "sweep": 5 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "You patch one clean value into the corrupted run and the score is 1. What does that show?",
+        "options": [{ "t": "That value was enough to restore the behaviour", "ok": true }, { "t": "That value is the only place the behaviour lives" }],
+        "why": "Denoising tests sufficiency. Other routes might carry the signal too."
+      },
+      {
+        "q": "You swap which prompt is clean and which is corrupted. What happens to your heatmap?",
+        "options": [{ "t": "Its sign flips: same parts, opposite numbers", "ok": true }, { "t": "Nothing: patching is symmetric" }],
+        "why": "The metric is signed relative to the baseline you are restoring towards."
+      },
+      {
+        "q": "Why score with the logit difference rather than the probability of the right name?",
+        "options": [{ "t": "Probability saturates near 1 and hides effects; logit difference stays linear", "ok": true }, { "t": "Probabilities cannot be computed mid-run" }],
+        "why": "The logit difference is linear in the residual stream and can move in both directions."
+      }
+    ],
+    "where": "Anywhere you find a cause by swapping one part in from a working copy: debugging, knockout-and-rescue, fact editing."
+  }
+}

@@ -1,0 +1,183 @@
+{
+  "id": "previous-token-head",
+  "title": "Note down who came before",
+  "week": 7,
+  "need": "core",
+  "allegory": "A previous-token head is like everyone in a queue glancing at the person just in front and sticking that name on a note on their own back, so a later searcher can ask 'who stood behind Alice?' and find the answer.",
+  "map": [
+    ["people standing in a queue", "tokens at successive positions"],
+    ["glancing at the person just in front", "attending to position i−1"],
+    ["writing that name on a note on your own back", "writing 'the token before me was X' into position i's residual stream"],
+    ["a later searcher hunting for the note that says 'Alice'", "an induction head's keys reading that subspace (K-composition)"],
+    ["the note never answers anything by itself", "its effect is indirect, so direct logit attribution scores it near zero"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Who came before?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "idle", "x": 0.3, "label": "Mary" },
+        { "pose": "think", "x": 0.6, "label": "and" }
+      ],
+      "props": [{ "kind": "cloud", "x": 0.68, "y": 0.2, "label": "who was in front of me?", "color": "butter" }],
+      "cap": {
+        "1": "To guess what comes next, it helps to know what came just before. But each word starts out knowing only itself and its place in line.",
+        "2": "At the start of the stream, each position holds only its own token and position embedding. To use 'the token before me', some head has to fetch it.",
+        "3": "x₀ at position i encodes only (tokenᵢ, i). Previous-token information has to be moved across positions by attention, the only cross-position operation."
+      }
+    },
+    {
+      "name": "Notes on backs",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "idle", "x": 0.22, "label": "Alice" },
+        { "pose": "point", "x": 0.5, "label": "Bob" },
+        { "pose": "point", "x": 0.78, "label": "Cat" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.5, "y": 0.22, "label": "in front: Alice", "color": "butter" },
+        { "kind": "card", "x": 0.78, "y": 0.22, "label": "in front: Bob", "color": "butter" }
+      ],
+      "arrows": [[0.45, 0.48, 0.28, 0.48, "glance"], [0.73, 0.48, 0.56, 0.48, "glance"]],
+      "cap": {
+        "1": "In a queue, everyone glances at the person just in front and writes that name on a note stuck to their own back. That is the whole job.",
+        "2": "A previous-token head at position i attends almost entirely to position i−1, then writes 'the token before me was X' into position i's residual stream.",
+        "3": "Pattern: A[i, i−1] ≈ 1, a bright sub-diagonal. The OV circuit then writes a representation of token_{i−1} into resid at i, in a subspace later heads can read."
+      }
+    },
+    {
+      "name": "The stripe",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "Attention pattern of a previous-token head (illustrative)",
+      "rows": 5,
+      "cols": 5,
+      "values": [[1, 0, 0, 0, 0], [0.9, 0.1, 0, 0, 0], [0, 0.9, 0.1, 0, 0], [0, 0, 0.9, 0.1, 0], [0, 0, 0, 0.9, 0.1]],
+      "labels": { "rows": ["<bos>", "When", "Mary", "and", "John"], "cols": ["<bos>", "When", "Mary", "and", "John"] },
+      "highlight": [[1, 0], [2, 1], [3, 2], [4, 3]],
+      "cap": {
+        "1": "Each row is a word looking back. Almost all of its attention lands on the word just before it: a bright stripe one step below the diagonal.",
+        "2": "Rows are destinations, columns are sources. A previous-token head lights up the sub-diagonal. Your detector: average <code>pattern.diagonal(-1)</code> and flag heads above a threshold.",
+        "3": "Score = mean of A.diagonal(offset=−1) over positions. Offset 0 would flag current-token heads; offset 1 − seq_len on repeated text flags induction heads."
+      }
+    },
+    {
+      "name": "The two-head relay",
+      "need": "core",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "a1", "label": "A", "x": 0.1, "y": 0.72, "c": "sky" },
+        { "id": "b1", "label": "B (note: A before me)", "x": 0.36, "y": 0.72, "c": "butter" },
+        { "id": "pt", "label": "prev-token head", "x": 0.22, "y": 0.3, "c": "orange" },
+        { "id": "a2", "label": "A again", "x": 0.66, "y": 0.72, "c": "sky" },
+        { "id": "ind", "label": "induction head", "x": 0.66, "y": 0.3, "c": "lav" },
+        { "id": "out", "label": "predict B", "x": 0.92, "y": 0.5, "c": "green" }
+      ],
+      "edges": [
+        ["a1", "pt", "read"],
+        ["pt", "b1", "write note"],
+        ["a2", "ind", "query: A?"],
+        ["b1", "ind", "key matches"],
+        ["ind", "out", "copy B"]
+      ],
+      "flow": "forward",
+      "cap": {
+        "1": "Later, A shows up again. A second head searches the queue for a note saying 'A was in front of me', finds B, and guesses B comes next.",
+        "2": "The induction head's keys read the note the previous-token head wrote. That is K-composition: the first head decides where the second one looks.",
+        "3": "In ARENA's 2-layer attention-only model, head 0.7 is the prev-token head and 1.4 and 1.10 are induction heads; ablate 0.7 and loss on repeated text climbs back up."
+      }
+    },
+    {
+      "name": "Invisible to DLA",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "looking", "c": "butter", "lines": ["bright sub-diagonal", "DLA score near zero", "suggests the role"] },
+      "right": { "title": "testing", "c": "mint", "lines": ["ablate or patch the head", "induction loses its target", "proves the role"] },
+      "verdict": "The pattern suggests the role; patching proves it.",
+      "cap": {
+        "1": "The note on Bob's back never shouts an answer itself, so counting who spoke up misses it. To prove it matters, peel the note off and see who gets lost.",
+        "2": "Direct logit attribution scores a prev-token head near zero, because it only helps through later heads. Ablate or patch it and watch induction fail.",
+        "3": "DLA sees only direct paths, and the prev-token head's effect is entirely indirect via K-composition. [1.4.1] validates the IOI circuit's prev-token heads by patching."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["The first half of every induction circuit", "The pattern suggests, patching proves", "Quiet heads can matter through others"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Many clever behaviours are relays: one simple head leaves a note, another uses it. Finding the note-writers is how you see how a model really works.",
+        "2": "Previous-token heads feed induction heads, which Anthropic tied to in-context learning. To understand or edit that behaviour you have to find the quiet first half too.",
+        "3": "Composition makes importance non-local: a component with zero direct effect can be necessary. Circuit discovery needs causal interventions, not only direct attribution."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Write your own detector: draw where each word looks",
+    "rows": 6,
+    "cols": 6,
+    "init": "c === r - 1 || (r === 0 && c === 0) ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "previous-token score", "f": "mean(G.slice(1).map((row, k) => { const s = sum(row.slice(0, k + 2)); return s > 0 ? row[k] / s : 0; })).toFixed(2)" },
+      { "label": "current-token score", "f": "mean(G.map((row, i) => { const s = sum(row.slice(0, i + 1)); return s > 0 ? row[i] / s : 0; })).toFixed(2)" },
+      { "label": "first-token score", "f": "mean(G.map((row, i) => { const s = sum(row.slice(0, i + 1)); return s > 0 ? row[0] / s : 0; })).toFixed(2)" },
+      { "label": "detector says", "f": "(() => { const n = G.map((row, i) => { const s = sum(row.slice(0, i + 1)); return row.map((v, j) => j <= i && s > 0 ? v / s : 0); }); const p = mean(n.slice(1).map((row, k) => row[k])); const c = mean(n.map((row, i) => row[i])); const f = mean(n.map(row => row[0])); const b = Math.max(p, c, f); return b < 0.4 ? 'no clear role' : b === p ? 'previous-token head' : b === c ? 'current-token head' : 'first-token head'; })()" }
+    ],
+    "caption": {
+      "1": "Tap cells to draw where each word looks. Rows only look left, never right. Keep the stripe just below the diagonal and the detector names a previous-token head.",
+      "2": "This is the detector you write in [1.2]: normalise each row, then average the sub-diagonal, the diagonal, or column 0. Now try drawing a current-token or first-token head.",
+      "3": "Scores are mean A[i, i−1], A[i, i] and A[i, 0] over causal, row-normalised patterns. Detectors are heuristics that flag candidates; ablation or patching confirms roles."
+    }
+  },
+  "where_else": [
+    "The first half of every induction circuit",
+    "The IOI circuit, where [1.4.1] validates previous-token heads by patching",
+    "Bigram-style prediction: knowing the previous word is the simplest basis for guessing the next",
+    "Shift registers and causal convolutions, which pass each value one step along"
+  ],
+  "hamming": {
+    "what": "An attention head that looks one position back and writes the previous token's identity into the current position.",
+    "when": "Early in the model, wherever later heads need to know 'what came just before me', most famously for induction.",
+    "why": "Attention is the only way information moves between positions, and many later tricks depend on this one-step relay existing."
+  },
+  "object": {
+    "title": "The pegboard of glances",
+    "subtitle": "Each row of pegs is one word; the tall peg marks where it looked. Slide the stripe to meet different kinds of head.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "c === Math.max(r - back, 0) ? 1.6 : (c <= r ? 0.06 : 0)",
+    "labels": { "rows": ["<bos>", "When", "Mary", "and", "John", "went", "to", "the"], "cols": ["<bos>", "When", "Mary", "and", "John", "went", "to", "the"] },
+    "c": "prob",
+    "knobs": [{ "id": "back", "label": "look back by", "min": 0, "max": 3, "step": 1, "value": 1 }],
+    "beats": [
+      { "cap": { "1": "Each row of pegs is one word, and the tall peg shows where it looked. Every word looks exactly one step back.", "2": "An 8x8 attention pattern: rows are destinations, columns are sources. This is a previous-token head.", "3": "A[i, i−1] ≈ 1: the sub-diagonal, with position 0 falling back to BOS." }, "view": "iso", "set": { "back": 1 } },
+      { "cap": { "1": "From above, the tall pegs form a stripe one step below the diagonal: the fingerprint to look for.", "2": "The detector averages that sub-diagonal. A high score marks a candidate previous-token head.", "3": "Score = mean of A.diagonal(−1); the causal mask keeps everything above the diagonal empty." }, "view": "top", "set": { "back": 1 } },
+      { "cap": { "1": "Slide the stripe onto the diagonal and each word looks only at itself. A different kind of head.", "2": "Offset 0 is a current-token head. Same detector, different diagonal.", "3": "The offset selects the circuit: 0 current-token, −1 previous-token, 1 − seq_len induction on repeated text." }, "view": "top", "set": { "back": 0 } },
+      { "cap": { "1": "Look three back and the early words, with nobody that far in front, pile onto the start marker.", "2": "In this toy, positions with no i−3 fall back to BOS, a common resting place for spare attention.", "3": "The toy routes out-of-range glances to BOS; real heads often park attention there when their target is absent." }, "view": "iso", "set": { "back": 3 } },
+      { "cap": { "1": "The peg only shows where a word looked. The note it writes matters only when a later head reads it.", "2": "Patterns show where a head looks, not whether it matters. Patching tells you that.", "3": "Attention patterns are QK-side evidence; the causal role (an OV write read by later keys) needs ablation or patching." }, "view": "close", "set": { "back": 1 } }
+    ],
+    "predict": [
+      { "q": "Where does a previous-token head's bright stripe sit in its attention pattern?", "options": [{ "t": "One step below the main diagonal", "ok": true }, { "t": "On the main diagonal" }], "why": "Row i (destination) puts its attention on column i−1 (source): the sub-diagonal. The main diagonal is a current-token head." },
+      { "q": "DLA gives your previous-token head a score near zero. Is it unimportant?", "options": [{ "t": "Not necessarily: its effect runs through later heads", "ok": true }, { "t": "Yes: it does not move the logits" }], "why": "DLA only sees direct paths. The prev-token head works indirectly, by feeding induction heads' keys." },
+      { "q": "You zero-ablate head 0.7 in ARENA's 2-layer model. What happens on repeated random text?", "options": [{ "t": "Loss on the second copy climbs back up", "ok": true }, { "t": "Nothing: the layer-1 heads manage alone" }], "why": "The induction heads need the note 0.7 writes. Without it they no longer know where to look." }
+    ],
+    "where": "Anywhere a value is passed one step along a sequence: shift registers, causal convolutions, the first half of induction."
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "id": "softmax-attention-and-causal-mask",
+  "title": "One whole pie, shared only backwards",
+  "week": 5,
+  "need": "core",
+  "allegory": "Each token is a guest in a queue who cuts one whole pie into shares for the guests ahead of it, by how useful each looks, and the causal mask means guests behind are never invited to the cutting, rather than having their slices binned afterwards.",
+  "map": [
+    ["how useful a guest's name tag looks to you", "score q·k / √d_head"],
+    ["cutting one whole pie into shares by usefulness", "softmax over key positions: each row sums to 1"],
+    ["guests behind you never invited to the cutting", "future scores set to −∞ before the softmax"],
+    ["cutting for everyone, then binning the future slices", "zeroing probabilities after softmax: row sums < 1, and the shortfall leaks the future"],
+    ["the plate you take home: a blend of the invited guests' dishes", "the weighted sum of value vectors, projected by W_O"]
+  ],
+  "credit": "Masking by setting scores to −∞ before the softmax so the rows stay normalised is how 3Blue1Brown frames it in 'Attention in transformers, visually explained'; attention as tokens communicating along a directed graph is Andrej Karpathy's framing in 'Let's build GPT'.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Peeking at the answer",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "loss better than the published number?! that's a bug",
+      "actors": [{ "pose": "recoil", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.58, "y": 0.3, "label": "the cat sat on the ___", "color": "cream" },
+        { "kind": "card", "x": 0.8, "y": 0.58, "label": "training loss: too good", "color": "pink" },
+        { "kind": "card", "x": 0.52, "y": 0.66, "label": "new prompt: babble", "color": "chalk" }
+      ],
+      "cap": {
+        "1": "A model trained to guess the next word does amazingly in training, then babbles on new prompts. It was peeking at the word it had to guess.",
+        "2": "If position t can see token t+1, predicting it is a lookup. Training loss collapses below any published number; generation, with no future to peek at, falls apart.",
+        "3": "An off-by-one or reversed mask puts the labels in the input. Treat any training loss that beats the published number for the architecture as a bug report, not a result."
+      }
+    },
+    {
+      "name": "The pie queue",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [
+        { "pose": "idle", "x": 0.2, "label": "the" },
+        { "pose": "idle", "x": 0.38, "label": "cat" },
+        { "pose": "reach", "x": 0.56, "label": "sat" }
+      ],
+      "props": [
+        { "kind": "circle", "x": 0.56, "y": 0.25, "w": 0.12, "h": 0.12, "label": "one whole pie", "color": "peach" },
+        { "kind": "door", "x": 0.72, "y": 0.55, "w": 0.06, "h": 0.6, "label": "no peeking", "color": "ink" },
+        { "kind": "cloud", "x": 0.88, "y": 0.5, "label": "on the mat", "color": "chalk" }
+      ],
+      "arrows": [[0.53, 0.35, 0.24, 0.45, "share"], [0.54, 0.38, 0.4, 0.46, "share"]],
+      "cap": {
+        "1": "Picture guests in a queue. Each one cuts a whole pie into shares for the guests ahead of it, by how useful each looks. Guests behind are never invited.",
+        "2": "Each position scores every earlier position (query · key), turns the scores into weights summing to 1 with softmax, and takes that blend of their value vectors.",
+        "3": "Per head, pattern[q, k] = softmax over k ≤ q of q·k/√d_head; the output Σ pattern[q, k]·v_k goes through W_O back into the residual stream."
+      }
+    },
+    {
+      "name": "The recipe",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "softmax(", "c": "ink", "note": "cut one whole pie" },
+        { "t": "QKᵀ", "c": "orange", "note": "how well each pair matches" },
+        { "t": "/√d_head", "c": "sky", "note": "keep scores tame" },
+        { "t": " + M", "c": "pink", "note": "−∞ above the diagonal" },
+        { "t": ")·V", "c": "teal", "note": "blend what they carry" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "Match every pair, tame the numbers, wall off the future, cut the pie, then blend what the invited guests carry. That is all of attention.",
+        "2": "Scores are queries dotted with keys, divided by √d_head so they don't grow with width. M adds −∞ above the diagonal; softmax runs over keys; the pattern then weights V.",
+        "3": "1/√d_head keeps score variance roughly constant as d_head grows, so the softmax doesn't saturate. M = triu(−∞, diagonal=1), softmax over key_pos, then the W_O projection."
+      }
+    },
+    {
+      "name": "Walling off the future",
+      "need": "exercise",
+      "dur": 10,
+      "type": "grid",
+      "title": "masked scores: −∞ strictly above the diagonal",
+      "rows": 4,
+      "cols": 4,
+      "values": [[2.1, "−∞", "−∞", "−∞"], [0.4, 1.3, "−∞", "−∞"], [-0.2, 0.9, 0.5, "−∞"], [0.1, 0.6, 1.2, 0.8]],
+      "labels": { "rows": ["query 0", "query 1", "query 2", "query 3"], "cols": ["key 0", "key 1", "key 2", "key 3"] },
+      "highlight": [[0, 0], [1, 1], [2, 2], [3, 3]],
+      "cap": {
+        "1": "Row by row: each guest sees everyone ahead and itself. Everything to the right is walled off before the pie is cut. Row t has t+1 open seats.",
+        "2": "<code>torch.triu(ones, diagonal=1)</code> picks the strictly-future keys; fill them with the <code>-inf</code> IGNORE buffer. <code>diagonal=0</code> would wall off each token's own seat too.",
+        "3": "Unit test: pass ones-shaped scores through apply_causal_mask and assert row t has exactly t+1 finite entries. diagonal=0 denies each token its own value vector."
+      }
+    },
+    {
+      "name": "Binning slices afterwards",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "−∞ before softmax", "c": "mint", "lines": ["future never in the cut", "row sums to 1", "no hint of the future"] },
+      "right": { "title": "zero after softmax", "c": "pink", "lines": ["pie cut for everyone", "future slices binned", "row sums below 1", "shortfall depends on the future"] },
+      "verdict": "Mask the scores, never the probabilities.",
+      "cap": {
+        "1": "Cut the pie for everyone, then bin the future guests' slices, and you're left with less than a whole pie. How much less depends on who stood behind you.",
+        "2": "Zeroing after softmax leaves each row summing to less than 1, so outputs shrink, worst at early positions. And the shrinkage depends on future tokens: a small leak.",
+        "3": "Post-softmax zeroing leaves row mass visible/total < 1, a position-dependent attenuation whose normaliser includes future scores, so the future leaks. exp(−∞) = 0 renormalises exactly."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["The only layer that moves information between positions", "Patterns you will read: induction heads, name movers", "KV caching works because the past never changes"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Attention is the only place words pass information to each other. Reading these pie shares is how you will watch a model think.",
+        "2": "MLPs work within one position; attention moves information across positions. Interpretability reads attention patterns to find heads such as induction heads, and KV caching relies on the mask.",
+        "3": "Because patterns are normalised distributions over allowed positions, they are directly readable: tracing who reads whom is the backbone of circuit work to understand and steer models."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Query 2's pie: change the method and the future's pull",
+    "labels": ["key 0", "key 1", "key 2 (self)", "key 3 (future)", "key 4 (future)"],
+    "params": [
+      { "id": "fut", "label": "how tempting future key 3 looks", "min": -3, "max": 4, "step": 0.1, "value": 1 },
+      { "id": "mode", "label": "0: −∞ before · 1: zero after · 2: no mask", "min": 0, "max": 2, "step": 1, "value": 0 }
+    ],
+    "f": "mode < 0.5 ? softmax([1, 0.2, 1.5]).concat([0, 0]) : (mode < 1.5 ? softmax([1, 0.2, 1.5, fut, 0]).slice(0, 3).concat([0, 0]) : softmax([1, 0.2, 1.5, fut, 0]))",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "row sum", "f": "(mode < 0.5 ? 1 : (mode < 1.5 ? sum(softmax([1, 0.2, 1.5, fut, 0]).slice(0, 3)) : 1)).toFixed(3)" },
+      { "label": "share given to the future", "f": "(mode < 1.5 ? 0 : sum(softmax([1, 0.2, 1.5, fut, 0]).slice(3))).toFixed(3)" },
+      { "label": "method", "f": "['−∞ before softmax (correct)', 'zeroed after softmax (bug: row sum < 1)', 'no mask (leak)'][round(mode)]" }
+    ],
+    "caption": {
+      "1": "Switch the method, then drag how tempting the future word looks. With −∞ first the bars never move. Zero-after shrinks them, by an amount set by the future.",
+      "2": "Mode 0 is the correct mask: a valid distribution over keys 0 to 2 whatever the future says. Mode 1 zeroes after softmax, so the row sum drops as the future gets tempting. Mode 2 leaks outright.",
+      "3": "Mode 1's survivors are exp(s_k)/Z with Z summed over future keys too, so they encode the future through the normaliser. Only masking scores before the softmax is both normalised and causal."
+    }
+  },
+  "where_else": [
+    "Illegal-move masking in game-playing policies: illegal logits go to −∞ before the softmax",
+    "Padding masks in batched attention, so real tokens ignore pad tokens",
+    "KV caching, which exists because under the mask past keys and values never change",
+    "Reading attention patterns in interpretability: an induction head is one learned pattern"
+  ],
+  "hamming": {
+    "what": "Scale query-key scores by 1/√d_head, set future positions to −∞, then softmax over keys so each position takes a normalised blend of earlier values.",
+    "when": "In every head of every layer of a decoder-only transformer, on every forward pass.",
+    "why": "It moves information between positions without letting a token see what it must predict, and masking before the softmax keeps every row a true distribution."
+  },
+  "object": {
+    "title": "The staircase city",
+    "subtitle": "An attention pattern as a block of towers: rows look, columns are looked at.",
+    "kind": "bars",
+    "rows": 6,
+    "cols": 6,
+    "f": "(() => { const ex = range(cols).map(k => exp(t*(k === r - 1 ? 1 : 0))); const Zv = sum(ex.slice(0, r + 1)); const Za = sum(ex); const w = mode < 0.5 ? (c <= r ? ex[c]/Zv : 0) : (mode < 1.5 ? (c <= r ? ex[c]/Za : 0) : ex[c]/Za); return 0.05 + 1.6*w; })()",
+    "labels": { "rows": ["q0", "q1", "q2", "q3", "q4", "q5"], "cols": ["k0", "k1", "k2", "k3", "k4", "k5"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "mode", "label": "0: −∞ before · 1: zero after · 2: no mask", "min": 0, "max": 2, "step": 1, "value": 0 },
+      { "id": "t", "label": "Score sharpness", "min": 0, "max": 4, "step": 0.1, "value": 2 }
+    ],
+    "beats": [
+      { "cap": { "1": "The pattern as a city: each row is a token doing the looking, each column a token being looked at. Nothing stands above the diagonal.", "2": "A causal attention pattern: height = attention weight, upper triangle empty.", "3": "pattern[q, k] with k > q masked to exactly zero by −∞ scores." }, "view": "iso", "set": { "mode": 0, "t": 2 } },
+      { "cap": { "1": "From above it's a staircase. Row t has t+1 towers, and each row's heights add up to one whole pie.", "2": "Row t has t+1 non-zero entries, and every row sums to 1.", "3": "Lower-triangular, row-stochastic: a valid distribution over allowed keys per query." }, "view": "top", "set": { "mode": 0, "t": 2 } },
+      { "cap": { "1": "Knock down the wall and towers sprout in the future half. Each token now reads the very word it's meant to predict.", "2": "No mask: weight flows to future keys, so next-token prediction becomes a lookup.", "3": "Unmasked self-attention leaks labels; training loss collapses while generation fails." }, "view": "iso", "set": { "mode": 2, "t": 2 } },
+      { "cap": { "1": "Zero-after: the future towers are gone, but the rest are shorter too, and the early rows lose the most.", "2": "Zeroing after softmax leaves rows summing below 1, worst at early queries.", "3": "Row mass = visible/total: here q0 keeps a sixth, q1 about two thirds, q5 all of it, so early outputs are heavily attenuated." }, "view": "iso", "set": { "mode": 1, "t": 2 } },
+      { "cap": { "1": "Turn the sharpness to zero: every visible key gets an equal share. Row t spreads its pie evenly over t+1 keys.", "2": "All scores equal gives uniform attention over the allowed prefix.", "3": "t → 0: softmax of a constant, weight 1/(q+1) on each allowed key." }, "view": "close", "set": { "mode": 0, "t": 0 } },
+      { "cap": { "1": "Crank the sharpness up and each row pours nearly all its pie onto the token just before it: a previous-token head.", "2": "Sharp scores concentrate each row on one key: here, the previous position.", "3": "Large score scale approaches argmax attention; this layout is the previous-token pattern induction circuits build on." }, "view": "iso", "set": { "mode": 0, "t": 4 } }
+    ],
+    "predict": [
+      { "q": "Row 3 of a correct causal pattern has how many non-zero entries?", "options": [{ "t": "4: keys 0 to 3, itself included", "ok": true }, { "t": "3" }, { "t": "6" }], "why": "triu(..., diagonal=1) masks only strictly-future keys, so row t keeps t+1 entries." },
+      { "q": "You zero future probabilities after the softmax. What happens to row 0?", "options": [{ "t": "It sums to far less than 1: most of its pie was binned", "ok": true }, { "t": "Nothing: it only has one visible key anyway" }], "why": "Row 0's softmax was spread over every key before zeroing, so most of the mass is thrown away. Masking scores first gives key 0 the whole share." },
+      { "q": "Training loss beats the published number for your model size. First suspicion?", "options": [{ "t": "The mask is leaking the future", "ok": true }, { "t": "A lucky hyperparameter choice" }], "why": "If a position can see the next token, predicting it is a lookup. Treat it as a bug report." }
+    ],
+    "where": "Any share-out with forbidden options: remove them before normalising, never after."
+  }
+}

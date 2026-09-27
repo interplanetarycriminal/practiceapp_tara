@@ -1,0 +1,206 @@
+{
+  "id": "factored-matrix",
+  "title": "Keep the cards, skip the chart",
+  "week": 7,
+  "need": "library",
+  "allegory": "A factored matrix is keeping two decks of short profile cards instead of printing the giant chart of every pair's match score: any score is just two cards laid together, and the chart's main themes can be read off the small decks.",
+  "map": [
+    ["the giant chart of every pair's score", "the full product M = AB, e.g. a 50k × 50k QK circuit"],
+    ["a deck of short cards, one per row", "the factor A, shape (50k, 64)"],
+    ["a deck of short cards, one per column", "the factor B, shape (64, 50k)"],
+    ["laying two cards together to get one score", "one entry of M: a row of A dotted with a column of B"],
+    ["reading the chart's main themes off the small decks", "SVD, norms and eigenvalues computed from the factors with small r-sized work"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The chart won't fit",
+      "need": "library",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "recoil", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.62, "y": 0.5, "w": 0.36, "h": 0.62, "label": "50k × 50k chart", "color": "chalk" },
+        { "kind": "card", "x": 0.62, "y": 0.12, "label": "about 2.5 billion numbers", "color": "butter" }
+      ],
+      "cap": {
+        "1": "You want to see which words a head links to which. The full table has 50,000 rows and 50,000 columns: about 2.5 billion numbers. It won't fit.",
+        "2": "A full QK circuit over GPT-2's vocabulary is 50k × 50k. Stored in float32 that is about 10 GB for one head, before you've computed anything about it.",
+        "3": "W_Eᵀ W_QK W_E is d_vocab × d_vocab, but it factors through d_head = 64, so its rank is at most 64. Materialising it wastes nearly all of its 2.5 × 10⁹ entries."
+      }
+    },
+    {
+      "name": "Two small decks",
+      "need": "library",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "carry", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.45, "y": 0.6, "w": 0.14, "h": 0.3, "label": "deck A: 50k × 64", "color": "sky" },
+        { "kind": "stack", "x": 0.65, "y": 0.6, "w": 0.14, "h": 0.3, "label": "deck B: 64 × 50k", "color": "peach" },
+        { "kind": "card", "x": 0.85, "y": 0.3, "label": "one score = card · card", "color": "butter" }
+      ],
+      "arrows": [[0.5, 0.42, 0.78, 0.32, ""], [0.66, 0.42, 0.8, 0.34, ""]],
+      "cap": {
+        "1": "But every number in that table is just two short cards laid together. Keep the two decks, 64 numbers per card, and make any entry on demand.",
+        "2": "M = AB with A (50k × 64) and B (64 × 50k). Storing A and B takes about 6.4 million numbers instead of 2.5 billion, and any entry is one row of A dotted with one column of B.",
+        "3": "A FactoredMatrix holds A and B separately; entry (i, j) is A[i]·B[:, j] and the product is never formed. Storage drops from d_vocab² to 2·d_vocab·d_head."
+      }
+    },
+    {
+      "name": "Rank caps the themes",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "M", "c": "ink", "note": "the chart" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "A", "c": "sky", "note": "50k × 64" },
+        { "t": "B", "c": "orange", "note": "64 × 50k" },
+        { "t": " → ", "c": "ink", "note": "" },
+        { "t": "rank ≤ 64", "c": "green", "note": "at most 64 themes" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "Every card has only 64 numbers, so the giant table can only hold 64 independent patterns, however big it looks.",
+        "2": "A (50k × 64) times a (64 × 50k) matrix has rank at most 64, so at most 64 nonzero singular values. Everything interesting about it lives in a 64-dimensional space.",
+        "3": "rank(AB) ≤ min(rank A, rank B) ≤ d_head. The vocab-sized object is a low-rank bilinear form, so all of its spectral content is recoverable from r-sized computations."
+      }
+    },
+    {
+      "name": "Themes from decks",
+      "need": "exercise",
+      "dur": 11,
+      "type": "graph",
+      "nodes": [
+        { "id": "A", "label": "A (50k × 64)", "x": 0.12, "y": 0.3, "c": "sky" },
+        { "id": "B", "label": "B (64 × 50k)", "x": 0.12, "y": 0.72, "c": "orange" },
+        { "id": "s", "label": "small r-sized work", "x": 0.47, "y": 0.5, "c": "butter" },
+        { "id": "u", "label": "singular values, SVD", "x": 0.84, "y": 0.28, "c": "green" },
+        { "id": "e", "label": "eigenvalues via BA", "x": 0.84, "y": 0.72, "c": "green" }
+      ],
+      "edges": [["A", "s", "SVD of A"], ["B", "s", ""], ["s", "u", ""], ["s", "e", ""]],
+      "flow": "forward",
+      "cap": {
+        "1": "To find the table's main themes you never build the table. You do a little work on the two decks, then stitch the answers back together.",
+        "2": "Take the SVD A = U S Vᵀ, then the SVD of the thin matrix S Vᵀ B, and multiply the left factors back together. Eigenvalues come from the 64 × 64 matrix BA. This week's exercise derives properties like these.",
+        "3": "M = U_A(S_A V_Aᵀ B) = (U_A U′) S V′ᵀ, costing O(d_vocab·r²). Nonzero eigenvalues of AB equal those of BA. Frobenius norm = √Σσᵢ². No d_vocab² tensor ever exists."
+      }
+    },
+    {
+      "name": "Half the circuit",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "head 1.4 alone", "c": "pink", "lines": ["copying score: 30.79% top-1", "47.73% top-5", "looks like it doesn't copy"] },
+      "right": { "title": "1.4 + 1.10, summed", "c": "mint", "lines": ["copying score: 95.6% top-1", "98% top-5", "they share one attention pattern"] },
+      "verdict": "Score the whole path the stream receives, not one head.",
+      "cap": {
+        "1": "A real surprise from this week: one copying head's table scores only 30.79% on 'copies its input'. Add its twin head's table and it jumps to 95.6%.",
+        "2": "Heads 1.4 and 1.10 share an attention pattern, so the stream receives the sum of their OV circuits. Scored alone, 1.4 copies 30.79% top-1; the sum scores 95.6%. Score the whole path.",
+        "3": "The effective circuit is W_E(W_VW_O[1.4] + W_VW_O[1.10])W_U. It stays factored: place the factors side by side, rank ≤ 128. top_1_acc: 0.3079 alone, 0.956 summed."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Read a head as two small maps", "Never build what you can keep factored", "LoRA stores its update the same way"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Keeping giant tables as two small decks is what lets you read a whole head across the vocabulary on an ordinary machine, in seconds.",
+        "2": "FactoredMatrix is a TransformerLens library call: hold A and B, ask for svd, norm or eigenvalues. The habit carries into the grokking and OthelloGPT exercises, and LoRA stores its update this way.",
+        "3": "Weights-only circuit analysis, a first step in understanding and then steering a model, needs the spectra of vocab-sized low-rank maps. Factoring is what makes them computable at all."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Paint a table and watch its rank: when do two decks beat the chart?",
+    "rows": 8,
+    "cols": 8,
+    "init": "[1, 0, 1, 1, 0, 1, 0, 0][r] * [0, 1, 1, 0, 1, 0, 0, 1][c]",
+    "click": "toggle",
+    "readouts": [
+      { "label": "rank (independent patterns)", "f": "(M => { const A = M.map(row => row.slice()); const n = A.length, m = A[0].length; let rank = 0; for (let c = 0; c < m && rank < n; c++) { let p = -1; for (let i = rank; i < n; i++) if (abs(A[i][c]) > 1e-9) { p = i; break; } if (p < 0) continue; const t = A[rank]; A[rank] = A[p]; A[p] = t; for (let i = 0; i < n; i++) if (i !== rank) { const f = A[i][c] / A[rank][c]; for (let j = c; j < m; j++) A[i][j] -= f * A[rank][j]; } rank++; } return rank; })(G)" },
+      { "label": "numbers to store the table", "f": "64" },
+      { "label": "numbers to store it as two decks", "f": "16 * (M => { const A = M.map(row => row.slice()); const n = A.length, m = A[0].length; let rank = 0; for (let c = 0; c < m && rank < n; c++) { let p = -1; for (let i = rank; i < n; i++) if (abs(A[i][c]) > 1e-9) { p = i; break; } if (p < 0) continue; const t = A[rank]; A[rank] = A[p]; A[p] = t; for (let i = 0; i < n; i++) if (i !== rank) { const f = A[i][c] / A[rank][c]; for (let j = c; j < m; j++) A[i][j] -= f * A[rank][j]; } rank++; } return rank; })(G)" },
+      { "label": "worth factoring?", "f": "(M => { const A = M.map(row => row.slice()); const n = A.length, m = A[0].length; let rank = 0; for (let c = 0; c < m && rank < n; c++) { let p = -1; for (let i = rank; i < n; i++) if (abs(A[i][c]) > 1e-9) { p = i; break; } if (p < 0) continue; const t = A[rank]; A[rank] = A[p]; A[p] = t; for (let i = 0; i < n; i++) if (i !== rank) { const f = A[i][c] / A[rank][c]; for (let j = c; j < m; j++) A[i][j] -= f * A[rank][j]; } rank++; } return rank; })(G) < 4 ? 'yes: the decks are smaller' : 'no: just store the table'" }
+    ],
+    "caption": {
+      "1": "This table is secretly one short list times another: rank 1. Tap squares to add patterns and watch the rank climb. Copy a row exactly and it won't move.",
+      "2": "Rank counts independent row patterns. A rank-r table can be stored as an (8 × r) deck times an (r × 8) deck: 16r numbers against 64. From rank 4 up, the decks stop being smaller.",
+      "3": "A rank-r n × n matrix factors as (n × r)(r × n), 2nr numbers. For a QK circuit n ≈ 50k and r ≤ 64, so factoring wins by a factor of n/2r ≈ 390."
+    }
+  },
+  "where_else": [
+    "LoRA: a weight update stored as two thin factors instead of a full matrix",
+    "Full QK and OV circuits for any head, and K-composition circuits between heads",
+    "The grokking and OthelloGPT exercises, which reuse the never-materialise habit"
+  ],
+  "hamming": {
+    "what": "A big matrix kept as the two thin matrices it is the product of, with its properties computed from them.",
+    "when": "Whenever a product is far bigger than its shared inner dimension, like a 50k × 50k circuit that factors through 64.",
+    "why": "The product would not fit in memory, yet its entries, SVD, norms and eigenvalues are all recoverable cheaply from the factors."
+  },
+  "object": {
+    "title": "The theme table",
+    "subtitle": "A 10 × 10 table built from a few themes, each one short list down the side times one along the top.",
+    "kind": "bars",
+    "rows": 10,
+    "cols": 10,
+    "f": "0.7 + (keep >= 2 ? 0.6*(r/9)*(c/9) : 0) + (keep >= 3 ? 0.4*(abs(r - 4.5)/4.5)*(abs(c - 4.5)/4.5) : 0) + (keep >= 4 ? 0.2*(r % 2)*(c % 2) : 0)",
+    "c": "dir",
+    "knobs": [{ "id": "keep", "label": "Number of themes (rank)", "min": 1, "max": 4, "step": 1, "value": 1 }],
+    "beats": [
+      {
+        "cap": { "1": "A 10 by 10 table made of one theme: one short list down the side times one along the top. Rank 1: 20 numbers describe all 100.", "2": "A rank-1 matrix is an outer product u vᵀ: every row is a multiple of the same pattern.", "3": "Rank 1: M = u vᵀ, storage 2n instead of n²." },
+        "view": "iso",
+        "set": { "keep": 1 }
+      },
+      {
+        "cap": { "1": "Add a second theme, a slope rising along both edges. Still only two pairs of short lists.", "2": "Adding a second outer product makes rank 2: M = u₁v₁ᵀ + u₂v₂ᵀ, still stored as two thin decks.", "3": "Each rank-1 term adds one column to A and one row to B." },
+        "view": "front",
+        "set": { "keep": 2 }
+      },
+      {
+        "cap": { "1": "A third theme digs a valley. Each theme is one card column in deck A and one card row in deck B.", "2": "Three themes: A is 10 × 3, B is 3 × 10, 60 numbers for a 100-entry table.", "3": "Rank 3 means a 3-dimensional row space; any row is a mix of three basis patterns." },
+        "view": "side",
+        "set": { "keep": 3 }
+      },
+      {
+        "cap": { "1": "A fourth adds a fine checker. It looks busy, but it is four themes: 80 numbers as decks. With 50k rows and 64 themes, decks are about 390 times smaller.", "2": "Rank 4 here costs 80 numbers against 100. At vocab scale, 50k × 64 decks beat a 50k × 50k table by n/2r ≈ 390.", "3": "Savings scale as n/2r: negligible for tiny n, enormous for d_vocab ≈ 50k with r = d_head = 64." },
+        "view": "top",
+        "set": { "keep": 4 }
+      },
+      {
+        "cap": { "1": "An SVD finds a table's strongest independent themes, strongest first. With the table kept as decks, it only ever needs the decks.", "2": "SVD ranks the directions a matrix stretches most. FactoredMatrix computes it from A and B, never from M.", "3": "Singular vectors of AB come from the SVD of A followed by the SVD of the thin S Vᵀ B: O(n·r²) instead of O(n³)." },
+        "view": "close",
+        "set": { "keep": 4 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "A matrix is a (50k × 64) times a (64 × 50k). At most how many nonzero singular values can it have?",
+        "options": [{ "t": "64", "ok": true }, { "t": "50,000" }, { "t": "2.5 billion" }],
+        "why": "A product's rank is at most its inner dimension, so the whole spectrum lives in 64 dimensions."
+      },
+      {
+        "q": "Head 1.4's full OV circuit scores 30.79% on copying. What should you check first?",
+        "options": [{ "t": "Whether another head shares its attention pattern, then score the summed OV", "ok": true }, { "t": "Conclude that head 1.4 does not copy" }],
+        "why": "1.4 and 1.10 share a pattern, so the stream receives their sum, which scores 95.6% top-1."
+      },
+      {
+        "q": "How much smaller is a rank-64, 50k × 50k matrix when kept factored?",
+        "options": [{ "t": "About 390 times: 6.4 million numbers instead of 2.5 billion", "ok": true }, { "t": "About 2 times" }],
+        "why": "Two 50k × 64 decks against one 50k × 50k table: n / 2r ≈ 390."
+      }
+    ],
+    "where": "Anything low-rank kept thin: LoRA updates, QK and OV circuits, layers compressed to their top singular directions."
+  }
+}

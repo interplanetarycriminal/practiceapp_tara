@@ -1,0 +1,206 @@
+{
+  "id": "induction-score",
+  "title": "Say it twice, see who points",
+  "week": 7,
+  "need": "core",
+  "allegory": "The induction score is a déjà vu test: read fifty nonsense words aloud twice, and on the second pass measure how often each listener points at the word that followed the current word last time.",
+  "map": [
+    ["a list of nonsense words read aloud twice", "random tokens concatenated to themselves"],
+    ["where each listener points during the second reading", "each head's attention pattern"],
+    ["the word that came right after this word's first appearance", "the diagonal at offset 1 − seq_len"],
+    ["the average share of pointing at that spot", "the induction score: mean of that diagonal"],
+    ["a seating chart shaded by score", "a layer × head heatmap whose bright cells are candidates"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Which head is it?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "12 layers × 12 heads. where are the copiers?",
+      "actors": [{ "pose": "think", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.5, "y": 0.6, "w": 0.16, "h": 0.4, "label": "layers", "color": "sky" },
+        { "kind": "stack", "x": 0.7, "y": 0.6, "w": 0.16, "h": 0.4, "label": "heads", "color": "lav" },
+        { "kind": "card", "x": 0.62, "y": 0.18, "label": "144 attention patterns to eyeball?", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A model has over a hundred attention heads. Some of them spot repeats and copy. How do you find those without studying each one by hand?",
+        "2": "GPT-2 small has 12 layers of 12 heads. You want the induction heads among them. Rather than eyeballing 144 attention patterns, build one number per head that ranks them all.",
+        "3": "Candidate discovery at scale needs a cheap, mechanism-specific statistic computed for every head in one forward pass, followed by causal checks on the top scorers."
+      }
+    },
+    {
+      "name": "The déjà vu test",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "write", "x": 0.12, "label": "you" },
+        { "pose": "point", "x": 0.55, "label": "copier" },
+        { "pose": "idle", "x": 0.8 }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.42, "y": 0.16, "label": "blick zorp fen ... | blick zorp fen ...", "color": "cream" },
+        { "kind": "card", "x": 0.7, "y": 0.4, "label": "after 'blick' came 'zorp'", "color": "mint" }
+      ],
+      "arrows": [[0.57, 0.5, 0.66, 0.44, "points"]],
+      "cap": {
+        "1": "Read fifty nonsense words aloud, then read them again. On the second pass some listeners point at the word that came next last time. Those are the copiers.",
+        "2": "Random tokens can't be predicted from meaning, only from repetition. Repeat them once and the second half becomes copyable: loss drops off a cliff there, and induction heads light up.",
+        "3": "A self-concatenated random sequence (50 tokens, twice, BOS prepended) isolates induction: bigram statistics are useless, so any second-half loss drop must come from in-context copying."
+      }
+    },
+    {
+      "name": "The stripe",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "an induction head on A B C D A B C D",
+      "rows": 8,
+      "cols": 8,
+      "values": [
+        ["·", "·", "·", "·", "·", "·", "·", "·"],
+        ["·", "·", "·", "·", "·", "·", "·", "·"],
+        ["·", "·", "·", "·", "·", "·", "·", "·"],
+        ["·", "·", "·", "·", "·", "·", "·", "·"],
+        ["·", "0.9", "·", "·", "·", "·", "·", "·"],
+        ["·", "·", "0.9", "·", "·", "·", "·", "·"],
+        ["·", "·", "·", "0.9", "·", "·", "·", "·"],
+        ["·", "·", "·", "·", "0.9", "·", "·", "·"]
+      ],
+      "labels": { "rows": ["A", "B", "C", "D", "A", "B", "C", "D"], "cols": ["A", "B", "C", "D", "A", "B", "C", "D"] },
+      "highlight": [[4, 1], [5, 2], [6, 3], [7, 4]],
+      "cap": {
+        "1": "Each second-pass word points at the word after its first appearance. On the chart that makes a bright stripe parallel to the diagonal, one copy back.",
+        "2": "Rows are the token doing the looking, columns the token looked at. The induction stripe sits at offset 1 − seq_len: from each repeat to the token after its earlier twin.",
+        "3": "For destination i in the second copy, source = i − seq_len + 1, the successor of the previous occurrence. Offset −seq_len is the duplicate-token stripe; offset 0, a current-token head."
+      }
+    },
+    {
+      "name": "One number each",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "score = ", "c": "ink", "note": "" },
+        { "t": "mean(", "c": "ink", "note": "average along the stripe" },
+        { "t": "diag(", "c": "ink", "note": "" },
+        { "t": "A", "c": "orange", "note": "one head's attention pattern" },
+        { "t": ", 1 − n", "c": "pink", "note": "n = length of one copy" },
+        { "t": "))", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Take one listener's pointing chart, read off the stripe, and average it. One number per head: near 1 means a copier, near 0 means not.",
+        "2": "<code>pattern.diagonal(dim1=-2, dim2=-1, offset=1-seq_len).mean()</code>, computed by a hook on every <code>hook_pattern</code> in one forward pass. Heads above roughly 0.4 are induction heads.",
+        "3": "Computed live via hooks on blocks.*.attn.hook_pattern, no full cache needed. In ARENA's 2L attention-only model heads 1.4 and 1.10 score above 0.6; nearly everything else sits near zero."
+      }
+    },
+    {
+      "name": "The glowing seats",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "induction score per head, ARENA's 2-layer model",
+      "rows": 2,
+      "cols": 12,
+      "values": [
+        ["~0", "~0", "~0", "~0", "~0", "~0", "~0", "~0", "~0", "~0", "~0", "~0"],
+        ["~0", "~0", "~0", "~0", ">0.6", "~0", "~0", "~0", "~0", "~0", ">0.6", "~0"]
+      ],
+      "labels": { "rows": ["layer 0", "layer 1"], "cols": ["h0", "h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8", "h9", "h10", "h11"] },
+      "highlight": [[1, 4], [1, 10]],
+      "cap": {
+        "1": "Shade every listener by score and two seats glow. They're your suspects. A glowing seat is a lead, not a verdict: next you check each one properly.",
+        "2": "In ARENA's 2-layer model heads 1.4 and 1.10 light up; on GPT-2 small the same detector flags 5.1, 5.5, 6.9, 7.2 and 7.10. Then zero-ablate each and watch second-half loss climb back.",
+        "3": "The score is correlational; confirm by ablation. The enabling previous-token head (0.7) scores near zero here, because its role is indirect: it tells 1.4 and 1.10 where to look."
+      }
+    },
+    {
+      "name": "One seat off",
+      "need": "exercise",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "offset = 1 − seq_len", "c": "mint", "lines": ["the token after the earlier twin", "induction heads glow", "matches the stripe you see"] },
+      "right": { "title": "offset = −seq_len", "c": "pink", "lines": ["the earlier twin itself", "duplicate-token heads glow", "induction heads read ~0"] },
+      "verdict": "seq_len is one copy, and BOS shifts every index by one.",
+      "cap": {
+        "1": "Check one seat too far back and you score a different kind of listener: the ones pointing at the earlier twin itself, not the word after it.",
+        "2": "offset = −seq_len scores duplicate-token heads; offset 0 scores current-token heads. Use the length of one copy, not the doubled sequence, and account for the BOS token.",
+        "3": "If circuitsvis clearly shows a stripe but the score is near zero, the offset is wrong, not the head. seq_len is the single-copy length; BOS shifts indices by one."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Guess a mechanism, build a detector", "Heatmap first, then ablate the bright cells", "Induction heads drive in-context learning"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "This is interpretability in miniature: guess what a part does, invent a cheap test, scan the whole model, then check the suspects properly.",
+        "2": "The same loop finds other heads later, such as name movers. Induction heads matter because they are a main driver of in-context learning, the model's use of its own context.",
+        "3": "Detector, heatmap, ablation: the loop scales from induction heads to the IOI circuit. Knowing which heads implement copying is a first handle for understanding and steering in-context behaviour."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "A B C D A B C D: tap cells to move where each word points",
+    "rows": 8,
+    "cols": 8,
+    "init": "c === r - 1 ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "induction score (offset 1 − 4)", "f": "mean([4, 5, 6, 7].map(i => G[i][i - 3] / (sum(G[i]) || 1))).toFixed(2)" },
+      { "label": "duplicate-token score (offset −4)", "f": "mean([4, 5, 6, 7].map(i => G[i][i - 4] / (sum(G[i]) || 1))).toFixed(2)" },
+      { "label": "current-token score (offset 0)", "f": "mean([4, 5, 6, 7].map(i => G[i][i] / (sum(G[i]) || 1))).toFixed(2)" },
+      { "label": "cells in the future (a causal head can't)", "f": "sum(G.map((row, i) => sum(row.map((v, j) => (j > i && v) ? 1 : 0))))" }
+    ],
+    "caption": {
+      "1": "This starts as a previous-token head. In the bottom four rows, move each lit cell to the word after its earlier twin and watch the induction score climb to 1.",
+      "2": "Rows point, columns are pointed at. Each score averages one offset over the second copy, with rows renormalised to sum to 1. Light a cell above the diagonal and the head is no longer causal.",
+      "3": "Offset 1 − n is induction, −n duplicate-token, 0 current-token, −1 previous-token. A head that splits its row splits its score, which is why real heads land between 0 and 1."
+    }
+  },
+  "where_else": [
+    "Finding name mover and S-inhibition heads in the IOI circuit with the same score-then-ablate loop",
+    "Previous-token and duplicate-token head detectors: the same diagonal trick at different offsets",
+    "Sweeping probes or SAE latents across layers: one number per component, then verify the bright ones"
+  ],
+  "hamming": {
+    "what": "One number per attention head: its average attention along the induction stripe of a repeated random sequence.",
+    "when": "When you need to find induction heads, or any head with a predictable pattern, across a whole model at once.",
+    "why": "It turns eyeballing every attention pattern into a ranked heatmap, so careful causal checks can focus on a few candidates."
+  },
+  "object": {
+    "title": "The stripe block",
+    "subtitle": "One head's attention on A B C D A B C D as a block of bars, morphing from previous-token to induction.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "0.05 + 1.5*((1 - m)*((r === 0 ? c === 0 : c === r - 1) ? 1 : 0) + m*((r < 4 ? c === 0 : c === r - 3) ? 1 : 0))",
+    "labels": { "rows": ["A", "B", "C", "D", "A", "B", "C", "D"], "cols": ["A", "B", "C", "D", "A", "B", "C", "D"] },
+    "c": "prob",
+    "knobs": [{ "id": "m", "label": "Previous-token (0) to induction (1)", "min": 0, "max": 1, "step": 0.05, "value": 0 }],
+    "beats": [
+      { "cap": { "1": "A previous-token head: every word points at the one just before it. A tight stripe hugging the diagonal. Induction score: zero.", "2": "Offset −1 pattern. Its induction score at offset 1 − 4 is 0.", "3": "Previous-token head: mass on (i, i−1). Necessary upstream of induction, but invisible to the induction score." }, "view": "iso", "set": { "m": 0 } },
+      { "cap": { "1": "Slide to an induction head. In the second copy each word now points at the word after its earlier twin: the stripe jumps back.", "2": "Second-copy rows move to offset 1 − seq_len = −3.", "3": "Induction: mass on (i, i − n + 1) for i ≥ n, the successor of the previous occurrence." }, "view": "iso", "set": { "m": 1 } },
+      { "cap": { "1": "From above, the stripe is one clean diagonal. Average its height over the second copy and you have the score: here, 1.", "2": "The induction score is the mean along that diagonal: 1.0 for this pure head.", "3": "score = mean(diag(A, 1 − n)) over the second copy; a pure induction head scores 1." }, "view": "top", "set": { "m": 1 } },
+      { "cap": { "1": "Halfway: each second-copy word splits its pointing. The score reads 0.5. Real heads are rarely pure, and the score still ranks them.", "2": "A mixed head scores between 0 and 1, which is why a threshold like 0.4 is used.", "3": "Scores are continuous because heads distribute mass; thresholds (ARENA uses roughly 0.4) turn a ranking into candidates." }, "view": "iso", "set": { "m": 0.5 } },
+      { "cap": { "1": "In the first copy there is nothing to copy yet, so here those rows rest on the first position. Only the second copy counts toward the score.", "2": "First-copy rows have no earlier twin; the score is read on the repeated half.", "3": "Only second-copy destinations have a defined induction target, so they carry the signal." }, "view": "side", "set": { "m": 1 } }
+    ],
+    "predict": [
+      { "q": "A head attends from each second-copy token to its earlier twin itself, not the token after. What does the induction score say?", "options": [{ "t": "Near zero: that's a duplicate-token head at offset −seq_len", "ok": true }, { "t": "Near one" }], "why": "The induction stripe is one position later, at offset 1 − seq_len." },
+      { "q": "Your heatmap is near zero everywhere, but circuitsvis shows a clear stripe. Most likely?", "options": [{ "t": "The offset is wrong: doubled seq_len, or BOS ignored", "ok": true }, { "t": "The model has no induction heads" }], "why": "Trust the picture: fix the offset before doubting the head." },
+      { "q": "Why use random tokens instead of ordinary text?", "options": [{ "t": "Random tokens can only be predicted by copying, so induction stands alone", "ok": true }, { "t": "Random tokens run faster" }], "why": "With real text, meaning and common word pairs also help; random repeats isolate in-context copying." }
+    ],
+    "where": "Any detector by template: define the pattern a mechanism must produce, score every part, then verify the top hits."
+  }
+}

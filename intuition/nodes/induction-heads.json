@@ -1,0 +1,110 @@
+{
+  "id": "induction-heads",
+  "title": "Find the stamp, copy the next word",
+  "week": 7,
+  "need": "core",
+  "allegory": "An induction head is like a two-clerk filing trick: clerk one stamps every card with the word that came before it, and when a word shows up again, clerk two finds the card stamped with that word and copies whatever is written on it.",
+  "map": [
+    ["clerk one stamps each card with the word before it", "the previous-token head (layer 0) writes 'the token before me was A' into position A+1"],
+    ["clerk two hunts for cards stamped with the current word", "the induction head's query for A matches keys carrying that stamp: K-composition"],
+    ["copying the word written on the found card", "the OV circuit copies the attended token B to the logits"],
+    ["the bright stripe in the attention picture", "attention at offset 1 - seq_len on a repeated sequence"],
+    ["sack either clerk and the trick stops", "ablating 0.7, 1.4 or 1.10 sends second-half loss back up"]
+  ],
+  "credit": "",
+  "linked_film": "films/deep-w07-induction.html",
+  "linked_object": null,
+  "where_else": [
+    "In-context learning: Olsson et al. (2022) tied a jump in it during training to induction heads forming",
+    "Copying names, code identifiers and repeated phrases from earlier in a prompt",
+    "The guess, detect, ablate loop you reuse for IOI, path patching and bracket classifiers",
+    "K-composition generally: any later head that looks where an earlier head's writing tells it to"
+  ],
+  "hamming": {
+    "what": "A pair of attention heads that implement 'I saw A then B earlier, I'm at A again, so predict B'.",
+    "when": "Whenever a sequence repeats something from earlier in its context, from random tokens to names and code.",
+    "why": "It is the first circuit where two heads cooperate, it explains a visible jump in in-context learning during training, and its stripe gives a cheap detector you can check causally."
+  },
+  "object": {
+    "title": "The stripe board",
+    "subtitle": "Attention on a random five-word run shown twice: each row is a word looking back, each bar how hard it looks.",
+    "kind": "bars",
+    "rows": 11,
+    "cols": 11,
+    "f": "(j => c > r ? 0 : 0.03 + 1.5 * (j === 0 ? (c === 0 ? 1 : 0) : (c === j ? 0.9 : (c === 0 ? 0.1 : 0))))(head < 0.5 ? (r >= 6 && ablate < 0.5 ? r - 4 : 0) : head < 1.5 ? (r >= 1 ? r - 1 : 0) : (r >= 6 ? r - 5 : 0))",
+    "labels": {
+      "rows": ["BOS", "A", "B", "C", "D", "E", "A", "B", "C", "D", "E"],
+      "cols": ["BOS", "A", "B", "C", "D", "E", "A", "B", "C", "D", "E"]
+    },
+    "c": "prob",
+    "knobs": [
+      { "id": "head", "label": "Head: 0 induction, 1 previous-token, 2 duplicate-token", "min": 0, "max": 2, "step": 1, "value": 0 },
+      { "id": "ablate", "label": "Ablate the previous-token head", "min": 0, "max": 1, "step": 1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "An attention picture for a random five-word run, shown twice. Each row is a word looking back; the tall bars show where it looks.",
+          "2": "Induction head on [BOS, A..E, A..E]. Rows are destinations, columns are sources. Second-copy rows light up one step after the earlier copy.",
+          "3": "A stripe at offset 1 - seq_len = -4: destination i attends to i - 4, the token after the previous occurrence. First-copy rows rest on BOS."
+        },
+        "view": "iso",
+        "set": { "head": 0, "ablate": 0 }
+      },
+      {
+        "cap": {
+          "1": "From above the stripe is plain: on the second pass every word looks at the word that followed it last time, and copies it.",
+          "2": "The induction score is the mean of this diagonal. Heads above about 0.4 count; in ARENA's two-layer model that is 1.4 and 1.10.",
+          "3": "Score = mean of pattern.diagonal(offset = 1 - seq_len), with seq_len the length of one copy and the BOS shift accounted for."
+        },
+        "view": "top",
+        "set": { "head": 0, "ablate": 0 }
+      },
+      {
+        "cap": {
+          "1": "Switch to clerk one, the previous-token head: every word simply looks one step back. That look is the stamping.",
+          "2": "The previous-token head (0.7 in ARENA's model) is a stripe at offset -1. It writes 'the token before me was A' into the next position.",
+          "3": "Offset -1 diagonal. Its output is what the induction head's keys read: K-composition across the two layers."
+        },
+        "view": "top",
+        "set": { "head": 1, "ablate": 0 }
+      },
+      {
+        "cap": {
+          "1": "A look-alike: the duplicate-token head looks back at the same word itself, one step too early to say what comes next.",
+          "2": "Duplicate-token head: offset -seq_len. It finds the earlier copy of the same token, not the token after it.",
+          "3": "Offset -seq_len = -5 here. Scoring at this offset instead of 1 - seq_len is the classic off-by-one detector bug."
+        },
+        "view": "top",
+        "set": { "head": 2, "ablate": 0 }
+      },
+      {
+        "cap": {
+          "1": "Sack clerk one and clerk two is lost: with no stamps to search for, the stripe vanishes and the model is back to guessing.",
+          "2": "Ablate the previous-token head and the induction stripe disappears, so second-half loss climbs back up.",
+          "3": "Zero-ablating 0.7 removes the key-side signal. That indirect effect is invisible to DLA, which is why ablation supplies the causal check."
+        },
+        "view": "iso",
+        "set": { "head": 0, "ablate": 1 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "On the second copy of a repeated random sequence, where does an induction head at token A look?",
+        "options": [{ "t": "At the token right after the earlier A", "ok": true }, { "t": "At the earlier A itself" }, { "t": "At the position just before it" }],
+        "why": "That token is what came next last time, so copying it predicts the next token. The earlier A itself is the duplicate-token head's target."
+      },
+      {
+        "q": "You zero-ablate the layer-0 previous-token head. What happens to the induction stripe?",
+        "options": [{ "t": "It fades: the keys lost their stamp", "ok": true }, { "t": "Nothing: the induction head works alone" }],
+        "why": "K-composition: the induction head's keys read what the previous-token head wrote."
+      },
+      {
+        "q": "What does per-token loss look like on a repeated random sequence?",
+        "options": [{ "t": "High on the first copy, low on the second", "ok": true }, { "t": "Low throughout" }, { "t": "High throughout" }],
+        "why": "Random tokens cannot be guessed the first time; the second time, the answer is already in the context."
+      }
+    ],
+    "where": "Any lookup that keys on 'what came before' and returns 'what came next': names, code and repeated phrases."
+  }
+}

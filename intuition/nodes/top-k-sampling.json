@@ -1,0 +1,207 @@
+{
+  "id": "top-k-sampling",
+  "title": "A raffle for the top k",
+  "week": 6,
+  "need": "library",
+  "allegory": "Top-k sampling is a raffle behind a velvet rope: every word holds tickets in proportion to its probability, only the k words holding the most tickets get past the rope, and one ticket is drawn from those alone.",
+  "map": [
+    ["every word the model could say, each holding raffle tickets", "the vocabulary with its next-token probabilities"],
+    ["only the k biggest ticket-holders get past the rope", "keep the top-k logits and treat the rest as −inf"],
+    ["recounting the tickets among those left", "renormalising over the survivors, ratios unchanged"],
+    ["drawing one ticket from the drum", "sampling from Categorical(logits = the survivors)"],
+    ["always handing the prize to the favourite", "greedy or beam-search decoding: bland, repetitive text"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The boring favourite",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "most likely ≠ best story",
+      "actors": [{ "pose": "slump", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.62, "y": 0.55, "w": 0.22, "h": 0.36, "label": "safe, common, repetitive", "color": "chalk" },
+        { "kind": "card", "x": 0.82, "y": 0.25, "label": "always the favourite", "color": "butter" }
+      ],
+      "cap": {
+        "1": "A model that predicts words well can still write awful stories. Always choosing its single favourite word gives safe, common, repetitive text.",
+        "2": "Fan, Lewis and Dauphin found beam search, which hunts for the most likely continuation, gave bland, repetitive stories. The model was fine; the way they read words out of it was the problem.",
+        "3": "Fan et al. (ACL 2018): in open-ended story generation, beam search yielded overly common, repetitive text. Decoding is a design choice layered on the same logits, not a detail."
+      }
+    },
+    {
+      "name": "The velvet rope",
+      "need": "library",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "pull", "x": 0.8, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.15, "y": 0.55, "w": 0.18, "h": 0.4, "label": "50,000 words", "color": "lav" },
+        { "kind": "door", "x": 0.42, "y": 0.45, "w": 0.1, "h": 0.5, "label": "rope: top 10", "color": "red" },
+        { "kind": "crate", "x": 0.64, "y": 0.62, "w": 0.16, "h": 0.22, "label": "raffle drum", "color": "butter" }
+      ],
+      "arrows": [[0.26, 0.5, 0.56, 0.58, "only 10 pass"]],
+      "cap": {
+        "1": "So run a raffle. Only the ten words holding the most tickets get past the velvet rope. Then draw one ticket from those ten. The rest go home.",
+        "2": "Top-k sampling: keep the k most likely tokens, renormalise their probabilities to sum to 1, sample one. Fan et al. used k = 10. The long tail of unlikely words never gets a chance.",
+        "3": "Truncate the next-token distribution to its k largest entries, renormalise over the survivors, sample. It survives as the <code>top_k</code> parameter in most text-generation APIs."
+      }
+    },
+    {
+      "name": "Cut, then recount",
+      "need": "library",
+      "dur": 11,
+      "type": "bars",
+      "title": "GPT-2 after 'John and Mary went to the', top_k = 5",
+      "labels": [" church", " house", " temple", " same", " Church"],
+      "from": [0.0648, 0.0367, 0.0145, 0.0104, 0.0097],
+      "to": [0.476, 0.27, 0.107, 0.076, 0.071],
+      "cap": {
+        "1": "Real GPT-2 numbers after 'John and Mary went to the': the top five words hold about 14% of the tickets. Cut the rest, recount, and church wins nearly half.",
+        "2": "Top-5 keeps ' church' 0.0648, ' house' 0.0367, ' temple' 0.0145, ' same' 0.0104, ' Church' 0.0097. Renormalised over those five, church gets about 0.48. ARENA checks your sampler against exactly these.",
+        "3": "Renormalising divides by the survivors' mass (≈ 0.136), so their ratios are preserved. Over 10,000 samples your empirical frequencies should match the renormalised reference within sampling noise."
+      }
+    },
+    {
+      "name": "Stay in log-space",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "topk(logits, k)", "c": "orange", "note": "the k survivors" },
+        { "t": " → ", "c": "ink", "note": "" },
+        { "t": "Categorical", "c": "sky", "note": "no softmax needed" },
+        { "t": " → ", "c": "ink", "note": "" },
+        { "t": "idx[i]", "c": "green", "note": "back to a token id" }
+      ],
+      "actor": { "pose": "type", "x": 0.1 },
+      "cap": {
+        "1": "In code it's about four lines: find the top k scores, hand them straight to the raffle drum, then look up which real word the winning ticket belongs to.",
+        "2": "<code>torch.topk(logits, k)</code> gives values and indices; <code>Categorical(logits=values).sample()</code> draws one; map it back through the indices. No softmax, no renormalising by hand.",
+        "3": "Stay in log-space: Categorical normalises unnormalised logits itself, so exponentiating and renormalising by hand is redundant and loses precision. Order: frequency penalty, temperature, top-k."
+      }
+    },
+    {
+      "name": "Two knobs, one trap",
+      "need": "library",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "lower the temperature", "c": "pink", "lines": ["the same k words survive", "the favourite hoards the tickets", "the tail is already gone", "output loops"] },
+      "right": { "title": "lower k, keep T = 1", "c": "mint", "lines": ["fewer words survive", "their ratios are kept", "or switch to top-p", "or add a frequency penalty"] },
+      "verdict": "Temperature never changes who gets past the rope, only how the tickets are shared.",
+      "cap": {
+        "1": "Turning the temperature down never changes who gets past the rope, only how the tickets are shared. Do both at once and the favourite hogs the drum: loops.",
+        "2": "Dividing logits by T keeps their order, so the top-k set is the same at any temperature. Low T plus truncation hands nearly all the mass to one token, and output loops. Pick one knob.",
+        "3": "T is monotone, so it can't change top-k membership, only the mass within it: k and T compound. A frequency penalty does reorder logits, so it can break loops. Argmax mass above ~0.9 means greedy."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["The sampler picks the word, not the model", "top_k sits in nearly every generation API", "top-p moves the rope with confidence"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "When you run evals or generate data, these knobs shape what you see. Same model, different sampler, different behaviour.",
+        "2": "You'll set top_k and temperature in almost every generation call you make. Top-p refines the idea: it keeps a fixed amount of probability rather than a fixed number of words.",
+        "3": "To understand or steer behaviour, separate the model's distribution from the decoder's choices: a result at top_k = 10, T = 1 is a claim about the model plus its sampler."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "A toy next-word raffle after 'Once upon a'",
+    "labels": ["time", "day", "night", "hill", "star", "dream", "cat", "spoon"],
+    "params": [
+      { "id": "k", "label": "k: words past the rope", "min": 1, "max": 8, "step": 1, "value": 3 },
+      { "id": "T", "label": "temperature T", "min": 0.2, "max": 2, "step": 0.1, "value": 1 }
+    ],
+    "f": "softmax([3, 1.5, 1.2, 0.5, 0.3, 0, -0.5, -1].map((v, i) => i < k ? v/T : -1e9))",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "favourite's share", "f": "(100*softmax([3, 1.5, 1.2, 0.5, 0.3, 0, -0.5, -1].map((v, i) => i < k ? v/T : -1e9))[0]).toFixed(0) + '%'" },
+      { "label": "effective choices", "f": "exp(-sum(softmax([3, 1.5, 1.2, 0.5, 0.3, 0, -0.5, -1].map((v, i) => i < k ? v/T : -1e9)).map(p => p > 0 ? p*log(p) : 0))).toFixed(2)" },
+      { "label": "verdict", "f": "softmax([3, 1.5, 1.2, 0.5, 0.3, 0, -0.5, -1].map((v, i) => i < k ? v/T : -1e9))[0] > 0.9 ? 'effectively greedy: expect loops' : 'still a real raffle'" }
+    ],
+    "caption": {
+      "1": "Set k to 8, then drag the temperature down. All eight words stay in the drum, yet the favourite ends up with nearly every ticket. Then try T = 1 with a small k.",
+      "2": "Temperature never changes which words survive the cut, only how tickets are shared. Watch effective choices: low T shrinks it towards 1 even with k = 8. Past 90% for the favourite, you're decoding greedily.",
+      "3": "Effective choices = exp(entropy) of the truncated, tempered distribution. k bounds the support; T sets concentration within it. At k = 8, T = 0.3 the favourite holds 99%: wide support, one real option."
+    }
+  },
+  "where_else": [
+    "Top-p (nucleus) sampling: keep a fixed probability mass, so the cut moves with the model's confidence",
+    "Beam search, which keeps k whole sequences alive instead of k tokens at one step",
+    "The temperature, top_k and frequency-penalty knobs on nearly every LLM API call"
+  ],
+  "hamming": {
+    "what": "A way to turn next-token probabilities into a choice: keep the k likeliest tokens, renormalise, and draw one at random.",
+    "when": "Whenever you generate open-ended text and want variety without letting the long tail of unlikely words in.",
+    "why": "Always taking the likeliest word gives bland, repetitive text and sampling from everything lets nonsense in; truncating and then sampling is the cheap middle."
+  },
+  "object": {
+    "title": "The velvet-rope raffle",
+    "subtitle": "Front row: every word's share of tickets. Back row: the same words after the rope and a recount.",
+    "kind": "bars",
+    "rows": 2,
+    "cols": 8,
+    "f": "0.05 + 2*softmax([3, 1.5, 1.2, 0.5, 0.3, 0, -0.5, -1].map((v, i) => (r == 1 && i >= k) ? -1e9 : v/T))[c]",
+    "labels": { "rows": ["all words, tempered", "after the top-k cut"], "cols": ["time", "day", "night", "hill", "star", "dream", "cat", "spoon"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "k", "label": "k: words past the rope", "min": 1, "max": 8, "step": 1, "value": 3 },
+      { "id": "T", "label": "Temperature", "min": 0.2, "max": 2, "step": 0.1, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": { "1": "Front row: every word's share of the tickets. Back row: after only the top three get past the rope and the tickets are recounted.", "2": "Row 1 is softmax over all logits; row 2 keeps the top 3 and renormalises, so the survivors grow in proportion.", "3": "Truncation zeroes the tail and rescales the survivors by 1/(their total mass), preserving ratios within the set." },
+        "view": "iso",
+        "set": { "k": 3, "T": 1 }
+      },
+      {
+        "cap": { "1": "Let all eight through and the two rows match. Top-k with k as big as the vocabulary is just plain sampling.", "2": "With k equal to the vocabulary size nothing is cut, so top-k reduces to ordinary sampling.", "3": "k = |V| is the identity truncation: the renormalising constant is 1." },
+        "view": "front",
+        "set": { "k": 8, "T": 1 }
+      },
+      {
+        "cap": { "1": "Cool the temperature. The same three words still get through, but now the favourite towers over the other two.", "2": "Lower T sharpens the distribution without changing the ranking, so the survivors are the same and the top one dominates.", "3": "Logits/T is monotone in each logit, so argsort and the top-k set are invariant; only within-set entropy falls." },
+        "view": "side",
+        "set": { "k": 3, "T": 0.3 }
+      },
+      {
+        "cap": { "1": "k = 1: one word gets every ticket. That is greedy decoding, the boring favourite from the start of the film.", "2": "With k = 1 the sampler always returns the argmax: greedy decoding.", "3": "Top-1 sampling is deterministic argmax decoding, which is prone to repetition in open-ended generation." },
+        "view": "top",
+        "set": { "k": 1, "T": 1 }
+      },
+      {
+        "cap": { "1": "Warm it up with k = 5. The five survivors share the tickets more evenly, and the rope still keeps the tail out.", "2": "Higher T flattens the shares among the survivors while truncation still excludes the unlikely tail.", "3": "High T raises entropy within the support; truncation bounds the support, so the tail's nonsense stays excluded." },
+        "view": "close",
+        "set": { "k": 5, "T": 1.6 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "You lower the temperature. Does the set of top-k words change?",
+        "options": [{ "t": "No: the ranking is kept, so the same words survive", "ok": true }, { "t": "Yes: fewer words survive" }],
+        "why": "Dividing logits by T keeps their order; only the shares inside the set change."
+      },
+      {
+        "q": "What is top-k sampling with k = 1?",
+        "options": [{ "t": "Greedy decoding: always the likeliest word", "ok": true }, { "t": "Uniform random sampling" }],
+        "why": "One survivor gets all of the renormalised mass."
+      },
+      {
+        "q": "Why hand the top-k logits straight to Categorical instead of softmaxing first?",
+        "options": [{ "t": "Categorical normalises logits itself; doing it by hand only loses precision", "ok": true }, { "t": "Categorical only accepts probabilities" }],
+        "why": "Stay in log-space: Categorical(logits=...) does the normalising for you."
+      }
+    ],
+    "where": "Any shortlist cut before a weighted draw: top-p sampling, and beam search, which keeps k whole sequences instead of k tokens."
+  }
+}

@@ -1,0 +1,205 @@
+{
+  "id": "tokenization",
+  "title": "Print with the stamps you have",
+  "week": 5,
+  "need": "core",
+  "allegory": "Tokenizing is printing text with a fixed box of rubber stamps: common chunks have their own numbered stamp, rare words are spelled from several small ones, and the space before a word is carved onto the same stamp.",
+  "map": [
+    ["the box of rubber stamps", "the fixed vocabulary"],
+    ["the number on each stamp", "the token id the model actually reads"],
+    ["a rare word spelled with several small stamps", "a string split into several tokens, like 'R' + 'alph'"],
+    ["the space carved onto the front of a stamp", "the leading space folded into the token: ' Mary' and 'Mary' are different ids"],
+    ["stamps carved but never practised with", "glitch tokens whose embeddings were barely trained"]
+  ],
+  "credit": "The 'so much LLM weirdness is really tokenization' framing (arithmetic, trailing spaces, SolidGoldMagikarp) is Andrej Karpathy's, from 'Let's build the GPT Tokenizer'.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The weird split",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "that is not where I would cut it",
+      "actors": [{ "pose": "shrug", "x": 0.12, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.6, "y": 0.2, "label": "56873+3184623", "color": "butter" },
+        { "kind": "card", "x": 0.32, "y": 0.58, "label": "568", "color": "sky" },
+        { "kind": "card", "x": 0.43, "y": 0.58, "label": "73", "color": "sky" },
+        { "kind": "card", "x": 0.53, "y": 0.58, "label": "+", "color": "teal" },
+        { "kind": "card", "x": 0.64, "y": 0.58, "label": "318", "color": "sky" },
+        { "kind": "card", "x": 0.75, "y": 0.58, "label": "46", "color": "sky" },
+        { "kind": "card", "x": 0.86, "y": 0.58, "label": "23", "color": "sky" }
+      ],
+      "arrows": [[0.6, 0.26, 0.6, 0.5, "what the model sees"]],
+      "cap": {
+        "1": "You type 56873+3184623. The model never sees your digits one by one. It sees six chunks: 568, 73, +, 318, 46, 23. Nobody would cut it there.",
+        "2": "Models read token ids, not characters. GPT-2 splits '56873+3184623' into '568', '73', '+', '318', '46', '23', a large part of why small models are bad at arithmetic.",
+        "3": "Input is a sequence of ids from a fixed BPE vocabulary. The segmentation is a by-product of merge statistics, not meaning, so digit groupings are arbitrary."
+      }
+    },
+    {
+      "name": "The stamp box",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "push", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "crate", "x": 0.44, "y": 0.6, "w": 0.18, "h": 0.2, "label": "stamp box (vocabulary)", "color": "peach" },
+        { "kind": "card", "x": 0.68, "y": 0.34, "label": "␣the", "color": "mint" },
+        { "kind": "card", "x": 0.84, "y": 0.34, "label": "␣Mary", "color": "mint" },
+        { "kind": "card", "x": 0.68, "y": 0.62, "label": "R", "color": "pink" },
+        { "kind": "card", "x": 0.84, "y": 0.62, "label": "alph", "color": "pink" }
+      ],
+      "arrows": [[0.54, 0.52, 0.63, 0.38, "common: one stamp"], [0.54, 0.64, 0.63, 0.62, "rare: pieces"]],
+      "cap": {
+        "1": "Picture printing with a box of rubber stamps. Common chunks have their own stamp; a rarer word is spelled with several small ones. Every stamp has a number.",
+        "2": "A tokenizer is a fixed vocabulary: each stamp is a token with an integer id. Common strings get one token; rare ones are built from several smaller tokens.",
+        "3": "A tokenizer deterministically maps strings to id sequences over a fixed vocabulary; the ids then index rows of W_E. Nothing about meaning enters at this stage."
+      }
+    },
+    {
+      "name": "Glue frequent pairs",
+      "need": "library",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "M + a", "c": "sky", "note": "most frequent pair" },
+        { "t": " → Ma", "c": "orange", "note": "glued into a new stamp" },
+        { "t": ";  Ma + r → Mar", "c": "green", "note": "repeat until the box is full" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Nobody designs the stamps by hand. Start with single letters, glue together the pair seen most often, and repeat until the box is full.",
+        "2": "Byte-pair encoding starts from single bytes and keeps merging the most frequent adjacent pair into a new token until the vocabulary is full. You will call it, never write it.",
+        "3": "BPE fits a merge list greedily on a corpus, from bytes up to a target vocabulary size, and encoding replays those merges. Segmentation mirrors that corpus's statistics, not meaning."
+      }
+    },
+    {
+      "name": "Spaces are carved on",
+      "need": "core",
+      "dur": 9,
+      "type": "grid",
+      "title": "the leading space is part of the stamp",
+      "rows": 2,
+      "cols": 2,
+      "values": [["' Ralph'", "' Ralph'"], ["'Ralph'", "'R' + 'alph'"]],
+      "labels": { "rows": ["with a space", "no space"], "cols": ["you type", "tokens"] },
+      "highlight": [[0, 1], [1, 1]],
+      "cap": {
+        "1": "The space in front of a word is carved onto the same stamp. ' Ralph' is one stamp. 'Ralph' with no space needs two: R and alph.",
+        "2": "BPE folds the leading space into the token, so ' Ralph' is one common token while 'Ralph' is 'R' + 'alph'. To the model these are different inputs.",
+        "3": "Leading-space variants are distinct ids with distinct embeddings, and the space-less variant is often rarer or split. Word identity is not token identity."
+      }
+    },
+    {
+      "name": "The leading-space trap",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "' Mary' (with space)", "c": "mint", "lines": ["the token the sentence", "really contains", "your logit diff measures", "what you meant"] },
+      "right": { "title": "'Mary' (no space)", "c": "pink", "lines": ["a different token", "your logit diff measures", "something else", "no error, no warning"] },
+      "verdict": "Print the tokens before you trust a number.",
+      "cap": {
+        "1": "Ask how much the model prefers Mary over John, but type the name without its space, and you are asking about a different stamp. Nothing warns you.",
+        "2": "In IOI, GPT-2 must predict ' Mary' with the space. Compare logits for 'Mary' and you measure a different token. Every [1.2] and [1.4] exercise depends on getting this right first.",
+        "3": "Answer tokens must match the in-context tokenization (' Mary', not 'Mary'); otherwise logit differences, attributions and patching metrics quietly track the wrong ids."
+      }
+    },
+    {
+      "name": "Stamps never practised",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "dusk",
+      "actors": [{ "pose": "recoil", "x": 0.18, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.36, "y": 0.22, "label": "repeat it back?", "color": "butter" },
+        { "kind": "crate", "x": 0.52, "y": 0.62, "w": 0.2, "h": 0.2, "label": "␣SolidGoldMagikarp", "color": "lav" },
+        { "kind": "cloud", "x": 0.8, "y": 0.3, "w": 0.2, "h": 0.14, "label": "'distribute'", "color": "chalk" }
+      ],
+      "arrows": [[0.62, 0.54, 0.74, 0.38, "?!"]],
+      "cap": {
+        "1": "Some stamps were carved but hardly ever used while the model practised. Asked to repeat ' SolidGoldMagikarp', GPT-3 said 'distribute'.",
+        "2": "Rumbelow and Watkins (2023) found a knot of GPT-2 tokens near the centre of its embedding space: common when the vocabulary was built, nearly absent from training.",
+        "3": "Glitch tokens: BPE merges were fit on one corpus and pretraining ran on another, so those W_E rows got near-zero gradient and stayed near initialisation. Behaviour on them is arbitrary."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Print to_str_tokens before you measure", "Never end a prompt with a stray space", "The vocabulary is part of the model"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Every experiment you run on a model starts here. Check the stamps first, or you will measure something other than what you meant.",
+        "2": "Before any logit difference or patching, print <code>model.to_str_tokens(prompt)</code> on the exact string. Build prompts with explicit leading spaces, and never leave a trailing one.",
+        "3": "Token identity is the unit of every interp measurement: logit diffs, attention patterns, patch positions. Verify segmentation before you study or steer a model."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Carve stamps one merge at a time on 'Mary met John. John met Mary, then Mary left'",
+    "labels": ["Mary", "␣met", "␣John", ".", "␣John", "␣met", "␣Mary", ",", "␣then", "␣Mary", "␣left"],
+    "params": [{ "id": "k", "label": "merges learned", "min": 0, "max": 19, "step": 1, "value": 0 }],
+    "f": "range(k).reduce(C => (best => best === null ? C : C.map(t => t.reduce((s, x, i) => s.skip ? {out: s.out, skip: false} : (i + 1 < t.length && x + '|' + t[i + 1] === best) ? {out: s.out.concat([x + t[i + 1]]), skip: true} : {out: s.out.concat([x]), skip: false}, {out: [], skip: false}).out))((e => e.length ? e.reduce((b, q) => q[1] > b[1] ? q : b)[0] : null)(Object.entries(C.flatMap(t => t.slice(0, -1).map((x, i) => x + '|' + t[i + 1])).reduce((m, p) => (m[p] = (m[p] || 0) + 1, m), {})))), ['Mary',' met',' John','.',' John',' met',' Mary',',',' then',' Mary',' left'].map(w => Array.from(w))).map(t => t.length)",
+    "y": [0, 5],
+    "readouts": [
+      { "label": "the model sees", "f": "range(k).reduce(C => (best => best === null ? C : C.map(t => t.reduce((s, x, i) => s.skip ? {out: s.out, skip: false} : (i + 1 < t.length && x + '|' + t[i + 1] === best) ? {out: s.out.concat([x + t[i + 1]]), skip: true} : {out: s.out.concat([x]), skip: false}, {out: [], skip: false}).out))((e => e.length ? e.reduce((b, q) => q[1] > b[1] ? q : b)[0] : null)(Object.entries(C.flatMap(t => t.slice(0, -1).map((x, i) => x + '|' + t[i + 1])).reduce((m, p) => (m[p] = (m[p] || 0) + 1, m), {})))), ['Mary',' met',' John','.',' John',' met',' Mary',',',' then',' Mary',' left'].map(w => Array.from(w))).flat().map(x => x.replace(/ /g, '␣')).join(' | ')" },
+      { "label": "tokens in total", "f": "range(k).reduce(C => (best => best === null ? C : C.map(t => t.reduce((s, x, i) => s.skip ? {out: s.out, skip: false} : (i + 1 < t.length && x + '|' + t[i + 1] === best) ? {out: s.out.concat([x + t[i + 1]]), skip: true} : {out: s.out.concat([x]), skip: false}, {out: [], skip: false}).out))((e => e.length ? e.reduce((b, q) => q[1] > b[1] ? q : b)[0] : null)(Object.entries(C.flatMap(t => t.slice(0, -1).map((x, i) => x + '|' + t[i + 1])).reduce((m, p) => (m[p] = (m[p] || 0) + 1, m), {})))), ['Mary',' met',' John','.',' John',' met',' Mary',',',' then',' Mary',' left'].map(w => Array.from(w))).flat().length" },
+      { "label": "the two Marys", "f": "(C => 'Mary → [' + C[0].join('|') + ']    ␣Mary → [' + C[6].map(x => x.replace(/ /g, '␣')).join('|') + ']')(range(k).reduce(C => (best => best === null ? C : C.map(t => t.reduce((s, x, i) => s.skip ? {out: s.out, skip: false} : (i + 1 < t.length && x + '|' + t[i + 1] === best) ? {out: s.out.concat([x + t[i + 1]]), skip: true} : {out: s.out.concat([x]), skip: false}, {out: [], skip: false}).out))((e => e.length ? e.reduce((b, q) => q[1] > b[1] ? q : b)[0] : null)(Object.entries(C.flatMap(t => t.slice(0, -1).map((x, i) => x + '|' + t[i + 1])).reduce((m, p) => (m[p] = (m[p] || 0) + 1, m), {})))), ['Mary',' met',' John','.',' John',' met',' Mary',',',' then',' Mary',' left'].map(w => Array.from(w))))" }
+    ],
+    "caption": {
+      "1": "Drag the merges up from 0. Frequent pairs glue first, and each space glues onto the front of its word. Watch 'Mary' and '␣Mary' become two different stamps.",
+      "2": "This is BPE learning on one sentence: each merge glues the most frequent adjacent pair. Repeated chunks become single tokens first; rare ones like '␣left' stay in pieces longest.",
+      "3": "Toy BPE with GPT-2-style pre-splitting: the leading space attaches to its word and merges never cross words. The two Marys end up as unrelated ids, the ' Mary' vs 'Mary' trap."
+    }
+  },
+  "where_else": [
+    "Prompt templates: one stray trailing space changes the tokens the model sees",
+    "Arithmetic and spelling slips: the model sees chunks, not digits or letters",
+    "Interpretability: every logit difference and patch position is keyed to a token",
+    "Glitch tokens like ' SolidGoldMagikarp': vocabulary slots the model never learned"
+  ],
+  "hamming": {
+    "what": "Turning text into a sequence of integer ids from a fixed vocabulary of chunks, built by repeatedly merging frequent pairs.",
+    "when": "Every time text goes into or comes out of a language model, and first thing in every interpretability experiment.",
+    "why": "The model never sees letters, only chunks, so where the cuts fall and whether a space is attached decide what you are actually measuring."
+  },
+  "object": {
+    "title": "The stamp row",
+    "subtitle": "The stamps GPT-2 uses to print 56873+3184623, then ' Ralph' and 'Ralph'; each block is as tall as the characters it prints.",
+    "kind": "blocks",
+    "items": [
+      { "label": "568", "h": 0.9, "c": "data" },
+      { "label": "73", "h": 0.6, "c": "data" },
+      { "label": "+", "h": 0.3, "c": "aux" },
+      { "label": "318", "h": 0.9, "c": "data" },
+      { "label": "46", "h": 0.6, "c": "data" },
+      { "label": "23", "h": 0.6, "c": "data" },
+      { "label": "␣Ralph", "h": 1.8, "c": "good" },
+      { "label": "R", "h": 0.3, "c": "prob" },
+      { "label": "alph", "h": 1.2, "c": "prob" }
+    ],
+    "axis": "x",
+    "stream": false,
+    "gap": 0.3,
+    "knobs": [],
+    "beats": [
+      { "cap": { "1": "Nine rubber stamps in a row. Each block is as tall as the number of characters its stamp prints.", "2": "One block per token. Height = characters in the token.", "3": "Blocks are tokens; height is string length, a rough proxy for how common the merged chunk was." }, "view": "iso", "set": {} },
+      { "cap": { "1": "The first six print 56873+3184623. The cuts fall at 568|73 and 318|46|23, nowhere a person would put them.", "2": "GPT-2's split of '56873+3184623'. The chunks follow merge frequency, not place value.", "3": "Digit chunking is inherited from BPE merge statistics, so the same number can split differently in different contexts." }, "view": "front", "set": {} },
+      { "cap": { "1": "Same name, two ways. '␣Ralph' is one tall stamp with the space carved on. 'Ralph' with no space needs two: R and alph.", "2": "' Ralph' is one common token; 'Ralph' is 'R' + 'alph'. Different ids, different embeddings.", "3": "Leading-space variants occupy unrelated rows of W_E; the space-less form here is not even a single token." }, "view": "close", "set": {} },
+      { "cap": { "1": "The model only ever sees the numbers on these stamps. Everything after this works on stamps, never on letters.", "2": "Attention, the residual stream and sampling all operate on token ids and their embeddings.", "3": "Tokenization is the only place language becomes integers; every downstream computation is indexed by these ids." }, "view": "side", "set": {} }
+    ],
+    "predict": [
+      { "q": "Is ' Mary' (with a space) the same token as 'Mary'?", "options": [{ "t": "No: different tokens, different ids", "ok": true }, { "t": "Yes: spaces are ignored" }], "why": "BPE folds the leading space into the token, so GPT-2 treats ' Mary' and 'Mary' as different tokens." },
+      { "q": "Why does 56873 split as '568' + '73'?", "options": [{ "t": "Those chunks were frequent when the vocabulary was built", "ok": true }, { "t": "The model groups digits in threes on purpose" }], "why": "BPE merges the most frequent adjacent pairs in its corpus. The cuts follow frequency, not place value." },
+      { "q": "A token was common when the vocabulary was built but almost absent from training. What does the model do with it?", "options": [{ "t": "Something arbitrary: its embedding was barely trained", "ok": true }, { "t": "Treats it like the nearest real word" }], "why": "Glitch tokens like ' SolidGoldMagikarp' sat near the centre of embedding space, untouched by training. GPT-3 repeated it as 'distribute'." }
+    ],
+    "where": "Anywhere text meets a model: prompt templates, few-shot separators, and every token-keyed interpretability measurement."
+  }
+}

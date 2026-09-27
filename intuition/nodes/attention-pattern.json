@@ -1,0 +1,231 @@
+{
+  "id": "attention-pattern",
+  "title": "A chart of who looks at whom",
+  "week": 6,
+  "need": "core",
+  "allegory": "An attention pattern is the glance chart of a dinner party where guests arrive in order: each guest has exactly one unit of attention to split among the guests already seated, and the chart records who looked at whom and how much.",
+  "map": [
+    ["guests arriving in order", "token positions"],
+    ["each guest's one unit of attention, split among others", "one row of the pattern: a softmax over keys that sums to 1"],
+    ["you can only look at guests already seated", "the causal mask: the pattern is lower-triangular"],
+    ["the glance chart: who looks at whom, how much", "pattern[query, key] for one head on one prompt"],
+    ["a habit you can name from the chart", "current-token, previous-token and first-token heads"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "What does it do?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "so many heads. which one does what?",
+      "actors": [{ "pose": "think", "x": 0.22, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.52, "y": 0.4, "w": 0.12, "h": 0.14, "label": "L0H3", "color": "lav" },
+        { "kind": "box", "x": 0.68, "y": 0.55, "w": 0.12, "h": 0.14, "label": "L1H4", "color": "lav" },
+        { "kind": "box", "x": 0.84, "y": 0.4, "w": 0.12, "h": 0.14, "label": "L2H7 ?", "color": "lav" }
+      ],
+      "cap": {
+        "1": "A transformer has many attention heads, each a small block of numbers. You want to know what one of them does. Where do you even start?",
+        "2": "A head's weights are opaque matrices. The cheapest first look: run a prompt, pull that head's attention pattern from the cache, and see where each token looks.",
+        "3": "Weights alone rarely reveal function. The attention pattern, post-softmax, per head, per prompt, is the first observable: which source positions each destination reads."
+      }
+    },
+    {
+      "name": "The dinner table",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "idle", "x": 0.2, "label": "The" },
+        { "pose": "point", "x": 0.5, "label": "cat" },
+        { "pose": "point", "x": 0.8, "label": "sat" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.5, "y": 0.14, "label": "each guest: 1 unit of attention", "color": "butter" }
+      ],
+      "arrows": [[0.76, 0.42, 0.56, 0.42, "0.85"], [0.74, 0.34, 0.26, 0.34, "0.05"], [0.46, 0.42, 0.26, 0.42, "0.9"]],
+      "cap": {
+        "1": "Picture guests arriving at a dinner one by one. Each has exactly one unit of attention to split among the guests already seated. Who glances at whom?",
+        "2": "For each token (the query), a head splits 100% of its attention across earlier tokens (the keys) and itself. Write those splits down for every token and you have the pattern.",
+        "3": "pattern[q, k] = softmax over k of q·k/√d_head, with the causal mask applied: a row-stochastic, lower-triangular matrix per head, specific to this prompt."
+      }
+    },
+    {
+      "name": "The glance chart",
+      "need": "core",
+      "dur": 11,
+      "type": "grid",
+      "title": "rows = who is looking, columns = who is looked at",
+      "rows": 4,
+      "cols": 4,
+      "values": [[1, 0, 0, 0], [0.9, 0.1, 0, 0], [0.05, 0.85, 0.1, 0], [0.05, 0.05, 0.8, 0.1]],
+      "labels": { "rows": ["The", "cat", "sat", "down"], "cols": ["The", "cat", "sat", "down"] },
+      "highlight": [[1, 0], [2, 1], [3, 2]],
+      "cap": {
+        "1": "As a chart: one row per guest doing the looking, one column per guest looked at. This head's habit is to look at the guest just before you.",
+        "2": "Rows are queries (destination), columns are keys (source). Every row sums to 1, the top-right is all 0, and the mass sits just below the diagonal: a previous-token head.",
+        "3": "Row-stochastic and lower-triangular; mass on the (i, i−1) off-diagonal marks a previous-token head. In TransformerLens, cache['pattern', layer] is (batch, head, query, key)."
+      }
+    },
+    {
+      "name": "Name the habit",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "score = ", "c": "ink", "note": "" },
+        { "t": "mean(", "c": "ink", "note": "" },
+        { "t": "diag(P, −1)", "c": "sky", "note": "each guest's glance at the one before" },
+        { "t": ")", "c": "ink", "note": "" },
+        { "t": " > thr", "c": "orange", "note": "call it a previous-token head" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "To find 'look at the guest before' heads automatically, average every guest's glance at the one just before. A high average names the habit.",
+        "2": "Each detector is a one-liner: the mean of the diagonal (current-token), of the diagonal just below it (previous-token), or of column 0 (first-token), then a threshold.",
+        "3": "Shape scores: mean diag(P) for current-token, mean diag(P, −1) for previous-token, mean P[:, 0] for first-token. Threshold, and average over several prompts, not one."
+      }
+    },
+    {
+      "name": "Looks, not does",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "what the chart shows", "c": "mint", "lines": ["where each token looks", "on these prompts", "a habit you can name"] },
+      "right": { "title": "what it does not show", "c": "pink", "lines": ["what gets passed along (the OV side)", "whether it matters (ablate or patch)", "other prompts"] },
+      "verdict": "Name the shape first, then test it.",
+      "cap": {
+        "1": "The chart shows who glances at whom, not what gets whispered or whether it changes the conversation. It is a first clue, not a verdict.",
+        "2": "A pattern shows where a head reads, not what it writes (the OV circuit) or whether it matters (ablate or patch it). And read along rows: rows sum to 1, columns do not.",
+        "3": "Patterns are prompt-specific and silent on the OV map and on causal effect. Practice: eyeball, name the shape, score it, then confirm with ablation or patching before claiming a role."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["The first picture of any head", "Induction heads show up as a stripe", "Pattern = hypothesis, patching = proof"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Heads you will meet later, like induction heads, have tell-tale shapes in charts like this. Looking comes first; proof comes after.",
+        "2": "In [1.2] you plot patterns with circuitsvis, then write detectors for current-, previous- and first-token heads. Naming the shape before scoring it is the real research habit.",
+        "3": "To understand and steer a model you first locate mechanism: patterns show where information flows, so you know which heads to ablate, patch or steer through."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Paint a head: tap to add glances (row = looker, column = looked at)",
+    "rows": 5,
+    "cols": 5,
+    "init": "c == max(r - 1, 0) ? 1 : 0",
+    "click": "inc",
+    "readouts": [
+      { "label": "current-token score", "f": "mean(G.map((row, i) => [row.map((v, j) => j <= i ? v : 0)].map(m => sum(m) > 0 ? m.map(v => v / sum(m)) : m.map((v, j) => j <= i ? 1/(i + 1) : 0))[0]).slice(1).map((row, k) => row[k + 1])).toFixed(2)" },
+      { "label": "previous-token score", "f": "mean(G.map((row, i) => [row.map((v, j) => j <= i ? v : 0)].map(m => sum(m) > 0 ? m.map(v => v / sum(m)) : m.map((v, j) => j <= i ? 1/(i + 1) : 0))[0]).slice(1).map((row, k) => row[k])).toFixed(2)" },
+      { "label": "first-token score", "f": "mean(G.map((row, i) => [row.map((v, j) => j <= i ? v : 0)].map(m => sum(m) > 0 ? m.map(v => v / sum(m)) : m.map((v, j) => j <= i ? 1/(i + 1) : 0))[0]).slice(1).map(row => row[0])).toFixed(2)" },
+      { "label": "verdict", "f": "[G.map((row, i) => [row.map((v, j) => j <= i ? v : 0)].map(m => sum(m) > 0 ? m.map(v => v / sum(m)) : m.map((v, j) => j <= i ? 1/(i + 1) : 0))[0]).slice(1)].map(P => [mean(P.map((row, k) => row[k + 1])), mean(P.map((row, k) => row[k])), mean(P.map(row => row[0]))]).map(s => max(...s) < 0.5 ? 'no clear habit: a mixed head' : ['a current-token head', 'a previous-token head', 'a first-token head'][s.indexOf(max(...s))])[0]" },
+      { "label": "taps above the diagonal (blocked by the causal mask)", "f": "sum(G.map((row, i) => sum(row.filter((v, j) => j > i))))" }
+    ],
+    "caption": {
+      "1": "Paint a head's habits: tap cells to add glances, and each row is shared out to sum to 1. Try the diagonal, the cells just below it, or the first column.",
+      "2": "Taps become weights; each row is masked (no looking ahead) and normalised, like a real pattern. The readouts are the three [1.2] detectors: current, previous and first-token.",
+      "3": "Rows are masked then normalised; an empty row becomes uniform, as softmax of equal scores would. Scores average diag, diag(−1) and column 0 over rows 1 to 4 (row 0 is forced)."
+    }
+  },
+  "where_else": [
+    "Markov chains: a row-stochastic transition matrix, each row a split of probability",
+    "Cross-attention in translation and image-generation models: the same chart, with queries and keys from different sequences",
+    "Later circuits such as induction heads: first recognised by the shape of their pattern"
+  ],
+  "hamming": {
+    "what": "A head's matrix of attention weights, showing for each token how it splits its attention over earlier tokens.",
+    "when": "The first thing you look at when asking what a head does, from [1.2] onwards in every circuit hunt.",
+    "why": "It is the cheapest direct window into where information flows, which tells you which heads are worth testing properly."
+  },
+  "object": {
+    "title": "The glance landscape",
+    "subtitle": "One head's pattern on 'A B C A B C' as a landscape of towers; switch the habit and blur it.",
+    "kind": "bars",
+    "rows": 6,
+    "cols": 6,
+    "f": "(c <= r ? ((1 - blur)*(shape == 0 ? (c == r ? 1 : 0) : (shape == 1 ? (c == max(r - 1, 0) ? 1 : 0) : (shape == 2 ? (c == 0 ? 1 : 0) : (r >= 3 ? (c == r - 2 ? 1 : 0) : (c == 0 ? 1 : 0))))) + blur/(r + 1)) : 0)*1.6 + 0.03",
+    "labels": { "rows": ["A", "B", "C", "A", "B", "C"], "cols": ["A", "B", "C", "A", "B", "C"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "shape", "label": "habit: 0 self, 1 previous, 2 first, 3 induction", "min": 0, "max": 3, "step": 1, "value": 0 },
+      { "id": "blur", "label": "how spread out the glances are", "min": 0, "max": 1, "step": 0.1, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Each row is one token looking back; tower height is how much it looks. This head always looks at itself: a ridge down the diagonal.",
+          "2": "A current-token head: all mass on the diagonal. The flat top-right is the causal mask at work.",
+          "3": "Idealised current-token head: P = I. Height = 1.6·P + 0.03 so masked cells stay visible as a floor."
+        },
+        "view": "iso",
+        "set": { "shape": 0, "blur": 0 }
+      },
+      {
+        "cap": {
+          "1": "Switch habit: now every token looks at the one just before it. The ridge slides one step off the diagonal.",
+          "2": "A previous-token head: mass on the sub-diagonal. Row 0 has nowhere else to look, so it looks at itself.",
+          "3": "P[i, i−1] = 1 for i ≥ 1; the first row is forced to P[0, 0] = 1 by the mask plus normalisation."
+        },
+        "view": "top",
+        "set": { "shape": 1, "blur": 0 }
+      },
+      {
+        "cap": {
+          "1": "Now everyone looks at the very first token: a wall along the first column. Researchers often read this as a head with nothing better to do.",
+          "2": "A first-token head: every row puts its mass on position 0, often interpreted as the head resting.",
+          "3": "P[:, 0] = 1: a first-token head, commonly read as a default or null position when nothing relevant is present."
+        },
+        "view": "front",
+        "set": { "shape": 2, "blur": 0 }
+      },
+      {
+        "cap": {
+          "1": "On repeated text, an induction head looks at the token right after the last time the current token appeared. A stripe appears in the second half.",
+          "2": "At the second A, it looks at the B that followed the first A: a stripe two steps below the diagonal on this 3-token repeat.",
+          "3": "Idealised induction pattern on period-3 repeats: P[i, i−2] for i ≥ 3, offset −(period − 1); first-token fallback before the repeat."
+        },
+        "view": "iso",
+        "set": { "shape": 3, "blur": 0 }
+      },
+      {
+        "cap": {
+          "1": "Real heads are blurrier. Most attention goes to the habit and some spreads around, but every row still adds up to one.",
+          "2": "Blur mixes the habit with an even spread over allowed positions. Rows still sum to 1; detectors just score lower.",
+          "3": "P = (1 − b)·P_habit + b·U_causal, still row-stochastic. Thresholded detectors degrade gracefully as b grows."
+        },
+        "view": "close",
+        "set": { "shape": 1, "blur": 0.5 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "In an attention pattern, what always sums to 1?",
+        "options": [{ "t": "Each row: one query's attention", "ok": true }, { "t": "Each column" }, { "t": "The whole matrix" }],
+        "why": "Softmax runs over the keys for each query, so every row is a distribution. Columns can sum to anything."
+      },
+      {
+        "q": "Why is the top-right triangle of a GPT-style pattern always zero?",
+        "options": [{ "t": "The causal mask stops tokens looking ahead", "ok": true }, { "t": "Those later tokens are unimportant" }],
+        "why": "Scores above the diagonal are set to minus infinity before the softmax, so they get zero weight."
+      },
+      {
+        "q": "A head puts most of its attention on the previous token. What have you shown?",
+        "options": [{ "t": "Where it reads from on these prompts: a hypothesis to test", "ok": true }, { "t": "What it writes, and that the model needs it" }],
+        "why": "Patterns show where information is read. What moves is the OV circuit; whether it matters needs ablation or patching."
+      }
+    ],
+    "where": "Any row-normalised 'who attends to whom' chart: Markov transition matrices, cross-attention maps."
+  }
+}

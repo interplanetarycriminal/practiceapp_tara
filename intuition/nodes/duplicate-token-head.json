@@ -1,0 +1,214 @@
+{
+  "id": "duplicate-token-head",
+  "title": "Stamp every name that repeats",
+  "week": 7,
+  "need": "exercise",
+  "allegory": "A duplicate-token head is a door checker at a party: when a name arrives she scans the guest list for an earlier entry of the same name, and if she finds one she stamps 'already here' on the newcomer, without writing down who it is.",
+  "map": [
+    ["a name arriving at the door", "the current token, the position doing the looking"],
+    ["scanning the list for an earlier entry of that name", "attending back to earlier positions that hold the same token"],
+    ["stamping 'already here' on the newcomer", "writing a 'duplicated' signal into the residual stream at the repeat"],
+    ["the stamp says 'repeat', not who", "the flag carries no identity or position information"],
+    ["the neighbour who looks one entry below the earlier one", "an induction head, which attends to the token after the previous occurrence"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Haven't we met?",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.6, "y": 0.3, "w": 0.6, "label": "When Mary and John went to the store, John gave a drink to ...", "color": "cream" },
+        { "kind": "flag", "x": 0.72, "y": 0.62, "label": "John, again?", "color": "orange" }
+      ],
+      "cap": {
+        "1": "'When Mary and John went to the store, John gave a drink to...' Mary, obviously. But to get that, something inside the model has to notice John came up twice.",
+        "2": "In the IOI task GPT-2 small predicts the indirect object, ' Mary'. Its circuit starts with heads that notice the second 'John' repeats the first. Some of those are duplicate-token heads.",
+        "3": "The IOI circuit in GPT-2 small begins with duplicate-token and induction heads detecting that S2 repeats S1; S-inhibition heads then move that signal from S2 to the END position."
+      }
+    },
+    {
+      "name": "The guest-list stamp",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "night",
+      "actors": [
+        { "pose": "walk", "x": 0.9, "to": 0.62, "label": "John" },
+        { "pose": "point", "x": 0.42, "label": "checker" }
+      ],
+      "props": [
+        { "kind": "door", "x": 0.72, "y": 0.45, "w": 0.1, "h": 0.5, "label": "door", "color": "peach" },
+        { "kind": "card", "x": 0.16, "y": 0.35, "label": "list: Mary, John", "color": "cream" },
+        { "kind": "flag", "x": 0.52, "y": 0.2, "label": "already here", "color": "red" }
+      ],
+      "arrows": [[0.4, 0.3, 0.22, 0.35, "same name?"]],
+      "cap": {
+        "1": "Picture a door checker at a party. Each time a name arrives, she scans the list for an earlier entry of that name. If she finds one, she stamps 'already here'.",
+        "2": "A duplicate-token head attends from each token back to earlier positions holding the same token, and writes a 'this is a repeat' signal into the current position's residual stream.",
+        "3": "Its QK circuit matches a token to earlier instances of itself; its OV output at the repeat is a 'duplicated' feature that later heads can read through composition."
+      }
+    },
+    {
+      "name": "Where the stripe falls",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "A duplicate-token head on 'A B C A B C'",
+      "rows": 6,
+      "cols": 6,
+      "values": [
+        ["", "", "", "", "", ""],
+        ["", "", "", "", "", ""],
+        ["", "", "", "", "", ""],
+        ["1", "", "", "", "", ""],
+        ["", "1", "", "", "", ""],
+        ["", "", "1", "", "", ""]
+      ],
+      "labels": { "rows": ["A", "B", "C", "A", "B", "C"], "cols": ["A", "B", "C", "A", "B", "C"] },
+      "highlight": [[3, 0], [4, 1], [5, 2]],
+      "cap": {
+        "1": "Play a random string twice: A B C, A B C. On the second pass each letter lights up the square where its twin sat, exactly one copy-length back.",
+        "2": "On a repeated random sequence the pattern shows a stripe at offset −seq_len: the second A attends to the first A, and so on. The first pass has no earlier twin to find.",
+        "3": "Stripe position identifies the job: offset 0 is a current-token head, −1 previous-token, −seq_len duplicate-token, and 1 − seq_len the induction stripe."
+      }
+    },
+    {
+      "name": "Build a detector",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "mean(", "c": "ink", "note": "" },
+        { "t": "diagonal(", "c": "sky", "note": "one line of the pattern" },
+        { "t": "offset=−seq_len", "c": "orange", "note": "the twin's square" },
+        { "t": "))", "c": "ink", "note": "" }
+      ],
+      "actor": { "pose": "type", "x": 0.1 },
+      "cap": {
+        "1": "To find these heads automatically, average how much each head looks exactly one copy-length back. A high score means you've found a stamp checker.",
+        "2": "Detectors score each head by the mean of its attention pattern along one diagonal. For duplicate-token heads that is offset −seq_len on a sequence repeated twice. Mind the BOS shift.",
+        "3": "pattern.diagonal(dim1=−2, dim2=−1, offset=−seq_len).mean(), with seq_len the length of one copy. BOS shifts indices by one; off by one and you are scoring a different circuit."
+      }
+    },
+    {
+      "name": "Twin or neighbour?",
+      "need": "core",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "duplicate-token head", "c": "orange", "lines": ["looks at the earlier copy", "offset −seq_len", "writes: 'I'm a repeat'"] },
+      "right": { "title": "induction head", "c": "sky", "lines": ["looks one step after the copy", "offset 1 − seq_len", "writes: 'next comes B'"] },
+      "verdict": "One square apart in the pattern, completely different jobs.",
+      "cap": {
+        "1": "Its neighbour, the induction head, looks one seat further along, at whoever came after the twin. One seat apart, completely different jobs.",
+        "2": "A duplicate-token head attends to the earlier copy; an induction head attends one position later, to what followed it, and copies that. An off-by-one detector scores the wrong circuit.",
+        "3": "Duplicate heads output a 'seen before' flag; induction heads, via K-composition with a previous-token head, predict the next token. Their detectors differ by one in the diagonal offset."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 10,
+      "type": "cards",
+      "items": ["IOI: the stamp tells later heads 'not John'", "Heads have jobs you can detect", "The stamp says 'repeat', not who"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "In the Mary and John sentence the stamp travels to the end, and the heads that pick a name learn to skip the stamped one. Mary wins.",
+        "2": "S-inhibition heads carry the duplicate signal from the second John to the end; name movers then avoid the duplicated name and copy Mary. Spotting head jobs is how circuits get read.",
+        "3": "Path patching shows duplicate-token heads write a 'duplicated' flag with no identity or position, read by S-inhibition keys. Reading flags like this is how you understand, then steer, a circuit."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "Paint where your head looks on 'A B C D A B C D' (rows look, columns are looked at)",
+    "rows": 8,
+    "cols": 8,
+    "init": "(r >= 4 && c == r - 4) ? 1 : 0",
+    "click": "toggle",
+    "readouts": [
+      { "label": "current-token score (offset 0)", "f": "(100*mean(range(8).map(i => G[i][i]))).toFixed(0) + '%'" },
+      { "label": "previous-token score (offset −1)", "f": "(100*mean(range(7).map(i => G[i+1][i]))).toFixed(0) + '%'" },
+      { "label": "duplicate-token score (offset −4)", "f": "(100*mean(range(4).map(i => G[i+4][i]))).toFixed(0) + '%'" },
+      { "label": "induction score (offset −3)", "f": "(100*mean(range(4).map(i => G[i+4][i+1]))).toFixed(0) + '%'" },
+      { "label": "your head is a", "f": "(s => max(...s) == 0 ? 'no stripe yet' : ['current-token', 'previous-token', 'duplicate-token', 'induction'][s.indexOf(max(...s))] + ' head')([mean(range(8).map(i => G[i][i])), mean(range(7).map(i => G[i+1][i])), mean(range(4).map(i => G[i+4][i])), mean(range(4).map(i => G[i+4][i+1]))])" },
+      { "label": "squares peeking ahead (illegal)", "f": "sum(G.map((row, r) => sum(row.map((v, c) => c > r ? v : 0))))" }
+    ],
+    "caption": {
+      "1": "The lit squares are where your head looks. It starts as a duplicate-token head. Move the stripe one square right and watch it turn into an induction head.",
+      "2": "Rows are the token looking, columns the token looked at. Each detector averages one diagonal. Paint the main diagonal, or the line just below it, and see which detector fires.",
+      "3": "Scores are diagonal means at offsets 0, −1, −seq_len (−4) and 1 − seq_len (−3). Anything above the diagonal would break the causal mask; the last readout counts those squares."
+    }
+  },
+  "where_else": [
+    "IOI in GPT-2 small: the repeated-subject flag that S-inhibition heads carry to the end",
+    "Induction heads: one square further along, copying the next token instead of flagging",
+    "Every head detector: pick the diagonal a job predicts, average it, then ablate to confirm"
+  ],
+  "hamming": {
+    "what": "An attention head that looks from a token back to earlier copies of the same token and marks it as a repeat.",
+    "when": "Whenever repetition matters for the next prediction, as when a model must avoid the name that has already appeared twice.",
+    "why": "It supplies a 'seen before' flag that later heads read, which is how the IOI circuit knows not to answer with the repeated name."
+  },
+  "object": {
+    "title": "The twin-finder grid",
+    "subtitle": "An attention pattern on 'A B C D A B C D': slide the ridge and the head changes job.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "(c <= r && c == r - 4 + shift) ? 1.2 : 0.05",
+    "labels": { "rows": ["A", "B", "C", "D", "A", "B", "C", "D"], "cols": ["A", "B", "C", "D", "A", "B", "C", "D"] },
+    "c": "prob",
+    "knobs": [{ "id": "shift", "label": "Slide the ridge towards the diagonal", "min": 0, "max": 4, "step": 1, "value": 0 }],
+    "beats": [
+      {
+        "cap": { "1": "Rows look, columns are looked at. The ridge sits one copy-length back: every second-pass letter finds its twin. A duplicate-token head.", "2": "A stripe at offset −seq_len: each token in the second copy attends to its earlier occurrence.", "3": "Diagonal at offset −4 for seq_len 4: the duplicate-token signature on a self-concatenated sequence." },
+        "view": "iso",
+        "set": { "shift": 0 }
+      },
+      {
+        "cap": { "1": "Slide the ridge one square along. Now each letter looks at whoever followed its twin. That is an induction head.", "2": "Offset 1 − seq_len: attention to the token after the previous occurrence, the induction stripe.", "3": "One step right of the duplicate stripe is the induction diagonal, the one ARENA's induction score averages." },
+        "view": "top",
+        "set": { "shift": 1 }
+      },
+      {
+        "cap": { "1": "Slide it up against the diagonal. Each letter looks at the one just before it: a previous-token head.", "2": "Offset −1 is the previous-token pattern, the first half of the classic two-layer induction circuit.", "3": "The previous-token head writes 'the token before me was A' into the next position, which induction keys then read." },
+        "view": "front",
+        "set": { "shift": 3 }
+      },
+      {
+        "cap": { "1": "On the diagonal itself each letter looks only at itself: a current-token head.", "2": "Offset 0 means each position attends to itself.", "3": "Main-diagonal mass is the current-token signature; detectors score it with offset 0." },
+        "view": "side",
+        "set": { "shift": 4 }
+      },
+      {
+        "cap": { "1": "Back to the twin-finder. It doesn't copy its twin; it stamps 'repeat' for later heads to read.", "2": "What matters downstream is the flag it writes, not the token it looks at.", "3": "In IOI this flag, with no identity or position information, is read by the S-inhibition heads' keys." },
+        "view": "close",
+        "set": { "shift": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "On 'A B C D A B C D', where does a duplicate-token head at the second A look?",
+        "options": [{ "t": "At the first A", "ok": true }, { "t": "At the first B, just after the first A" }, { "t": "At itself" }],
+        "why": "It attends to the earlier copy itself. The first B is where an induction head looks."
+      },
+      {
+        "q": "According to path patching in IOI, what does a duplicate-token head write into the stream?",
+        "options": [{ "t": "A 'duplicated' flag with no identity or position", "ok": true }, { "t": "The name of the repeated token" }],
+        "why": "The S-inhibition heads' keys read a bare 'this was repeated' signal."
+      },
+      {
+        "q": "Your detector scores every head near zero, but you can see a twin stripe by eye. Most likely cause?",
+        "options": [{ "t": "The diagonal offset is off by one", "ok": true }, { "t": "The model has no such heads" }],
+        "why": "The offset is the whole experiment: seq_len means one copy, and BOS shifts indices by one."
+      }
+    ],
+    "where": "Any 'have I seen this before?' check, like the repeated-name flag in IOI that tells later heads which name to skip."
+  }
+}

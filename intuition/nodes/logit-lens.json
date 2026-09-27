@@ -1,0 +1,250 @@
+{
+  "id": "logit-lens",
+  "title": "A straw poll after every round",
+  "week": 7,
+  "need": "core",
+  "allegory": "The logit lens is like calling a straw poll after every round of a jury's deliberation: using the official counting rules, you ask 'if you had to vote right now, what would you say?', and watch when the verdict forms.",
+  "map": [
+    ["the jury's shared notes, revised each round", "the residual stream, added to by every layer"],
+    ["a straw poll: 'if you had to vote now?'", "apply ln_final and W_U to the residual after layer L"],
+    ["the official ballot-counting rules", "the unembedding W_U, trained only to read the last layer"],
+    ["counting early notes with the final session's scale", "using the final LayerNorm scale for every layer: an approximation"],
+    ["asking each juror how hard they pushed", "splitting the same readout per component: direct logit attribution"]
+  ],
+  "credit": "",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Deciding when?",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "12 layers ... where did it make up its mind?",
+      "actors": [{ "pose": "think", "x": 0.2, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.55, "y": 0.56, "w": 0.2, "h": 0.4, "label": "12 layers", "color": "lav" },
+        { "kind": "card", "x": 0.55, "y": 0.18, "label": "...John gave a drink to ___", "color": "cream" },
+        { "kind": "card", "x": 0.86, "y": 0.56, "label": "' Mary'", "color": "mint" }
+      ],
+      "arrows": [[0.66, 0.56, 0.78, 0.56, "only at the end"]],
+      "cap": {
+        "1": "A language model only speaks at the very end, after all its layers. You want to know when it actually made up its mind, and what it believed on the way.",
+        "2": "GPT-2 reads its residual stream through ln_final and W_U once, after the last block. Everything before that is hidden state with no obvious way to read it.",
+        "3": "We want a readout of intermediate residual states in output space: what distribution over tokens does the stream encode at depth L, before later layers write to it?"
+      }
+    },
+    {
+      "name": "The straw poll",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.15, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.42, "y": 0.58, "w": 0.16, "h": 0.34, "label": "jury notes", "color": "sky" },
+        { "kind": "box", "x": 0.62, "y": 0.6, "w": 0.12, "h": 0.2, "label": "ballot rules", "color": "green" },
+        { "kind": "card", "x": 0.86, "y": 0.4, "label": "round 3: 'the'", "color": "chalk" },
+        { "kind": "card", "x": 0.86, "y": 0.72, "label": "round 9: 'Mary'", "color": "mint" }
+      ],
+      "arrows": [[0.51, 0.58, 0.56, 0.6, ""], [0.69, 0.56, 0.78, 0.44, ""], [0.69, 0.64, 0.78, 0.7, ""]],
+      "cap": {
+        "1": "Picture a jury deliberating in rounds. After each round you call a straw poll: 'If you had to vote right now, what would you say?' Nobody has to stop.",
+        "2": "The logit lens takes the residual stream after layer L and pushes it through the model's own final LayerNorm and unembedding, as if every later layer were deleted.",
+        "3": "Lens(L) = W_U · LN_final(resid_L). It works because the stream is one additive bus, so a partial sum is a legitimate object, and each token's unembedding direction is fixed."
+      }
+    },
+    {
+      "name": "One multiplication",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "logits_L", "c": "orange", "note": "the straw poll" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "LN_final(", "c": "lav", "note": "final scale, borrowed" },
+        { "t": "x_L", "c": "sky", "note": "notes after round L" },
+        { "t": ")·W_U", "c": "green", "note": "official counting rules" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Take the notes after round L, format them the way the final round would be, and count votes with the official rules. One multiplication, no training.",
+        "2": "In TransformerLens: <code>cache.accumulated_resid(layer=-1, incl_mid=True)</code>, then <code>apply_ln_to_stack(..., layer=-1)</code>, then multiply by W_U or dot with a logit-difference direction.",
+        "3": "The LN scale used is the one computed from the real final residual, applied to every layer. That is an approximation: fine for a global scale, and a lens-model gap is information."
+      }
+    },
+    {
+      "name": "Where minds change",
+      "need": "core",
+      "dur": 10,
+      "type": "plot",
+      "curves": [{ "f": "3.5 * sigmoid(3 * (x - 9))", "c": "orange", "label": "lens logit difference (schematic)" }],
+      "x": [0, 12],
+      "y": [-0.5, 4],
+      "dot": true,
+      "marks": [{ "x": 9, "label": "layer 9: the jump" }],
+      "cap": {
+        "1": "Poll after every round and plot the answers. On the name task the jury is undecided for nine rounds, then suddenly leans hard towards the right name.",
+        "2": "In ARENA's IOI exercises the logit difference (right name minus wrong name) read through the lens is flat until layer 9, then jumps. That localises the decision without touching the model.",
+        "3": "An accumulated-residual lens on the logit-difference direction gives the counterfactual 'delete every later layer'. Curve shape schematic; the layer-9 jump is the reported feature."
+      }
+    },
+    {
+      "name": "Guesses, not echoes",
+      "need": "core",
+      "dur": 9,
+      "type": "compare",
+      "left": { "title": "What you might expect", "c": "chalk", "lines": ["early layers echo the input", "slowly morph into an answer"] },
+      "right": { "title": "What GPT-2 shows", "c": "mint", "lines": ["after layer 1, already a guess", "the guess is refined, layer by layer"] },
+      "verdict": "The stream is a running prediction almost from the start.",
+      "cap": {
+        "1": "The surprise: early polls do not repeat the evidence back. Almost from the first round, the jury is already guessing the verdict and just refining it.",
+        "2": "nostalgebraist found GPT-2's intermediate layers decode to sensible next-token guesses that converge on the final answer, and almost never to the input tokens themselves.",
+        "3": "The input representation is discarded within about the first layer; later computation refines a prediction rather than transforming an input (nostalgebraist, LessWrong, 2020)."
+      }
+    },
+    {
+      "name": "When the lens lies",
+      "need": "contested",
+      "dur": 10,
+      "type": "compare",
+      "left": { "title": "GPT-2", "c": "mint", "lines": ["coherent guesses by depth", "lens tracks the model", "a known-good test bed"] },
+      "right": { "title": "some other models", "c": "pink", "lines": ["noise until the last layers", "middle layers in another basis", "not your bug"] },
+      "verdict": "Check on GPT-2 first. Where the raw lens fails, a tuned lens learns one decoder per layer.",
+      "cap": {
+        "1": "The straw poll assumes early notes are written in the same language as the final vote. In GPT-2 that roughly holds. In some other models it does not.",
+        "2": "Current method: the raw lens, which works well on GPT-2. Research (Belrose et al.) finds it brittle on other families and trains a tuned lens. What you need: the raw lens on GPT-2, tested on a known case.",
+        "3": "The tuned lens fits an affine probe per layer instead of assuming the identity. Any lens is correlational: it says what layer L encodes, never that L caused it. Patching tests that."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 8,
+      "type": "cards",
+      "items": ["Find where a decision forms", "Same trick per component: DLA", "Read what a feature or steering vector promotes"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "It is the cheapest look inside a model: no training, no surgery, one multiplication. It tells you roughly where a decision happens, so you know where to dig.",
+        "2": "Split the same readout by component and you get direct logit attribution. Apply it to an SAE decoder vector and you see which tokens that feature pushes toward.",
+        "3": "The same W_U projection on a steering vector or SAE latent gives its promoted-token profile with no forward pass: a first check on what an intervention will make the model say."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "A toy stream: set the decision layer, its strength, and a late push-back",
+    "labels": ["emb", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10", "L11", "L12"],
+    "params": [
+      { "id": "d", "label": "decision layer", "min": 1, "max": 12, "step": 1, "value": 9 },
+      { "id": "s", "label": "strength of the decisive write", "min": 0, "max": 4, "step": 0.5, "value": 3 },
+      { "id": "c", "label": "late push-back at layer 11", "min": -4, "max": 1, "step": 0.5, "value": 0 }
+    ],
+    "f": "range(13).map(i => (i >= d ? s : 0) + (i >= 11 ? c : 0))",
+    "y": [-4.5, 5],
+    "readouts": [
+      { "label": "model's final answer (lens at L12)", "f": "(s + c) > 0 ? 'right name, logit diff ' + (s + c).toFixed(1) : 'wrong name or tie, logit diff ' + (s + c).toFixed(1)" },
+      { "label": "first poll favouring the right name", "f": "(v => v === undefined ? 'never' : (v === 0 ? 'emb' : 'L' + v))(range(13).find(i => (i >= d ? s : 0) + (i >= 11 ? c : 0) > 0))" },
+      { "label": "lens at L10 vs final output", "f": "(d <= 10 ? s : 0).toFixed(1) + ' vs ' + (s + c).toFixed(1)" }
+    ],
+    "caption": {
+      "1": "Each bar is a straw poll after one layer: above zero favours the right name. Move the decision layer, then add a late push-back and watch middle polls disagree.",
+      "2": "The lens reads a running total, so a bar only moves at layers that write along the answer direction. A late negative write makes middle polls disagree with the output: a finding, not a bug.",
+      "3": "Toy stream: layer d writes +s along the logit-difference direction, layer 11 writes c. Lens(L) is the cumulative sum; DLA would credit d with s and 11 with c. Real curves are messier."
+    }
+  },
+  "where_else": [
+    "Direct logit attribution: the same projection split per component instead of per layer",
+    "An SAE or transcoder latent's logit lens: its decoder vector dotted with W_U",
+    "Checking what a steering vector will push the model to say, with no forward pass",
+    "The tuned lens, which swaps the borrowed decoder for a trained one per layer"
+  ],
+  "hamming": {
+    "what": "Running an intermediate residual state through the model's own final LayerNorm and unembedding, to read what it would predict if it stopped there.",
+    "when": "When you want a cheap first look at where in the stack a prediction forms, before any patching.",
+    "why": "It needs no training or intervention, it shows the stream is a running prediction, and where it disagrees with the model, the gap points at what later layers do."
+  },
+  "object": {
+    "title": "The polling tower",
+    "subtitle": "Twelve straw polls stacked from the first layer to the last, five candidate words each (schematic, not measured).",
+    "kind": "bars",
+    "rows": 12,
+    "cols": 5,
+    "f": "(t => 0.05 + 2 * ((1 - t) * [0.1, 0.1, 0.35, 0.25, 0.2][c] + t * (r >= 10 ? (1 - late) * [0.8, 0.1, 0.04, 0.03, 0.03][c] + late * [0.5, 0.4, 0.04, 0.03, 0.03][c] : [0.8, 0.1, 0.04, 0.03, 0.03][c])))(sigmoid(3 * (r + 1 - d)))",
+    "labels": {
+      "rows": ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9", "L10", "L11", "L12"],
+      "cols": ["Mary", "John", "the", "them", "a"]
+    },
+    "c": "prob",
+    "knobs": [
+      { "id": "d", "label": "Layer where the decision forms", "min": 3, "max": 12, "step": 1, "value": 9 },
+      { "id": "late", "label": "Late layers push back towards John", "min": 0, "max": 1, "step": 0.5, "value": 0 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Twelve straw polls, one per layer, five candidate words each. Taller means more votes. The shape is schematic, not measured.",
+          "2": "Each row is a lens distribution after one layer on an IOI-style prompt, restricted to five candidates.",
+          "3": "Rows: softmax(W_U · LN_final(resid_L)) over five candidates; values schematic, to show the shape of the finding."
+        },
+        "view": "iso",
+        "set": { "d": 9, "late": 0 }
+      },
+      {
+        "cap": {
+          "1": "From the side: the right name barely registers for eight layers, then shoots up around layer 9. That is where the jury decided.",
+          "2": "The reported IOI result: the lens logit difference is flat until layer 9, then jumps. The lens localises the decision.",
+          "3": "Localisation without intervention: the jump marks where components writing the answer direction sit. Patching then tests causation."
+        },
+        "view": "side",
+        "set": { "d": 9, "late": 0 }
+      },
+      {
+        "cap": {
+          "1": "Move the decision earlier and the tower changes shape. The lens would now send you looking for the mechanism in earlier layers.",
+          "2": "Where the curve moves tells you which layers to patch first.",
+          "3": "The lens narrows the search space for activation patching; it cannot itself show those layers are necessary."
+        },
+        "view": "iso",
+        "set": { "d": 5, "late": 0 }
+      },
+      {
+        "cap": {
+          "1": "Now the last layers push back towards the wrong name. The middle polls disagree with the final vote, and that gap is a finding.",
+          "2": "When the lens at layer 10 disagrees with the output, a later component changed the prediction. Information, not a bug.",
+          "3": "Lens-model disagreement flags late writes along the answer direction, or a basis mismatch; DLA and patching tell them apart."
+        },
+        "view": "front",
+        "set": { "d": 9, "late": 1 }
+      },
+      {
+        "cap": {
+          "1": "From above, the tower changes colour as it rises: generic guesses first, then one answer, refined rather than invented at the end.",
+          "2": "Early layers already hold guesses, not copies of the input: the stream is a running prediction.",
+          "3": "nostalgebraist's observation: after roughly the first layer, the stream lives in prediction space, not input space."
+        },
+        "view": "top",
+        "set": { "d": 9, "late": 0 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "What does the logit lens compute at layer 5?",
+        "options": [{ "t": "The final LayerNorm and unembedding applied to layer 5's residual", "ok": true }, { "t": "A newly trained probe for layer 5" }, { "t": "Layer 5's attention pattern" }],
+        "why": "No training: it borrows the model's own output step. A trained decoder per layer is the tuned lens."
+      },
+      {
+        "q": "The lens at layer 10 favours John, but the model outputs Mary. A bug?",
+        "options": [{ "t": "Not necessarily: a later layer changed the prediction", "ok": true }, { "t": "Yes: the lens must match the output at every layer" }],
+        "why": "Where the lens disagrees with the model, the gap is itself a finding about what later layers do."
+      },
+      {
+        "q": "The raw lens decodes to noise on a new model family. Most likely cause?",
+        "options": [{ "t": "Its middle layers are not in W_U's basis", "ok": true }, { "t": "Your LayerNorm code is wrong" }],
+        "why": "The lens assumes a shared basis, which holds for GPT-2 but not everywhere. Test on GPT-2 small first; the tuned lens learns a decoder per layer."
+      }
+    ],
+    "where": "Any readout that borrows the final decoder early: DLA per component, SAE latents' promoted tokens, steering vectors."
+  }
+}

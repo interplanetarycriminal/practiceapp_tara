@@ -1,0 +1,210 @@
+{
+  "id": "unembedding",
+  "title": "Every word scores the final arrow",
+  "week": 5,
+  "need": "core",
+  "allegory": "The unembedding is a line of judges, one per word in the vocabulary, each holding their own arrow; they score the model's final arrow by how far it points along theirs, and those scores are the logits.",
+  "map": [
+    ["the model's final arrow", "the residual vector at a position, after the final LayerNorm"],
+    ["one judge per word, holding their own arrow", "one column of W_U per vocabulary token"],
+    ["a judge's score: how far your arrow points along theirs", "logit = residual · W_U[:, token] (plus the bias b_U)"],
+    ["turning all the scores into odds", "softmax over the logits, done later by the loss or the sampler"],
+    ["judges don't care where an arrow came from", "linearity: any piece of the residual stream can be unembedded (logit lens, DLA)"]
+  ],
+  "credit": "The picture of a final matrix that scores every word, followed by softmax turning scores into odds, follows 3Blue1Brown's 'But what is a GPT?' (Deep Learning series).",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "The last step",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "night",
+      "note": "a list of numbers in, a score per word out?",
+      "actors": [{ "pose": "think", "x": 0.12, "label": "you" }],
+      "props": [
+        { "kind": "stack", "x": 0.38, "y": 0.55, "w": 0.1, "h": 0.4, "label": "final arrow", "color": "sky" },
+        { "kind": "card", "x": 0.74, "y": 0.3, "label": "' Paris'  ?", "color": "cream" },
+        { "kind": "card", "x": 0.74, "y": 0.46, "label": "' the'  ?", "color": "cream" },
+        { "kind": "card", "x": 0.74, "y": 0.62, "label": "' banana'  ?", "color": "cream" },
+        { "kind": "card", "x": 0.74, "y": 0.78, "label": "…every word", "color": "cream" }
+      ],
+      "arrows": [[0.45, 0.5, 0.64, 0.32], [0.45, 0.55, 0.64, 0.47], [0.45, 0.6, 0.64, 0.62]],
+      "cap": {
+        "1": "At the end of the model sits one long list of numbers: its final thought. But you need a score for every word it might say next. How?",
+        "2": "The residual stream ends as one d_model-sized vector per position. What you need is a score (a logit) for each of the d_vocab tokens. One matrix does the conversion.",
+        "3": "The final residual (after ln_final) must be mapped to d_vocab logits. The unembedding W_U, shape (d_model, d_vocab), is that linear readout."
+      }
+    },
+    {
+      "name": "The word judges",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [
+        { "pose": "cheer", "x": 0.5, "label": "' Paris'" },
+        { "pose": "shrug", "x": 0.68, "label": "' London'" },
+        { "pose": "slump", "x": 0.86, "label": "' banana'" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.18, "y": 0.5, "label": "final arrow", "color": "sky" },
+        { "kind": "flag", "x": 0.5, "y": 0.2, "label": "high score", "color": "green" },
+        { "kind": "flag", "x": 0.68, "y": 0.2, "label": "low", "color": "butter" },
+        { "kind": "flag", "x": 0.86, "y": 0.2, "label": "very low", "color": "red" }
+      ],
+      "arrows": [[0.26, 0.48, 0.44, 0.42, "score me"]],
+      "cap": {
+        "1": "Line up one judge for every word in the dictionary. Each holds their own arrow and scores the model's final arrow by how well it points along theirs.",
+        "2": "W_U has one column per token. A token's logit is the dot product of the final residual with that token's column: big when they point the same way.",
+        "3": "logits = x·W_U + b_U with x the post-ln_final residual. Column W_U[:, t] is token t's readout direction; the logit is a projection onto it, scaled by its norm."
+      }
+    },
+    {
+      "name": "One dot per word",
+      "need": "exercise",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "logit[w]", "c": "ink", "note": "word w's score" },
+        { "t": " = ", "c": "ink", "note": "" },
+        { "t": "x", "c": "sky", "note": "final arrow" },
+        { "t": " · ", "c": "ink", "note": "how aligned" },
+        { "t": "W_U[:, w]", "c": "orange", "note": "word w's arrow" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Each score is one multiply-and-add: pair up the two arrows' numbers, multiply each pair, add it all up. Same direction: big score. Opposite: very negative.",
+        "2": "All words at once is one matrix multiply: <code>x @ W_U + b_U</code> gives a logit per token. The <code>Unembed</code> exercise is this multiply plus a bias.",
+        "3": "An einsum over d_model: (batch, pos, d_model) × (d_model, d_vocab) → (batch, pos, d_vocab), plus b_U. Softmax comes later, inside the loss or the sampler."
+      }
+    },
+    {
+      "name": "A tiny dictionary",
+      "need": "core",
+      "dur": 10,
+      "type": "grid",
+      "title": "toy W_U: one column per word; final arrow x = [2, 1, 0]",
+      "rows": 3,
+      "cols": 4,
+      "values": [[1, 1, 0, 0], [0, 1, 1, 0], [1, 0, 1, 1]],
+      "labels": { "rows": ["dim 1", "dim 2", "dim 3"], "cols": ["' cat'", "' dog'", "' sat'", "' the'"] },
+      "highlight": [[0, 1], [1, 1], [2, 1]],
+      "cap": {
+        "1": "A tiny model: arrows of 3 numbers, a 4-word dictionary. Each column is one word's arrow. With final arrow [2, 1, 0], dog scores 2 + 1 + 0 = 3 and wins.",
+        "2": "x @ W_U: cat = 2·1 + 1·0 + 0·1 = 2, dog = 3, sat = 1, the = 0. Real GPT-2 is the same picture with far more rows and columns.",
+        "3": "Each logit is a column-wise inner product. Rows are residual dimensions, so reading a row of W_U shows how one dimension votes across the whole vocabulary."
+      }
+    },
+    {
+      "name": "Read any arrow",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [{ "pose": "point", "x": 0.08, "label": "you" }],
+      "props": [
+        { "kind": "card", "x": 0.26, "y": 0.3, "label": "a middle layer", "color": "mint" },
+        { "kind": "card", "x": 0.26, "y": 0.5, "label": "one head's output", "color": "peach" },
+        { "kind": "card", "x": 0.26, "y": 0.7, "label": "a steering vector", "color": "lav" },
+        { "kind": "crate", "x": 0.58, "y": 0.52, "w": 0.16, "h": 0.2, "label": "W_U judges", "color": "butter" },
+        { "kind": "card", "x": 0.86, "y": 0.5, "label": "which words it favours", "color": "green" }
+      ],
+      "arrows": [[0.36, 0.32, 0.5, 0.46], [0.36, 0.5, 0.5, 0.5], [0.36, 0.68, 0.5, 0.56], [0.66, 0.5, 0.76, 0.5]],
+      "cap": {
+        "1": "The judges don't care where an arrow came from. Hold up a half-finished thought, or one part's contribution, and they still tell you which words it favours.",
+        "2": "Unembedding is linear, so you can apply W_U to anything in the residual stream: a middle layer (the logit lens), one head's output (direct logit attribution), a steering vector.",
+        "3": "Logits decompose over residual summands. The logit lens applies ln_final and W_U mid-model; DLA projects each component's output; unembedding a steering vector reveals its top tokens."
+      }
+    },
+    {
+      "name": "Logits, not probabilities",
+      "need": "core",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "logit difference", "c": "mint", "lines": ["logit[Mary] − logit[John]", "one fixed direction:", "W_U[:,Mary] − W_U[:,John]", "parts add up"] },
+      "right": { "title": "probabilities", "c": "pink", "lines": ["pass through softmax", "not linear", "parts don't add up", "each depends on every word"] },
+      "verdict": "Measure in logits; softmax only at the very end.",
+      "cap": {
+        "1": "Scores add up nicely; odds don't. Once scores become odds, each word's odds depend on every other word, so the parts stop adding up.",
+        "2": "Logit difference, logit[' Mary'] − logit[' John'], is one dot product with W_U[:, Mary] − W_U[:, John], so contributions add. Probabilities pass through softmax and don't.",
+        "3": "Softmax is nonlinear, so log-probs don't decompose over components; logit differences do. Caveat: ln_final divides everything by a prompt-dependent scale before W_U."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["Logit lens: read the middle of the model", "Logit difference: IOI's yardstick", "Unembed a steering vector to see what it says"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "This one matrix is your window into the model: hold any internal arrow up to the word judges and see what it is trying to say.",
+        "2": "You will reuse W_U constantly: logit lens, direct logit attribution, OV circuits, and sanity-checking a steering vector by unembedding it. It is the model's own dictionary.",
+        "3": "W_U is the fixed readout basis that makes internal directions legible: logit lens, DLA and full OV circuits (W_U W_OV W_E) all use it to understand and steer model behaviour."
+      }
+    }
+  ],
+  "coda": {
+    "type": "bars",
+    "title": "Aim the final arrow at four word judges and read the odds",
+    "labels": ["' Paris'", "' France'", "' London'", "' the'"],
+    "params": [
+      { "id": "ax", "label": "arrow tip, east-west", "min": -1, "max": 1, "step": 0.05, "value": 0.9 },
+      { "id": "ay", "label": "arrow tip, north-south", "min": -1, "max": 1, "step": 0.05, "value": -0.2 },
+      { "id": "len", "label": "arrow length ×", "min": 0.5, "max": 5, "step": 0.25, "value": 1 }
+    ],
+    "f": "softmax([[1, 0], [0.64, 0.77], [-0.94, 0.34], [-0.21, -0.56]].map(w => len*dot([ax, ay], w)))",
+    "y": [0, 1],
+    "readouts": [
+      { "label": "logits (Paris, France, London, the)", "f": "[[1, 0], [0.64, 0.77], [-0.94, 0.34], [-0.21, -0.56]].map(w => (len*dot([ax, ay], w)).toFixed(2)).join(', ')" },
+      { "label": "top word", "f": "[' Paris', ' France', ' London', ' the'][(l => l.indexOf(max(...l)))([[1, 0], [0.64, 0.77], [-0.94, 0.34], [-0.21, -0.56]].map(w => dot([ax, ay], w)))]" },
+      { "label": "logit[' Paris'] − logit[' London']", "f": "(len*(dot([ax, ay], [1, 0]) - dot([ax, ay], [-0.94, 0.34]))).toFixed(2)" }
+    ],
+    "caption": {
+      "1": "Slide the arrow's tip around and watch which word wins. Then raise the length: same winner, far more sure. Direction picks the word; length sets the confidence.",
+      "2": "Bars are softmax of x·W_U for four toy word columns. Paris and France point close together, so they rise and fall together. Scaling x keeps the ranking but sharpens the odds.",
+      "3": "Logit = |x||w|cos θ per token, so scaling x by c is softmax at temperature 1/c. The logit-difference readout stays exactly linear in x even as the probabilities saturate."
+    }
+  },
+  "where_else": [
+    "Logit lens: unembed the middle of the model to watch its guess form",
+    "Direct logit attribution: unembed each head's output to see what it pushes",
+    "OV circuits: W_U W_OV W_E, what a head writes about a token it attends to",
+    "Any classifier's final linear layer: one score per class, then softmax"
+  ],
+  "hamming": {
+    "what": "The final matrix that scores every vocabulary token by a dot product with the last residual vector, producing the logits.",
+    "when": "At the end of every forward pass, and any time you want to read what an internal vector says in words.",
+    "why": "Because it is linear, any piece of the residual stream can be read through it, which makes it the main window interpretability uses to see what a model is doing."
+  },
+  "object": {
+    "title": "The word tent",
+    "subtitle": "The ground is every possible final arrow; the height is the best score any word gives it, and each flat facet belongs to one word.",
+    "kind": "surface",
+    "f": "max(x, 0.643*x + 0.766*y, -0.940*x + 0.342*y, n*(-0.342*x - 0.940*y))",
+    "x": [-2, 2],
+    "y": [-2, 2],
+    "marks": [
+      { "x": 1.5, "y": 0, "label": "' Paris'" },
+      { "x": 0.96, "y": 1.15, "label": "' France'" },
+      { "x": -1.41, "y": 0.51, "label": "' London'" },
+      { "x": -0.51, "y": -1.41, "label": "' the'" }
+    ],
+    "knobs": [{ "id": "n", "label": "Length of the ' the' column", "min": 0.2, "max": 1.5, "step": 0.1, "value": 0.6 }],
+    "beats": [
+      { "cap": { "1": "Every point on the ground is a possible final arrow. The height is the best score any word gives it. Each flat facet belongs to one word.", "2": "Surface height = max over tokens of x·W_U[:, t] for a 2-D toy residual x.", "3": "The max of linear functions is convex and piecewise linear; each facet is the region where one token has the top logit." }, "view": "iso", "set": { "n": 0.6 } },
+      { "cap": { "1": "From above, the ground is carved into territories. Wherever the arrow's tip lands, that territory's word wins.", "2": "Argmax regions: which token the model would pick greedily for each residual direction.", "3": "The decision regions of a linear readout are convex cones through the origin, bounded where two logits tie." }, "view": "top", "set": { "n": 0.6 } },
+      { "cap": { "1": "The ridges are ties. On a ridge two words score the same, and the model is torn between them.", "2": "Paris and France point close together, so their ridge is gentle: arrows near it give both high scores.", "3": "Along a ridge x·(W_U[:, a] − W_U[:, b]) = 0: the logit-difference direction is the normal to that boundary." }, "view": "close", "set": { "n": 0.6 } },
+      { "cap": { "1": "Lengthen the ' the' column and its territory grows: a longer judge's arrow scores higher for arrows pointing its way.", "2": "Column norm matters as well as direction: a longer W_U column gives bigger logits and wins more of the space.", "3": "Logits scale with ‖W_U[:, t]‖, so norm acts like a per-token gain on top of direction, shifting the argmax boundaries." }, "view": "iso", "set": { "n": 1.4 } },
+      { "cap": { "1": "Every facet is perfectly flat because scoring is straight-line: double the arrow and every score doubles. The logit lens relies on that.", "2": "Linearity: unembedding a sum is the sum of unembeddings, which is why you can read one head or one layer on its own.", "3": "Flat facets are the linearity of W_U made visible; it is what licenses logit-lens readouts and per-component DLA before softmax." }, "view": "side", "set": { "n": 0.6 } }
+    ],
+    "predict": [
+      { "q": "You double the length of the final arrow. What happens to the winning word?", "options": [{ "t": "Same winner, more confident", "ok": true }, { "t": "A different word wins" }], "why": "Doubling x doubles every logit. The ranking stays the same; softmax just gets sharper." },
+      { "q": "Can you apply W_U to one attention head's output on its own?", "options": [{ "t": "Yes: it shows which words that head pushes", "ok": true }, { "t": "No: only the final residual can be unembedded" }], "why": "Unembedding is linear, so any piece of the residual stream can be read this way. That is direct logit attribution." },
+      { "q": "Which of these is a single fixed direction in the residual stream?", "options": [{ "t": "logit[' Mary'] − logit[' John']", "ok": true }, { "t": "P(' Mary') − P(' John')" }], "why": "The logit difference is a dot product with W_U[:, Mary] − W_U[:, John]. Probabilities pass through softmax, which is not linear." }
+    ],
+    "where": "Any linear readout that scores every class at once: a classifier's last layer, a linear probe, a dot-product search."
+  }
+}

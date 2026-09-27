@@ -1,0 +1,190 @@
+{
+  "id": "ov-circuit",
+  "title": "The head's phrasebook",
+  "week": 7,
+  "need": "core",
+  "allegory": "An OV circuit is like a head's phrasebook: once the head has decided which word to look at, it opens the phrasebook to that word's page and reads out which next words to vote for, and a copying head's phrasebook simply says each word back.",
+  "map": [
+    ["the phrasebook, one page per word the head might look at", "the full OV circuit W_E W_V W_O W_U: a d_vocab × d_vocab matrix"],
+    ["opening to the page of the word you looked at", "a row: that source token's embedding pushed through W_V W_O"],
+    ["reading the page out as votes for next words", "the logit effects, via W_U"],
+    ["a phrasebook that says each word back to itself", "a copying head: the diagonal dominates"],
+    ["two clerks who always look at the same page", "heads with the same attention pattern: only their summed OV circuit is the real one"]
+  ],
+  "credit": "The 'where to look versus what to write' split is from Elhage et al., A Mathematical Framework for Transformer Circuits (Anthropic, 2021).",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "Four opaque grids",
+      "need": "core",
+      "dur": 8,
+      "type": "story",
+      "setting": "night",
+      "note": "W_Q, W_K, W_V, W_O... which one says what it does?",
+      "actors": [{ "pose": "shrug", "x": 0.25, "label": "you" }],
+      "props": [
+        { "kind": "box", "x": 0.52, "y": 0.45, "w": 0.1, "h": 0.14, "label": "W_Q", "color": "sky" },
+        { "kind": "box", "x": 0.66, "y": 0.45, "w": 0.1, "h": 0.14, "label": "W_K", "color": "sky" },
+        { "kind": "box", "x": 0.52, "y": 0.68, "w": 0.1, "h": 0.14, "label": "W_V", "color": "peach" },
+        { "kind": "box", "x": 0.66, "y": 0.68, "w": 0.1, "h": 0.14, "label": "W_O", "color": "peach" }
+      ],
+      "cap": {
+        "1": "An attention head has four grids of numbers. Stare at any one alone and it tells you nothing about what the head actually does.",
+        "2": "W_Q, W_K, W_V and W_O are not separately meaningful. They only ever act in pairs, and each pair answers one clear question.",
+        "3": "The four matrices only enter as two low-rank products: W_QK sets attention scores and W_OV sets what is written (Elhage et al., 2021). The individual factors are not separately meaningful."
+      }
+    },
+    {
+      "name": "Where, then what",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "point", "x": 0.2, "label": "head" },
+        { "pose": "write", "x": 0.72, "label": "same head" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.38, "y": 0.4, "label": "look at: 'Mary'", "color": "sky" },
+        { "kind": "stack", "x": 0.55, "y": 0.58, "w": 0.12, "h": 0.26, "label": "phrasebook", "color": "butter" },
+        { "kind": "card", "x": 0.86, "y": 0.4, "label": "vote: 'Mary'", "color": "peach" }
+      ],
+      "arrows": [[0.44, 0.45, 0.5, 0.52, "QK chose"], [0.61, 0.52, 0.8, 0.45, "OV says"]],
+      "cap": {
+        "1": "Split the job in two. One pair of grids picks which earlier word to look at. The other pair is a phrasebook: it says what to write about that word.",
+        "2": "QK decides where a head looks; OV decides what it writes once it looks there. OV never asks why the head looked; it just maps the looked-at token to an output.",
+        "3": "Given the attention pattern, the head's output is linear in the source residual via W_OV. Along the direct path, the OV circuit is a fixed map from attended token to logit effect."
+      }
+    },
+    {
+      "name": "Printing the phrasebook",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "W_E", "c": "sky", "note": "word → vector" },
+        { "t": " W_V", "c": "orange", "note": "read" },
+        { "t": " W_O", "c": "orange", "note": "write" },
+        { "t": " W_U", "c": "green", "note": "vector → votes" }
+      ],
+      "actor": { "pose": "write", "x": 0.1 },
+      "cap": {
+        "1": "Four steps: turn the looked-at word into a vector, read it, write it, turn the result into votes for next words. Multiply them: that is the phrasebook.",
+        "2": "W_E W_V W_O W_U is a d_vocab × d_vocab table: row = token attended to, column = logit it pushes. It is low rank through d_head = 64, so keep it as a <code>FactoredMatrix</code>.",
+        "3": "Full OV circuit W_E W_OV W_U has rank at most d_head. FactoredMatrix keeps the factors, giving svd, norms and top-k without materialising a d_vocab² matrix you cannot fit in memory."
+      }
+    },
+    {
+      "name": "A copier's diagonal",
+      "need": "core",
+      "dur": 9,
+      "type": "grid",
+      "title": "a copying head's phrasebook",
+      "rows": 4,
+      "cols": 4,
+      "values": [["++", "·", "·", "·"], ["·", "++", "·", "·"], ["·", "·", "++", "·"], ["·", "·", "·", "++"]],
+      "labels": { "rows": ["Mary", "John", "store", "drink"], "cols": ["Mary", "John", "store", "drink"] },
+      "highlight": [[0, 0], [1, 1], [2, 2], [3, 3]],
+      "cap": {
+        "1": "For a head that copies, the phrasebook's rule is simple: whatever word you looked at, say that word. The big entries run down the diagonal.",
+        "2": "A copying head has an OV circuit whose diagonal dominates. The exercise scores it with <code>top_1_acc</code>: the fraction of rows whose biggest entry sits on the diagonal.",
+        "3": "Copying means diagonal dominance of W_E W_OV W_U. top_1_acc measures argmax-on-diagonal per row; induction heads and IOI's name movers are the copiers you will test."
+      }
+    },
+    {
+      "name": "Thirty, then ninety-six",
+      "need": "exercise",
+      "dur": 10,
+      "type": "bars",
+      "title": "head 1.4 alone → 1.4 + 1.10 (copying score, %)",
+      "labels": ["top-1", "top-5"],
+      "from": [30.79, 47.73],
+      "to": [95.6, 98],
+      "cap": {
+        "1": "Head 1.4 puts its biggest vote on the diagonal in only 31% of rows, as if it barely copies. Add its twin, head 1.10, and the score jumps to about 96%.",
+        "2": "1.4 alone: top-1 30.79%, top-5 47.73%. Heads 1.4 and 1.10 share an attention pattern, so the stream gets their summed writes. Score the sum: 95.6% top-1, 98% top-5.",
+        "3": "The effective circuit is W_E (W_OV of 1.4 + W_OV of 1.10) W_U: same attention, so contributions add before W_U. Individually mediocre, jointly excellent; nothing pushes either to copy alone."
+      }
+    },
+    {
+      "name": "Weights versus runs",
+      "need": "core",
+      "dur": 9,
+      "type": "compare",
+      "left": { "title": "OV circuit (weights)", "c": "sky", "lines": ["no data, no forward pass", "what the head would write for any token", "a claim about one path"] },
+      "right": { "title": "Logit attribution (a run)", "c": "peach", "lines": ["one real prompt", "what it actually wrote this time", "depends on where it looked"] },
+      "verdict": "The phrasebook says what a head can say; a run shows what it did say.",
+      "cap": {
+        "1": "Reading the phrasebook needs no example sentences at all: it tells you what the head would say about any word. A real sentence shows what it did say.",
+        "2": "The OV circuit is weights-only: no data, no forward pass. Direct logit attribution is its activation-based cousin: on one prompt, what did this head actually push?",
+        "3": "Weights-only analysis is a claim about a path, so check it is the whole path the stream receives. Activation methods such as DLA and patching answer the prompt-specific question."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["QK: where to look. OV: what to write.", "Copiers have a bright diagonal", "Score twin heads together"],
+      "actor": { "pose": "cheer", "x": 0.85 },
+      "cap": {
+        "1": "Splitting a head into 'where it looks' and 'what it says' lets you read circuits off the weights. Copying returns in induction and name-mover heads.",
+        "2": "IOI's name-mover heads copy a name into the logits, so their OV circuits are copiers too. Always check for twin heads before trusting a single-head score.",
+        "3": "Reading OV circuits turns weights into checkable claims like 'this head copies': a foundation for understanding a model and, eventually, for editing or steering it precisely."
+      }
+    }
+  ],
+  "coda": {
+    "type": "grid",
+    "title": "A head's phrasebook: rows are words it looked at, columns are words it votes for",
+    "rows": 6,
+    "cols": 6,
+    "init": "r == c && r % 2 == 0 ? 3 : (c == (r + 1) % 6 && r % 2 == 1 ? 2 : 0)",
+    "click": "inc",
+    "readouts": [
+      { "label": "this head's copying score (top-1 on the diagonal)", "f": "round(100 * G.filter((row, r) => row.every((v, c) => c == r || v < row[r])).length / G.length) + '%'" },
+      { "label": "with its twin head's writes added", "f": "(T => round(100 * G.map((row, r) => row.map((v, c) => v + T(r, c))).filter((row, r) => row.every((v, c) => c == r || v < row[r])).length / G.length) + '%')((r, c) => r % 2 == 1 && r == c ? 3 : (r % 2 == 0 && c == (r + 2) % 6 ? 1 : 0))" }
+    ],
+    "caption": {
+      "1": "Each row is a word the head looked at; tap cells to add votes. The score counts rows whose biggest vote is the same word. That is copying.",
+      "2": "This head copies on half the rows and votes for a neighbour on the rest: 50%. Its twin looks at the same places, so add their tables and the diagonal wins nearly everywhere.",
+      "3": "top_1_acc over rows of W_E W_OV W_U. With shared attention the stream receives the sum of both heads' W_OV, so score the sum: ARENA's 1.4 goes from 30.79% alone to 95.6% with 1.10."
+    }
+  },
+  "where_else": [
+    "Name-mover heads in IOI: OV circuits that copy a name into the logits",
+    "Induction heads: the copying half of the circuit that continues repeated text",
+    "The direct path W_E W_U, read the same way as a table of which token tends to follow which"
+  ],
+  "hamming": {
+    "what": "A head's value and output weights, sandwiched between embedding and unembedding and read as a table from 'token attended to' to 'logits pushed'.",
+    "when": "Whenever you want to know what a head writes regardless of any particular prompt, for example to test whether it copies.",
+    "why": "It turns four opaque matrices into one readable map, so claims like 'this head copies' can be checked straight from the weights."
+  },
+  "object": {
+    "title": "The phrasebook landscape",
+    "subtitle": "Two heads' phrasebooks as a field of bars: rows are words looked at, columns are words voted for.",
+    "kind": "bars",
+    "rows": 8,
+    "cols": 8,
+    "f": "0.1 + mine * ((r == c && r % 2 == 0 ? 1.2 : 0) + (c == (r + 1) % 8 && r % 2 == 1 ? 0.8 : 0)) + twin * ((r == c && r % 2 == 1 ? 1.2 : 0) + (c == (r + 3) % 8 && r % 2 == 0 ? 0.4 : 0))",
+    "labels": { "rows": ["Mary", "John", "store", "drink", "went", "to", "the", "gave"], "cols": ["Mary", "John", "store", "drink", "went", "to", "the", "gave"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "mine", "label": "head A's writes", "min": 0, "max": 1, "step": 0.1, "value": 1 },
+      { "id": "twin", "label": "twin head B's writes", "min": 0, "max": 1, "step": 0.1, "value": 0 }
+    ],
+    "beats": [
+      { "cap": { "1": "One head's phrasebook as a landscape: rows are words it looked at, columns are words it votes for. Only half the rows peak on the diagonal.", "2": "Head A alone copies on every other row and votes for the next word on the rest. Copying score: 50%.", "3": "A single head's full OV circuit with diagonal dominance on half the rows, so top_1_acc = 0.5." }, "view": "iso", "set": { "mine": 1, "twin": 0 } },
+      { "cap": { "1": "Its twin looks at exactly the same places and fills in the other half.", "2": "Head B alone copies precisely where A does not. On its own it also scores 50%.", "3": "Heads that share an attention pattern are free to split the work; neither needs to copy well alone." }, "view": "front", "set": { "mine": 0, "twin": 1 } },
+      { "cap": { "1": "Add the two phrasebooks and a clean ridge runs down the diagonal: together they copy.", "2": "The stream receives both heads' writes, so the real circuit is the sum: 100% on this toy, 95.6% for ARENA's heads 1.4 + 1.10.", "3": "Effective OV = W_E (W_OV^A + W_OV^B) W_U. Score the summed path: in ARENA, 30.79% alone becomes 95.6% summed." }, "view": "iso", "set": { "mine": 1, "twin": 1 } },
+      { "cap": { "1": "From above, the diagonal is the signature of copying: look at a word, say that word.", "2": "Diagonal dominance is what you expect from induction heads and IOI's name movers.", "3": "A copying head approximates the identity on token space through a map of rank at most d_head." }, "view": "top", "set": { "mine": 1, "twin": 1 } }
+    ],
+    "predict": [
+      { "q": "A head's OV circuit scores 31% on the copying test. What should you check before deciding it does not copy?", "options": [{ "t": "Whether another head shares its attention pattern", "ok": true }, { "t": "Whether the model trained for long enough" }], "why": "Heads that look at the same places add their writes. Score the summed circuit: for 1.4 plus 1.10 that took 30.79% to 95.6%." },
+      { "q": "The full OV circuit is a vocabulary-by-vocabulary table, about 50k by 50k. How do you work with it?", "options": [{ "t": "Keep it factored and compute from the factors", "ok": true }, { "t": "Build the full table on the GPU" }], "why": "It has rank at most d_head = 64, so the factors hold everything. FactoredMatrix gives svd, norms and top-k without the dense table, which would not fit in memory." }
+    ],
+    "where": "Any lookup table read straight off a model's weights: the direct path's bigram table, embedding similarity maps."
+  }
+}

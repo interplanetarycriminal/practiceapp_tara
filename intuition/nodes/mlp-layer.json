@@ -1,0 +1,276 @@
+{
+  "id": "mlp-layer",
+  "title": "Questions in, sticky notes out",
+  "week": 5,
+  "need": "core",
+  "allegory": "An MLP layer is a private desk each token visits alone: a wall of yes/no questions is checked against the token's notes, and every clear yes adds its matching sticky note back onto the notes.",
+  "map": [
+    ["a token's notes arriving at the desk", "the residual stream at one position (after LayerNorm)"],
+    ["the wall of yes/no questions", "rows of W_in: each hidden neuron's read direction"],
+    ["only a clear yes counts", "the nonlinearity (GELU) squashing negative scores toward 0"],
+    ["the sticky note matched to each question", "columns of W_out: what each neuron writes back"],
+    ["every token visits the same desk alone", "shared weights at every position, no mixing between positions"]
+  ],
+  "credit": "The 'rows ask questions, columns are what gets added' framing is borrowed from 3Blue1Brown, Neural Networks chapter 7, How might LLMs store facts.",
+  "linked_film": null,
+  "linked_object": null,
+  "chapters": [
+    {
+      "name": "After the meeting",
+      "need": "core",
+      "dur": 9,
+      "type": "story",
+      "setting": "room",
+      "actors": [
+        { "pose": "walk", "x": 0.3, "to": 0.12, "label": "cat" },
+        { "pose": "walk", "x": 0.42, "to": 0.62 },
+        { "pose": "sit", "x": 0.86, "label": "sat" }
+      ],
+      "props": [
+        { "kind": "card", "x": 0.36, "y": 0.18, "label": "attention: the meeting", "color": "sky" },
+        { "kind": "box", "x": 0.12, "y": 0.7, "w": 0.14, "h": 0.12, "label": "desk", "color": "cream" },
+        { "kind": "box", "x": 0.86, "y": 0.7, "w": 0.14, "h": 0.12, "label": "desk", "color": "cream" }
+      ],
+      "cap": {
+        "1": "In a transformer, attention is the meeting where words swap information. Then each word goes to its own desk to think it over. That desk is the MLP.",
+        "2": "Each block has two halves: attention moves information between positions; the MLP then processes each position on its own, with the same weights everywhere.",
+        "3": "Block: x = x + attn(ln1(x)), then x = x + mlp(ln2(x)). Attention is the only cross-position operation; the MLP is a position-wise map applied identically at every token."
+      }
+    },
+    {
+      "name": "The wall of questions",
+      "need": "core",
+      "dur": 10,
+      "type": "story",
+      "setting": "day",
+      "actors": [{ "pose": "think", "x": 0.24, "label": "one word" }],
+      "props": [
+        { "kind": "card", "x": 0.55, "y": 0.18, "label": "a name?", "color": "butter" },
+        { "kind": "card", "x": 0.72, "y": 0.18, "label": "sport?", "color": "butter" },
+        { "kind": "card", "x": 0.89, "y": 0.18, "label": "past tense?", "color": "butter" },
+        { "kind": "stack", "x": 0.72, "y": 0.62, "w": 0.22, "h": 0.3, "label": "sticky notes", "color": "mint" }
+      ],
+      "cap": {
+        "1": "At the desk hangs a wall of yes/no questions, each checked against the word's notes. Every clear 'yes' adds its matching sticky note back to the notes.",
+        "2": "Each hidden neuron is one question: a direction it reads from the residual stream with a dot product. On a strong yes it writes its own vector back. Thousands of these run in parallel.",
+        "3": "Neuron i computes gᵢ = GELU(w_in,i · x + bᵢ) and contributes gᵢ · w_out,i. The MLP output is the sum over neurons: a bank of (read direction, write vector) pairs gated by the nonlinearity."
+      }
+    },
+    {
+      "name": "Read, gate, write",
+      "need": "core",
+      "dur": 10,
+      "type": "equation",
+      "parts": [
+        { "t": "W_out", "c": "green", "note": "add the notes" },
+        { "t": "·", "c": "ink", "note": "" },
+        { "t": "GELU(", "c": "orange", "note": "keep the yeses" },
+        { "t": "W_in·x", "c": "sky", "note": "ask every question" },
+        { "t": ")", "c": "orange", "note": "" }
+      ],
+      "actor": { "pose": "point", "x": 0.1 },
+      "cap": {
+        "1": "Read it right to left: ask every question at once, keep only the yeses, then add up the matching notes. Two plain multiplications with a squash in between.",
+        "2": "<code>W_in</code> maps d_model up to a wider hidden layer (4x wider in GPT-2), GELU gates it, and <code>W_out</code> maps back down to d_model. The result is added to the residual stream.",
+        "3": "mlp(x) = W_out·GELU(W_in·x + b_in) + b_out, applied to ln2(x) at each position. Without the nonlinearity the two maps would collapse into one linear map and add no expressive power."
+      }
+    },
+    {
+      "name": "Row by row",
+      "need": "core",
+      "dur": 9,
+      "type": "grid",
+      "title": "the same desk, one token at a time",
+      "rows": 4,
+      "cols": 6,
+      "values": [
+        [0.2, -1.1, 0.7, 0.0, 1.3, -0.4],
+        [0.9, 0.3, -0.6, 1.2, -0.2, 0.5],
+        [-0.3, 0.8, 0.1, -0.9, 0.6, 1.0],
+        [1.1, -0.5, 0.4, 0.3, -1.2, 0.2]
+      ],
+      "labels": { "rows": ["When", "Mary", "and", "John"], "cols": ["d0", "d1", "d2", "d3", "d4", "d5"] },
+      "highlight": [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [0, 5], [1, 0], [1, 1], [1, 2], [1, 3], [1, 4], [1, 5], [2, 0], [2, 1], [2, 2], [2, 3], [2, 4], [2, 5], [3, 0], [3, 1], [3, 2], [3, 3], [3, 4], [3, 5]],
+      "cap": {
+        "1": "Every word visits the same desk, one at a time, and the desk never peeks at the other words. Same questions, same notes, for every position.",
+        "2": "The MLP acts on each row of the (seq, d_model) stream independently with one shared set of weights. Anything that needs another position's information must arrive through attention first.",
+        "3": "Position-wise: mlp is applied to x[b, p, :] for every (b, p) with shared W_in and W_out, so it commutes with permuting positions. All cross-token computation lives in attention."
+      }
+    },
+    {
+      "name": "Why the squash",
+      "need": "core",
+      "dur": 9,
+      "type": "plot",
+      "curves": [
+        { "f": "0.5*x*(1 + tanh(sqrt(2/PI)*(x + 0.044715*pow(x, 3))))", "c": "orange", "label": "GELU (GPT-2)" },
+        { "f": "relu(x)", "c": "sky", "label": "ReLU" },
+        { "f": "x", "c": "chalk", "label": "no squash: straight line" }
+      ],
+      "x": [-3, 3],
+      "y": [-1.5, 3],
+      "dot": true,
+      "marks": [{ "x": 0, "label": "the gate" }],
+      "cap": {
+        "1": "The squash is the 'only a clear yes' rule. Positive scores pass; negative ones are flattened toward zero. Without it, the desk can only do one simple thing.",
+        "2": "GPT-2 uses GELU, a smooth cousin of ReLU that bends gently near zero and dips slightly below 0 for small negatives. Without any nonlinearity, W_out·W_in is just one matrix.",
+        "3": "GELU(x) = x·Φ(x), usually computed with the tanh approximation plotted here. The gate makes each neuron a soft threshold; remove it and the layer is a single linear map."
+      }
+    },
+    {
+      "name": "Add, never replace",
+      "need": "exercise",
+      "dur": 11,
+      "type": "compare",
+      "left": { "title": "Replace", "c": "pink", "lines": ["resid = mlp(ln2(resid))", "shapes match, no error", "earlier work destroyed", "loss stuck near 10.8"] },
+      "right": { "title": "Add", "c": "mint", "lines": ["resid = resid + mlp(ln2(resid))", "notes pile up", "later layers read earlier ones", "loss falls"] },
+      "verdict": "The desk adds sticky notes. It never throws the page away.",
+      "cap": {
+        "1": "The desk must add its sticky notes to the page, never swap the page for them. Swap it and every earlier layer's work is lost, with no error to warn you.",
+        "2": "Write <code>resid = resid + mlp(ln2(resid))</code>. Dropping the <code>resid +</code> keeps shapes identical, so nothing errors, but the model can't learn: loss hovers near log(50257) ≈ 10.8.",
+        "3": "Without the residual add each sublayer overwrites the stream: embeddings are destroyed, later layers can't read earlier writes, and gradients lose their short path. 10.8 ≈ log(d_vocab), the uniform-output loss."
+      }
+    },
+    {
+      "name": "Why it matters",
+      "need": "core",
+      "dur": 9,
+      "type": "cards",
+      "items": ["About two-thirds of each block's weights", "Neurons are messy: superposition", "Transcoders rewrite MLPs as readable features"],
+      "actor": { "pose": "cheer", "x": 0.86 },
+      "cap": {
+        "1": "Much of what a model 'knows' is thought to sit at these desks. Reading their questions and notes is a big part of understanding, and steering, what it does.",
+        "2": "With the usual 4x width, MLPs hold about two-thirds of each block's weights. Their neurons are rarely clean one-question units, which is why transcoders were built to rewrite them as sparse, readable features.",
+        "3": "MLP neurons are heavily polysemantic, so circuit work swaps MLPs for transcoders (sparse maps from ln(resid_mid) to mlp_out). GPT-2's layer-0 MLP even acts as an extended embedding."
+      }
+    }
+  ],
+  "coda": {
+    "type": "sliders",
+    "title": "Two neurons make a step",
+    "params": [
+      { "id": "a", "label": "neuron 1 says yes above", "min": -2, "max": 2, "step": 0.1, "value": -0.5 },
+      { "id": "b", "label": "neuron 2 says yes above", "min": -2, "max": 2, "step": 0.1, "value": 1 },
+      { "id": "squash", "label": "nonlinearity: off / on", "min": 0, "max": 1, "step": 1, "value": 1 }
+    ],
+    "curves": [
+      { "f": "squash ? relu(x - a) - relu(x - b) : (x - a) - (x - b)", "c": "orange", "label": "MLP output (note 1 minus note 2)" },
+      { "f": "squash ? relu(x - a) : x - a", "c": "sky", "label": "neuron 1's note" },
+      { "f": "squash ? -relu(x - b) : -(x - b)", "c": "pink", "label": "neuron 2's note (negative)" }
+    ],
+    "x": [-3, 3],
+    "y": [-3, 3],
+    "readouts": [
+      { "label": "output at x = 0", "f": "(squash ? relu(-a) - relu(-b) : b - a).toFixed(2)" },
+      { "label": "output at x = 2", "f": "(squash ? relu(2 - a) - relu(2 - b) : b - a).toFixed(2)" },
+      { "label": "shape", "f": "!squash ? 'flat: without the squash the two neurons cancel into one linear map' : (a < b ? 'a ramp that levels off: a soft step' : (a > b ? 'an upside-down step' : 'flat: the two notes cancel'))" }
+    ],
+    "caption": {
+      "1": "Two neurons, one adds and one subtracts. With the squash on they build a step. Switch it off and they cancel into a flat line. That's why the squash is there.",
+      "2": "Output = relu(x − a) − relu(x − b): each neuron fires past its threshold, and the second note is negative. Move a and b to place the step. Without the nonlinearity, any stack of linear maps is one linear map.",
+      "3": "Differences of shifted ReLUs give piecewise-linear ramps and bumps; sums of many such units approximate continuous functions, the intuition behind MLPs as universal approximators. GPT-2 uses the smooth GELU."
+    }
+  },
+  "where_else": [
+    "Sparse autoencoders and transcoders are themselves one-hidden-layer MLPs, built to be readable",
+    "The Q-networks and policy heads in the RL chapter are small MLPs",
+    "The classic 'neural network' in every textbook is exactly this: linear, squash, linear"
+  ],
+  "hamming": {
+    "what": "Two linear maps with a nonlinearity between them, applied to every token position separately, with the output added back to the residual stream.",
+    "when": "In every transformer block, right after attention has gathered information from other positions.",
+    "why": "Attention only moves information around; the MLP is where each position does non-linear computation on what it gathered."
+  },
+  "object": {
+    "title": "The folded sheet",
+    "subtitle": "A sheet laid over the input plane: each neuron adds one crease, and without the squash it stays perfectly flat.",
+    "kind": "surface",
+    "f": "0.9*(s*relu(x + 0.5*y - 0.2) + (1 - s)*(x + 0.5*y - 0.2)) + (n >= 2 ? -0.7*(s*relu(-x + y - 0.3) + (1 - s)*(-x + y - 0.3)) : 0) + (n >= 3 ? 0.8*(s*relu(-0.5*x - y + 0.1) + (1 - s)*(-0.5*x - y + 0.1)) : 0)",
+    "x": [-1.5, 1.5],
+    "y": [-1.5, 1.5],
+    "marks": [
+      { "x": 0.7, "y": -1.0, "label": "crease 1" },
+      { "x": -0.8, "y": -0.5, "label": "crease 2" },
+      { "x": -1.0, "y": 0.6, "label": "crease 3" }
+    ],
+    "knobs": [
+      { "id": "s", "label": "squash strength (0 = none, 1 = ReLU)", "min": 0, "max": 1, "step": 0.1, "value": 1 },
+      { "id": "n", "label": "neurons", "min": 1, "max": 3, "step": 1, "value": 3 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Squash off: three neurons, and the sheet is still perfectly flat. Stacking plain multiplications only ever gives a tilted plane.",
+          "2": "With no nonlinearity, W_out·W_in is one matrix: the whole MLP is a single linear map, however many neurons it has.",
+          "3": "Affine maps compose to an affine map: the output is a plane over (x, y)."
+        },
+        "view": "iso",
+        "set": { "s": 0, "n": 3 }
+      },
+      {
+        "cap": {
+          "1": "Squash on, one neuron: a single crease. On one side its question says no and the sheet is flat; on the other side it rises.",
+          "2": "One ReLU neuron is zero on one side of its threshold line and linear on the other. The crease is where its question flips to yes.",
+          "3": "relu(w·x + b) is piecewise linear with a hinge along the hyperplane w·x + b = 0."
+        },
+        "view": "iso",
+        "set": { "s": 1, "n": 1 }
+      },
+      {
+        "cap": {
+          "1": "Three neurons, three creases. Now the sheet bends differently in different places: that is the extra power.",
+          "2": "Summing gated neurons gives a piecewise-linear surface with a region for each on/off pattern. More neurons, more regions, finer shapes.",
+          "3": "The activation pattern partitions input space; within each region the MLP is affine, and the number of regions grows with width."
+        },
+        "view": "iso",
+        "set": { "s": 1, "n": 3 }
+      },
+      {
+        "cap": {
+          "1": "Half squash: the creases soften into gentle bends. The harder the negatives are squashed, the sharper the folds.",
+          "2": "At half strength each unit is a leaky ReLU, slope 0.5 below its threshold. GELU is another gate that bends without going flat.",
+          "3": "act(t) = s·relu(t) + (1 − s)·t interpolates linear (s = 0) to ReLU (s = 1); fold sharpness tracks the nonlinearity's strength."
+        },
+        "view": "front",
+        "set": { "s": 0.5, "n": 3 }
+      },
+      {
+        "cap": {
+          "1": "From above the creases show as lines: each is where one question's answer flips. Every token lands somewhere on this map.",
+          "2": "Real MLPs do this in hundreds of dimensions with thousands of neurons, at every position separately.",
+          "3": "A GPT-2 MLP folds d_model-dimensional space with thousands of hinges per layer; transcoders try to re-express those folds as sparse, nameable features."
+        },
+        "view": "top",
+        "set": { "s": 1, "n": 3 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "You delete the nonlinearity from an MLP with thousands of neurons. What is left?",
+        "options": [
+          { "t": "A single linear map", "ok": true },
+          { "t": "A weaker but still bendy function" },
+          { "t": "Nothing: it outputs zero" }
+        ],
+        "why": "Two matrices multiplied together are one matrix. The squash is the only thing that lets the sheet fold."
+      },
+      {
+        "q": "Can the MLP at position 5 use the word at position 2?",
+        "options": [
+          { "t": "Only if attention already moved that information to position 5", "ok": true },
+          { "t": "Yes, it sees the whole sequence" }
+        ],
+        "why": "The MLP works on each position alone. Cross-position information only arrives through attention."
+      },
+      {
+        "q": "Your block says resid = mlp(ln2(resid)). What happens?",
+        "options": [
+          { "t": "It runs, but loss stays near 10.8: earlier work is overwritten", "ok": true },
+          { "t": "A shape error at the MLP" }
+        ],
+        "why": "Shapes match, so nothing errors, but the sublayer replaces the stream instead of adding to it."
+      }
+    ],
+    "where": "Anywhere a network must bend space: every hidden layer of every MLP, from digit classifiers to RL value heads."
+  }
+}

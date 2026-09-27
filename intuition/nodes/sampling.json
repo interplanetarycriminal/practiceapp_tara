@@ -1,0 +1,117 @@
+{
+  "id": "sampling",
+  "title": "A raffle drum with three dials",
+  "week": 6,
+  "need": "core",
+  "allegory": "Sampling is a raffle: every word holds tickets in proportion to its probability and you draw one, while temperature reprints the tickets, top-k keeps only the biggest holders in the drum, and top-p keeps the biggest holders until they cover a set share of all tickets.",
+  "map": [
+    ["raffle tickets each word holds", "each token's probability, softmax(logits / T)"],
+    ["reprinting the tickets with the temperature dial", "dividing logits by T: low T sharpens, high T flattens, the ranking never changes"],
+    ["only the k biggest holders stay in the drum", "top-k: keep the k largest logits, set the rest to -inf"],
+    ["keep the biggest holders until they cover p of the tickets", "top-p: the smallest set whose cumulative probability reaches p, cut inclusively"],
+    ["drawing one ticket from the drum", "sampling one token from the renormalised distribution"]
+  ],
+  "credit": "",
+  "linked_film": "films/deep-w06-sampling.html",
+  "linked_object": null,
+  "where_else": [
+    "The temperature, top_k and top_p parameters of every text-generation API",
+    "Beam search, which keeps several partial sentences instead of drawing one token at a time",
+    "Sampling actions from a softmax policy in RL, where temperature trades exploring against exploiting",
+    "Evals that sample the same prompt many times at T > 0 to measure how often a behaviour appears"
+  ],
+  "hamming": {
+    "what": "The step that turns the model's next-token probabilities into one actual token, with temperature, top-k and top-p as the knobs.",
+    "when": "Every time a language model writes text, one token at a time.",
+    "why": "Likelihood is a good training objective but a bad decoding objective: always taking the top token gives bland, repetitive text, so how you draw shapes what the same model says."
+  },
+  "object": {
+    "title": "The raffle drum",
+    "subtitle": "Eight candidate words, three rows: the model's odds, after the temperature dial, and after the cut.",
+    "kind": "bars",
+    "rows": 3,
+    "cols": 8,
+    "f": "0.02 + 2 * ((q => r === 0 ? softmax([3, 2.2, 1.5, 1, 0.6, 0.2, -0.3, -1])[c] : r === 1 ? q[c] : ((c < k && sum(q.slice(0, c)) < p) ? q[c] / sum(q.map((v, i) => (i < k && sum(q.slice(0, i)) < p) ? v : 0)) : 0))(softmax([3, 2.2, 1.5, 1, 0.6, 0.2, -0.3, -1].map(z => z / T))))",
+    "labels": { "rows": ["model's odds", "after temperature", "after top-k / top-p"], "cols": ["w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8"] },
+    "c": "prob",
+    "knobs": [
+      { "id": "T", "label": "Temperature T", "min": 0.2, "max": 2, "step": 0.1, "value": 1 },
+      { "id": "k", "label": "Top-k: words kept", "min": 1, "max": 8, "step": 1, "value": 8 },
+      { "id": "p", "label": "Top-p: share of tickets kept", "min": 0.1, "max": 1, "step": 0.05, "value": 1 }
+    ],
+    "beats": [
+      {
+        "cap": {
+          "1": "Eight candidate words and the tickets each holds. The front row is the model's own odds; the rows behind show what the dials do.",
+          "2": "Row 1: softmax(logits). Row 2: after temperature. Row 3: after top-k and top-p, renormalised. The logits are illustrative.",
+          "3": "Order as in ARENA's sample_next_token: frequency penalty, then temperature, then truncation, then one draw."
+        },
+        "view": "iso",
+        "set": { "T": 1, "k": 8, "p": 1 }
+      },
+      {
+        "cap": {
+          "1": "Turn the temperature down: the favourite grabs almost all the tickets. Near zero this becomes 'always pick the top word'.",
+          "2": "Dividing logits by T below 1 sharpens the distribution; T → 0 is greedy argmax decoding.",
+          "3": "softmax(z/T) tends to one-hot on the argmax as T → 0 and to uniform as T → ∞; the ranking never changes."
+        },
+        "view": "front",
+        "set": { "T": 0.4, "k": 8, "p": 1 }
+      },
+      {
+        "cap": {
+          "1": "Turn it up: the tickets spread out and long-shot words get a real chance. Livelier text, and riskier.",
+          "2": "T above 1 flattens the distribution, so low-probability tokens are drawn more often.",
+          "3": "Higher T raises entropy. Because the argsort is unchanged, T alone never changes which tokens are eligible."
+        },
+        "view": "iso",
+        "set": { "T": 1.8, "k": 8, "p": 1 }
+      },
+      {
+        "cap": {
+          "1": "Top-k: only the three biggest holders stay in the drum, and their tickets are topped up to fill it.",
+          "2": "top_k=3 keeps the three largest logits and renormalises over them.",
+          "3": "A fixed count ignores the distribution's shape: too many survivors when it is peaked, too few when it is flat."
+        },
+        "view": "iso",
+        "set": { "T": 1, "k": 3, "p": 1 }
+      },
+      {
+        "cap": {
+          "1": "Top-p: keep the biggest holders until they cover 90% of the tickets. Here that keeps five words.",
+          "2": "top_p=0.9 keeps the smallest prefix whose running total reaches 0.9, including the one that crosses it.",
+          "3": "The inclusive cutoff guarantees kept mass ≥ p and a non-empty set; the survivors are then renormalised."
+        },
+        "view": "iso",
+        "set": { "T": 1, "k": 8, "p": 0.9 }
+      },
+      {
+        "cap": {
+          "1": "Same 90% rule, colder temperature: now only two words survive. The two dials work together, not separately.",
+          "2": "Lowering T reshapes the running total, so the nucleus shrinks. Top-p and temperature interact.",
+          "3": "T rescales probabilities before the cumsum, so it changes the nucleus size; with top-k it only reweights a fixed set."
+        },
+        "view": "iso",
+        "set": { "T": 0.5, "k": 8, "p": 0.9 }
+      }
+    ],
+    "predict": [
+      {
+        "q": "You lower the temperature from 1 to 0.5. Can a different set of words survive top-k?",
+        "options": [{ "t": "No, temperature never changes the ranking", "ok": true }, { "t": "Yes, low temperature reorders the words" }],
+        "why": "Dividing logits by T keeps their order, so the top-k set is identical; only the shares inside it change."
+      },
+      {
+        "q": "Top-p with p = 0.1, and the top word alone holds 0.3 of the probability. How many words survive?",
+        "options": [{ "t": "One: the cutoff is inclusive", "ok": true }, { "t": "None" }, { "t": "Ten" }],
+        "why": "Keep up to and including the first word that takes the running total past p, so the set is never empty."
+      },
+      {
+        "q": "Why not always pick the single most likely word?",
+        "options": [{ "t": "It tends to produce bland, repetitive text", "ok": true }, { "t": "It is too slow" }],
+        "why": "Holtzman et al. (ICLR 2020): likelihood is a good training objective but a bad decoding objective."
+      }
+    ],
+    "where": "Anywhere a distribution has to become one decision: text generation, RL actions, evals that sample many times."
+  }
+}
