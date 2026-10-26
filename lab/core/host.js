@@ -97,7 +97,15 @@ export class Host {
     return buf;
   }
 
-  async load({ allowDownload = false, engine = 'auto' } = {}) {
+  /* A load in flight is remembered, so a request that arrives while it reads the manifest waits for it instead of
+     finding no model yet. */
+  load(opts) {
+    const p = this.startLoad(opts);
+    this.pending = p.catch(() => {});
+    return p;
+  }
+
+  async startLoad({ allowDownload = false, engine = 'auto' } = {}) {
     if (this.ready) return this.ready;
     const man = await this.manifest();
     const p = await this.probe();
@@ -223,7 +231,8 @@ export class Host {
     if (op === 'probe') return this.probe();
     if (op === 'load') return this.load(args);
     if (op === 'forget') return this.forget();
-    if (!this.ready) throw new Error('The model is not loaded yet');
+    if (!this.ready && this.pending) await this.pending;
+    if (!this.ready) throw new Error('GPT-2 is not loaded yet: start it with the button at the top of this tool.');
     await this.ready;
     switch (op) {
       case 'tokenize': {

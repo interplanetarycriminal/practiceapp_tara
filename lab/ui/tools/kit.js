@@ -100,11 +100,12 @@ export function runner(label, slot, run) {
     ctl = {
       cancelled: false, ids: [],
       track(pr) { if (pr && pr.id) this.ids.push(pr.id); return pr; },
-      cancel() { this.cancelled = true; for (const id of this.ids) engine.lab.cancel(id); },
+      cancel() { this.cancelled = true; if (this.stopWaiting) this.stopWaiting(); for (const id of this.ids) engine.lab.cancel(id); },
     };
     current.add(ctl);
     let err = null;
     try {
+      if (!engine.ready()) await waitForModel(bar, ctl);
       await run((done, total, text) => bar.set(total ? done / total : 0, text || (total ? `${done} of ${total}` : '')), ctl);
     } catch (e) {
       if (!/cancelled/.test(String(e && e.message))) { err = e; console.error(e); }
@@ -118,6 +119,24 @@ export function runner(label, slot, run) {
   };
   btn.addEventListener('click', go);
   return { btn, go, get busy() { return busy; } };
+}
+
+/* A run pressed before GPT-2 is ready waits for it, showing why, and starts by itself once the model loads; Stop still
+   works while it waits. */
+function waitForModel(bar, ctl) {
+  return new Promise((resolve, reject) => {
+    let off = null, settled = false;
+    const end = (fn, x) => { if (settled) return; settled = true; ctl.stopWaiting = null; if (off) off(); fn(x); };
+    ctl.stopWaiting = () => end(reject, new Error('cancelled'));
+    off = engine.on((s) => {
+      if (s.state === 'ready') end(resolve);
+      else if (s.state === 'error') end(reject, new Error(s.error || 'GPT-2 did not start'));
+      else bar.set(s.total ? (s.loaded || 0) / s.total : 0, s.state === 'needs-download' || s.state === 'idle'
+        ? 'Waiting for GPT-2: press Download and start above, and this run begins once it has loaded.'
+        : 'Waiting for GPT-2 to finish loading; this run starts by itself.');
+    });
+    if (settled) off();
+  });
 }
 
 /* every tool awaits the model through this, so the download card shows in the tool's own model slot */
