@@ -83,9 +83,12 @@ self.addEventListener('fetch', (event) => {
 
   /* The shell document: always try the network so a redeploy lands, but never
      fail — a cached shell is what makes the app work offline. */
-  /* Intuition films (intuition/*) and the 3D objects (objects/*): their own pages, edited often, so always
-     network-first and cached under their own URL, never as the shell. */
-  if (/\/(intuition|objects)\//.test(url.pathname.slice(SCOPE.pathname.length - 1))) {
+  /* The mech interp lab's model weights (lab/model/*, about 133 MB): the lab's own worker keeps them in
+     its own cache, so this one passes them straight through. */
+  if (/^lab\/model\//.test(url.pathname.slice(SCOPE.pathname.length))) return;
+  /* Intuition films (intuition/*), the 3D objects (objects/*) and the lab (lab/*): their own pages, edited
+     often, so always network-first and cached under their own URL, never as the shell. */
+  if (/\/(intuition|objects|lab)\//.test(url.pathname.slice(SCOPE.pathname.length - 1))) {
     event.respondWith((async () => {
       const cache = await caches.open(SHELL_CACHE);
       try {

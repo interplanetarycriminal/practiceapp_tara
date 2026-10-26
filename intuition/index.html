@@ -158,12 +158,17 @@ details.how li{margin:3px 0}
   };
   var PLACEHOLDER = [
     {path:'films/north-star.html', title:'The whole journey', week:null, seconds:60, blurb:'From tensors to steering: the path this course takes you on, in one minute.'},
-    {path:'films/w1-tensors.html', title:'Tensors are labelled boxes', week:1, seconds:45, blurb:'Named axes, einops and broadcasting, as a post room that sorts a thousand letters in one move.'},
-    {path:'films/w2-cnns.html', title:'Small stencils, deep towers', week:2, seconds:50, blurb:'Convolutions slide, feature maps glow, and a residual lift keeps the signal alive up the tower.'},
-    {path:'films/w3-optimisers.html', title:'Which way is down?', week:3, seconds:60, blurb:'SGD, momentum, Adam and AdamW, as a paper ball looking for the valley floor.'},
-    {path:'films/w4-backprop.html', title:'Who gets the blame?', week:4, seconds:60, blurb:'Backprop as blame flowing backwards through a recipe graph, in topological order.'}
+    {path:'films/w1-tensors.html', title:'Tensors are labelled boxes', week:0, seconds:45, blurb:'Named axes, einops and broadcasting, as a post room that sorts a thousand letters in one move.'},
+    {path:'films/w2-cnns.html', title:'Small stencils, deep towers', week:1, seconds:50, blurb:'Convolutions slide, feature maps glow, and a residual lift keeps the signal alive up the tower.'},
+    {path:'films/w3-optimisers.html', title:'Which way is down?', week:1, seconds:60, blurb:'SGD, momentum, Adam and AdamW, as a paper ball looking for the valley floor.'},
+    {path:'films/w4-backprop.html', title:'Who gets the blame?', week:1, seconds:60, blurb:'Backprop as blame flowing backwards through a recipe graph, in topological order.'}
   ];
-  var WEEK_NAMES = {1:'Tensors',2:'CNNs',3:'Optimisation',4:'Backprop & generative',5:'Transformers',6:'Sampling & hooks',7:'Mech interp',8:'Circuits',9:'RL basics',10:'PPO & RLHF',11:'Evals & control',12:'Misalignment',13:'Reasoning & personas',14:'Auditing'};
+  /* TARA's own week order (26 Oct 2026): weeks 0-14. A film or storyboard carries
+     `week` (its first TARA week) and, when it serves more than one, `weeks`. */
+  var WEEK_NAMES = {0:'Prerequisites',1:'Foundations',2:'Transformers',3:'Mech interp',4:'Probes & circuits',5:'RL basics',6:'PPO & RLHF',7:'Evals & agents',10:'Misalignment',11:'Reasoning & personas',12:'Project'};
+  function span(e){ var w = e.weeks && e.weeks.length ? e.weeks : (e.week == null ? [] : [e.week]); return w; }
+  function weekLabel(e, short){ var w = span(e); if (!w.length) return 'Whole course'; var a = w[0], z = w[w.length-1]; return (short ? 'W' : (a === z ? 'Week ' : 'Weeks ')) + (a === z ? a : a + '–' + z); }
+  function isSat(e){ return span(e).indexOf(SAT) >= 0; }
 
   function el(tag, attrs, kids){
     var n = document.createElement(tag);
@@ -183,7 +188,7 @@ details.how li{margin:3px 0}
     var today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
     var start = Date.UTC(2026, 8, 12);
     var diff = Math.round((today - start) / 86400000);
-    if (diff < 0) return 1;
+    if (diff < 0) return 0;
     return Math.ceil(diff / 7) + 1;
   }
   var SAT = thisSaturdayWeek();
@@ -208,7 +213,7 @@ details.how li{margin:3px 0}
     return arr.map(function(f){
       var p = f.path || f.href || f.file || f.url || '';
       if (p && !/^(https?:|\.\.?\/|\/)/.test(p) && !/^films\//.test(p)) p = 'films/' + p;
-      return {path:p, title:f.title||f.name||'Untitled', week:(f.week==null?null:Number(f.week)), seconds:f.seconds||f.length||f.duration||0, blurb:f.blurb||f.description||f.summary||''};
+      return {path:p, title:f.title||f.name||'Untitled', week:(f.week==null?null:Number(f.week)), weeks:f.weeks||null, seconds:f.seconds||f.length||f.duration||0, blurb:f.blurb||f.description||f.summary||''};
     }).filter(function(f){ return f.path; });
   }
   function renderFilms(list, placeholder){
@@ -216,9 +221,9 @@ details.how li{margin:3px 0}
     document.getElementById('films-sub').textContent = placeholder ? 'coming together now' : (list.length + (list.length===1?' film':' films'));
     list.forEach(function(f, i){
       var meta = el('div', {class:'meta'}, [
-        f.week ? el('span', {class:'pill', text:'Week '+f.week}) : el('span', {class:'pill', text:'Whole course'}),
+        el('span', {class:'pill', text:weekLabel(f)}),
         f.seconds ? el('span', {text:fmtLen(f.seconds)}) : null,
-        (f.week === SAT) ? el('span', {class:'badge', text:'this Saturday'}) : null
+        isSat(f) ? el('span', {class:'badge', text:'this Saturday'}) : null
       ]);
       var a = el('a', {class:'card film band'+(i%6), href:f.path}, [
         el('h3', {text:f.title}), meta,
@@ -282,13 +287,13 @@ details.how li{margin:3px 0}
     var btns = el('div', {class:'row'}, [copy, more, e.film ? el('a', {class:'btn watch', href:e.film, text:'Watch ▶'}) : null]);
     var L = e.links || {};
     var links = el('div', {class:'links'}, [
-      L.demo ? el('a', {href:L.demo, text:'Week '+e.week+' demos'}) : null,
+      L.demo ? el('a', {href:L.demo, text:'Study pack'}) : null,
       L.map ? el('a', {href:L.map, text:'Concept map'}) : null,
       L.case ? el('a', {href:L.case, text:'Case card'}) : null
     ]);
     return el('article', {class:'card sb band'+(e.week%6)}, [
       el('h3', {text:e.title}),
-      el('div', {class:'meta'}, [el('span', {class:'pill', text:'Week '+e.week}), el('span', {class:'pill fmt-'+e.format, text:({weekly:'weekly film',deep:'deep dive',concept:'concept'})[e.format]||e.format}), el('span', {text:fmtLen(e.seconds)}), e.film ? el('span', {class:'pill', text:'film ready'}) : null, e.week === SAT ? el('span', {class:'badge', text:'this Saturday'}) : null]),
+      el('div', {class:'meta'}, [el('span', {class:'pill', text:weekLabel(e)}), el('span', {class:'pill fmt-'+e.format, text:({weekly:'weekly film',deep:'deep dive',concept:'concept'})[e.format]||e.format}), el('span', {text:fmtLen(e.seconds)}), e.film ? el('span', {class:'pill', text:'film ready'}) : null, isSat(e) ? el('span', {class:'badge', text:'this Saturday'}) : null]),
       el('div', {class:'concepts', text:e.concepts.join(' · ')}),
       text, btns, links
     ]);
@@ -306,7 +311,7 @@ details.how li{margin:3px 0}
     chips.textContent = '';
     var weeks = []; DATA.forEach(function(e){ if (weeks.indexOf(e.week) < 0) weeks.push(e.week); });
     weeks.sort(function(a,b){return a-b;});
-    [['all','All']].concat(weeks.map(function(w){ return [String(w), 'W'+w+(WEEK_NAMES[w]?' '+WEEK_NAMES[w]:'')]; })).forEach(function(p){
+    [['all','All']].concat(weeks.map(function(w){ var e = DATA.filter(function(x){ return x.week === w; })[0] || {week:w}; return [String(w), weekLabel(e, true)+(WEEK_NAMES[w]?' '+WEEK_NAMES[w]:'')]; })).forEach(function(p){
       var b = el('button', {class:'chip', type:'button', 'aria-pressed':String(week===p[0]), text:p[1]});
       b.addEventListener('click', function(){ week = p[0]; renderChips(); renderBank(); });
       chips.appendChild(b);

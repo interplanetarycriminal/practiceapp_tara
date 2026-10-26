@@ -4,16 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Model Room · Object Lessons</title>
-<meta name="description" content="Every hard idea in TARA as an object you can hold: 28 models in a round room, one bay per Saturday.">
+<meta name="description" content="Every hard idea in TARA as an object you can hold: 28 models in a round room, fourteen bays in TARA’s week order.">
 <link rel="stylesheet" href="kit.css">
 <!-- The Model Room (objects/index.html): the 3D hub of Object Lessons.
      A rotunda: The Machine (00) on a tall plinth in the centre, 14 bays in a ring around it in
-     week order (clockwise from the brass start line in the north), chapter zones as soft coloured
+     course order (clockwise from the brass start line in the north), chapter zones as soft coloured
      floor arcs. Each bay holds its objects' miniatures (minis.js) on small numbered plinths.
      Fixed places on purpose: it is a memory palace. Stops: 0 = the whole room (The Machine),
      1-14 = the bays; swipe, arrow keys or the card's buttons walk them. objects.json is read at
      runtime: ready objects are painted and open on tap, the rest stay plaster, "in the workshop".
-     URL: #week-03 or #w03 (a bay), #<object-id> (that object, highlighted), no hash = this week.
+     The bays keep the places they had when the course followed ARENA's order, and are labelled
+     with TARA's weeks (BAY below): bay 6 is W2–3, bay 11 is W7–9, bays 2–4 are all W1.
+     URL: #week-08 or #w8 (TARA week 8, opens its bay), #bay-11 (a bay), #<object-id> (that object,
+     highlighted), no hash = this week.
      ?shot=1 (screenshots: no intro flight, instant moves), ?nowebgl=1 (the plain list).
      Test hooks: window.__hub = { ready, stop(), go(stop, {hl}), list(open), week, stats() }. -->
 <style>
@@ -193,7 +196,7 @@
   <section class="h-list" id="list" hidden tabindex="-1" aria-labelledby="listTitle">
     <div class="h-lwrap">
       <h2 class="h-ltitle" id="listTitle">All 28 objects</h2>
-      <p class="h-lnote" id="listNote">In course order, one group per Saturday. Painted objects are ready to open; the rest are still in the workshop.</p>
+      <p class="h-lnote" id="listNote">In TARA’s course order, one group per bay. Painted objects are ready to open; the rest are still in the workshop.</p>
       <div id="listBody"></div>
       <h2 class="h-ltitle" id="concepts">Every concept</h2>
       <p class="h-lnote">One 3D twin for each node on the concept map, beside its film.</p>
@@ -224,40 +227,47 @@ const LS = store('localStorage'), SS = store('sessionStorage');
 const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 
 /* ============================================================ the course */
-const WEEKS = 14;
+const WEEKS = 14;                                             // bays in the ring
 const T0 = Date.parse('2026-09-12T00:00:00+10:00');          // W1 Saturday, Brisbane
-function weekNow(now = Date.now()) {                          // same rule as intuition/hook.js
+function weekNow(now = Date.now()) {                          // TARA week 0-14, same rule as intuition/hook.js
   const d = (now - T0) / 864e5;
-  return clamp(Math.floor(d / 7) + 1 + (d % 7 > 0.5 ? 1 : 0), 1, WEEKS);
+  return clamp(Math.floor(d / 7) + 1 + (d % 7 > 0.5 ? 1 : 0), 0, 14);
 }
-const WEEK = weekNow();
+/* TARA's week order on the old bays: bay b holds the objects made for ARENA week b, and teaches
+   TARA weeks BAY[b][0]..BAY[b][1]. BAY_OF is the other way round: a TARA week's main bay. */
+const BAY = { 1: [0, 0], 2: [1, 1], 3: [1, 1], 4: [1, 1], 5: [2, 2], 6: [2, 3], 7: [3, 3], 8: [4, 4], 9: [5, 5], 10: [6, 6], 11: [7, 9], 12: [10, 10], 13: [11, 11], 14: [12, 14] };
+const BAY_OF = [1, 2, 5, 7, 8, 9, 10, 11, 11, 11, 12, 13, 14, 14, 14];
+const TW = weekNow(), WEEK = BAY_OF[TW];                      // WEEK: the bay in season now
+const isNow = (b) => TW >= BAY[b][0] && TW <= BAY[b][1];
+const wk = (b) => (BAY[b][0] === BAY[b][1] ? `W${BAY[b][0]}` : `W${BAY[b][0]}–${BAY[b][1]}`);
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-function sat(w) { const d = new Date(Date.UTC(2026, 8, 12 + 7 * (w - 1))); return `${d.getUTCDate()} ${MON[d.getUTCMonth()]}`; }
+function day(w) { const d = new Date(Date.UTC(2026, 8, 12 + 7 * (w - 1))); return `${d.getUTCDate()} ${MON[d.getUTCMonth()]}`; }
+function sat(b) { const [f, t] = BAY[b]; return f === t ? day(f) : `${day(f)} – ${day(t)}`; }
 const CHAPTERS = [
   { name: 'Fundamentals', from: 1, to: 4, color: C.data },
-  { name: 'Transformers', from: 5, to: 6, color: C.prob },
-  { name: 'Interpretability', from: 7, to: 8, color: C.dir },
+  { name: 'Mech interp', from: 5, to: 8, color: C.dir },
   { name: 'RL', from: 9, to: 10, color: C.good },
   { name: 'Evals', from: 11, to: 11, color: C.aux },
-  { name: 'Capstone', from: 12, to: 14, color: C.brass },
+  { name: 'Alignment science', from: 12, to: 13, color: C.prob },
+  { name: 'Project', from: 14, to: 14, color: C.brass },
 ];
 const chapterOf = (w) => CHAPTERS.find((c) => w >= c.from && w <= c.to);
-const range = (c) => (c.from === c.to ? `W${c.from}` : `W${c.from}–${c.to}`);
+const range = (c) => { const f = BAY[c.from][0], t = BAY[c.to][1]; return f === t ? `W${f}` : `W${f}–${t}`; };
 const LINE = {
-  1: 'Tensors, einops and einsum, then a ray tracer built from batched maths.',
-  2: 'Convolutions, and ResNets: the shortcut that lets nets go deep.',
-  3: 'Optimisation: how SGD, momentum and Adam walk down a loss surface.',
-  4: 'Backprop by hand: blame flows back through every op. Then VAEs and GANs.',
+  1: 'Prerequisites: tensors, einops and einsum, then a ray tracer built from batched maths.',
+  2: 'Foundations, part one: convolutions, and ResNets, the shortcut that lets nets go deep.',
+  3: 'Foundations, part two: how SGD, momentum and Adam walk down a loss surface.',
+  4: 'Foundations, part three: backprop by hand, blame flowing back through every op.',
   5: 'A transformer from scratch: attention, MLPs and the residual stream.',
-  6: 'Sampling, the KV cache, and opening the model with TransformerLens.',
-  7: 'Mech interp begins: induction heads and the circuits they build.',
-  8: 'Patching on IOI, then superposition and sparse autoencoders.',
-  9: 'Values, Q-learning and DQN, then vanilla policy gradients.',
+  6: 'Sampling and the KV cache (W2), then opening the model with TransformerLens (W3).',
+  7: 'Mech interp proper: induction heads and the circuits they build.',
+  8: 'Linear probes and patching on IOI, then superposition and sparse autoencoders.',
+  9: 'Values, Q-learning and DQN. Vanilla policy gradients open W6.',
   10: 'PPO’s clipped update, then RLHF: climbing a learned reward on a KL leash.',
-  11: 'One Saturday: threat models, datasets, Inspect, agents and AI control.',
-  12: 'Model organisms, persona vectors and steering, LoRA fine-tunes.',
-  13: 'Thought anchors (the sentence an answer hangs on) and the assistant axis.',
-  14: 'Final presentations: a research claim that stands like an arch.',
+  11: 'Three Saturdays: threat models and datasets, then Inspect, then agents.',
+  12: 'Emergent misalignment and model organisms, steering, LoRA fine-tunes.',
+  13: 'Thought anchors (the sentence an answer hangs on), personas and the assistant axis.',
+  14: 'Three project Saturdays, then a research claim that stands like an arch.',
 };
 const KIND = { weekly: 'weekly object', deep: 'deep dive', north: 'north star' };
 
@@ -302,7 +312,7 @@ async function main() {
       if (!objs.length) return '';
       const ch = w ? chapterOf(w) : null;
       const head = w
-        ? `<span class="h-wk">W${w}</span><span class="h-date">Sat ${sat(w)}</span><span class="h-chap" style="--cc:${ch.color}">${ch.name}</span>${w === WEEK ? '<span class="h-now">this week</span>' : ''}`
+        ? `<span class="h-wk">${wk(w)}</span><span class="h-date">Sat ${sat(w)}</span><span class="h-chap" style="--cc:${ch.color}">${ch.name}</span>${isNow(w) ? '<span class="h-now">this week</span>' : ''}`
         : `<span class="h-wk">00</span><span class="h-date">The Machine</span><span class="h-chap" style="--cc:${C.brass}">north star</span>`;
       const line = w ? LINE[w] : 'Stands in the centre of the room; every other object is one of its parts.';
       const items = objs.map((o) => {
@@ -312,7 +322,7 @@ async function main() {
         const find = st ? `<button type="button" class="h-find" data-find="${esc(o.id)}">Show in the room</button>` : '';
         return `<li class="h-item"><span class="h-num">${esc(o.num)}</span><div><p class="h-it">${title}${seen}</p><p class="h-is">${esc(o.subtitle || '')}</p></div><div class="h-ia">${act}${find}</div></li>`;
       }).join('');
-      return `<section class="h-grp" id="grp-${w}" aria-label="${w ? `Week ${w}` : 'The Machine'}"><h3>${head}</h3><p class="h-gl">${esc(line)}</p><ul class="h-items">${items}</ul></section>`;
+      return `<section class="h-grp" id="grp-${w}" aria-label="${w ? wk(w).replace('W', 'Week ') : 'The Machine'}"><h3>${head}</h3><p class="h-gl">${esc(line)}</p><ul class="h-items">${items}</ul></section>`;
     }).join('');
   }
   let listOpen = false;
@@ -474,7 +484,7 @@ async function main() {
     bandMesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
   }
 
-  // the brass start line: where W14 ends and W1 begins, pointing north from The Machine
+  // the brass start line: where the project bay ends and W0 begins, pointing north from The Machine
   const startLine = new THREE.Mesh(new THREE.PlaneGeometry(0.05, BAND.r1 - 2.05).rotateX(-Math.PI / 2),
     new THREE.MeshStandardMaterial({ color: C.brass, roughness: 0.45, metalness: 0.5, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
   startLine.position.set(0, 0.006, -(2.05 + BAND.r1) / 2);
@@ -508,8 +518,8 @@ async function main() {
     g.textBaseline = 'alphabetic';
     for (let w = 1; w <= WEEKS; w++) {
       const x0 = ((w - 1) % FLB.cols) * FLB.cw, y0 = Math.floor((w - 1) / FLB.cols) * FLB.ch, cx = x0 + FLB.cw / 2;
-      const main = `W${w} · ${sat(w)}`, maxW = FLB.cw - 28;
-      if (w === WEEK) {
+      const main = `${wk(w)} · ${sat(w)}`, maxW = FLB.cw - 28;
+      if (isNow(w)) {
         const tail = '  ·  this week';
         let k = 1;
         for (; k > 0.5; k -= 0.02) {
@@ -754,7 +764,7 @@ async function main() {
   const focusLabel = st.label(new THREE.Vector3(), '', { cls: 'focus', dy: -6, prio: 5 }); focusLabel.show(false);
   const roomLabels = [];      // week tags and chapter names, for the whole-room view
   for (let w = 1; w <= WEEKS; w++) {
-    const L = st.label(polar(bayAngle(w), R + 1.0, 0.02), `W${w}`, { cls: w === WEEK ? 'wk now' : 'wk', anchor: 'center', dy: 0, prio: 2 });
+    const L = st.label(polar(bayAngle(w), R + 1.0, 0.02), wk(w), { cls: isNow(w) ? 'wk now' : 'wk', anchor: 'center', dy: 0, prio: 2 });
     L.show(false); roomLabels.push(L);
   }
   for (const c of CHAPTERS) {
@@ -845,7 +855,7 @@ async function main() {
     cur = stop;
     if (stop) LAST = stop;
     HL = hl || null;
-    const h = stop === 0 ? '#' + (machine ? machine.id : 'room') : HL ? '#' + HL : `#week-${String(stop).padStart(2, '0')}`;
+    const h = stop === 0 ? '#' + (machine ? machine.id : 'room') : HL ? '#' + HL : `#bay-${String(stop).padStart(2, '0')}`;
     if (location.hash !== h) try { history.replaceState(null, '', h); } catch (e) { /* file:// */ }
     // labels for the stop in view
     updateNotes();
@@ -884,7 +894,7 @@ async function main() {
       line.textContent = machine ? machine.subtitle : '';
     } else {
       const c = chapterOf(cur);
-      id.innerHTML = `<span class="h-wk">W${cur}</span><span class="h-date">Sat ${sat(cur)}</span>${cur === WEEK ? '<span class="h-now">this week</span>' : ''}`;
+      id.innerHTML = `<span class="h-wk">${wk(cur)}</span><span class="h-date">Sat ${sat(cur)}</span>${isNow(cur) ? '<span class="h-now">this week</span>' : ''}`;
       line.innerHTML = `<b class="h-lc" style="--cc:${c.color}">${c.name}</b> · ${esc(LINE[cur])}`;
     }
     renderRows();
@@ -901,7 +911,7 @@ async function main() {
         : `<button type="button" class="h-open" disabled aria-label="${esc(o.title)}: in the workshop">Open</button>`;
       return `<li class="h-row${HL === o.id ? ' on' : ''}" data-id="${esc(o.id)}"><span class="h-num">${esc(o.num)}</span><span class="h-tt"><span class="h-name">${esc(o.title)}</span><span class="h-sub">${sub}</span></span>${btn}</li>`;
     }).join('');
-    if (cur === 0) html += '<li class="h-row h-tip">Around it, one bay per Saturday: swipe, or use ◀ ▶, to walk the 14 weeks.</li>';
+    if (cur === 0) html += '<li class="h-row h-tip">Around it, fourteen bays in TARA’s week order, W0 to W14: swipe, or use ◀ ▶, to walk them.</li>';
     $('cardRows').innerHTML = html;
   }
   $('cardRows').addEventListener('click', (e) => {
@@ -1006,7 +1016,8 @@ async function main() {
   function fromHash() {
     const h = decodeURIComponent(location.hash.replace(/^#/, ''));
     let m;
-    if ((m = h.match(/^(?:week-?|w)(\d{1,2})$/i))) { const w = Number(m[1]); if (w >= 1 && w <= WEEKS) return { stop: w }; }
+    if ((m = h.match(/^bay-?(\d{1,2})$/i))) { const b = Number(m[1]); if (b >= 1 && b <= WEEKS) return { stop: b }; }
+    if ((m = h.match(/^(?:week-?|w)(\d{1,2})$/i))) { const w = Number(m[1]); if (w >= 0 && w <= 14) return { stop: BAY_OF[w] }; }
     if (byId[h]) return { stop: stopOf(byId[h]), hl: h };
     if (h === 'room') return { stop: 0 };
     return null;

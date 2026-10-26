@@ -2,7 +2,9 @@
    touching the generated shell code. Puts a 2D | 3D toggle at the far right of the
    top bar and a "3D" item in the nav. Flipping to 3D remembers where you were
    (sessionStorage tara.dim.back) so the 2D side of the toggle brings you back, and
-   lands on the matching object: #week-NN opens that week's bay in the Model Room,
+   lands on the matching object: a TARA week (#today/week-NN, #plan/week-N,
+   #packs/week-NN) opens that week's bay in the Model Room, a pack (#week-NN, ids
+   in the original ARENA numbering, which is also the bay number) opens its bay, and
    a demo, case or map node opens the object that covers it. */
 (function () {
   var REG = []; var NODES = {};
@@ -33,16 +35,17 @@
   }
   function target() {
     var h = location.hash || '#today', m, o;
-    if ((m = h.match(/^#(?:today\/)?week-(\d\d)/))) return 'objects/index.html#week-' + m[1];
-    if ((m = h.match(/^#plan\/w(?:eek)?-?0?(\d{1,2})$/))) return 'objects/index.html#week-' + (m[1].length < 2 ? '0' : '') + m[1];
-    if (/^#capstone-weeks-12-14/.test(h)) return 'objects/index.html#week-12';
+    if ((m = h.match(/^#(?:today|packs)\/week-(\d{1,2})/))) return 'objects/index.html#week-' + (m[1].length < 2 ? '0' : '') + m[1];
+    if ((m = h.match(/^#plan\/w(?:eek)?-?(\d{1,2})$/))) return 'objects/index.html#week-' + (m[1].length < 2 ? '0' : '') + m[1];
+    if ((m = h.match(/^#(?:drill\/)?week-(\d\d)/))) return 'objects/index.html#bay-' + m[1];
+    if (/^#(?:drill\/)?(?:week-)?capstone-weeks-12-14/.test(h)) return 'objects/index.html#bay-14';
+    if (/^#(?:drill\/)?(?:week-)?alignment-science/.test(h)) return 'objects/index.html#bay-12';
     if ((m = h.match(/^#demo\/([\w-]+)/))) o = find(function (x) { return x.demo === m[1]; });
     else if ((m = h.match(/^#cases\/([\w-]+)/))) o = find(function (x) { return (x.concepts || []).indexOf(m[1]) >= 0; });
     else if ((m = h.match(/^#map\/node=([\w-]+)/))) {
       if (NODES[m[1]]) return 'objects/' + NODES[m[1]];   // the node's own 3D twin
       o = find(function (x) { return (x.map || []).indexOf(m[1]) >= 0; });
     }
-    else if ((m = h.match(/^#drill\/week-(\d\d)/))) return 'objects/index.html#week-' + m[1];
     return o ? 'objects/' + o.path : 'objects/index.html';
   }
   function go3d() {

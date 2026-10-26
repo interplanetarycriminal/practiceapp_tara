@@ -21,10 +21,10 @@
     if (!document.getElementById('nl-css')) { var st = document.createElement('style'); st.id = 'nl-css'; st.textContent = CSS; document.head.appendChild(st); }
     var film = o.film || '', obj = o.object || '../objects/';
     fetch(o.index || 'nodes/index.json').then(function (r) { return r.ok ? r.json() : { nodes: [] }; }).then(function (idx) {
-      var nodes = (idx.nodes || []).slice().sort(function (a, b) { return ((a.week || 99) - (b.week || 99)) || ((a.order || 0) - (b.order || 0)); });
+      var nodes = (idx.nodes || []).slice().sort(function (a, b) { return ((a.week == null ? 99 : a.week) - (b.week == null ? 99 : b.week)) || ((a.order || 0) - (b.order || 0)); });
       var ready = nodes.filter(function (n) { return o.mode === 'object' ? n.object : n.film; }).length;
       var groups = {}, order = [];
-      nodes.forEach(function (n) { var k = n.week ? 'Week ' + n.week : 'Alignment science and background'; if (!groups[k]) { groups[k] = []; order.push(k); } groups[k].push(n); });
+      nodes.forEach(function (n) { var k = n.week != null ? 'Week ' + n.week : 'Background, off the Saturday list'; if (!groups[k]) { groups[k] = []; order.push(k); } groups[k].push(n); });
       var thing = o.mode === 'object' ? '3D twin' : 'film';
       var html = '<p class="nl-sum">' + (ready === nodes.length ? 'Every one of the ' + nodes.length + ' concepts on the map has its own ' + thing + '.' : ready + ' of ' + nodes.length + ' concepts on the map have their own ' + thing + ' so far.') +
         (o.mode === 'object' ? ' Each twin has a film to go with it, and each film ends in something you can play with.' : ' Each film ends in something you can play with, and each has a 3D twin.') + '</p>' +

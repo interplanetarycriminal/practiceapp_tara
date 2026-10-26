@@ -349,6 +349,7 @@ const html = [
   SW_REG,
   '<script src="intuition/hook.js" defer></script>',
   '<script src="objects/hook.js" defer></script>',
+  '<script src="lab/hook.js" defer></script>',
   '</body>',
   '</html>',
   ''
