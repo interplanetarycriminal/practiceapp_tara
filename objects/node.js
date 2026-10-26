@@ -242,7 +242,7 @@ async function main() {
   const impl = (KINDS[o.kind] || KINDS.blocks)(o, kid);
   const filmHref = spec.linked_film && !(spec.chapters && spec.chapters.length) ? `../intuition/${spec.linked_film}` : `../intuition/node.html?id=${id}`;
   const links = [{ label: 'Watch the film (2D)', href: filmHref }, { label: 'On the concept map', href: `../index.html#map/node=${id}` }];
-  if (node.week) links.push({ label: `Week ${node.week} pack`, href: `../index.html#week-${String(node.week).padStart(2, '0')}` });
+  if (node.week != null) links.push({ label: `Open week ${node.week}`, href: `../index.html#today/week-${String(node.week).padStart(2, '0')}` });
   if (node.case) links.push({ label: 'Case study', href: `../index.html#cases/${node.case}` });
   document.title = `${o.title || spec.title} · Object Lessons`;
   const beats = (o.beats || []).slice(0, 8).map((b) => ({

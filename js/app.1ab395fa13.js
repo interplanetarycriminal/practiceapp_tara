@@ -738,6 +738,44 @@ APP.today = function (whenISO) {
   return out;
 };
 
+/* Which TARA weeks a pack (or a drill bank, same slug) serves, from calendar.md.
+   Pack slugs are content ids from the first build (week-01 ... week-11), not TARA
+   week numbers: week-11 serves weeks 7-9, week-07 weeks 3 and 4. */
+APP.weekByN = function (n) {
+  var weeks = (_schedule && _schedule.weeks) || [];
+  for (var i = 0; i < weeks.length; i++) if (weeks[i].n === Number(n)) return weeks[i];
+  return null;
+};
+APP.weeksOfPack = function (slug) {
+  var out = [];
+  ((_schedule && _schedule.weeks) || []).forEach(function (w) {
+    if ((w.packSlugs || [w.packSlug]).indexOf(slug) >= 0) out.push(w.n);
+  });
+  return out;
+};
+APP.weeksOfDemo = function (slug) {
+  var out = [];
+  ((_schedule && _schedule.weeks) || []).forEach(function (w) {
+    if ((w.demoSlugs || []).indexOf(slug) >= 0) out.push(w.n);
+  });
+  return out;
+};
+/* [3,4] -> "Weeks 3–4", [7,8,9] -> "Weeks 7–9", [0] -> "Week 0"; short form "W3–4". */
+APP.weekSpan = function (ns, short) {
+  if (!ns || !ns.length) return '';
+  var a = ns[0], b = ns[ns.length - 1];
+  if (short) return a === b ? 'W' + a : 'W' + a + '–' + b;
+  return a === b ? 'Week ' + a : 'Weeks ' + a + '–' + b;
+};
+/* The hash that opens a week's nth pack, at the part that week uses. */
+APP.packHash = function (w, i) {
+  var slugs = (w && (w.packSlugs || [w.packSlug])) || [];
+  var slug = slugs[i || 0];
+  if (!slug) return null;
+  var a = w.packAnchors && w.packAnchors[slug];
+  return a ? slug + '/' + a : slug;
+};
+
 /* ==================================================================== boot */
 
 function fatal(msg) {
@@ -775,8 +813,10 @@ async function boot() {
 
   try {
     _schedule = await APP.payloadJSON('schedule');
-    PACK_SLUGS = _schedule.weeks.map(function (w) { return w.packSlug; })
-      .filter(function (x, i, a) { return x && a.indexOf(x) === i; });
+    PACK_SLUGS = [];
+    _schedule.weeks.forEach(function (w) {
+      (w.packSlugs || [w.packSlug]).forEach(function (p) { if (p && PACK_SLUGS.indexOf(p) < 0) PACK_SLUGS.push(p); });
+    });
     if (_schedule.bonus && _schedule.bonus.slug) PACK_SLUGS.push(_schedule.bonus.slug);
     DEMO_SLUGS = [];
     _schedule.weeks.forEach(function (w) {
@@ -816,8 +856,12 @@ setTimeout(function () {
 ;(function(){
 /* app/src/shell/today.js — SPEC §9. The default view: what to do right now.
    Fixed row slots, built once, then text-swapped in place. Owner: Worker A.
-   A strip of the fourteen weeks sits above the rows: #today is the current
-   week, #today/week-NN shows the same rows for any other week, earlier or later. */
+   A strip of the weeks sits above the rows: #today is the current week,
+   #today/week-NN shows the same rows for any other week, earlier or later.
+   Weeks follow TARA's own order (26 Oct 2026): W0 prerequisites, W1 foundations,
+   W2-4 mech interp, W5-6 RL, W7-9 evals, W10-11 alignment science, W12-14 project.
+   A week can carry several packs (calendar.md lists them); pack slugs are content
+   ids, so week-11 is the evals pack that serves W7-W9. */
 
 'use strict';
 
@@ -863,7 +907,7 @@ function buildOnce(el) {
   ((s && s.weeks) || []).forEach(function (w) {
     var a = APP.el('a', {
       'class': 'app-wk', href: '#today/week-' + pad2(w.n), 'data-wk': String(w.n),
-      title: 'Week ' + w.n + ' · ' + pretty(w.saturday) + ' · ' + w.chapter
+      title: 'Week ' + w.n + ' · ' + pretty(w.saturday) + ' · ' + w.chapter + (w.n === 0 ? ' (no Saturday session)' : '')
     });
     a.appendChild(APP.el('b', { text: 'W' + w.n }));
     a.appendChild(APP.el('span', { text: dayMonth(w.saturday) }));
@@ -926,11 +970,11 @@ function weekByN(n) {
   return null;
 }
 
-/* #today/week-03 (also week-3, w3) -> 3; plain #today -> 0 */
+/* #today/week-03 (also week-3, w3) -> 3; #today/week-00 -> 0; plain #today -> null */
 function shownWeek(route) {
   var raw = route && route.raw ? String(route.raw) : '';
-  var m = /^today\/w(?:eek)?-?0?(\d{1,2})$/i.exec(raw);
-  return m ? Number(m[1]) : 0;
+  var m = /^today\/w(?:eek)?-?(\d{1,2})$/i.exec(raw);
+  return m ? Number(m[1]) : null;
 }
 
 function packTitle(slug) {
@@ -938,11 +982,15 @@ function packTitle(slug) {
   var p = K && K.PACK_BY ? K.PACK_BY[slug] : null;
   return p ? p.title : titleCaseSlug(slug);
 }
+function packSlugsOf(w) { return (w && (w.packSlugs || (w.packSlug ? [w.packSlug] : []))) || []; }
 
-/* Ticks the plan keeps for a week (tara.fourteen.v1: w<N>p<k>, w<N>e<k>). */
+/* Ticks the plan keeps for a week (tara.fourteen.v1: w<N>p<k>, w<N>e<k>). Older
+   ticks used ARENA's week numbers; the plan moves them to TARA's order the first
+   time it opens and marks the store __order:"tara". Until then, count nothing. */
 function planTicks(n) {
   var st = {};
   try { st = JSON.parse(localStorage.getItem('tara.fourteen.v1') || '{}') || {}; } catch (e) { st = {}; }
+  if (st.__order !== 'tara') return 0;
   var rx = new RegExp('^w' + n + '[pe]\\d+$'), c = 0;
   for (var k in st) if (Object.prototype.hasOwnProperty.call(st, k) && rx.test(k) && st[k]) c++;
   return c;
@@ -953,14 +1001,25 @@ function planTicks(n) {
 function weekRows(w, mine) {
   var rows = {};
   if (!w) return rows;
-  if (w.packSlug) {
+  var packs = packSlugsOf(w);
+  if (packs.length === 1) {
     rows.pack = {
-      title: 'Study pack — ' + titleCaseSlug(w.packSlug),
-      sub: w.arena || w.chapter, hash: w.packSlug
+      title: 'Study pack — ' + packTitle(packs[0]),
+      sub: w.arena || w.chapter, hash: APP.packHash(w, 0)
     };
+  } else if (packs.length > 1) {
+    rows.pack = {
+      title: packs.length + (mine ? ' study packs this week' : ' study packs for week ' + w.n),
+      sub: packs.map(packTitle).join(' · '),
+      hash: 'packs/week-' + pad2(w.n)
+    };
+  }
+  if (packs.length) {
     rows.drill = {
       title: 'Drill week ' + w.n,
-      sub: 'Eight questions from ' + (mine ? 'this week’s' : 'week ' + w.n + '’s') + ' bank', hash: 'drill/' + w.packSlug
+      sub: 'Eight questions from ' + (mine ? 'this week’s' : 'week ' + w.n + '’s') + ' bank' +
+        (packs.length > 1 ? ' · ' + packs.length + ' banks, one per pack' : ''),
+      hash: 'drill/' + packs[0]
     };
   }
   var demos = w.demoSlugs || [];
@@ -985,12 +1044,12 @@ function weekRows(w, mine) {
 /* Any week other than the current one: the same rows, pointed at that week. */
 function describeWeek(t, w) {
   var s = APP.schedule();
-  var cur = t.week ? t.week.n : 0;
-  var past = !cur || w.n < cur;
+  var cur = t.week ? t.week.n : null;
+  var past = cur == null || w.n < cur;
   var rows = weekRows(w, false);
   rows.now = {
-    title: (past ? 'Back to week ' : 'Get ahead on week ') + w.n + ' — ' + packTitle(w.packSlug),
-    sub: w.arena || w.chapter, hash: w.packSlug || 'packs', primary: true
+    title: (past ? 'Back to week ' : 'Get ahead on week ') + w.n + ' — ' + (w.packSlug ? packTitle(w.packSlug) : w.chapter),
+    sub: w.arena || w.chapter, hash: APP.packHash(w, 0) || 'packs', primary: true
   };
   rows.sprint = { title: 'Crash sprint', sub: 'Seven prerequisite evenings · ' + pretty(s.sprint.start) + ' – ' + pretty(s.sprint.end), hash: 'sprint' };
   return {
@@ -1019,8 +1078,9 @@ function describe(t) {
   var line;
 
   if (t.phase === 'sprint') {
-    line = 'Crash sprint, day ' + t.dayIndex + ' of ' + s.sprint.days +
-           (w ? ' · week ' + w.n + ' (' + w.chapter + ') starts ' + pretty(w.saturday) : '');
+    var first = w && w.n === 0 ? weekByN(1) : w;     /* the sprint is week 0; say when Saturdays start */
+    line = 'Week 0 · crash sprint, day ' + t.dayIndex + ' of ' + s.sprint.days +
+           (first ? ' · week ' + first.n + ' (' + first.chapter + ') starts ' + pretty(first.saturday) : '');
     rows.now = {
       title: 'Sprint day ' + t.dayIndex,
       sub: 'One page a day, exercises run in the browser · ends ' + pretty(s.sprint.end),
@@ -1028,10 +1088,10 @@ function describe(t) {
     };
     rows.sprint = { title: 'All seven sprint days', sub: pretty(s.sprint.start) + ' – ' + pretty(s.sprint.end), hash: 'sprint' };
   } else if (t.phase === 'week' && w) {
-    line = 'Week ' + w.n + ' · ' + w.chapter + ' · Saturday ' + pretty(w.saturday);
+    line = 'Week ' + w.n + ' · ' + w.chapter + ' · Saturday ' + dayMonth(w.saturday);
     rows.now = {
-      title: 'Week ' + w.n + ' pack — ' + w.chapter,
-      sub: w.arena || '', hash: w.packSlug || 'packs', primary: true
+      title: 'Week ' + w.n + ' pack — ' + (w.packSlug ? packTitle(w.packSlug) : w.chapter),
+      sub: w.arena || '', hash: APP.packHash(w, 0) || 'packs', primary: true
     };
     rows.sprint = { title: 'Crash sprint', sub: 'Seven prerequisite evenings · ' + pretty(s.sprint.start) + ' – ' + pretty(s.sprint.end), hash: 'sprint' };
   } else {
@@ -1039,7 +1099,7 @@ function describe(t) {
       ? 'Between Saturdays · week ' + w.n + ' (' + w.chapter + ') starts ' + pretty(t.nextSaturday)
       : 'The course calendar has run out.';
     rows.now = w
-      ? { title: 'Get ahead on week ' + w.n, sub: w.arena || w.chapter, hash: w.packSlug || 'packs', primary: true }
+      ? { title: 'Get ahead on week ' + w.n, sub: w.arena || w.chapter, hash: APP.packHash(w, 0) || 'packs', primary: true }
       : { title: 'The plan', sub: 'Fourteen Saturdays', hash: 'plan', primary: true };
     rows.sprint = { title: 'Crash sprint', sub: pretty(s.sprint.start) + ' – ' + pretty(s.sprint.end), hash: 'sprint' };
   }
@@ -1066,15 +1126,16 @@ function reviewRow() {
 function render(el, route) {
   buildOnce(el);
   var t = APP.today();
-  var cur = t.week ? t.week.n : 0;
-  var w = weekByN(shownWeek(route || APP.route()));
+  var cur = t.week ? t.week.n : null;
+  var sw = shownWeek(route || APP.route());
+  var w = sw == null ? null : weekByN(sw);
   if (w && w.n === cur) w = null;          /* the current week is plain #today */
   var d = w ? describeWeek(t, w) : describe(t);
   var line = el.querySelector('#app-todayline');
   if (line) line.textContent = d.line;
   var back = el.querySelector('#app-wkback');
   if (back) {
-    back.hidden = !(w && cur);
+    back.hidden = !(w && cur != null);
     back.textContent = 'Back to this week (W' + cur + ')';
   }
   paintWeeks(el, w ? w.n : cur, cur, !!t.upcoming);
@@ -1104,7 +1165,10 @@ APP._initNowLine = function () {
   var t = APP.today();
   var s = APP.schedule();
   if (!s) { box.textContent = ''; return; }
-  if (t.phase === 'sprint') box.textContent = 'Sprint day ' + t.dayIndex + ' of ' + s.sprint.days + (t.week ? ' · week ' + t.week.n + ' ' + pretty(t.week.saturday) : '');
+  if (t.phase === 'sprint') {
+    var first = t.week && t.week.n === 0 ? weekByN(1) : t.week;
+    box.textContent = 'Week 0 · sprint day ' + t.dayIndex + ' of ' + s.sprint.days + (first ? ' · week ' + first.n + ' ' + pretty(first.saturday) : '');
+  }
   else if (t.phase === 'week' && t.week) box.textContent = 'Week ' + t.week.n + ' · ' + t.week.chapter;
   else if (t.week) box.textContent = 'Week ' + t.week.n + ' starts ' + pretty(t.nextSaturday);
   else box.textContent = '';
@@ -1483,36 +1547,40 @@ APP._initReview = function () {
 
   /* --------------------------------------------------------------- tables */
 
+  /* label = the TARA week(s) the pack serves, in TARA's own order (26 Oct 2026).
+     The live label comes from calendar.md via APP.weeksOfPack (packLabel below);
+     these are the fallback. Slugs are stable content ids, not week numbers. */
   var PACKS = [
-    { slug: 'week-01', label: 'Week 1',  title: 'Einops and Ray Tracing',              sub: '[0.0] Prerequisites · [0.1] Ray Tracing' },
-    { slug: 'week-02', label: 'Week 2',  title: 'Modules and ResNets',                 sub: '[0.2] CNNs & ResNets' },
-    { slug: 'week-03', label: 'Week 3',  title: 'Optimizers and Sweeps',               sub: '[0.3] Optimization' },
-    { slug: 'week-04', label: 'Week 4',  title: 'Your Own Autograd',                   sub: '[0.4] Backprop · [0.5] VAEs & GANs' },
-    { slug: 'week-05', label: 'Week 5',  title: 'Transformer From Scratch',            sub: '[1.1] Transformer from Scratch' },
-    { slug: 'week-06', label: 'Week 6',  title: 'Hooks and the Cache',                 sub: 'sampling · TransformerLens' },
-    { slug: 'week-07', label: 'Week 7',  title: 'Induction Circuits and Patching',     sub: '[1.2] Intro to Mech Interp' },
-    { slug: 'week-08', label: 'Week 8',  title: 'Superposition and Sparse Autoencoders', sub: '[1.4.1] IOI · [1.5.4] Superposition · [1.3.3] SAEs' },
-    { slug: 'week-09', label: 'Week 9',  title: 'Value Functions and DQN',             sub: '[2.1] Intro to RL · [2.2] DQN, VPG' },
-    { slug: 'week-10', label: 'Week 10', title: 'Policy Gradients, PPO and RLHF',      sub: '[2.3] PPO · [2.4] RLHF' },
-    { slug: 'week-11', label: 'Week 11', title: 'Eval Design and Inspect',             sub: '[3.1]–[3.5] incl. AI Control' },
-    { slug: 'alignment-science',    label: 'Chapter 4', title: 'Model Organisms and Open Problems', sub: 'bonus · background from W8 · capstone source' },
-    { slug: 'capstone-weeks-12-14', label: 'W12–14',    title: 'Three Saturdays and a Talk',        sub: 'capstone · final presentation 12 Dec' }
+    { slug: 'week-01', label: 'Week 0',  title: 'Einops and Ray Tracing',              sub: '[0.0] Prerequisites · [0.1] Ray Tracing' },
+    { slug: 'week-02', label: 'Week 1',  title: 'Modules and ResNets',                 sub: '[0.2] CNNs & ResNets' },
+    { slug: 'week-03', label: 'Week 1',  title: 'Optimizers and Sweeps',               sub: '[0.3] Optimization' },
+    { slug: 'week-04', label: 'Week 1',  title: 'Your Own Autograd',                   sub: '[0.4] Backprop · [0.5] VAEs & GANs (optional)' },
+    { slug: 'week-05', label: 'Week 2',  title: 'Transformer From Scratch',            sub: '[1.1] Transformer from Scratch' },
+    { slug: 'week-06', label: 'Week 3',  title: 'Hooks and the Cache',                 sub: '[1.2] §1–3 · TransformerLens, induction heads, hooks' },
+    { slug: 'week-07', label: 'Weeks 3–4', title: 'Induction Circuits and Patching',   sub: '[1.2] §4 circuits · [1.4.1] IOI & path patching' },
+    { slug: 'week-08', label: 'Week 4',  title: 'Superposition and Sparse Autoencoders', sub: '[1.5.4] Superposition · [1.3.3] SAEs' },
+    { slug: 'week-09', label: 'Week 5',  title: 'Value Functions and DQN',             sub: '[2.1] Intro to RL · [2.2.1] DQN' },
+    { slug: 'week-10', label: 'Week 6',  title: 'Policy Gradients, PPO and RLHF',      sub: '[2.2.2] VPG · [2.3] PPO · [2.4] RLHF' },
+    { slug: 'week-11', label: 'Weeks 7–9', title: 'Eval Design and Inspect',           sub: '[3.1]–[3.3] in depth · [3.4] agents and [3.5] AI control in brief' },
+    { slug: 'alignment-science',    label: 'Weeks 10–11', title: 'Model Organisms and Open Problems', sub: '[4.1]–[4.5] alignment science · capstone quarry' },
+    { slug: 'capstone-weeks-12-14', label: 'Weeks 12–14', title: 'Three Saturdays and a Talk',        sub: 'project phase · final presentation 12 Dec' }
   ];
 
+  /* weeks = TARA weeks (fallback; live from calendar.md via APP.weeksOfDemo) */
   var DEMOS = [
-    { slug: 'tensors-einops',           title: 'Einops Bench',                     weeks: [1] },
-    { slug: 'convolutions-cnn',         title: 'Sliding Window Lab',               weeks: [2] },
-    { slug: 'backprop-training',        title: 'Backprop Bench',                   weeks: [3, 4] },
-    { slug: 'transformer-block',        title: 'Residual Stream Anatomy',          weeks: [5] },
-    { slug: 'sampling-decoding',        title: "Decoder's Bench",                  weeks: [5] },
-    { slug: 'residual-stream-bus',      title: 'Residual Stream Bus',              weeks: [5, 6] },
-    { slug: 'induction-heads-patching', title: 'Induction Circuit Workbench',      weeks: [7] },
-    { slug: 'superposition-sae',        title: 'Superposition Bench',              weeks: [8] },
-    { slug: 'rl-foundations-dqn',       title: 'Bellman to DQN',                   weeks: [9] },
-    { slug: 'policy-gradients-ppo',     title: 'Reading the PPO Objective',        weeks: [10] },
-    { slug: 'rlhf-overoptimisation',    title: 'The Overoptimisation Curve',       weeks: [10] },
-    { slug: 'evals-pipeline',           title: 'The Measurement Is Not the Property', weeks: [11] },
-    { slug: 'steering-persona-vectors', title: 'Persona Vector Bench',             weeks: [12] }
+    { slug: 'tensors-einops',           title: 'Einops Bench',                     weeks: [0] },
+    { slug: 'convolutions-cnn',         title: 'Sliding Window Lab',               weeks: [1] },
+    { slug: 'backprop-training',        title: 'Backprop Bench',                   weeks: [1] },
+    { slug: 'transformer-block',        title: 'Residual Stream Anatomy',          weeks: [2] },
+    { slug: 'sampling-decoding',        title: "Decoder's Bench",                  weeks: [2] },
+    { slug: 'residual-stream-bus',      title: 'Residual Stream Bus',              weeks: [2, 3] },
+    { slug: 'induction-heads-patching', title: 'Induction Circuit Workbench',      weeks: [3, 4] },
+    { slug: 'superposition-sae',        title: 'Superposition Bench',              weeks: [4] },
+    { slug: 'rl-foundations-dqn',       title: 'Bellman to DQN',                   weeks: [5] },
+    { slug: 'policy-gradients-ppo',     title: 'Reading the PPO Objective',        weeks: [6] },
+    { slug: 'rlhf-overoptimisation',    title: 'The Overoptimisation Curve',       weeks: [6] },
+    { slug: 'evals-pipeline',           title: 'The Measurement Is Not the Property', weeks: [7, 8, 9] },
+    { slug: 'steering-persona-vectors', title: 'Persona Vector Bench',             weeks: [10, 11] }
   ];
 
   /* Published-artifact uuid -> the route that now holds that page. Used only to
@@ -1556,6 +1624,21 @@ APP._initReview = function () {
   var PACK_BY = {}, DEMO_BY = {};
   PACKS.forEach(function (p, i) { p.order = i; PACK_BY[p.slug] = p; });
   DEMOS.forEach(function (d, i) { d.order = i; DEMO_BY[d.slug] = d; });
+
+  /* Live week labels from the schedule (calendar.md), falling back to the tables. */
+  function packWeeks(slug) {
+    var ns = (window.APP && APP.weeksOfPack) ? APP.weeksOfPack(slug) : [];
+    return ns.length ? ns : null;
+  }
+  function packLabel(slug) {
+    var p = PACK_BY[slug], ns = packWeeks(slug);
+    return ns ? APP.weekSpan(ns) : (p ? p.label : slug);
+  }
+  function demoWeeks(slug) {
+    var ns = (window.APP && APP.weeksOfDemo) ? APP.weeksOfDemo(slug) : [];
+    var d = DEMO_BY[slug];
+    return ns.length ? ns : (d ? d.weeks : []);
+  }
 
   /* ---------------------------------------------------------- string bits */
 
@@ -2120,6 +2203,7 @@ APP._initReview = function () {
 
   window.__TARA_FK = {
     PACKS: PACKS, DEMOS: DEMOS, PACK_BY: PACK_BY, DEMO_BY: DEMO_BY, URL2HASH: URL2HASH,
+    packWeeks: packWeeks, packLabel: packLabel, demoWeeks: demoWeeks,
     scriptSafe: scriptSafe, jsonLit: jsonLit, splice: splice, prelude: prelude,
     envelopeConfig: envelopeConfig, bootBlock: bootBlock, payloadOr: payloadOr,
     composePack: composePack, composeDemo: composeDemo, composeSimple: composeSimple,
@@ -2197,6 +2281,9 @@ APP._initReview = function () {
   function parse(route) {
     var h = fk().hashOf(route);
     if (!h || h === 'packs' || h === 'pack') return { slug: null, anchor: null };
+    /* #packs/week-NN: the index, with that TARA week's packs marked */
+    var wm = /^packs\/w(?:eek)?-?(\d{1,2})$/i.exec(h);
+    if (wm) return { slug: null, anchor: null, week: Number(wm[1]) };
     var i = h.indexOf('/');
     var head = i === -1 ? h : h.slice(0, i);
     var anchor = i === -1 ? null : h.slice(i + 1) || null;
@@ -2223,8 +2310,9 @@ APP._initReview = function () {
     var head = document.createElement('div');
     head.className = 'app-idx-head';
     head.innerHTML = '<h2 class="app-idx-h">Study packs</h2>' +
-      '<p class="app-idx-note">Thirteen packs covering all fourteen weeks. Each one carries its own ' +
-      'eight-question drill, drawn from that week&rsquo;s bank.</p>';
+      '<p class="app-idx-note">Thirteen packs in TARA&rsquo;s week order, week 0 to week 14. Some weeks use ' +
+      'two or three packs and some packs serve two or three weeks. Each pack carries its own ' +
+      'eight-question drill.</p>';
     idx.appendChild(head);
     var grid = document.createElement('div');
     grid.className = 'app-idx-grid';
@@ -2232,8 +2320,10 @@ APP._initReview = function () {
       var a = document.createElement('a');
       a.className = 'app-idx-card';
       a.href = '#' + p.slug;
+      a.setAttribute('data-pack', p.slug);
+      a.setAttribute('data-weeks', (fk().packWeeks(p.slug) || []).join(','));
       a.innerHTML =
-        '<span class="app-idx-k">' + APP.esc(p.label) + '</span>' +
+        '<span class="app-idx-k">' + APP.esc(fk().packLabel(p.slug)) + '</span>' +
         '<span class="app-idx-t">' + APP.esc(p.title) + '</span>' +
         '<span class="app-idx-s">' + APP.esc(p.sub) + '</span>';
       grid.appendChild(a);
@@ -2241,6 +2331,25 @@ APP._initReview = function () {
     idx.appendChild(grid);
     APP._order = APP._order || {};
     APP._order[SEC] = fk().PACKS.map(function (p) { return p.slug; });
+  }
+
+  /* #packs/week-NN: mark that week's cards in place (nothing reorders or hides),
+     and say so in the note, the way #demo-week-NN does for demos. */
+  function markWeek(idx, week) {
+    var cards = idx.querySelectorAll('.app-idx-card');
+    for (var i = 0; i < cards.length; i++) {
+      var ws = (cards[i].getAttribute('data-weeks') || '').split(',');
+      if (week != null && ws.indexOf(String(week)) !== -1) cards[i].setAttribute('data-now', '1');
+      else cards[i].removeAttribute('data-now');
+    }
+    var note = idx.querySelector('.app-idx-note');
+    if (!note) return;
+    if (!note.__base) note.__base = note.innerHTML;
+    var w = week != null && APP.weekByN ? APP.weekByN(week) : null;
+    note.innerHTML = w
+      ? 'Week ' + w.n + ' &middot; ' + APP.esc(w.chapter) + ' &middot; ' + APP.esc(w.arena || '') +
+        '. Its packs are marked; open them in order.'
+      : note.__base;
   }
 
   var openSlug = null, openFrame = null;
@@ -2251,13 +2360,14 @@ APP._initReview = function () {
     buildIndex(parts.idx);
     var r = parse(route);
     if (!r.slug || !K.PACK_BY[r.slug]) {
+      markWeek(parts.idx, r.week == null ? null : r.week);
       K.showIndex(parts, true);
       openSlug = null; openFrame = null;
       return Promise.resolve();
     }
     var p = K.PACK_BY[r.slug];
     K.showIndex(parts, false);
-    parts.name.textContent = p.label + ' · ' + p.title;
+    parts.name.textContent = K.packLabel(r.slug) + ' · ' + p.title;
     openSlug = r.slug;
     return K.show(parts.host, 'pack:' + r.slug, function () {
       return K.composePack(r.slug);
@@ -2290,9 +2400,10 @@ APP._initReview = function () {
     var K = fk();
     var direct = [];
     K.PACKS.forEach(function (p) {
-      var s = K.score(q, { id: p.slug, slug: p.slug, title: p.title, body: p.sub + ' ' + p.label });
-      if (!s) s = K.score(q, { id: p.label.toLowerCase(), title: p.label });
-      if (s) direct.push({ title: p.title, sub: p.label, hash: '#' + p.slug, score: s + 5, _o: p.order });
+      var lab = K.packLabel(p.slug);
+      var s = K.score(q, { id: p.slug, slug: p.slug, title: p.title, body: p.sub + ' ' + lab });
+      if (!s) s = K.score(q, { id: lab.toLowerCase(), title: lab });
+      if (s) direct.push({ title: p.title, sub: lab, hash: '#' + p.slug, score: s + 5, _o: p.order });
     });
     return ensureIndex().then(function (all) {
       var rows = direct.slice();
@@ -2302,7 +2413,7 @@ APP._initReview = function () {
           if (!s) return;
           rows.push({
             title: row.title,
-            sub: entry.pack.label + ' · ' + entry.pack.title,
+            sub: K.packLabel(entry.pack.slug) + ' · ' + entry.pack.title,
             hash: '#' + entry.pack.slug + '/' + row.id,
             score: s,
             _o: entry.pack.order * 1000 + i
@@ -2381,7 +2492,7 @@ APP._initReview = function () {
     var head = document.createElement('div');
     head.className = 'app-idx-head';
     head.innerHTML = '<h2 class="app-idx-h">Demos</h2>' +
-      '<p class="app-idx-note">Thirteen benches. Every Saturday has one; there are no coverage gaps.</p>';
+      '<p class="app-idx-note">Thirteen benches, in TARA&rsquo;s week order. Labels show the weeks each one serves.</p>';
     idx.appendChild(head);
     var grid = document.createElement('div');
     grid.className = 'app-idx-grid';
@@ -2390,9 +2501,10 @@ APP._initReview = function () {
       a.className = 'app-idx-card';
       a.href = '#demo/' + d.slug;
       a.setAttribute('data-demo', d.slug);
-      a.setAttribute('data-weeks', d.weeks.join(','));
+      var ws = fk().demoWeeks(d.slug);
+      a.setAttribute('data-weeks', ws.join(','));
       a.innerHTML =
-        '<span class="app-idx-k">' + APP.esc(d.weeks.map(function (w) { return 'W' + w; }).join(' · ')) + '</span>' +
+        '<span class="app-idx-k">' + APP.esc(ws.map(function (w) { return 'W' + w; }).join(' · ')) + '</span>' +
         '<span class="app-idx-t">' + APP.esc(d.title) + '</span>' +
         '<span class="app-idx-s">' + APP.esc(d.slug) + '</span>';
       grid.appendChild(a);
@@ -2415,8 +2527,8 @@ APP._initReview = function () {
     var head = idx.querySelector('.app-idx-note');
     if (head) {
       head.textContent = week == null
-        ? 'Thirteen benches. Every Saturday has one; there are no coverage gaps.'
-        : 'Week ' + week + ' has more than one demo. Both are marked below.';
+        ? 'Thirteen benches, in TARA’s week order. Labels show the weeks each one serves.'
+        : 'Week ' + week + ' has more than one demo. They are marked below.';
     }
   }
 
@@ -2450,11 +2562,12 @@ APP._initReview = function () {
   function search(q) {
     var K = fk(), rows = [];
     K.DEMOS.forEach(function (d) {
+      var ws = K.demoWeeks(d.slug);
       var s = K.score(q, {
         id: d.slug, slug: d.slug, title: d.title,
-        body: d.weeks.map(function (w) { return 'week ' + w + ' w' + w; }).join(' ')
+        body: ws.map(function (w) { return 'week ' + w + ' w' + w; }).join(' ')
       });
-      if (s) rows.push({ title: d.title, sub: 'Demo · ' + d.weeks.map(function (w) { return 'W' + w; }).join(' · '),
+      if (s) rows.push({ title: d.title, sub: 'Demo · ' + ws.map(function (w) { return 'W' + w; }).join(' · '),
         hash: '#demo/' + d.slug, score: s, _o: d.order });
     });
     return K.cap(rows, 8);
@@ -2500,11 +2613,11 @@ APP._initReview = function () {
   var openFrame = null;
   var cache = {};
 
-  /* week-3, week-03, w3, w-3 -> 3; anything else -> 0 */
+  /* week-3, week-03, w3, w-3 -> 3; week-0 -> 0 (TARA's online week); anything else -> null */
   function weekOf(anchor) {
-    var m = /^w(?:eek)?-?0?(\d{1,2})$/i.exec(String(anchor || ''));
-    var n = m ? Number(m[1]) : 0;
-    return n >= 1 && n <= 14 ? n : 0;
+    var m = /^w(?:eek)?-?(\d{1,2})$/i.exec(String(anchor || ''));
+    var n = m ? Number(m[1]) : -1;
+    return n >= 0 && n <= 14 ? n : null;
   }
 
   /* The plan defines window.__planWeek(n, opts) in its own script. Wait for it
@@ -2541,7 +2654,7 @@ APP._initReview = function () {
     }).then(function (f) {
       openFrame = f;
       var wk = weekOf(r.anchor);
-      if (wk) pickWeek(f, wk);
+      if (wk != null) pickWeek(f, wk);
       else if (r.anchor) K.scrollTo(f, r.anchor);
       return f;
     });
@@ -2554,7 +2667,7 @@ APP._initReview = function () {
       var s = K.score(q, { id: a, title: a });
       if (s) rows.push({ title: a.charAt(0).toUpperCase() + a.slice(1), sub: 'Plan', hash: '#plan/' + a, score: s, _o: i });
     });
-    for (var n = 1; n <= 14; n++) {
+    for (var n = 0; n <= 14; n++) {
       var s = K.score(q, { id: 'week-' + n, title: 'Week ' + n });
       if (s) rows.push({ title: 'Week ' + n + ' in the plan', sub: 'Plan · its checklist, pack, demo, drill and film', hash: '#plan/week-' + n, score: s, _o: ANCHORS.length + n });
     }
@@ -3817,21 +3930,43 @@ APP._initReview = function () {
   var APP = window.APP;
   if (!APP || !APP.registerSection) return;
 
+  /* One chip per bank. Banks share their pack's slug, a stable content id, so the
+     labels are TARA weeks (26 Oct 2026 order): week-11's bank serves W7-W9, the
+     three chapter-0 banks all serve W1. name/saturday/when are the fallback;
+     liveWeeks() refreshes them from calendar.md. saturday = the last Saturday the
+     bank serves, so the default chip stays on a shared bank until its block ends. */
   var WEEKS = [
-    { slug: 'week-01', name: 'W1', saturday: '2026-09-12', when: '12 Sep', title: 'Einops and Ray Tracing', count: 78, accent: '#c2477f' },
-    { slug: 'week-02', name: 'W2', saturday: '2026-09-19', when: '19 Sep', title: 'Modules and ResNets', count: 88, accent: '#a86a1f' },
-    { slug: 'week-03', name: 'W3', saturday: '2026-09-26', when: '26 Sep', title: 'Optimizers and Sweeps', count: 72, accent: '#4a5fc4' },
-    { slug: 'week-04', name: 'W4', saturday: '2026-10-03', when: '3 Oct', title: 'Your Own Autograd', count: 76, accent: '#c05a34' },
-    { slug: 'week-05', name: 'W5', saturday: '2026-10-10', when: '10 Oct', title: 'Transformer From Scratch', count: 81, accent: '#4c58bd' },
-    { slug: 'week-06', name: 'W6', saturday: '2026-10-17', when: '17 Oct', title: 'Hooks and the Cache', count: 79, accent: '#4c58bd' },
-    { slug: 'week-07', name: 'W7', saturday: '2026-10-24', when: '24 Oct', title: 'Induction circuits, ablation and activation patching', count: 91, accent: '#4a5fc4' },
-    { slug: 'week-08', name: 'W8', saturday: '2026-10-31', when: '31 Oct', title: 'Superposition, feature geometry and sparse autoencoders', count: 96, accent: '#6f8a20' },
-    { slug: 'week-09', name: 'W9', saturday: '2026-11-07', when: '7 Nov', title: 'Value functions, DQN and vanilla policy gradients', count: 70, accent: '#5561c9' },
-    { slug: 'week-10', name: 'W10', saturday: '2026-11-14', when: '14 Nov', title: 'PPO and RLHF', count: 73, accent: '#a1519f' },
-    { slug: 'week-11', name: 'W11', saturday: '2026-11-21', when: '21 Nov', title: 'Eval Design, Inspect and AI Control', count: 78, accent: '#4a63c0' },
-    { slug: 'alignment-science', name: 'Ch4', saturday: null, when: 'background', title: 'Alignment science — chapter 4, the capstone quarry', count: 68, accent: '#b45a2a' },
-    { slug: 'capstone-weeks-12-14', name: 'W12-14', saturday: '2026-12-12', when: '28 Nov – 12 Dec', title: 'Capstone — three Saturdays and a talk', count: 233, accent: '#8759c0' }
+    { slug: 'week-01', name: 'W0', saturday: '2026-09-05', when: '5 Sep', topic: 'Einops', title: 'Einops and Ray Tracing', count: 78, accent: '#c2477f' },
+    { slug: 'week-02', name: 'W1', saturday: '2026-09-12', when: '12 Sep', topic: 'ResNets', title: 'Modules and ResNets', count: 88, accent: '#a86a1f' },
+    { slug: 'week-03', name: 'W1', saturday: '2026-09-12', when: '12 Sep', topic: 'Optimisers', title: 'Optimizers and Sweeps', count: 72, accent: '#4a5fc4' },
+    { slug: 'week-04', name: 'W1', saturday: '2026-09-12', when: '12 Sep', topic: 'Autograd', title: 'Your Own Autograd', count: 76, accent: '#c05a34' },
+    { slug: 'week-05', name: 'W2', saturday: '2026-09-19', when: '19 Sep', topic: 'Transformer', title: 'Transformer From Scratch', count: 81, accent: '#4c58bd' },
+    { slug: 'week-06', name: 'W3', saturday: '2026-09-26', when: '26 Sep', topic: 'Hooks', title: 'Hooks and the Cache', count: 79, accent: '#4c58bd' },
+    { slug: 'week-07', name: 'W3–4', saturday: '2026-10-03', when: '26 Sep – 3 Oct', topic: 'Circuits', title: 'Induction circuits, ablation and activation patching', count: 91, accent: '#4a5fc4' },
+    { slug: 'week-08', name: 'W4', saturday: '2026-10-03', when: '3 Oct', topic: 'SAEs', title: 'Superposition, feature geometry and sparse autoencoders', count: 96, accent: '#6f8a20' },
+    { slug: 'week-09', name: 'W5', saturday: '2026-10-10', when: '10 Oct', topic: 'DQN', title: 'Value functions, DQN and vanilla policy gradients', count: 70, accent: '#5561c9' },
+    { slug: 'week-10', name: 'W6', saturday: '2026-10-17', when: '17 Oct', topic: 'PPO & RLHF', title: 'PPO and RLHF', count: 73, accent: '#a1519f' },
+    { slug: 'week-11', name: 'W7–9', saturday: '2026-11-07', when: '24 Oct – 7 Nov', topic: 'Evals', title: 'Eval Design, Inspect and AI Control', count: 78, accent: '#4a63c0' },
+    { slug: 'alignment-science', name: 'W10–11', saturday: '2026-11-21', when: '14 – 21 Nov', topic: 'Alignment', title: 'Alignment science — chapter 4, the capstone quarry', count: 68, accent: '#b45a2a' },
+    { slug: 'capstone-weeks-12-14', name: 'W12–14', saturday: '2026-12-12', when: '28 Nov – 12 Dec', topic: 'Capstone', title: 'Capstone — three Saturdays and a talk', count: 233, accent: '#8759c0' }
   ];
+  var MON3 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function dm(iso) { var p = String(iso).split('-'); return Number(p[2]) + ' ' + MON3[Number(p[1]) - 1]; }
+  /* Labels from the schedule, so calendar.md stays the one place weeks are decided. */
+  function liveWeeks() {
+    if (!APP.weeksOfPack || !APP.weekByN) return;
+    WEEKS.forEach(function (w) {
+      var ns = APP.weeksOfPack(w.slug);
+      if (!ns.length) return;
+      var a = APP.weekByN(ns[0]), b = APP.weekByN(ns[ns.length - 1]);
+      w.name = APP.weekSpan(ns, true);
+      w.saturday = b.saturday;
+      w.when = a === b ? dm(a.saturday) : dm(a.saturday) + ' – ' + dm(b.saturday);
+      w.first = ns[0];
+    });
+    WEEKS.sort(function (x, y) { return (x.first == null ? 99 : x.first) - (y.first == null ? 99 : y.first) || x.order - y.order; });
+  }
+  WEEKS.forEach(function (w, i) { w.order = i; });
 
   var SIZES = [8, 12, 20];
   var PREF_KEY = 'tara-drill-prefs-v1';
@@ -4030,17 +4165,18 @@ APP._initReview = function () {
       focusClear: S.root.querySelector('[data-focus-clear]')
     };
 
+    liveWeeks();
     WEEKS.forEach(function (w) {
       var b = document.createElement('button');
       b.type = 'button';
       b.className = 'drill-wk';
       b.setAttribute('data-slug', w.slug);
       b.setAttribute('aria-pressed', 'false');
-      b.title = w.title + ' — ' + w.when + ' · ' + w.count + ' questions';
+      b.title = w.title + ' — ' + w.name + ' · ' + w.when + ' · ' + w.count + ' questions';
       b.style.setProperty('--dw', w.accent);
       b.innerHTML = '<span class="drill-wk-id"></span><span class="drill-wk-meta"></span>';
       b.querySelector('.drill-wk-id').textContent = w.name;
-      b.querySelector('.drill-wk-meta').textContent = w.when + ' · ' + w.count;
+      b.querySelector('.drill-wk-meta').textContent = w.topic + ' · ' + w.count;
       b.addEventListener('click', function () { APP.navigate('#drill/' + w.slug); });
       S.els.weeks.appendChild(b);
       w._btn = b;

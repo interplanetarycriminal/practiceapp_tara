@@ -575,75 +575,77 @@ const OBJ = {
   'w11-beans': ['The bean machine', 11], 'd11-threshold': ['The threshold wall', 11], 'w12-sheet': ['One thin sheet', 12], 'd12-dial': ['The dial', 12],
   'w13-fan': ['The fan', 13], 'w14-arch': ['The arch', 14],
 };
+/* OBJ numbers are Model Room bays (the original ARENA weeks); BAYW is each bay's TARA weeks */
+const BAYW = { 1: '0', 2: '1', 3: '1', 4: '1', 5: '2', 6: '2–3', 7: '3', 8: '4', 9: '5', 10: '6', 11: '7–9', 12: '10', 13: '11', 14: '12–14' };
 const PARTS = {
-  tok: { name: { 1: 'Word tiles', 2: 'Tokens', 3: 'tokens' }, wk: 'W5–6', links: ['w05-searchlight', 'w06-skyline'],
+  tok: { name: { 1: 'Word tiles', 2: 'Tokens', 3: 'tokens' }, wk: 'W2', links: ['w05-searchlight', 'w06-skyline'],
     txt: { 1: 'The words going in, one tile each. Everything above works out which word comes next.',
       2: 'The input tokens, one per position. GPT-2 cuts text into pieces from a 50,257-token vocabulary; this toy knows 12 words. Each tile starts its own tube.',
       3: '`tokens` (batch, posn) = [Mary, met, John, ., John, thanked]. Toy d_vocab = 12; GPT-2 uses 50,257 BPE tokens. Each posn gets its own residual stream.' } },
-  embed: { name: { 1: 'Word → numbers', 2: 'Embedding', 3: 'embed + pos_embed' }, wk: 'W5', links: ['w05-searchlight', 'w01-block'],
+  embed: { name: { 1: 'Word → numbers', 2: 'Embedding', 3: 'embed + pos_embed' }, wk: 'W2', links: ['w05-searchlight', 'w01-block'],
     txt: { 1: 'Each word looks up its own list of 12 numbers, plus a list for its place in the sentence. GPT-2 small uses 768.',
       2: '`W_E` is a table with one row per vocabulary word, `W_pos` one row per position. The stream starts as their sum: 12 numbers here, 768 in GPT-2 small.',
       3: '`embed(tokens) + pos_embed(tokens)`: `W_E[tokens]` (d_vocab × d_model) + `W_pos[:posn]` (n_ctx × d_model). Toy 12 × 12 and 6 × 12; GPT-2 small 50,257 × 768 and 1,024 × 768.' } },
-  stream: { name: { 1: 'A tube = one word\'s running total', 2: 'Residual stream', 3: 'residual stream (resid_pre / mid / post)' }, wk: 'W2 · W5–6', links: ['d02-highway', 'd06-shelf', 'w01-block'],
+  stream: { name: { 1: 'A tube = one word\'s running total', 2: 'Residual stream', 3: 'residual stream (resid_pre / mid / post)' }, wk: 'W1 · W2–3', links: ['d02-highway', 'd06-shelf', 'w01-block'],
     txt: { 1: 'One tube per word: a running total of 12 numbers. Every part reads it and adds its answer back in; nothing is rubbed out.',
-      2: 'The residual stream, a (position × d_model) table. Each block reads it through a LayerNorm and adds its output back: x ← x + f(LN(x)). The shortcut idea comes from ResNets (week 2).',
+      2: 'The residual stream, a (position × d_model) table. Each block reads it through a LayerNorm and adds its output back: x ← x + f(LN(x)). The shortcut idea comes from ResNets (week 1).',
       3: '`resid_pre` → `resid_mid` → `resid_post` per block, (batch, posn, d_model). The sum of every earlier output: the one channel all components read and write (Elhage et al. 2021).' } },
-  block: { name: { 1: 'One floor', 2: 'Transformer block', 3: 'TransformerBlock' }, wk: 'W5', links: ['w05-searchlight', 'd05-circuits', 'd06-shelf'],
+  block: { name: { 1: 'One floor', 2: 'Transformer block', 3: 'TransformerBlock' }, wk: 'W2', links: ['w05-searchlight', 'd05-circuits', 'd06-shelf'],
     txt: { 1: 'One floor = one block: attention (the amber arcs at the back), then a small calculator per word (the collar on each tube). Both add to the tubes.',
       2: 'A block: `ln1` → attention → add, then `ln2` → MLP → add. The toy stacks 4 by default; GPT-2 small stacks 12 of the same design.',
       3: '`resid_mid = attn(ln1(resid_pre)) + resid_pre`; `resid_post = mlp(ln2(resid_mid)) + resid_mid`. Toy default n_layers 4, n_heads 3, d_head 4; GPT-2 small 12, 12, 64.' } },
-  attn: { name: { 1: 'Attention heads', 2: 'Attention heads', 3: 'Attention' }, wk: 'W5 · W7', links: ['w05-searchlight', 'd05-circuits', 'w07-stripe'],
+  attn: { name: { 1: 'Attention heads', 2: 'Attention heads', 3: 'Attention' }, wk: 'W2 · W3', links: ['w05-searchlight', 'd05-circuits', 'w07-stripe'],
     txt: { 1: 'Each amber block is a head: it lets a word look back at earlier words and copy what it needs from them.',
       2: 'A head scores how well each earlier word answers this word\'s question (query · key), softmaxes the scores and copies a weighted mix of values. The only part that moves information between tubes.',
       3: 'Per head: q, k, v = LN(x)·W + b; `pattern = softmax(mask(q·kᵀ / √d_head))`; z = pattern·v; `attn_out = Σ_h z·W_O + b_O`. Toy d_head = 12 / n_heads.' } },
-  arcs: { name: { 1: 'Notes passed between words', 2: 'Attention arcs', 3: 'attention pattern' }, wk: 'W5 · W7', links: ['w05-searchlight', 'd07-relay', 'w02-stencil'],
+  arcs: { name: { 1: 'Notes passed between words', 2: 'Attention arcs', 3: 'attention pattern' }, wk: 'W2 · W3', links: ['w05-searchlight', 'd07-relay', 'w02-stencil'],
     txt: { 1: 'Each arc carries a note from an earlier word\'s tube into a later word\'s tube. Thicker = more attention. Arcs only point backwards: no peeking ahead.',
-      2: 'An arc from word j to word i is `pattern[head, i, j]`: how much of j\'s value vector i copies. The causal mask stops any word looking ahead. A convolution (week 2) mixes fixed neighbours; attention picks its own.',
+      2: 'An arc from word j to word i is `pattern[head, i, j]`: how much of j\'s value vector i copies. The causal mask stops any word looking ahead. A convolution (week 1) mixes fixed neighbours; attention picks its own.',
       3: 'Arc radius ∝ `pattern[h, posn_Q, posn_K]`: drawn if ≥ 0.15, or every arc into the last posn. Causal mask: scores with posn_K > posn_Q become −inf before softmax. Heads compose across floors (K-, Q-, V-composition).' } },
-  mlp: { name: { 1: 'Per-word calculators', 2: 'MLP', 3: 'MLP (position-wise)' }, wk: 'W1 · W8', links: ['d01-cube', 'd08-polytope'],
+  mlp: { name: { 1: 'Per-word calculators', 2: 'MLP', 3: 'MLP (position-wise)' }, wk: 'W0 · W4', links: ['d01-cube', 'd08-polytope'],
     txt: { 1: 'One collar per word per floor: a small calculator that only sees its own tube, then adds its result back in.',
       2: 'The MLP: 12 → 48 → 12 numbers with a GELU bend in the middle, applied to each position separately. The usual picture: where stored knowledge lives.',
-      3: '`gelu_new(LN(x)·W_in + b_in)·W_out + b_out`, d_mlp = 4·d_model (48 here, 3,072 in GPT-2 small). Position-wise: no term mixes posn. Its neurons are polysemantic (week 8).' } },
-  top: { name: { 1: 'The guess', 2: 'Unembed + softmax', 3: 'ln_final · unembed · softmax' }, wk: 'W5–6', links: ['w06-skyline', 'w05-searchlight'],
+      3: '`gelu_new(LN(x)·W_in + b_in)·W_out + b_out`, d_mlp = 4·d_model (48 here, 3,072 in GPT-2 small). Position-wise: no term mixes posn. Its neurons are polysemantic (week 4).' } },
+  top: { name: { 1: 'The guess', 2: 'Unembed + softmax', 3: 'ln_final · unembed · softmax' }, wk: 'W2', links: ['w06-skyline', 'w05-searchlight'],
     txt: { 1: 'The top reads the last tube, gives every word in the vocabulary a score, and turns the scores into chances: the amber bars.',
-      2: '`ln_final`, then `W_U` maps each tube to one score (logit) per vocabulary word; softmax turns the last tube\'s scores into the amber probabilities. The pale rows are the other positions\' guesses. Sampling picks from them (week 6).',
+      2: '`ln_final`, then `W_U` maps each tube to one score (logit) per vocabulary word; softmax turns the last tube\'s scores into the amber probabilities. The pale rows are the other positions\' guesses. Sampling picks from them (week 2).',
       3: '`logits = unembed(ln_final(resid))`, `W_U` (d_model, d_vocab), `b_U` frozen (requires_grad=False). Bars = softmax(logits[0, −1]); every posn is trained on its own next token.' } },
-  grad: { name: { 1: 'Training arrows', 2: 'Gradients', 3: '∂L/∂θ per part' }, wk: 'W3–4', links: ['w04-blame', 'w03-ravine', 'd03-step', 'd04-squash'],
+  grad: { name: { 1: 'Training arrows', 2: 'Gradients', 3: '∂L/∂θ per part' }, wk: 'W1', links: ['w04-blame', 'w03-ravine', 'd03-step', 'd04-squash'],
     txt: { 1: 'Red arrows: how hard training is pushing on each part. The loss sends blame down through the whole machine, and every weight gets nudged.',
-      2: 'The gradient of the loss for each part. Backprop carries it from the top down through every block (week 4); the optimiser steps each weight against it (week 3). Big arrows early, small once it has learned.',
+      2: 'The gradient of the loss for each part. Backprop carries it from the top down through every block; the optimiser steps each weight against it (both week 1). Big arrows early, small once it has learned.',
       3: 'Arrow length ∝ √(‖∂L/∂θ_part‖ / max at initialisation), L = mean next-token cross-entropy over the 12 toy sentences; AdamW (ARENA [0.3]) steps every weight except the frozen b_U.' } },
-  probe: { name: { 1: 'Probe', 2: 'Linear probe', 3: 'probe (difference of means)' }, wk: 'W12', links: ['d12-dial', 'w07-stripe'],
+  probe: { name: { 1: 'Probe', 2: 'Linear probe', 3: 'probe (difference of means)' }, wk: 'W4', links: ['d12-dial', 'w07-stripe'],
     txt: { 1: 'A gauge clamped on the last tube. It reads one direction: how Anna-like the stream is right there. Live.',
       2: 'A probe is a dot product with one direction. The needle reads (x − x_Mary) · v / |v|²: 0 = Mary\'s run, 1 = Anna\'s run. Live, one floor above the dial.',
       3: 'Reads (x − x_clean)·v/‖v‖² at the last posn, v = resid(Anna prompt) − resid(Mary prompt) at that floor: a difference-of-means probe with one pair. A trained probe would fit v by logistic regression.' } },
-  sae: { name: { 1: 'Feature lens', 2: 'Sparse autoencoder lens', 3: 'SAE' }, wk: 'W8', links: ['d08-dictionary', 'd08-polytope'],
+  sae: { name: { 1: 'Feature lens', 2: 'Sparse autoencoder lens', 3: 'SAE' }, wk: 'W4', links: ['d08-dictionary', 'd08-polytope'],
     txt: { 1: 'A lens that splits a tube into many simple ingredients, only a few switched on at once. Illustrative here: no lens is trained on this toy.',
       2: 'A sparse autoencoder rewrites the stream as a few active features out of many more than 12 (superposition). Illustrative needles; The dictionary trains one live.',
       3: 'z = ReLU(W_enc(x − b_dec) + b_enc), x̂ = W_dec·z + b_dec, loss ‖x − x̂‖² + λ‖z‖₁. Needle lengths here are illustrative, not computed.' } },
-  patch: { name: { 1: 'Patch cable', 2: 'Activation patching', 3: 'activation patching' }, wk: 'W7–8', links: ['w08-twins', 'w07-stripe'],
+  patch: { name: { 1: 'Patch cable', 2: 'Activation patching', 3: 'activation patching' }, wk: 'W3–4', links: ['w08-twins', 'w07-stripe'],
     txt: { 1: 'Run the machine twice (the pale ghost tube is the second run), copy one piece across with this cable, and see whether the answer swings.',
       2: 'Patching: run a clean and a corrupted prompt, copy one activation from one run into the other, measure how much of the answer moves. The cable is for show here; The twin towers runs it live.',
       3: 'Hook one (layer, posn) activation, overwrite it with the other run\'s cached value, score with a normalised logit difference. Fun fact, live here: the dial at α = 1 is exactly this patch.' } },
-  steer: { name: { 1: 'Steering dial', 2: 'Steering vector', 3: 'activation steering' }, wk: 'W12', links: ['d12-dial', 'w12-sheet'],
+  steer: { name: { 1: 'Steering dial', 2: 'Steering vector', 3: 'activation steering' }, wk: 'W10–11', links: ['d12-dial', 'w12-sheet'],
     txt: { 1: 'Turn the dial and the last tube gets pushed toward "Anna". At 1 the machine answers Anna. Live.',
-      2: 'Steering adds α·v to the stream. Here v = the Anna run minus the Mary run at this floor, last word. Persona and steering vectors (week 12) are the same move on big models.',
+      2: 'Steering adds α·v to the stream. Here v = the Anna run minus the Mary run at this floor, last word. Persona and steering vectors (weeks 10–11) are the same move on big models.',
       3: '`resid_pre[l][0, −1] += α·v`, v = resid(Anna prompt) − resid(Mary prompt) there (ActAdd-style). At α = 1 that position holds the Anna run\'s activation exactly: a patch.' } },
-  lora: { name: { 1: 'Fine-tuning sheet', 2: 'LoRA', 3: 'LoRA' }, wk: 'W12', links: ['w12-sheet'],
+  lora: { name: { 1: 'Fine-tuning sheet', 2: 'LoRA', 3: 'LoRA' }, wk: 'W10', links: ['w12-sheet'],
     txt: { 1: 'A thin sheet laid over one floor: fine-tuning that changes a few directions instead of every weight. Illustrative here.',
       2: 'LoRA freezes the big weights and learns a thin low-rank change B·A on top. Illustrative sheet; One thin sheet shows it live (and how one sheet can tilt a whole model).',
       3: 'W′ = W + (α/r)·B·A, B ∈ ℝ^(d×r), A ∈ ℝ^(r×d), W frozen, r ≪ d. Illustrative, over the top block\'s MLPs.' } },
-  reward: { name: { 1: 'Reward scale', 2: 'Reward model', 3: 'reward model · RL' }, wk: 'W9–10', links: ['d10-leash', 'w10-saddle', 'w09-terrain', 'd09-cartpole'],
+  reward: { name: { 1: 'Reward scale', 2: 'Reward model', 3: 'reward model · RL' }, wk: 'W5–6', links: ['d10-leash', 'w10-saddle', 'w09-terrain', 'd09-cartpole'],
     txt: { 1: 'A scale that weighs how good an answer is. Reinforcement learning trains the machine to tip it. Illustrative here.',
-      2: 'RL (weeks 9–10): a reward scores outputs and the policy climbs it. RLHF learns the reward from human preferences and keeps a KL leash to the starting model. Illustrative.',
+      2: 'RL (weeks 5–6): a reward scores outputs and the policy climbs it. RLHF learns the reward from human preferences and keeps a KL leash to the starting model. Illustrative.',
       3: 'RLHF: maximise E[r_φ(x, y)] − β·KL(π_θ ‖ π_ref) with PPO\'s clipped objective. Illustrative scale.' } },
-  evals: { name: { 1: 'Test clipboard', 2: 'Evals', 3: 'eval' }, wk: 'W11', links: ['w11-beans', 'd11-threshold'],
+  evals: { name: { 1: 'Test clipboard', 2: 'Evals', 3: 'eval' }, wk: 'W7–9', links: ['w11-beans', 'd11-threshold'],
     txt: { 1: 'The clipboard asks the machine all 12 toy questions and counts the right answers, with your knobs applied. Live.',
       2: 'An eval: fixed questions, a scorer, a score. Here: the 12 toy prompts; right = the top word is the first name. Live, with the switched-off parts and the dial applied.',
-      3: 'Accuracy of argmax(logits[:, −1]) = IO name over the 12 training prompts, with the current ablation and steering hooks. Twelve questions give a wide error bar (week 11).' } },
-  loop: { name: { 1: 'The writing loop', 2: 'Generation loop', 3: 'autoregressive sampling' }, wk: 'W6 · W13', links: ['w06-skyline', 'w13-fan', 'd06-shelf'],
+      3: 'Accuracy of argmax(logits[:, −1]) = IO name over the 12 training prompts, with the current ablation and steering hooks. Twelve questions give a wide error bar (weeks 7–9).' } },
+  loop: { name: { 1: 'The writing loop', 2: 'Generation loop', 3: 'autoregressive sampling' }, wk: 'W2 · W11', links: ['w06-skyline', 'w13-fan', 'd06-shelf'],
     txt: { 1: 'The chosen word becomes the next tile and the whole machine runs again. That is how it writes, one word at a time.',
-      2: 'Append the chosen token and run again. The ghost tile shows the top word. Long chains of this are the reasoning traces week 13 takes apart; a KV cache (week 6) saves recomputing old tubes.',
-      3: '`tokens = cat([tokens, sample(logits[:, −1])])`, argmax shown. Thought anchors (W13) resample the chain from each sentence to find what the answer hangs on.' } },
+      2: 'Append the chosen token and run again. The ghost tile shows the top word. Long chains of this are the reasoning traces week 11 takes apart; a KV cache (week 2) saves recomputing old tubes.',
+      3: '`tokens = cat([tokens, sample(logits[:, −1])])`, argmax shown. Thought anchors (W11) resample the chain from each sentence to find what the answer hangs on.' } },
   plaque: { name: { 1: 'Your claim', 2: 'Research claim', 3: 'capstone claim' }, wk: 'W14', links: ['w14-arch'],
     txt: { 1: 'The course ends with your own claim about what one part of a machine like this does, and the evidence that holds it up.',
       2: 'Week 14: a research claim built with these tools, where every experiment is a stone in the arch.',
@@ -807,7 +809,7 @@ function buildGauge(S) {
   st.gaugeRoot.visible = false;
 }
 
-/* the instruments of weeks 3-14, clipped on where they act */
+/* the instruments of the later weeks, clipped on where they act */
 function buildTools(S) {
   const st = S.state, mat = st.mat, T = st.tool = {};
   const mesh = (geom, m, parent) => { const x = new THREE.Mesh(geom, m); x.castShadow = true; x.receiveShadow = true; parent.add(x); return x; };
@@ -918,16 +920,16 @@ function buildLabels(S) {
   Lb.gnote = K.label(A.gnote, '', { cls: 'note', anchor: 'bottom', dy: -6 });
   Lb.rows = K.label(A.rows, '', { cls: 'note', anchor: 'bottom', dy: -4 });
   Lb.tools = {
-    probe: tag(A.probe, { 1: 'probe', 2: 'W12 · probe', 3: 'probe · v̂ᵀx' }),
-    steer: tag(A.steer, { 1: 'steering dial', 2: 'W12 · steer', 3: 'steer · +αv' }),
-    patch: tag(A.patch, { 1: 'patch cable', 2: 'W8 · patching', 3: 'W8 · patch' }, { anchor: 'right', dx: -6 }),
-    sae: tag(A.sae, { 1: 'feature lens', 2: 'W8 · SAE lens', 3: 'W8 · SAE' }, { anchor: 'right', dx: -6 }),
-    lora: tag(A.lora, { 1: 'fine-tune sheet', 2: 'W12 · LoRA', 3: 'W12 · LoRA (BA)' }),
-    reward: tag(A.reward, { 1: 'reward scale', 2: 'W9–10 · reward', 3: 'W10 · r_φ' }, { anchor: 'bottom', dx: 0, dy: -6 }),
+    probe: tag(A.probe, { 1: 'probe', 2: 'W4 · probe', 3: 'probe · v̂ᵀx' }),
+    steer: tag(A.steer, { 1: 'steering dial', 2: 'W10–11 · steer', 3: 'steer · +αv' }),
+    patch: tag(A.patch, { 1: 'patch cable', 2: 'W4 · patching', 3: 'W4 · patch' }, { anchor: 'right', dx: -6 }),
+    sae: tag(A.sae, { 1: 'feature lens', 2: 'W4 · SAE lens', 3: 'W4 · SAE' }, { anchor: 'right', dx: -6 }),
+    lora: tag(A.lora, { 1: 'fine-tune sheet', 2: 'W10 · LoRA', 3: 'W10 · LoRA (BA)' }),
+    reward: tag(A.reward, { 1: 'reward scale', 2: 'W5–6 · reward', 3: 'W6 · r_φ' }, { anchor: 'bottom', dx: 0, dy: -6 }),
     evals: K.label(st.evalAt, '', { cls: 'readout', anchor: 'left', dx: 10, dy: 0 }),
-    loop: tag(A.loop, { 1: 'write the next word', 2: 'W6 · generate', 3: 'W6 · sample loop' }),
+    loop: tag(A.loop, { 1: 'write the next word', 2: 'W2 · generate', 3: 'W2 · sample loop' }),
     plaque: tag(A.plaque, { 1: 'your claim', 2: 'W14 · your claim', 3: 'W14 · claim' }, { anchor: 'top', dx: 0, dy: 10 }),
-    grad: tag(A.grad, { 1: 'training push', 2: 'W3–4 · gradients', 3: 'W3–4 · ∂L/∂θ' }, { anchor: 'right', dx: -6 }),
+    grad: tag(A.grad, { 1: 'training push', 2: 'W1 · gradients', 3: 'W1 · ∂L/∂θ' }, { anchor: 'right', dx: -6 }),
   };
 }
 
@@ -1003,7 +1005,7 @@ function paintPart(S) {
   box.querySelector('.nm-pw').textContent = P.wk;
   box.querySelector('.nm-pt').innerHTML = mdLite(P.txt[t] || P.txt[2]);
   box.querySelector('.nm-live').textContent = liveLine(S, id, st.part.info);
-  box.querySelector('.nm-pl').innerHTML = P.links.map((o) => `<a href="${o}.html">${mdLite(OBJ[o][0])} <i>W${OBJ[o][1]}</i></a>`).join('');
+  box.querySelector('.nm-pl').innerHTML = P.links.map((o) => `<a href="${o}.html">${mdLite(OBJ[o][0])} <i>W${BAYW[OBJ[o][1]]}</i></a>`).join('');
 }
 /* one line of live numbers for the tapped part */
 function liveLine(S, id, info) {
@@ -1588,8 +1590,8 @@ run({
     { tag: 'core',
       cap: {
         1: '**This is the whole course.** A language model as one machine: words go in at the bottom, the next word comes out on top. Each week is a part of it or a tool clipped on (some illustrative). Tap any part.',
-        2: '**One object = the whole course.** A real toy transformer, trained in this page: 6 words in at the bottom, the next word\'s probabilities out of the top. Weeks 1–6 build and run it, 7–8 open it, 9–10 train it on rewards, 11–14 test, steer and report. Lens, sheet and scale are illustrative. Tap a part.',
-        3: 'ARENA\'s `DemoTransformer`, toy-sized (d_model 12, 4 layers × 3 heads, d_vocab 12, 7,932 weights) and trained here on 12 toy sentences; GPT-2 small: 768 wide, 12 × 12, ~124M. Clipped on: ∂L/∂θ (W3–4), patching, SAE* (W8), reward* (W10), evals (W11), steering, LoRA* (W12). *illustrative',
+        2: '**One object = the whole course.** A real toy transformer, trained in this page: 6 words in at the bottom, the next word\'s probabilities out of the top. Weeks 0–2 build and run it, 3–4 open it, 5–6 train it on rewards, 7–14 test, steer and report. Lens, sheet and scale are illustrative. Tap a part.',
+        3: 'ARENA\'s `DemoTransformer`, toy-sized (d_model 12, 4 layers × 3 heads, d_vocab 12, 7,932 weights) and trained here on 12 toy sentences; GPT-2 small: 768 wide, 12 × 12, ~124M. Clipped on: ∂L/∂θ (W1), probe, patching, SAE* (W4), reward* (W6), evals (W7–9), steering, LoRA* (W10–11). *illustrative',
       },
       cam: CAM.hero,
       set: { ...DEF, tools: true, arcs: 'all' },
@@ -1659,7 +1661,7 @@ run({
       cap: {
         1: '**The course\'s tools, clipped on.** Probe: read one direction. Patch cable: swap a piece between two runs. Lens: split a tube into features (illustrative). Dial: push a direction in; at 1 it says Anna.',
         2: '**Open it, then steer it.** The violet dial adds the direction "Anna run minus Mary run" to the last tube just before block 2; the probe above it reads that direction with a dot product. Dial at 1 → Anna. Live: dial, probe, evals, arrows. Illustrative: lens, LoRA sheet, reward scale.',
-        3: 'Steering: `resid_pre[2][0, −1] += α·v`, v = Anna run − Mary run there (ActAdd-style); at α = 1 it equals patching that activation. Probe: (x − x₀)·v′/‖v′‖² one floor up. Patching and SAEs (W8), LoRA (W12), reward models (W10), evals (W11): each reads or writes one place in this machine.',
+        3: 'Steering: `resid_pre[2][0, −1] += α·v`, v = Anna run − Mary run there (ActAdd-style); at α = 1 it equals patching that activation. Probe: (x − x₀)·v′/‖v′‖² one floor up. Patching and SAEs (W4), LoRA (W10), reward models (W6), evals (W7–9): each reads or writes one place in this machine.',
       },
       cam: CAM.tools,
       set: { ...DEF, tools: true, steer: 1, arcs: 'all' },
@@ -1678,7 +1680,7 @@ run({
     { tag: 'core',
       cap: {
         1: '**Where else?** A shared bus in a computer: every part reads one line and writes back to it. A whiteboard in a meeting: each specialist adds a note, nobody erases. ResNets add back too.',
-        2: 'The residual stream is a shared bus (every component reads and writes one channel) and a whiteboard (specialists add notes, nobody erases). ResNets (week 2) invented the add-back; graph neural networks pass messages along edges the way attention passes them along arcs.',
+        2: 'The residual stream is a shared bus (every component reads and writes one channel) and a whiteboard (specialists add notes, nobody erases). ResNets (week 1) invented the add-back; graph neural networks pass messages along edges the way attention passes them along arcs.',
         3: 'Residual connections: ResNets (He et al. 2015) and nearly every deep net since. Message passing: graph neural networks generalise attention to any graph. Blackboard architectures in classic AI: independent experts reading and writing one shared store.',
       },
       cam: CAM.where,
@@ -1728,9 +1730,9 @@ run({
         return wait(S, 900);
       } },
     { q: { 1: 'Which week\'s tool changes behaviour by adding a direction to the stream?', 2: 'Which tool edits behaviour by adding a vector to the residual stream?', 3: 'resid += α·v at inference time is…' },
-      options: [{ t: 'Steering (week 12)', ok: true }, { t: 'Patching (week 8)' }, { t: 'Optimisers (week 3)' }, { t: 'Sampling (week 6)' }],
+      options: [{ t: 'Steering (weeks 10–11)', ok: true }, { t: 'Patching (week 4)' }, { t: 'Optimisers (week 1)' }, { t: 'Sampling (week 2)' }],
       why: { 1: 'Steering. The dial adds the "Anna minus Mary" direction to the last tube; at 1 the machine answers Anna.',
-        2: 'Activation steering (week 12). Here v = Anna run − Mary run at floor 2; α = 1 flips the answer to Anna. Patching copies a whole activation instead; at α = 1 the two coincide.',
+        2: 'Activation steering (weeks 10–11). Here v = Anna run − Mary run at floor 2; α = 1 flips the answer to Anna. Patching copies a whole activation instead; at α = 1 the two coincide.',
         3: 'Activation steering (ActAdd, persona vectors). With v = resid(Anna) − resid(Mary) at resid_pre[2][−1], α = 1 is exactly a patch; α = 0.5 already gives Anna ~42%.' },
       show(S) {
         S.setKnobs({ ...DEF, tools: true, steer: 1, arcs: 'all' });
@@ -1750,7 +1752,7 @@ run({
   ],
 
   where: { 1: 'A shared bus in a computer, a whiteboard that specialists add notes to, and the skip connections of every deep network since ResNets.',
-    2: 'The residual stream is a shared bus and a whiteboard; the add-back comes from ResNets (week 2); attention\'s arcs are message passing, as in graph neural networks.',
+    2: 'The residual stream is a shared bus and a whiteboard; the add-back comes from ResNets (week 1); attention\'s arcs are message passing, as in graph neural networks.',
     3: 'Residual connections (He et al. 2015), message passing in graph neural networks, and blackboard architectures in classic AI: many experts, one shared store.' },
   links: [
     { label: 'Film · the north star', href: '../../intuition/films/north-star.html' },

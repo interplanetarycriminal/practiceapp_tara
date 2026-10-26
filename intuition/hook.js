@@ -3,9 +3,16 @@
    film" chip on #today and #week-NN. Fixed-position, so it never moves layout. */
 (function () {
   var FILMS = null, chip = null, closed = {};
+  /* TARA week now (0-14, week 0 is the online start): the app's own answer when it
+     has one, so the chip and the Now page agree; otherwise the same calendar rule. */
   function weekNow() {
+    try { var t = window.APP && APP.today && APP.today(); if (t && t.week) return t.week.n; } catch (e) {}
     var t0 = Date.parse('2026-09-12T00:00:00+10:00'), d = (Date.now() - t0) / 864e5;
-    return Math.max(1, Math.min(14, Math.floor(d / 7) + 1 + (d % 7 > 0.5 ? 1 : 0)));
+    return Math.max(0, Math.min(14, Math.floor(d / 7) + 1 + (d % 7 > 0.5 ? 1 : 0)));
+  }
+  function serves(f, w) {
+    if (f.week == null) return false;
+    return f.weeks && f.weeks.length ? f.weeks.indexOf(w) >= 0 : Number(f.week) === w;
   }
   function addNav() {
     var list = document.getElementById('app-navlist');
@@ -18,10 +25,14 @@
   }
   function pick() {
     if (!FILMS) return null;
-    var h = location.hash || '#today', m = h.match(/^#week-(\d\d)/) || h.match(/^#today\/week-(\d\d)/), w;
-    if (m) w = Number(m[1]); else if (/^#today|^$/.test(h)) w = weekNow(); else return null;
-    for (var i = 0; i < FILMS.length; i++) if (Number(FILMS[i].week) === w) return FILMS[i];
-    if (!m) for (var j = 0; j < FILMS.length; j++) if (FILMS[j].id === 'north-star') return FILMS[j];
+    /* #week-NN is a study pack (ids week-01 … week-11 are the original ARENA
+       numbering, kept in films.json as `arena`); #today/week-NN is a TARA week. */
+    var h = location.hash || '#today', i, m = h.match(/^#week-(\d\d)/);
+    if (m) { for (i = 0; i < FILMS.length; i++) if (Number(FILMS[i].arena) === Number(m[1])) return FILMS[i]; return null; }
+    var t = h.match(/^#today\/week-(\d{1,2})/), w;
+    if (t) w = Number(t[1]); else if (/^#today|^$/.test(h)) w = weekNow(); else return null;
+    for (i = 0; i < FILMS.length; i++) if (serves(FILMS[i], w)) return FILMS[i];
+    if (!t) for (i = 0; i < FILMS.length; i++) if (FILMS[i].id === 'north-star') return FILMS[i];
     return null;
   }
   function paint() {

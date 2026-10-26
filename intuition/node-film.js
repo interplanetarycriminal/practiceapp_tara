@@ -564,7 +564,7 @@
     if (objHref) links.push({ label: 'Hold it in 3D', href: objHref });
     links.push({ label: 'On the concept map', href: '../index.html#map/node=' + encodeURIComponent(id) });
     if (spec.linked_film) links.push({ label: 'The long film', href: spec.linked_film });
-    if (node.week) links.push({ label: 'Week ' + node.week + ' pack', href: '../index.html#week-' + (node.week < 10 ? '0' : '') + node.week });
+    if (node.week != null) links.push({ label: 'Open week ' + node.week, href: '../index.html#today/week-' + (node.week < 10 ? '0' : '') + node.week });
     if (spec._case) links.push({ label: 'Case study', href: '../index.html#cases/' + spec._case });
     var film = F.play({ title: spec.title || node.label, back: 'index.html#concepts', chapters: chapters, coda: coda, links: links });
     var st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
