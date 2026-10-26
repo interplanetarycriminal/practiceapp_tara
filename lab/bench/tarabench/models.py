@@ -40,7 +40,8 @@ MODELS = {
     'gemma-3-270m-it': dict(hf='google/gemma-3-270m-it', params_b=0.3, gated=True),
     'gemma-3-1b-it': dict(hf='google/gemma-3-1b-it', params_b=1.0, gated=True),
     'gemma-2-2b': dict(hf='google/gemma-2-2b', params_b=2.6, gated=True),
-    'gpt2': dict(hf='openai-community/gpt2', params_b=0.12),
+    # bos: start every raw text with <|endoftext|>, as TransformerLens and the lab do (the hub tokenizer does not)
+    'gpt2': dict(hf='openai-community/gpt2', params_b=0.12, bos=50256),
     'tiny-qwen3.5': dict(tiny=True, params_b=0.001),
     'tiny-qwen3.5-tuned': dict(tiny=True, params_b=0.001, perturb=0.05),
 }
@@ -181,7 +182,11 @@ class LM:
     def encode(self, texts, fmt='raw', system=None):
         if fmt == 'chat':
             return [self.tok(self.chat(t, system), add_special_tokens=False)['input_ids'] for t in texts]
-        return [self.tok(t, add_special_tokens=True)['input_ids'] for t in texts]
+        out = [self.tok(t, add_special_tokens=True)['input_ids'] for t in texts]
+        bos = self.entry.get('bos')
+        if bos is not None:
+            out = [ids if ids[:1] == [bos] else [bos] + ids for ids in out]
+        return out
 
     def token_id(self, s):
         ids = self.tok(s, add_special_tokens=False)['input_ids']

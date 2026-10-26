@@ -260,9 +260,11 @@ export class Host {
     return exact.concat(starts, has).slice(0, k);
   }
 
-  /* Rows that share a prompt and differ by their interventions, decoded together, streamed token by token. */
+  /* Rows that share a prompt and differ by their interventions, decoded together, streamed token by token.
+     Each step reports, per row, the token drawn, the model's own log-probability for it, its probability after the
+     sampling dials (q), and with alts: k the model's top k candidates at that step. */
   async generate(args, ctx) {
-    const { prompt, R = 1, maxNew = 40, temperature = 0, topK = 0, topP = 1, iv = [], seed = 1 } = args;
+    const { prompt, R = 1, maxNew = 40, temperature = 0, topK = 0, topP = 1, iv = [], seed = 1, alts = 0 } = args;
     const E = this.E, V = CFG.V;
     const Tmax = Math.min(CFG.ctx, prompt.length + maxNew);
     const kv = E.newCache(R, Tmax);
@@ -276,14 +278,16 @@ export class Host {
       for (let s = 0; s < steps; s++) {
         await new Promise((r) => setTimeout(r, 0));     // let a cancel message in
         if (ctx.cancelled && ctx.cancelled()) break;
-        const next = [];
+        const next = [], qs = [], alt = [];
         for (let r = 0; r < R; r++) {
           const lg = res.logits.subarray(r * V, (r + 1) * V);
-          const t = sample(lg, temperature, topK, topP, rand);
+          const { t, q } = sample(lg, temperature, topK, topP, rand);
           const lp = logSoftmax(lg);
-          next.push(t); out[r].push(t); lps[r].push(lp[t]);
+          next.push(t); qs.push(q); out[r].push(t); lps[r].push(lp[t]);
+          if (alts) alt.push(topk(lg, alts).map((i) => [this.tok.piece(i), Math.exp(lp[i]), i]));
         }
-        if (ctx.progress) ctx.progress({ step: s, tokens: next, pieces: next.map((t) => this.tok.piece(t)), logprobs: lps.map((a) => a[a.length - 1]) });
+        if (ctx.progress) ctx.progress({ step: s, tokens: next, pieces: next.map((t) => this.tok.piece(t)),
+          logprobs: lps.map((a) => a[a.length - 1]), q: qs, alts: alts ? alt : undefined });
         if (s === steps - 1) break;
         res = await E.forward({ ids: next.map((t) => [t]), cache: kv, iv, logits: 'last' });
       }
@@ -292,21 +296,44 @@ export class Host {
   }
 }
 
-/* temperature 0 = greedy; topK 0 = off; topP 1 = off */
+/* Draw one token. temperature 0 = greedy; topK 0 = off; topP 1 = off. The order is the usual one (Hugging Face's
+   too): divide the logits by the temperature, keep the top k, renormalise, then keep the smallest set of the most
+   likely tokens whose probability adds up to top-p, renormalise again. With top-k off the whole vocabulary takes
+   part. Returns the token and its probability under the final, adjusted distribution. */
 export function sample(lg, temperature, topK, topP, rand) {
-  if (!temperature) { let b = 0; for (let i = 1; i < lg.length; i++) if (lg[i] > lg[b]) b = i; return b; }
-  const K = topK || 200;
-  const idx = topk(lg, K);
-  let mx = -Infinity; for (const i of idx) mx = Math.max(mx, lg[i]);
-  let p = idx.map((i) => Math.exp((lg[i] - mx) / temperature));
-  let sum = p.reduce((a, b) => a + b, 0);
-  p = p.map((x) => x / sum);
+  const n = lg.length;
+  if (!temperature) { let b = 0; for (let i = 1; i < n; i++) if (lg[i] > lg[b]) b = i; return { t: b, q: 1 }; }
+  let mx = -Infinity;
+  for (let i = 0; i < n; i++) if (lg[i] > mx) mx = lg[i];
+  if (!topK && !(topP < 1)) {
+    const w = new Float64Array(n);
+    let Z = 0;
+    for (let i = 0; i < n; i++) { w[i] = Math.exp((lg[i] - mx) / temperature); Z += w[i]; }
+    let u = rand() * Z;
+    for (let i = 0; i < n; i++) { u -= w[i]; if (u <= 0) return { t: i, q: w[i] / Z }; }
+    return { t: n - 1, q: w[n - 1] / Z };
+  }
+  let idx, Z = 0;
+  if (topK) {
+    idx = topk(lg, Math.min(topK, n));
+    for (const i of idx) Z += Math.exp((lg[i] - mx) / temperature);
+  } else {
+    // top-p alone: the 2,048 most likely tokens usually hold the nucleus; sort everything only when they do not
+    for (let i = 0; i < n; i++) Z += Math.exp((lg[i] - mx) / temperature);
+    idx = topk(lg, 2048);
+    let c = 0;
+    for (const i of idx) c += Math.exp((lg[i] - mx) / temperature) / Z;
+    if (c < topP) idx = Array.from({ length: n }, (_, i) => i).sort((a, b) => lg[b] - lg[a]);
+  }
+  let p = idx.map((i) => Math.exp((lg[i] - mx) / temperature) / Z);
   if (topP < 1) {
-    let c = 0, cut = p.length;
+    let c = 0, cut = p.length, sum = 0;
     for (let j = 0; j < p.length; j++) { c += p[j]; if (c >= topP) { cut = j + 1; break; } }
-    p = p.slice(0, cut); sum = p.reduce((a, b) => a + b, 0); p = p.map((x) => x / sum);
+    p = p.slice(0, cut);
+    for (const x of p) sum += x;
+    p = p.map((x) => x / sum);
   }
   let u = rand();
-  for (let j = 0; j < p.length; j++) { u -= p[j]; if (u <= 0) return idx[j]; }
-  return idx[p.length - 1];
+  for (let j = 0; j < p.length; j++) { u -= p[j]; if (u <= 0) return { t: idx[j], q: p[j] }; }
+  return { t: idx[p.length - 1], q: p[p.length - 1] };
 }

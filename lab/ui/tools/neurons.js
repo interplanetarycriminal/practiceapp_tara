@@ -1,0 +1,368 @@
+/* lab/ui/tools/neurons.js: the neuron explorer. Which of GPT-2's 36,864 MLP neurons fire on your text and, for any one
+   of them: where it fires, what it writes (its logit lens), which neurons it is wired to and which of them pushed it
+   on your text, and what pushing it does to the next word and to what GPT-2 writes, beside random pushes of the same
+   size. The card follows Lyra's neuron-explorer (github.com/lyramakesmusic/neuron-explorer), reimplemented for GPT-2
+   in the browser; the wiring and the push test run live (lab/core/recipes.js: neuronLinks, neuronPush). */
+
+import { h, mount as put, tokText, debounce, fmt } from '../dom.js';
+import { toolPage, field, textArea, textInput, select, slider, presets, runner, whenReady, LAYERS, intParam, numParam, tk } from './kit.js';
+import { engine } from '../engine.js';
+import { tokens as strip, bars, stat, tipRow, intervals } from '../charts.js';
+import { randomUnit } from '../../core/recipes.js';
+import { topk } from '../../core/gpt2.js';
+
+const M = 3072, MAXT = 128, LIST = 16;
+
+const TEACH = {
+  what: {
+    1: `<p>Each of GPT-2's 12 layers has a block of 3,072 <b>neurons</b>, 36,864 in all. At every word, each neuron gives
+one number: how strongly the pattern it looks for is present right here. When it fires, it adds its own fixed
+direction to the stream, and that nudges what the model says next.</p>
+<p>Some neurons are easy to name: one fires on "rain" and pushes weather words. Many are not: they fire on unrelated
+things (one fires on both "court" and "win"). That mess is called <b>polysemanticity</b>, and it is why the field
+moved on from neurons to sparse autoencoders.</p>`,
+    2: `<p>A neuron reads the stream through its input weights w<sub>in</sub> (after the layer norm), passes the sum through
+GELU, and writes activation × w<sub>out</sub> back into the stream. This page gives four views of one neuron, each
+answering a different question: <b>where it fires</b> (its activation on your text), <b>what it writes</b> (w<sub>out</sub>
+read through the unembedding: its direct effect on the next word), <b>who it talks to</b> (whose input weights line
+up with its output, and which earlier neurons pushed it on your text), and <b>what pushing it does</b> (add more of
+w<sub>out</sub> and let every later layer react).</p>
+<div data-angle="analogy"><p>A neuron is a word in an overloaded dictionary. Some words have one meaning
+("photosynthesis"); many have several unrelated ones ("bank"). You learn a word from the sentences it turns up in
+(where it fires) and from what it does to a sentence (what pushing it does). Polysemantic neurons are the
+"bank"s.</p></div>`,
+    3: `<p>Activation = GELU(w<sub>in</sub>·LN<sub>2</sub>(x) + b), TransformerLens' <code>blocks.l.mlp.hook_post</code>. The output
+lens is W<sub>U</sub>(γ<sub>f</sub> ⊙ centre(w<sub>out</sub>)) at a typical ln_f scale, measured from the vocabulary's mean (a
+shift shared by every token is invisible to softmax). Wiring is the direct path: S = centre(w<sub>out,A</sub>)·(γ<sub>2</sub> ⊙
+w<sub>in,B</sub>), ranked by the z-score of the cosine within each layer. The push adds dose × the layer's median
+residual norm along unit(w<sub>out</sub>) at every position, against random unit directions at the same size.</p>`,
+  },
+  read: {
+    1: `<p>Start with the list: the neurons that fire most on your text. Tap a word to rank the neurons on that word, and
+open one. Then ask two questions: what makes it fire, and what does it push? It is clean when the first answer is one
+thing, and polysemantic when it fires on several unrelated things (test a guess by changing the text). The two
+answers need not match: many late neurons fire where a word is likely to come next, and push that word.</p>`,
+    2: `<p>The list skips neurons that are on almost everywhere in your text (their average is more than half their peak),
+so the ones that pick out particular words come first. Output words are in logits per unit of activation (multiply by the activation to get the
+push). Wiring strengths are in standard deviations: 8σ means the pair is far better aligned than the layer's typical
+pair. In the push test, KL says how far the prediction moved; the gray dots are random directions pushed just as
+hard, so the blue dot means something only when it is clear of them.</p>`,
+    3: `<p>Activations share one scale across layers, although later layers run larger; the layer filter compares within
+a layer. The output lens and the wiring are direct paths and ignore attention; the push test includes everything
+downstream. Its rises are changes in log-probability among tokens with at least 0.01% probability after the push
+(falls: before it), so near-impossible tokens do not top the list.</p>`,
+  },
+  why: {
+    1: `<p>If each neuron meant one thing, reading a model would come down to naming 36,864 neurons. They mostly do not,
+and seeing that for yourself is the best reason for what comes next in the course: sparse autoencoders, which find
+cleaner features spread across many neurons.</p>`,
+    2: `<p>Superposition (Elhage et al., 2022) is the leading explanation: a model can store more features than it has
+neurons by giving each feature a direction that is nearly at right angles to the others, at the cost of a little
+interference. Week 6's SAEs, transcoders and attribution graphs are all ways of reading those directions, and the
+same four views (where it fires, what it writes, who it talks to, what pushing does) carry over unchanged to SAE
+features.</p>`,
+    3: `<p>Neuron tools in practice: Neuroscope-style max-activating examples, automated neuron explanations (Bills et al.,
+2023) and Lyra's neuron-explorer, whose card, push unit (the median residual norm) and random-direction controls this
+page reimplements for GPT-2; its wiring z-scores |S|, this page the cosine, so a few neurons with long write vectors
+do not top every list. Max-activating examples favour the extreme end of a neuron's range; typical-strength examples
+often tell a different story.</p>`,
+  },
+};
+
+const EXAMPLES = [
+  { label: 'Eiffel Tower and rain', text: 'The Eiffel Tower is in Paris. I wrote a short poem about love and rain.' },
+  { label: 'Days of the week', text: 'We met on Monday, argued on Tuesday, and made up by Friday.' },
+  { label: 'Code', text: 'def add(a, b):\n    return a + b\n\nprint(add(2, 3))' },
+  { label: 'A recipe', text: 'Whisk two eggs with a cup of flour, then bake for twenty minutes.' },
+];
+const PROMPTS = ['I think the most important thing to remember is', 'Today we are going to talk about', 'Once upon a time,', 'The best thing about'];
+
+/* what each neuron writes, kept for this visit: gid -> {up, down} */
+const LENS = new Map();
+
+export function mount(el, meta, api) {
+  const P = api.params, life = { dead: false };
+  const hasN = P.layer !== undefined && P.neuron !== undefined;
+  const st = {
+    text: P.text ?? EXAMPLES[0].text,
+    open: hasN ? [intParam(P.layer, 0, 11, 6), intParam(P.neuron, 0, M - 1, 974)] : P.text === undefined ? [6, 974] : null,
+    auto: false, at: null, sort: 'stand', only: 'all',
+    prompt: PROMPTS[0], dose: numParam(P.dose, -2, 2, 0.8),
+    F: null, ids: null, pieces: null, ranked: [],
+  };
+  const page = toolPage(el, meta, TEACH);
+  const save = debounce(() => api.setParams({ text: st.text, layer: st.open && !st.auto ? st.open[0] : null, neuron: st.open && !st.auto ? st.open[1] : null }), 400);
+
+  /* ---- controls */
+  const count = h('span');
+  const ta = textArea(st.text, { rows: 2, oninput: (e) => { st.text = e.target.value; st.at = null; save(); go(); } });
+  const lSel = select(LAYERS, st.open ? st.open[0] : 6);
+  const nIn = h('input', { type: 'number', min: 0, max: M - 1, step: 1, inputmode: 'numeric', style: { width: '7.5em' } });
+  nIn.value = String(st.open ? st.open[1] : 974);
+  nIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') openTyped(); });
+  const openTyped = () => open(Number(lSel.value), intParam(nIn.value, 0, M - 1, 0));
+  put(page.controls,
+    field('Your text', ta, count),
+    presets(EXAMPLES, (x) => { ta.value = st.text = x.text; st.at = null; save(); go.now(); }),
+    h('div.row', { style: { marginTop: '10px', alignItems: 'flex-end' } },
+      field('Layer', lSel), field('Neuron, 0 to 3,071', nIn),
+      h('button.btn', { type: 'button', onclick: openTyped }, 'Open'),
+      h('button.btn', { type: 'button', onclick: () => open(Math.floor(Math.random() * 12), Math.floor(Math.random() * M)) }, 'A random neuron')));
+
+  /* ---- the list */
+  const textStrip = h('div'), list = h('div.picklist'), listNote = h('p.small.muted');
+  const sSel = select([['stand', 'most active, skipping neurons that are on almost everywhere'], ['peak', 'most active, all of them']], st.sort, (v) => { st.sort = v; drawList(); });
+  const oSel = select([['all', 'every layer'], ...LAYERS], st.only, (v) => { st.only = v; drawList(); });
+  const card = h('div');
+  put(page.result,
+    h('div.subhead', null, h('h3', null, 'Strongest on your text'), h('span.small.muted', null, 'tap a word to rank the neurons on that word')),
+    textStrip,
+    h('div.row', { style: { marginTop: '8px' } }, field('Rank by', sSel), field('Layers', oSel)),
+    list, listNote, card);
+
+  /* ---- the push test: made once, placed into each card */
+  const pIn = textInput(st.prompt, { oninput: (e) => { st.prompt = e.target.value; } });
+  const doseOut = h('span.small');
+  const dose = slider({ min: -2, max: 2, step: 0.1, value: st.dose, oninput: (e) => { st.dose = Number(e.target.value); doseOut.textContent = doseText(); } });
+  const pushSlot = h('div'), pushOut = h('div'), genOut = h('div');
+  const run = runner('Push it', pushSlot, (onP, ctl) => push(onP, ctl));
+  const pushPanel = h('div.panel', null,
+    h('div.fields.two', null, field('Prompt', pIn), field('How hard', dose, doseOut)),
+    presets([...PROMPTS.map((p) => ({ label: p, text: p })), { label: 'your text', text: null }], (x) => { pIn.value = st.prompt = x.text ?? st.text; }),
+    h('div.row', { style: { marginTop: '10px' } }, run.btn, h('span.small.muted', null, 'A few seconds; it also writes three short continuations.')),
+    pushSlot);
+  function doseText() {
+    const [l] = st.open || [0], rn = (engine.status.residNorm || [])[l];
+    return `${st.dose > 0 ? '+' : st.dose < 0 ? '−' : ''}${Math.abs(st.dose).toFixed(1)} × the typical size of the stream at layer ${l}${rn ? ` (about ${Math.round(Math.abs(st.dose) * rn)})` : ''}`;
+  }
+
+  /* ---- reading the text */
+  const go = debounce(async () => {
+    const text = st.text;
+    if (!text.trim()) return;
+    try {
+      const t = await engine.tok(text);
+      const ids = t.ids.slice(0, MAXT + 1);
+      count.textContent = t.ids.length - 1 > MAXT ? `${t.ids.length - 1} tokens; the first ${MAXT} are used` : `${t.ids.length - 1} tokens`;
+      page.result.classList.add('busy');
+      const F = await engine.recipe('fires', { ids }, { channel: 'neurons-fires' });
+      if (life.dead || text !== st.text) return;
+      Object.assign(st, { F, ids, pieces: t.pieces.slice(0, ids.length) });
+      drawText();
+      drawList();
+      if (!st.open || st.auto) { const top = st.ranked[0]; if (top) { st.open = [top.l, top.n]; st.auto = true; } }
+      if (st.open) drawCard();
+    } catch (e) {
+      if (!/cancelled/.test(String(e && e.message))) put(listNote, h('span.err', null, String(e.message || e)));
+    } finally { page.result.classList.remove('busy'); }
+  }, 400);
+
+  function drawText() {
+    strip(textStrip, { pieces: st.pieces, values: st.pieces.map(() => NaN), skip: new Set([0]), selected: st.at ?? undefined,
+      onPick: (t) => { if (t === 0) return; st.at = st.at === t ? null : t; drawText(); drawList(); if (st.open) drawCard(); } });
+  }
+
+  /* rank every neuron (or one layer's) by its activation on the chosen word, or at its peak */
+  function rank() {
+    const F = st.F, T = F.T, A = F.acts, at = st.at;
+    const layers = st.only === 'all' ? [...Array(12).keys()] : [Number(st.only)];
+    const score = new Float32Array(layers.length * M).fill(-Infinity), info = [];
+    layers.forEach((l, li) => {
+      for (let n = 0; n < M; n++) {
+        let sum = 0, peak = -Infinity, pt = 1;
+        for (let t = 1; t < T; t++) { const v = A[l * T * M + t * M + n]; sum += v; if (v > peak) { peak = v; pt = t; } }
+        const t0 = at ?? pt, a = A[l * T * M + t0 * M + n], mean = sum / Math.max(1, T - 1);
+        score[li * M + n] = st.sort === 'stand' && T > 4 && mean > 0.5 * a ? -Infinity : a;
+      }
+    });
+    for (const i of topk(score, LIST)) {
+      const l = layers[Math.floor(i / M)], n = i % M;
+      let pt = 1, on = 0, peak = -Infinity;
+      for (let t = 1; t < T; t++) { const v = A[l * T * M + t * M + n]; if (v > peak) { peak = v; pt = t; } }
+      for (let t = 1; t < T; t++) if (A[l * T * M + t * M + n] > Math.max(0.1, 0.5 * peak)) on++;
+      const t0 = at ?? pt;
+      info.push({ l, n, t: t0, act: A[l * T * M + t0 * M + n], on });
+    }
+    return info;
+  }
+
+  function drawList() {
+    if (!st.F) return;
+    st.ranked = rank();
+    const T = st.F.T;
+    const rows = st.ranked.map((x) => {
+      const hint = h('span.hint', null, hintText(x.l * M + x.n));
+      const b = h('button', { type: 'button', 'aria-pressed': isOpen(x.l, x.n) ? 'true' : 'false', onclick: () => open(x.l, x.n) },
+        h('span.k', null, `L${x.l} N${x.n}`), hint, h('span.v', null, fmt(x.act, 2), ' on ', tk(st.pieces[x.t])));
+      b.dataset.gid = String(x.l * M + x.n);
+      b.title = `fires above half its peak on ${x.on} of ${T - 1} tokens`;
+      return { b, hint, gid: x.l * M + x.n };
+    });
+    put(list, rows.map((r) => r.b));
+    const skip = st.sort === 'stand' && T > 4 ? ' Skipped: neurons whose average on this text is more than half of that, which are on almost everywhere.' : '';
+    put(listNote, st.at !== null ? ['Ranked by how strongly each fires on ', tk(st.pieces[st.at]), '; tap the word again for the whole text.', skip]
+      : ['Ranked by each neuron\'s peak activation on this text.', skip]);
+    lensFor(rows.map((r) => r.gid)).then(() => { if (!life.dead) for (const r of rows) r.hint.textContent = hintText(r.gid); });
+  }
+
+  const isOpen = (l, n) => !!st.open && st.open[0] === l && st.open[1] === n;
+
+  function open(l, n) {
+    if (run.busy) run.go();                 // a push still running for the last neuron: stop it
+    st.open = [l, n]; st.auto = false;
+    lSel.value = String(l); nIn.value = String(n);
+    save();
+    for (const b of list.querySelectorAll('button[data-gid]')) b.setAttribute('aria-pressed', b.dataset.gid === String(l * M + n) ? 'true' : 'false');
+    put(pushOut); put(genOut);
+    drawCard();
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  /* ---- one neuron */
+  let cardSeq = 0;
+  async function drawCard() {
+    if (!st.F || !st.open) return;
+    const seq = ++cardSeq, [l, n] = st.open, gid = l * M + n, F = st.F, T = F.T;
+    const acts = Array.from({ length: T }, (_, t) => F.acts[l * T * M + t * M + n]);
+    let pt = 1;
+    for (let t = 1; t < T; t++) if (acts[t] > acts[pt]) pt = t;
+    const peak = acts[pt], at = st.at ?? pt;
+    let on = 0;
+    for (let t = 1; t < T; t++) if (acts[t] > Math.max(0.1, 0.5 * peak)) on++;
+    const tiles = h('div.stats'), actStrip = h('div'), writes = h('div'), feeds = h('div'), fedBy = h('div'), pushed = h('div');
+    doseOut.textContent = doseText();
+    put(card,
+      h('div.subhead', null, h('h2', { style: { margin: '0' } }, `Layer ${l}, neuron ${n}`), h('span.small.muted', null, `L${l} N${n} · one of 36,864`)),
+      tiles,
+      h('div.small-caps', { style: { marginTop: '8px' } }, 'Where it fires on your text'), actStrip,
+      h('div.res-cols', { style: { marginTop: '10px' } },
+        h('div', null, h('h3', null, 'What it writes'), writes),
+        h('div', null, h('h3', null, 'Who it talks to'),
+          h('div.small-caps', null, 'Feeds: later neurons it pushes'), feeds,
+          h('div.small-caps', { style: { marginTop: '10px' } }, 'Fed by: earlier neurons that push it'), fedBy)),
+      pushed,
+      h('div.subhead', null, h('h3', null, 'What pushing it does'), h('span.small.muted', null, 'everything after this layer reacts; random pushes of the same size are the control')),
+      pushPanel, pushOut, genOut,
+      h('div.card.flat', { style: { marginTop: '14px' } }, h('div.small-caps', null, 'Its strongest examples across a large body of text'),
+        h('p.small', { style: { margin: '4px 0 0' } }, 'The usual way to name a neuron is to collect the passages, out of millions, where it fires hardest. That takes a graphics card about an hour for all 36,864 neurons, so it runs once in the lab\'s GPU precompute, which has not been run yet. Until then the fastest test of a guess is the text box above: write a sentence that should make this neuron fire, and one that should not.')));
+
+    strip(actStrip, { pieces: st.pieces, values: acts.map((v) => Math.max(0, v)), scale: 'seq', max: Math.max(0.5, peak), skip: new Set([0]), selected: st.at ?? undefined,
+      tip: (t) => [h('div.tip-head', null, tokText(st.pieces[t])), tipRow(fmt(acts[t], 2), t === pt ? 'activation, its peak on this text' : 'activation'),
+        acts[t] < 0 ? h('div.tip-sub', null, 'GELU lets a neuron go slightly negative (down to −0.17); shown as off') : null],
+      onPick: (t) => { if (t === 0) return; st.at = st.at === t ? null : t; drawText(); drawList(); drawCard(); } });
+
+    await lensFor([gid]);
+    if (seq !== cardSeq || life.dead) return;
+    const lens = LENS.get(gid), names = await vocabOf([...lens.up, ...lens.down].map((x) => x[0]));
+    put(tiles,
+      stat('Peak on your text', fmt(peak, 2), ['on ', tokText(st.pieces[pt])]),
+      stat('Fires on', `${on} of ${T - 1}`, 'tokens, above half its peak'),
+      stat('Pushes most', tokText(names.get(lens.up[0][0])), `${signed(lens.up[0][1])} logits per unit, directly`));
+    bars(writes, { signed: true, fmtv: signed,
+      items: [...lens.up.slice(0, 8), ...lens.down.slice(0, 5)].map(([t, v]) => ({ label: tokText(names.get(t)), value: v })),
+      caption: `Logits added to each word per unit of activation, through the direct path, at a typical final-layer scale. At its peak here (${fmt(peak, 2)} on ${tokText(st.pieces[pt])}) that is about ${signed(peak * lens.up[0][1])} for ${tokText(names.get(lens.up[0][0]))}.` });
+
+    /* wiring, and who pushed it at the chosen word */
+    const prev = new Float32Array(l * M);
+    for (let i = 0; i < l; i++) for (let a = 0; a < M; a++) prev[i * M + a] = F.acts[i * T * M + at * M + a];
+    const links = await engine.recipe('neuronLinks', { layer: l, neuron: n, k: 6, acts: l ? prev : null, sigma: F.sigma[l * T + at] }, { channel: 'neurons-links' });
+    if (seq !== cardSeq || life.dead) return;
+    const actAt = (g) => F.acts[Math.floor(g / M) * T * M + at * M + (g % M)];
+    const linkRows = (rows, empty) => (rows.length ? h('div.picklist', null, rows.map(([g, z, cos]) => {
+      const hint = h('span.hint', null, hintText(g));
+      const b = h('button', { type: 'button', onclick: () => open(Math.floor(g / M), g % M),
+        title: `cosine ${cos.toFixed(2)} between the write and read directions; fires ${fmt(actAt(g), 2)} on ${tokText(st.pieces[at])}` },
+      h('span.k', null, `L${Math.floor(g / M)} N${g % M}`), h('span', { style: { minWidth: '5.6em' } }, cos > 0 ? '▲ excites' : '▼ inhibits'), hint, h('span.v', null, `${z.toFixed(1)}σ`));
+      b.hint = hint; b.gid = g;
+      return b;
+    })) : h('p.small.muted', null, empty));
+    const fe = linkRows(links.feeds, 'Nothing: layer 11 is the last.'), fb = linkRows(links.fedBy, 'Nothing: layer 0 reads only the embeddings and attention.');
+    put(feeds, fe); put(fedBy, fb);
+    lensFor([...links.feeds, ...links.fedBy].map((x) => x[0])).then(() => {
+      if (seq !== cardSeq || life.dead) return;
+      for (const b of card.querySelectorAll('.picklist button')) if (b.hint) b.hint.textContent = hintText(b.gid);
+    });
+    if (l && links.pushed && links.pushed.length) {
+      const bx = h('div');
+      put(pushed, h('div.subhead', null, h('h3', null, ['Who pushed it on ', tk(st.pieces[at])]), h('span.small.muted', null, st.at === null ? 'its peak word; tap another word above' : 'tap another word above')), bx);
+      bars(bx, { signed: true, fmtv: signed,
+        items: links.pushed.map(([g, c]) => ({ label: `L${Math.floor(g / M)} N${g % M}`, value: c, note: `fires ${fmt(actAt(g), 2)}`, onClick: () => open(Math.floor(g / M), g % M) })),
+        caption: `Direct pushes from earlier neurons into this neuron's input on ${tokText(st.pieces[at])}, in units of its pre-activation. All ${(l * M).toLocaleString('en')} earlier neurons together pushed ${signed(links.pushedTotal)}; attention heads, the embeddings and its own bias make up the rest of its input.` });
+    } else put(pushed);
+  }
+
+  /* ---- the push test */
+  async function push(onP, ctl) {
+    const [l, n] = st.open, d = st.dose;
+    const t = await engine.tok(st.prompt.trim() || PROMPTS[0]);
+    const ids = t.ids.slice(0, 64);
+    onP(0, 3, 'Pushing it, and four random directions, and reading the next word…');
+    const r = await ctl.track(engine.recipe('neuronPush', { ids, layer: l, neuron: n, dose: d, controls: 4 }));
+    if (life.dead || !isOpen(l, n)) return;
+    const names = await vocabOf([...r.up, ...r.down, ...r.before, ...r.after].map((x) => x[0]));
+    const klBox = h('div'), upBox = h('div'), downBox = h('div');
+    put(pushOut,
+      h('p.small', null, `Next word after "${st.prompt.trim()}". Before: `, r.before.map(([x, p]) => [tk(names.get(x)), ' ', pc(p), '  ']),
+        h('br'), 'After the push: ', r.after.map(([x, p]) => [tk(names.get(x)), ' ', pc(p), '  '])),
+      klBox,
+      h('div.res-cols', null, h('div', null, h('div.small-caps', null, 'Made more likely'), upBox), h('div', null, h('div.small-caps', null, 'Made less likely'), downBox)));
+    const lo = Math.min(...r.klCtrl), hi = Math.max(...r.klCtrl);
+    intervals(klBox, {
+      rows: [{ label: `L${l} N${n}`, est: r.kl, lo: r.kl, hi: r.kl, ctrl: r.klCtrl, note: `${fmt(r.kl, 2)} nats` }],
+      x: { label: 'how far the prediction moved (KL divergence, nats)', fmt: (v) => fmt(v, 1), min: 0 },
+      ref: 0, estName: 'this neuron', ctrlName: 'random directions, same size',
+    });
+    klBox.appendChild(h('p.small', null, r.kl > hi ? `Pushing this neuron moves the prediction more than any of the four random pushes (${fmt(lo, 2)} to ${fmt(hi, 2)}).`
+      : `A random push of the same size moves the prediction about as much (${fmt(lo, 2)} to ${fmt(hi, 2)}), so the size of the change says little here; what changes, in the lists below, still can.`));
+    const item = ([x, dl, p0, p1], col) => ({ label: tokText(names.get(x)), value: Math.abs(dl), color: col, note: `${pc(p0)} → ${pc(p1)}` });
+    bars(upBox, { items: r.up.slice(0, 8).map((x) => item(x, 'var(--s1)')), fmtv: (v) => '+' + fmt(v, 1) });
+    bars(downBox, { items: r.down.slice(0, 6).map((x) => item(x, 'var(--neg)')), fmtv: (v) => '−' + fmt(v, 1) });
+    upBox.appendChild(h('div.chart-cap', null, 'Change in log-probability, nats; then the chance before → after.'));
+
+    /* three greedy continuations: no push, this neuron, one random direction at the same size */
+    onP(1, 3, 'Writing three continuations…');
+    let s = (l * M + n) * 2654435761 >>> 0;
+    const vec = randomUnit(() => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; });
+    const rn = (engine.status.residNorm || [])[l] || 100;
+    for (let i = 0; i < vec.length; i++) vec[i] *= rn;
+    const iv = [{ hook: 'mlp_post', layer: l, neuron: n, op: 'addr', rows: [1], value: d }, { hook: 'mlp_out', layer: l, op: 'add', rows: [2], vec, value: d }];
+    const cols = [0, 1, 2].map(() => h('div.gen', null, h('span.prompt', null, st.prompt.trim())));
+    put(genOut, h('div.gencol.three', null,
+      ['No push', `L${l} N${n} pushed (${d > 0 ? '+' : ''}${d.toFixed(1)})`, 'A random direction, same size'].map((title, i) => h('div', null, h('div.gen-h', null, title), cols[i]))),
+    h('p.small.muted', null, 'Greedy (the likeliest word each time), so the only difference between the three is the push.'));
+    const N = 24;
+    await ctl.track(engine.generate({ prompt: ids, R: 3, maxNew: N, temperature: 0, iv }, (pr) => {
+      pr.pieces.forEach((p, i) => cols[i].appendChild(document.createTextNode(p)));
+      onP(1 + 2 * (pr.step + 1) / N, 3, 'Writing three continuations…');
+    }));
+  }
+
+  whenReady(page, life, () => go.now());
+  return { destroy() { life.dead = true; } };
+}
+
+/* ---- helpers */
+
+async function lensFor(gids) {
+  const need = [...new Set(gids)].filter((g) => !LENS.has(g));
+  if (!need.length) return;
+  const r = await engine.recipe('neuronLens', { neurons: need, k: 10 });
+  need.forEach((g, i) => LENS.set(g, r.lens[i]));
+  await vocabOf(r.lens.flatMap((x) => [...x.up, ...x.down].map((y) => y[0])));
+}
+
+const PIECES = new Map();
+async function vocabOf(ids) {
+  const need = [...new Set(ids)].filter((i) => !PIECES.has(i));
+  if (need.length) (await engine.vocab(need)).forEach((p, j) => PIECES.set(need[j], p));
+  return PIECES;
+}
+
+function hintText(gid) {
+  const x = LENS.get(gid);
+  if (!x) return 'writes …';
+  return 'writes ' + x.up.slice(0, 3).map(([t]) => { const p = String(PIECES.get(t) ?? '?'); return tokText(p.trim()) || tokText(p); }).join(', ');
+}
+
+function signed(x) { return (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).toFixed(2); }
+function pc(p) { return p >= 0.1 ? (100 * p).toFixed(0) + '%' : p >= 0.001 ? (100 * p).toFixed(1) + '%' : p >= 1e-5 ? (100 * p).toFixed(3) + '%' : '<0.001%'; }

@@ -20,7 +20,28 @@ from tarabench.common import WORK, say  # noqa: E402
 from tarabench.runner import read_spec, run_spec  # noqa: E402
 
 
+def write_spec_index():
+    """specs/index.json: every spec's id, engine, title, question and models, so the lab can list the experiments
+    that have not produced a result yet. Rewritten whenever the bench starts."""
+    out = []
+    for p in sorted((HERE / 'specs').glob('*.json')):
+        if p.name == 'index.json':
+            continue
+        try:
+            s = json.loads(p.read_text(encoding='utf-8'))
+        except ValueError:
+            continue
+        models = [s['a'], s['b']] if s.get('a') else [s.get('model') or s.get('hf_model')]
+        out.append({'id': s.get('id', p.stem), 'engine': s.get('engine'), 'title': s.get('title'),
+                    'question': s.get('question'), 'models': [m for m in models if m]})
+    text = json.dumps({'format': 'tara-specs/1', 'specs': out}, indent=1, ensure_ascii=False) + '\n'
+    path = HERE / 'specs' / 'index.json'
+    if not path.exists() or path.read_text(encoding='utf-8') != text:
+        path.write_text(text, encoding='utf-8')
+
+
 def main():
+    write_spec_index()
     ap = argparse.ArgumentParser()
     ap.add_argument('specs', nargs='*')
     ap.add_argument('--lock', default='', help='a .py file defining hold(): take turns with other GPU users')
@@ -39,10 +60,12 @@ def main():
         models.LOCAL[name] = path
     if a.list:
         for p in sorted((HERE / 'specs').glob('*.json')):
+            if p.name == 'index.json':
+                continue
             s = json.loads(p.read_text(encoding='utf-8'))
             say(f"{p.name:44s} {s.get('engine', '?'):9s} {s.get('title', '')}")
         return 0
-    paths = [p for pat in a.specs for p in (sorted(glob.glob(pat)) or [pat])]
+    paths = [p for pat in a.specs for p in (sorted(glob.glob(pat)) or [pat]) if Path(p).name != 'index.json']
     if not paths:
         ap.error('give at least one spec')
     failures = []
