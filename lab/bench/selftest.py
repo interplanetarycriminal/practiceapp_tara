@@ -1,4 +1,4 @@
-"""Proves the bench's plumbing on a tiny random Qwen 3.5 (no downloads, CPU, about a minute).
+"""Proves the bench's plumbing on a tiny random Qwen 3.5 and a tiny GPT-2 (no downloads, CPU, about a minute).
 
 Checks the invariants every engine relies on, then runs every engine end to end into a scratch findings folder and
 reads each pack back. The numbers mean nothing; a pass means the machinery is sound.
@@ -122,6 +122,31 @@ def vlm_checkpoint(tmp):
     lm.unload()
 
 
+def layernorm_checkpoint(tmp):
+    """GPT-2 keeps its blocks at transformer.h and ends in a LayerNorm, which subtracts the mean: the gain must come
+    from the weight (normalising a vector of ones would give zeros), and the logit lens must centre the vector."""
+    from transformers import GPT2Config, GPT2LMHeadModel
+    tok = tiny.tokenizer()
+    torch.manual_seed(0)
+    gpt = GPT2LMHeadModel(GPT2Config(vocab_size=len(tok), n_embd=64, n_layer=2, n_head=4, n_positions=128,
+                                     pad_token_id=0, eos_token_id=2)).eval()
+    with torch.no_grad():
+        gpt.transformer.ln_f.weight.uniform_(0.5, 1.5)
+    d = Path(tmp) / 'gpt2-tiny'
+    gpt.save_pretrained(d)
+    tok.save_pretrained(d)
+    lm = load(str(d), precision='fp32', device='cpu')
+    w = gpt.transformer.ln_f.weight.float()
+    v = torch.randn(lm.d_model)
+    lens = lm.logit_lens(v + 3.0, top=3)          # a shift along all-ones is invisible to a LayerNorm
+    ref = (lm.unembed().float() @ ((v - v.mean()) * w)).topk(3).values
+    got = torch.tensor([x for _, x in lens['up']])
+    check('a LayerNorm model (GPT-2 layout) reads its gain and centres the logit lens',
+          lm.layers_path == 'transformer.h' and float((lm.gain() - w).abs().max()) < 1e-6 and
+          float((got - ref).abs().max()) < 1e-4, f'layers at {lm.layers_path}')
+    lm.unload()
+
+
 def engines(out, dict_dir):
     common = {'seed': 0, 'precision': 'fp32'}
     specs = [
@@ -204,6 +229,11 @@ def main():
         except Exception:
             traceback.print_exc()
             check('a saved Qwen 3.5 checkpoint loads as a causal LM', False, 'raised')
+        try:
+            layernorm_checkpoint(tmp)
+        except Exception:
+            traceback.print_exc()
+            check('a LayerNorm model (GPT-2 layout) loads', False, 'raised')
         engines(Path(tmp) / 'findings', dict_dir)
     bad = [r for r in RESULTS if not r[1]]
     say(f'\n{len(RESULTS) - len(bad)} of {len(RESULTS)} checks passed')

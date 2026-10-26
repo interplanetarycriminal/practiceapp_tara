@@ -8,7 +8,7 @@ against a control, so every claim it makes says how it could have been wrong.
 | engine | the question it answers | the control |
 |---|---|---|
 | `steer` | Does pushing along one direction change a behaviour, how much per unit of push, and what does it break? | the same pushes along random directions; loss on neutral text |
-| `probe` | Is a property written in a straight line inside the model, and from which layer? | the same probe trained on shuffled labels |
+| `probe` | Is a property written in a straight line inside the model, and from which layer? | the same probe trained and scored on shuffled labels (a permutation test) |
 | `features` | What does one dictionary feature respond to, and what does it make the model say? | the dictionary's reconstruction quality on this model |
 | `diff` | What did post-training (or a fine-tune) change inside the model, and where? | a random vector of the same size as the measured shift |
 | `circuit` | Which dictionary features carry a behaviour, and how do they feed each other? | patching the top features for real, against random active features |

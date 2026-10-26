@@ -27,8 +27,16 @@ def main():
     ap.add_argument('--device', default=None)
     ap.add_argument('--out', default=None, help='findings folder (default: lab/findings of this checkout)')
     ap.add_argument('--smoke', action='store_true', help="use each spec's smoke settings, written as <id>-smoke")
+    ap.add_argument('--model-dir', action='append', default=[], metavar='NAME=PATH',
+                    help='load a registry model from a local folder instead of the hub (the pack says so)')
     ap.add_argument('--list', action='store_true')
     a = ap.parse_args()
+    from tarabench import models
+    for m in a.model_dir:
+        name, _, path = m.partition('=')
+        if not Path(path).is_dir():
+            ap.error(f'--model-dir {m}: no folder at {path}')
+        models.LOCAL[name] = path
     if a.list:
         for p in sorted((HERE / 'specs').glob('*.json')):
             s = json.loads(p.read_text(encoding='utf-8'))

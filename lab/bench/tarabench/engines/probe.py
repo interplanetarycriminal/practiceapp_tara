@@ -2,8 +2,11 @@
 
 For a labelled set of texts, read the residual stream at each layer and ask whether one straight line separates
 the two labels on held-out examples. Two probes per layer: logistic regression (the best line) and the difference of
-class means (the simplest line, and in practice usually the more causal one). The control is the same logistic
-probe trained on shuffled labels, which shows how much a wide model can fit by chance. A probe only shows that the
+class means (the simplest line, and in practice usually the more causal one). The control is a permutation test:
+shuffle every label, train the same logistic probe on the shuffled training half and score it against the shuffled
+held-out half, which shows how well a wide model can do when there is nothing to find. (Scoring a shuffled-label
+probe against the true labels instead is not a fair null: a shuffle that happens to correlate a little with the truth
+tilts the probe towards the real direction, and on an easy property that tilt can look like 80% accuracy.) A probe only shows that the
 information is there to be read; whether the model uses it is a job for the steering engine, which can take the
 directions saved here."""
 import numpy as np
@@ -44,9 +47,9 @@ def run(spec, ctx):
         lr_correct = ((s > 0) == (ys[te] == 1))
         shuf = []
         for _ in range(n_shuffle):
-            yp = rng.permutation(ys[tr])
-            ms = fit_logistic(X[tr], yp, l2, iters=100)
-            shuf.append(float(((probe_scores(ms, X[te]) > 0) == (ys[te] == 1)).mean()))
+            yp = rng.permutation(ys)
+            ms = fit_logistic(X[tr], yp[tr], l2, iters=100)
+            shuf.append(float(((probe_scores(ms, X[te]) > 0) == (yp[te] == 1)).mean()))
         a_lr, lo_lr, hi_lr = bootstrap_acc(lr_correct, seed=seed)
         a_dm, lo_dm, hi_dm = bootstrap_acc(dm_correct, seed=seed)
         rows.append({'layer': L, 'logreg': a_lr, 'logreg_ci': [lo_lr, hi_lr], 'logreg_auc': auc(s, ys[te]),
@@ -68,11 +71,15 @@ def run(spec, ctx):
     claims = [claim(
         f"The label is linearly readable from the residual stream: at layer {br['layer']} a logistic probe gets "
         f"{br['logreg']:.0%} of held-out examples right (95% CI {br['logreg_ci'][0]:.0%} to {br['logreg_ci'][1]:.0%}), "
-        f"against {floor:.0%} at best for probes trained on shuffled labels.",
+        f"against {floor:.0%} at best for probes trained and scored on shuffled labels.",
         status, {'layer': br['layer'], 'acc': br['logreg'], 'ci': br['logreg_ci'], 'shuffled_best': floor},
         test='CI lower bound clears the best shuffled-label probe by 5 points')]
     first = next((r for r in rows if r['logreg_ci'][0] > max(floor, 0.5) + 0.05), None)
-    if first:
+    if first is rows[0]:
+        claims.append(claim(
+            f"It is readable from the first layer probed (layer {first['layer']} of {lm.n_layers}).",
+            'supported', {'layer': first['layer']}, test='first layer whose CI lower bound clears the control'))
+    elif first:
         claims.append(claim(
             f"It becomes readable by layer {first['layer']} of {lm.n_layers}: earlier layers do not clear the control.",
             'supported', {'layer': first['layer']}, test='first layer whose CI lower bound clears the control'))
@@ -83,6 +90,11 @@ def run(spec, ctx):
         'supported' if br['diffmeans_ci'][0] > max(floor, 0.5) + 0.05 else 'weak',
         {'acc': br['diffmeans'], 'ci': br['diffmeans_ci']}, test='same bar as above'))
 
+    notes = []
+    if rows[0]['layer'] == 0 and rows[0]['logreg_ci'][0] > max(floor, 0.5) + 0.05:
+        notes.append('Readable already at layer 0, right after the first block: the words themselves probably give the '
+                     'label away, so this probe says more about the dataset than about anything the model computes. '
+                     'Compare a property that only becomes readable in later layers.')
     pack = ctx.pack('probe')
     pack.array('pca', np.stack(pcas), 'f16')
     pack.array('labels', ys, 'u8')
@@ -95,5 +107,6 @@ def run(spec, ctx):
     data = {'layers': layers, 'rows': rows, 'best': best, 'pca_ratio': ratios, 'pool': pool, 'format': fmt,
             'texts': [x if len(x) <= 200 else x[:197] + '...' for x in xs], 'n': len(xs), 'n_test': int(len(te)),
             'directions_note': 'dirs_dm and dirs_lr are unit vectors, one row per entry of layers'}
-    summary = {'headline': f"best layer {br['layer']}: {br['logreg']:.0%} held-out (shuffled-label control {floor:.0%})"}
-    return pack.save(models=[lm.info()], summary=summary, claims=claims, data=data, provenance=ctx.provenance())
+    summary = {'headline': f"best layer {br['layer']}: {br['logreg']:.0%} held-out (shuffled-label control at most {floor:.0%})"}
+    return pack.save(models=[lm.info()], summary=summary, claims=claims, data=data, notes=notes,
+                     provenance=ctx.provenance())

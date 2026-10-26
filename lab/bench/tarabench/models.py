@@ -273,13 +273,22 @@ class LM:
     def unembed(self):
         return self.model.get_output_embeddings().weight
 
+    def centres(self):
+        """True when the final norm subtracts the mean first (LayerNorm: GPT-2, GLM-4's older relatives); RMSNorm
+        (Qwen, Gemma, DeepSeek's distills) does not."""
+        return isinstance(self.final_norm, torch.nn.LayerNorm)
+
     @torch.no_grad()
     def gain(self):
-        """The final norm's per-dimension gain, read off by normalising a vector of ones (covers both the w and the
-        1 + w parameterisations; Qwen 3.5 uses 1 + w)."""
+        """The final norm's per-dimension gain. An RMSNorm's is read off by normalising a vector of ones, which covers
+        both the w and the 1 + w parameterisations (Qwen 3.5 uses 1 + w); a LayerNorm would turn that vector into
+        zeros, so its weight is read directly."""
         if self._gain is None:
-            ones = torch.ones(1, 1, self.d_model, device=self.device, dtype=self.dtype)
-            self._gain = self.final_norm(ones).float().reshape(-1)
+            if self.centres():
+                self._gain = self.final_norm.weight.detach().float().reshape(-1).to(self.device)
+            else:
+                ones = torch.ones(1, 1, self.d_model, device=self.device, dtype=self.dtype)
+                self._gain = self.final_norm(ones).float().reshape(-1)
         return self._gain
 
     @torch.no_grad()
@@ -287,7 +296,10 @@ class LM:
         """Which tokens a residual-stream direction pushes up and down when read straight out through the final
         norm's gain and the unembedding (the norm's division by the vector's size is left out)."""
         W = self.unembed()
-        v = (vec.to(self.device).float() * self.gain()).to(W.dtype)
+        vec = vec.to(self.device).float()
+        if self.centres():
+            vec = vec - vec.mean()
+        v = (vec * self.gain()).to(W.dtype)
         scores = (W @ v).float()
         up = scores.topk(top)
         down = (-scores).topk(top)
@@ -355,6 +367,9 @@ class LM:
             torch.cuda.empty_cache()
 
 
+LOCAL = {}   # registry name -> a local folder holding the same checkpoint (run.py --model-dir name=path)
+
+
 def load(name, precision='auto', device=None, revision=None, headroom_gb=2.5):
     entry = resolve(name)
     device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
@@ -362,9 +377,14 @@ def load(name, precision='auto', device=None, revision=None, headroom_gb=2.5):
         from .tiny import tiny_lm
         return tiny_lm(entry)
     from transformers import AutoModelForCausalLM, AutoTokenizer
+    src = LOCAL.get(entry['id'], entry['hf'])
     prec, note = choose_precision(entry, precision, device, revision, headroom_gb)
-    say(f'loading {entry["hf"]} as {prec} on {device}' + (f' ({note})' if note else ''))
-    tok = AutoTokenizer.from_pretrained(entry['hf'], revision=revision)
+    if src != entry['hf']:
+        entry = {**entry, 'files': str(src)}
+        note = (note + '; ' if note else '') + f'weights read from a local copy of {entry["hf"]}'
+        revision = None
+    say(f'loading {src} as {prec} on {device}' + (f' ({note})' if note else ''))
+    tok = AutoTokenizer.from_pretrained(src, revision=revision)
     kw = {'revision': revision, 'dtype': torch.float32 if prec == 'fp32' else torch.bfloat16}
     if prec == 'nf4':
         from transformers import BitsAndBytesConfig
@@ -374,12 +394,12 @@ def load(name, precision='auto', device=None, revision=None, headroom_gb=2.5):
     if str(device).startswith('cuda'):
         kw['device_map'] = {'': device}
     try:
-        model = AutoModelForCausalLM.from_pretrained(entry['hf'], **kw)
+        model = AutoModelForCausalLM.from_pretrained(src, **kw)
     except ValueError as e:
         if 'Unrecognized configuration class' not in str(e):
             raise
         from transformers import AutoModelForImageTextToText
-        model = AutoModelForImageTextToText.from_pretrained(entry['hf'], **kw)
+        model = AutoModelForImageTextToText.from_pretrained(src, **kw)
     if 'device_map' not in kw:
         model.to(device)
     model.eval()
