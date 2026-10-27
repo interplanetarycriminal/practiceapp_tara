@@ -140,9 +140,16 @@ export const engine = {
 choose(store.get('tara.lab.model', 'gpt2'));
 if (engine.remote) active.boot().catch(() => {});
 
-/* While Qwen is picked and the tab is open, a light look at the server every minute keeps the header honest when the
-   server lets the model go after its idle time (and notices a server started after the page). */
-setInterval(() => { if (engine.remote && document.visibilityState === 'visible' && !['loading', 'waiting'].includes(active.status.state)) active.refresh().catch(() => {}); }, 60000);
+/* While Qwen is picked and the tab is open, a light look at the server keeps the header honest when the server lets
+   the model go after its idle time: every minute, or every 10 s while it does not answer, so a server started after
+   the page (or the browser's "allow local network" answered late) is picked up soon. */
+let lastLook = Date.now();
+setInterval(() => {
+  if (!engine.remote || document.visibilityState !== 'visible' || ['loading', 'waiting', 'connecting'].includes(active.status.state)) return;
+  if (Date.now() - lastLook < (active.status.state === 'offline' ? 10000 : 60000)) return;
+  lastLook = Date.now();
+  active.refresh().catch(() => {});
+}, 5000);
 document.addEventListener('visibilitychange', () => { if (engine.remote && document.visibilityState === 'visible') active.refresh().catch(() => {}); });
 
 export const isGPU = () => engine.remote || lab.status.engine === 'webgpu';

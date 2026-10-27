@@ -106,7 +106,7 @@ export class RemoteClient {
   async refresh() {
     if (this.booting && this.status.state === 'connecting') return this.booting;
     const info = await probeLive(this.url);
-    if (!info) { this.setStatus({ state: 'offline', error: OFFLINE, note: null }); return null; }
+    if (!info) { if (this.status.state !== 'offline') this.setStatus({ state: 'offline', error: OFFLINE, note: null }); return null; }   // no redraw while it stays away
     if (info.warming) { this.booting = null; return this.boot(); }
     this.absorb(info);
     return info;
