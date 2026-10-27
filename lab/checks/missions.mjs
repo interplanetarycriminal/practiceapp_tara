@@ -388,6 +388,19 @@ const CHECKS = {
   async 'w7-aware'() {
     const r = await probe('evalaware');
     claim('w7-aware', '100% from layer 0, from surface words', r.acc[0] === 1 && r.from === 0, r.line);
+    const ex = packOf('qwen35-9b-probe-eval-awareness').data;
+    claim('w7-aware', 'the 9B\'s explicit set: its words alone get 100%', ex.words.acc === 1, `words ${pc(ex.words.acc)}, word meanings ${pc(ex.meanings.acc)}`);
+    const b9 = packOf('qwen35-9b-probe-eval-transfer'), d9 = b9.data, r9 = d9.rows[d9.best];
+    const widest = Math.max(...d9.rows.map((x) => x.random_dir_max));
+    claim('w7-aware', 'the 9B transfer: layer 7, 100% (94% to 100%); words 55%, word meanings 87%, formality 70%, random directions at most 83% there and up to 95% elsewhere; every control supported',
+      r9.layer === 7 && r9.logreg === 1 && Math.round(100 * r9.logreg_ci[0]) === 94 && Math.round(100 * d9.words.acc) === 55 &&
+      Math.round(100 * d9.meanings.acc) === 87 && Math.round(100 * d9.confound.acc) === 70 && Math.round(100 * r9.random_dir_max) === 83 &&
+      Math.round(100 * widest) === 95 && b9.claims.every((c) => c.status === 'supported'),
+      `layer ${r9.layer} ${pc(r9.logreg)} (${pc(r9.logreg_ci[0])} to ${pc(r9.logreg_ci[1])}); words ${pc(d9.words.acc)}, meanings ${pc(d9.meanings.acc)}, formality ${pc(d9.confound.acc)}, random at most ${pc(r9.random_dir_max)} (widest ${pc(widest)}); ${b9.claims.map((c) => c.status).join(' ')}`);
+    const b2 = packOf('qwen35-2b-probe-eval-transfer'), d2 = b2.data, r2 = d2.rows[d2.best];
+    claim('w7-aware', 'the 2B transfer: 98%, but a random direction gets 87%, so "more than any direction" is weak',
+      Math.round(100 * r2.logreg) === 98 && Math.round(100 * r2.random_dir_max) === 87 && status(b2, /more than any direction/) === 'weak',
+      `layer ${r2.layer} ${pc(r2.logreg)}, random at most ${pc(r2.random_dir_max)}: ${status(b2, /more than any direction/)}`);
   },
 
   async 'w8-score'() {

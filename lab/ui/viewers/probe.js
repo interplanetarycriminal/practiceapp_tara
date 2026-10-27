@@ -37,7 +37,7 @@ different one (${setName(tr.test)}: other items, and the label shows only in how
 found the idea, not the first set's words.` : ''}${w ? ` The dashed gray line is a ruler that sees only which words each text
 contains, with no model at all: if blue does no better, the words gave the answer away.` : ''}${mn ? ` The dotted gray line
 knows what each word means to the model but not how the words combine: if blue does no better, the meanings of the words
-gave the answer away.` : ''}${R ? ` The thin gray line is the best of ${R} rulers pointed in random directions: when two
+gave the answer away.` : ''}${R ? ` The solid gray line is the best of ${R} rulers pointed in random directions: when two
 kinds of text differ in many ways at once, even a random ruler can separate them.` : ''}${cf ? ` The aqua line is a
 ruler for a rival idea (${cf.name}), placed on its own texts: if it does as well as blue, blue may be reading ${cf.name}.` : ''}</p>`,
     2: `<p>For each of ${d.n} texts, the residual stream ${d.pool === 'last' ? 'at the last token' : 'averaged over the tokens'} is

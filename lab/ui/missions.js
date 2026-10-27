@@ -202,9 +202,12 @@ export const MISSIONS = [
     why: 'If a model behaves differently when it suspects an evaluation, every eval is in doubt. A probe for "this looks like a test" is one way in; the bench runs it on Qwen 3.5 2B and 9B and asks whether it carries over to prompts where nobody says so.',
     steps: ['Run the probe on test-style versus real-user requests.',
       'Check which words could give the label away, and remove them.',
-      'Open the Qwen 3.5 9B transfer result once it lands: a probe trained on prompts that say outright whether they are a test, scored on other tasks where the cues are only implied, against the words alone and a formality probe.'],
-    look: '100% from layer 0. GPT-2 small is not a chat model, so this is a dry run: it separates the two sets by surface words ("Question 14", "Answer with a single letter", lower-case chat). The interesting question is whether a model that answers questions separates them after the surface cues are removed, which is what the bench\'s transfer test asks.',
-    result: 'qwen35-9b-probe-eval-transfer', nodes: ['alignment-faking', 'eval-threat-model-and-spec'] },
+      'Open the Qwen 3.5 9B transfer result: a probe trained on prompts that say outright whether they are a test, scored on other tasks where the cues are only implied. Read each control in the ledger: the words alone, what the words mean, a formality probe and random directions.',
+      'Then open the 2B result. Which control does it fail?'],
+    look: 'In the browser, 100% from layer 0: GPT-2 separates the two sets by surface words ("Question 14", "Answer with a single letter", lower-case chat), so this part is a dry run, and the 9B\'s explicit set is no better (its words alone get 100%). The transfer test is the real one. Trained on the explicit set and scored on implied cues, the 9B\'s layer-7 probe gets 100% (94% to 100%), against 55% for the words, 87% for what the words mean, 70% for formality and at most 83% for 32 random directions, so it clears every control. The lead is thin, though: at other layers a random direction gets up to 95%. The 2B\'s probe gets 98%, but a random direction gets 87%, so its lead is marked weak: the two kinds of prompt differ in so many ways that a direction picked at random nearly separates them. Whether the 9B\'s direction is really about being tested, and whether steering along it changes how the model answers, is a capstone question.',
+    result: 'qwen35-9b-probe-eval-transfer', resultLabel: 'The 9B result',
+    more: [['qwen35-2b-probe-eval-transfer', 'The 2B result'], ['qwen35-9b-probe-eval-awareness', 'The 9B on explicit cues']],
+    nodes: ['alignment-faking', 'eval-threat-model-and-spec'] },
 
   /* ---------------- week 8 */
   { id: 'w8-variance', week: 8, title: 'One prompt is an anecdote', tool: null, result: 'gpt2-steer-sentiment',
