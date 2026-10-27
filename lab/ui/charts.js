@@ -129,7 +129,7 @@ function s(tag, attrs = {}, ...kids) {
 export function legend(items) {
   return h('div.legend', { 'data-tara-noglossary': true },
     items.map((it) => h('span.legend-item', null,
-      h('span.legend-key' + (it.kind === 'band' ? '.band' : it.kind === 'dot' ? '.dot' : ''),
+      h('span.legend-key' + (it.kind === 'band' ? '.band' : it.kind === 'dot' ? '.dot' : it.kind === 'dash' ? '.dash' : it.kind === 'dotted' ? '.dotted' : ''),
         { style: { '--k': it.color } }),
       it.name)));
 }
@@ -137,13 +137,14 @@ export function legend(items) {
 /* ---------------------------------------------------------------- line chart */
 
 /* opts: { height, x: {label, fmt, min, max, ticks}, y: {label, fmt, min, max, zero}, series: [{name, color, pts:
-   [[x, y]], band: [[x, lo, hi]], muted, dash, marker, width}], hlines: [{y, label}], vlines: [{x, label}],
+   [[x, y]], band: [[x, lo, hi]], muted, dash (true, or a dasharray drawn as dots in the legend), marker, width}],
+   hlines: [{y, label}], vlines: [{x, label}],
    legend: true, caption } */
 export function lineChart(el, opts) {
   clear(el);
   el.classList.add('chart');
   const leg = opts.legend === false ? null : legend(opts.series.filter((q) => !q.hideLegend).map((q) => ({
-    name: q.name, color: q.color, kind: q.band && !q.pts ? 'band' : 'line' })));
+    name: q.name, color: q.color, kind: q.band && !q.pts ? 'band' : q.dash ? (q.dash === true ? 'dash' : 'dotted') : 'line' })));
   if (leg && opts.series.filter((q) => !q.hideLegend).length > 1) el.appendChild(leg);
   const box = h('div.chart-box', { 'data-tara-noglossary': true });
   el.appendChild(box);
@@ -200,7 +201,7 @@ export function lineChart(el, opts) {
         const pts = q.pts.filter((p) => Number.isFinite(p[1]));
         g.appendChild(s('polyline', { points: pts.map((p) => `${X(p[0])},${Y(p[1])}`).join(' '), fill: 'none', stroke: col,
           'stroke-width': q.width || (q.muted ? 1.25 : 2), 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
-          'stroke-opacity': q.muted ? 0.75 : 1, 'stroke-dasharray': q.dash ? '4 4' : null }));
+          'stroke-opacity': q.muted ? 0.75 : 1, 'stroke-dasharray': q.dash ? (q.dash === true ? '4 4' : q.dash) : null }));
         if (q.marker !== false && !q.muted) for (const p of pts) g.appendChild(s('circle', { cx: X(p[0]), cy: Y(p[1]), r: 4, fill: col, class: 'mark' }));
         if (q.endLabel && pts.length) {
           const p = pts[pts.length - 1];
@@ -578,7 +579,13 @@ export function intervals(el, opts) {
         if (r.lo < x0) svg.appendChild(s('path', { d: `M${X(x0) + 7} ${y - 5} L${X(x0) + 1} ${y} L${X(x0) + 7} ${y + 5}`, stroke: col('s1'), fill: 'none', 'stroke-width': 2 }));
         if (r.hi > x1) svg.appendChild(s('path', { d: `M${X(x1) - 7} ${y - 5} L${X(x1) - 1} ${y} L${X(x1) - 7} ${y + 5}`, stroke: col('s1'), fill: 'none', 'stroke-width': 2 }));
       }
-      if (Number.isFinite(r.est)) svg.appendChild(s('circle', { cx: X(r.est), cy: y, r: 6, fill: col('s1'), class: 'mark' }));
+      if (Number.isFinite(r.est) && r.est >= x0 && r.est <= x1) svg.appendChild(s('circle', { cx: X(r.est), cy: y, r: 6, fill: col('s1'), class: 'mark' }));
+      else if (Number.isFinite(r.est)) {
+        // off the scale (opts.x.min or max cut it off): a solid arrow at that edge, with the value beside it
+        const left = r.est < x0, ex = X(left ? x0 : x1), k = left ? 1 : -1;
+        svg.appendChild(s('path', { d: `M${ex + 10 * k} ${y - 6} L${ex + k} ${y} L${ex + 10 * k} ${y + 6} Z`, fill: col('s1'), class: 'mark' }));
+        svg.appendChild(s('text', { x: ex + 14 * k, y: y + 4, class: 'tick', 'text-anchor': left ? 'start' : 'end' }, f(r.est)));
+      }
       const hit = s('rect', { x: 0, y: y - rowH / 2, width: W, height: rowH, fill: 'transparent' });
       const show = (ev) => tip.show([h('div.tip-head', null, r.label),
         tipRow(f(r.est), (opts.estName || 'estimate') + (Number.isFinite(r.lo) ? ` (${f(r.lo)} to ${f(r.hi)})` : ''), col('s1')),
@@ -587,7 +594,10 @@ export function intervals(el, opts) {
       hit.addEventListener('pointermove', show); hit.addEventListener('pointerdown', show); hit.addEventListener('pointerleave', () => tip.hide());
       svg.appendChild(hit);
       // shorten labels that do not fit the gutter
-      requestAnimationFrame(() => { try { while (lab.length > 4 && t.getComputedTextLength() > lw - 14) { lab = lab.slice(0, -2); t.textContent = lab + '…'; } } catch (e) { /* not rendered */ } });
+      requestAnimationFrame(() => { try {
+        if (r.short && t.getComputedTextLength() > lw - 14) { lab = String(r.short); t.textContent = lab; }
+        while (lab.length > 4 && t.getComputedTextLength() > lw - 14) { lab = lab.slice(0, -2); t.textContent = lab + '…'; }
+      } catch (e) { /* not rendered */ } });
     });
     box.appendChild(svg);
   };

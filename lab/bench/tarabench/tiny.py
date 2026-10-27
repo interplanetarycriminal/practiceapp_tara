@@ -17,6 +17,7 @@ CHAT = ("{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<
 def _words():
     pool = list(data.NEUTRAL) + [a for p in data.FORMAL_CASUAL for a in p] + data.DIFF_PROMPTS
     pool += data.cities()[0] + data.cities()[1] + data.eval_deploy()[0] + data.eval_deploy()[1]
+    pool += data.eval_deploy_implicit()[0] + data.eval_deploy_implicit()[1]
     pool += [p['clean'] + ' ' + p['corrupt'] + p['answer'] + p['foil'] for p in data.ioi_pairs(48)]
     pool += ['user', 'assistant', 'system']
     words = set()

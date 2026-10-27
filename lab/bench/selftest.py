@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import traceback
+import weakref
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -25,7 +26,8 @@ from tarabench.models import LM, load  # noqa: E402
 from tarabench.packs import DTYPES  # noqa: E402
 from tarabench.runner import run_spec  # noqa: E402
 from tarabench.sae import TopKSAE  # noqa: E402
-from tarabench.stats import binom_ci, null_labels, split  # noqa: E402
+from tarabench.stats import (binom_ci, mcnemar, mean_ci, null_labels, ratio_ci, right_side, split, t_quantile,  # noqa: E402
+                             words_probe)
 
 RESULTS = []
 
@@ -50,6 +52,33 @@ def statistics():
     yp = null_labels(ys, np.random.default_rng(1), g)
     check('the paired null swaps labels within pairs', all(sorted(yp[g == v]) == [0, 1] for v in np.unique(g)) and
           (yp != ys).any())
+    # Student t quantiles against the tables, a t interval by hand, and a share's bootstrap around its own estimate
+    tq = [t_quantile(0.975, df) for df in (1, 7, 30)]
+    check('t quantiles match the tables', all(abs(a - b) < 1e-5 for a, b in zip(tq, (12.70620, 2.36462, 2.04227))),
+          f'df 7: {tq[1]:.5f}')
+    _, lo, hi = mean_ci([1.0, 2.0, 3.0, 4.0])      # 2.5 +- 3.18245 x 1.29099 / 2
+    check('a mean\'s t interval matches a hand computation, and one item gives none',
+          abs(lo - 0.44574) < 1e-4 and abs(hi - 4.55426) < 1e-4 and np.isnan(mean_ci([1.0])[1]), f'{lo:.5f} to {hi:.5f}')
+    # the words-only control reads a label carried by one token, and cannot read one carried by word order
+    r = np.random.default_rng(5)
+    noise = [list(r.integers(20, 60, 6)) for _ in range(120)]
+    ys = np.arange(120) % 2
+    tr, te = np.arange(80), np.arange(80, 120)
+    by_word, _ = words_probe([n + [7 if y else 8] for n, y in zip(noise, ys)], ys, tr, te)
+    by_order, _ = words_probe([n + ([5, 9] if y else [9, 5]) for n, y in zip(noise, ys)], ys, tr, te)
+    check('the words-only control reads words, not word order',
+          by_word.mean() == 1 and abs(by_order.mean() - 0.5) <= 0.2 and mcnemar(by_word, by_order)[2] < 0.05,
+          f'one-token label {by_word.mean():.0%}, order label {by_order.mean():.0%}')
+    # a probe carried to a new set keeps its direction, not its offset: re-centring on other texts of that set finds it
+    y2 = np.arange(40) % 2
+    moved = (2.0 * y2 - 1) + 10
+    as_fit, recentred = right_side(moved, y2, np.arange(20, 40)), right_side(moved, y2, np.arange(20, 40), np.arange(20))
+    check('re-centring a carried probe on other texts of the new set', as_fit.mean() == 0.5 and recentred.mean() == 1,
+          f'cut as fit {as_fit.mean():.0%}, re-centred {recentred.mean():.0%}')
+    num, den = np.random.default_rng(3).normal(1, 1, 40), np.random.default_rng(4).normal(2, 0.5, 40)
+    est, lo, hi = ratio_ci(num, den)
+    check('a share\'s interval brackets its own ratio of means', lo <= est <= hi and
+          abs(est - num.mean() / den.mean()) < 1e-12, f'{est:.3f} in {lo:.3f} to {hi:.3f}')
 
 
 def invariants(lm, dict_dir):
@@ -80,7 +109,16 @@ def invariants(lm, dict_dir):
     on = lm16._head32
     lm16._head32 = False
     lp16raw = lm16.last_logprobs(seqs)
+    # 2c. unloading frees the weights, so a second model (a diff's base) loads into the memory the first one held
+    first_layer = weakref.ref(lm16.layers[0])
+    lm16.unload()
+    check('unloading a model lets go of its weights', first_layer() is None)
     del lm16
+    # 2d. the word-meaning control averages the input embeddings of a text's own tokens: no order, no chat template
+    a, b = lm.mean_embeddings(['Paris is in France .', '. France in is Paris'])
+    want = lm.model.get_input_embeddings().weight[lm.tok('Paris is in France .', add_special_tokens=False)['input_ids']]
+    check('the word-meaning control averages a text\'s own input embeddings, with no order and no template',
+          float((a - b).abs().max()) < 1e-6 and float((a - want.float().mean(0)).abs().max()) < 1e-6)
     e32, e16 = float((lp16 - lp_batch).abs().max()), float((lp16raw - lp_batch).abs().max())
     check('in bf16 the float32 head switches on and scores stay near float32', on is True and e32 < 0.1,
           f'largest error against float32: {e32:.3g} through the float32 head, {e16:.3g} from the bf16 logits')
@@ -205,6 +243,9 @@ def engines(out, dict_dir):
          'controls': {'random': 2}},
         {'engine': 'probe', 'id': 'selftest-probe', 'model': 'tiny-qwen3.5', 'dataset': 'builtin:cities',
          'layers': 'all', 'controls': {'shuffle': 2}},
+        {'engine': 'probe', 'id': 'selftest-probe-transfer', 'model': 'tiny-qwen3.5', 'dataset': 'builtin:eval_deploy',
+         'test_dataset': 'builtin:eval_deploy_implicit', 'format': 'chat', 'layers': 'all',
+         'controls': {'shuffle': 2, 'confound': {'dataset': 'builtin:formal_casual', 'name': 'formality'}}},
         {'engine': 'steer', 'id': 'selftest-steer-pack', 'model': 'tiny-qwen3.5',
          'direction': {'from': 'pack', 'pack': 'selftest-probe', 'layer': 2}, 'doses': [0, 0.2],
          'metric': {'kind': 'prob', 'prompts': ['The city of Paris is in'], 'target': ['France', 'Spain']},
@@ -242,6 +283,56 @@ def engines(out, dict_dir):
                       pd.get('paired') is True and pd['n_test'] % 2 == 0 and 'exact' in pd.get('interval', '') and
                       all(0 <= r['logreg_ci'][0] <= r['logreg'] <= r['logreg_ci'][1] <= 1 for r in pd['rows']),
                       f"{pd['n_test']} of {pd['n']} held out")
+                w, mn = pd.get('words') or {}, pd.get('meanings') or {}
+                check('the probe picks its layer inside the training half and reports the words-only and word-meaning '
+                      'controls', all('cv_acc' in r for r in pd['rows']) and 'training' in pd.get('best_by', '') and
+                      all(0 <= c.get('ci', [2])[0] <= c.get('acc', -1) <= c['ci'][1] <= 1 for c in (w, mn)) and
+                      any('more than the words' in c['text'] for c in meta['claims']) and
+                      any('more than word meanings' in c['text'] for c in meta['claims']) and
+                      pd.get('random_directions') == 32 and all(0 <= r['random_dir'] <= r['random_dir_max'] <= 1
+                                                                for r in pd['rows']) and
+                      any('more than any direction' in c['text'] for c in meta['claims']) and
+                      any('difference-of-means' in c['text'] and 'shuffled-label' in c.get('test', '')
+                          for c in meta['claims']),
+                      f"words alone {w.get('acc', float('nan')):.0%} on {w.get('vocabulary')} tokens, "
+                      f"word meanings {mn.get('acc', float('nan')):.0%}")
+            if spec['id'] == 'selftest-probe-transfer':
+                pd, tt = meta['data'], meta['data'].get('transfer') or {}
+                is_test = np.fromfile(Path(d) / meta['arrays']['is_test']['file'], np.uint8)
+                where = np.flatnonzero(is_test)
+                texts = [c['text'] for c in meta['claims']]
+                check('a transfer probe trains on one set and is scored only on the other, with every control',
+                      tt.get('n_train') == 120 and tt.get('n_dev') == 60 and tt.get('n_test') == 60 == len(where) and
+                      where.min() >= tt['n_train'] and 'dev' in pd.get('best_by', '') and
+                      all('dev_acc' in r and 'confound' in r for r in pd['rows']) and pd['confound']['name'] == 'formality'
+                      and any('carries over' in t for t in texts) and any('shared words' in t for t in texts) and
+                      any('not just formality' in t for t in texts) and 'meanings' in pd and
+                      any('more than word meanings' in t and 'trained on the same texts' in t for t in texts) and
+                      any('more than any direction' in t and 're-centred like the probe' in t for t in texts),
+                      f"words alone {pd['words']['acc']:.0%}, word meanings {pd['meanings']['acc']:.0%}, "
+                      f"formality {pd['confound']['acc']:.0%}")
+            if spec['id'] == 'selftest-steer':
+                ev = [c['evidence'] for c in meta['claims']]
+                check('steering intervals are Student t, around their own estimates',
+                      'Student t' in meta['data'].get('interval', '') and
+                      all(e['ci'][0] <= e['delta'] <= e['ci'][1] for e in ev), f'{len(ev)} claims')
+            if spec['id'] in ('selftest-steer-seq', 'selftest-steer-pack'):
+                check(f"one prompt gives no interval and no supported claim ({spec['id']})",
+                      all(c['status'] != 'supported' and 'one prompt' in c['text'] for c in meta['claims']),
+                      ', '.join(c['status'] for c in meta['claims']))
+            if spec['id'] == 'selftest-circuit':
+                vs, cv = meta['data']['validation_split'], meta['data']['validation']
+                check('the circuit check patches pairs held out of the ranking',
+                      vs['held_out'] and vs['patched_on'] == 6 and vs['ranked_on'] + vs['patched_on'] == meta['data']['n_items']
+                      and all(c['top_ci'][0] <= c['top'] <= c['top_ci'][1] for c in cv),
+                      f"ranked on {vs['ranked_on']}, patched on {vs['patched_on']}")
+            if spec['id'] == 'selftest-diff':
+                ss, rows = meta['data']['steer_split'], meta['data']['steer']
+                check('the diff test scores its vector on held-out prompts, inside its own interval',
+                      ss['held_out'] and ss['fit'] + ss['eval'] == meta['data']['n_prompts'] and
+                      all(r['delta']['closed_ci'][0] <= r['delta']['closed'] <= r['delta']['closed_ci'][1] for r in rows)
+                      and all(len(r['random']['closed_all']) == ss['random'] for r in rows),
+                      f"fit {ss['fit']}, scored on {ss['eval']}, {ss['random']} random vectors")
             if spec['engine'] == 'circuit':
                 g = json.loads((Path(d) / meta['data']['graph']).read_text(encoding='utf-8'))
                 ids = {n['node_id'] for n in g['nodes']}

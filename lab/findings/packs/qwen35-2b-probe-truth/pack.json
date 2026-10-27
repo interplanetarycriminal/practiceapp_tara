@@ -4,61 +4,112 @@
  "kind": "probe",
  "title": "Where does Qwen 3.5 2B know a statement is true?",
  "question": "Is \"this sentence is true\" written in a straight line inside the model, and from which layer?",
- "created": "2026-10-27T09:42:24Z",
+ "created": "2026-10-27T14:08:08Z",
  "models": [
   {
    "id": "qwen3.5-2b-base",
    "hf": "Qwen/Qwen3.5-2B-Base",
    "revision": null,
-   "precision": "bf16",
+   "precision": "fp32",
    "layers": 24,
    "d_model": 2048,
    "vocab": 248320,
    "layers_path": "model.layers",
-   "load_note": "22.8 GB free on the GPU; bf16 weights need about 4.2 GB"
+   "load_note": null
   }
  ],
  "dictionary": null,
  "summary": {
-  "headline": "best layer 5: 100% held-out (shuffled-label control at most 71%)"
+  "headline": "best layer 10: 99% held-out (words alone 43%, word meanings 56%, shuffled labels at most 59%)"
  },
  "claims": [
   {
-   "text": "The label is linearly readable from the residual stream: at layer 5 a logistic probe gets 100% of held-out examples right (95% CI 100% to 100%), against 71% at best for probes trained and scored on shuffled labels.",
+   "text": "The label is linearly readable from the residual stream: at layer 10 a logistic probe gets 99% of 100 held-out examples right (exact 95% interval 94.6% to 100.0%), against 59% at best for probes trained and scored on shuffled labels.",
    "status": "supported",
    "evidence": {
-    "layer": 5,
-    "acc": 1.0,
+    "layer": 10,
+    "acc": 0.99,
     "ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
-    "shuffled_best": 0.714286
+    "shuffled_best": 0.59
    },
    "test": "CI lower bound clears the best shuffled-label probe by 5 points"
   },
   {
-   "text": "It becomes readable by layer 4 of 24: earlier layers do not clear the control.",
+   "text": "It becomes readable by layer 2 of 24: earlier layers do not clear the control.",
    "status": "supported",
    "evidence": {
-    "layer": 4
+    "layer": 2
    },
    "test": "first layer whose CI lower bound clears the control"
   },
   {
-   "text": "The simple difference-of-means direction at layer 5 gets 100% (CI 100% to 100%); it is saved for steering, which tests whether the model actually uses it.",
+   "text": "It is more than the words: a probe on which tokens each text contains, with no model at all, gets 43% of the same held-out examples right (33.1% to 53.3%), against 99% at layer 10 (exact McNemar test on the 58 examples where they disagree: p = 4.1e-16).",
    "status": "supported",
    "evidence": {
-    "acc": 1.0,
+    "bow": 0.43,
+    "bow_ci": [
+     0.331391,
+     0.532866
+    ],
+    "probe": 0.99,
+    "right_only_probe": 57,
+    "right_only_words": 1,
+    "p": 0.0,
+    "vocabulary": 275
+   },
+   "test": "the best layer beats the words-only probe on the same held-out examples, exact McNemar p below 0.05"
+  },
+  {
+   "text": "It is more than word meanings: a probe on each text's average input embedding (what its words mean to the model before any layer combines them), gets 56% of the same held-out examples right (45.7% to 65.9%), against 99% at layer 10 (exact McNemar test on the 43 examples where they disagree: p = 2.3e-13).",
+   "status": "supported",
+   "evidence": {
+    "meanings": 0.56,
+    "meanings_ci": [
+     0.457187,
+     0.659164
+    ],
+    "probe": 0.99,
+    "right_only_probe": 43,
+    "right_only_meanings": 0,
+    "p": 0.0
+   },
+   "test": "the best layer beats the word-meaning probe on the same held-out examples, exact McNemar p below 0.05"
+  },
+  {
+   "text": "It is more than any direction: 32 random directions at layer 10, each pointed the way it splits the training texts and cut half-way between the training texts' classes, get 72% of the same held-out examples right on average and 98% at best, against 99% (exact 95% interval 94.6% to 100.0%).",
+   "status": "weak",
+   "evidence": {
+    "random_mean": 0.717188,
+    "random_max": 0.98,
+    "n": 32,
+    "probe": 0.99,
     "ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
+    ]
+   },
+   "test": "CI lower bound clears the best random direction by 5 points"
+  },
+  {
+   "text": "The simple difference-of-means direction at layer 10 gets 97% (91.5% to 99.4%); it is saved for steering, which tests whether the model actually uses it.",
+   "status": "supported",
+   "evidence": {
+    "acc": 0.97,
+    "ci": [
+     0.914824,
+     0.99377
     ]
    },
    "test": "same bar as above"
   }
  ],
- "notes": [],
+ "notes": [
+  "The 330 texts are 165 matched pairs, each item once with each label. Whole pairs are held out (50 of them), so the probe is scored only on items it never saw in any version, and the shuffled-label control swaps labels within pairs.",
+  "Random directions separate these texts too: at layer 10 the best of 32 gets 98% (average 72%). Neither the words nor what they mean give the label away here, so this is not the texts differing on the surface: the label accounts for so much of the variation in the model's state at this layer that a direction picked at random catches part of it. That makes it a major axis there, which is not evidence that the probe's own direction is special; steering along it tests whether the model uses it."
+ ],
  "data": {
   "layers": [
    0,
@@ -89,558 +140,630 @@
   "rows": [
    {
     "layer": 0,
-    "logreg": 0.380952,
+    "logreg": 0.54,
     "logreg_ci": [
-     0.238095,
-     0.547619
+     0.437412,
+     0.640157
     ],
-    "logreg_auc": 0.369615,
-    "diffmeans": 0.380952,
+    "logreg_auc": 0.5604,
+    "diffmeans": 0.54,
     "diffmeans_ci": [
-     0.238095,
-     0.52381
+     0.437412,
+     0.640157
     ],
-    "diffmeans_auc": 0.351474,
-    "shuffled": 0.515873,
-    "shuffled_max": 0.619048,
+    "diffmeans_auc": 0.5536,
+    "shuffled": 0.506667,
+    "shuffled_max": 0.54,
     "l2": 0.1,
-    "mean_gap": 0.012849
+    "cv_acc": 0.626293,
+    "mean_gap": 0.014583,
+    "random_dir": 0.494375,
+    "random_dir_max": 0.65
    },
    {
     "layer": 1,
-    "logreg": 0.738095,
+    "logreg": 0.67,
     "logreg_ci": [
-     0.595238,
-     0.857143
+     0.568827,
+     0.760801
     ],
-    "logreg_auc": 0.791383,
-    "diffmeans": 0.595238,
+    "logreg_auc": 0.7484,
+    "diffmeans": 0.67,
     "diffmeans_ci": [
-     0.452381,
-     0.738095
+     0.568827,
+     0.760801
     ],
-    "diffmeans_auc": 0.671202,
-    "shuffled": 0.563492,
-    "shuffled_max": 0.619048,
+    "diffmeans_auc": 0.6936,
+    "shuffled": 0.533333,
+    "shuffled_max": 0.59,
     "l2": 0.001,
-    "mean_gap": 0.04512
+    "cv_acc": 0.752137,
+    "mean_gap": 0.047182,
+    "random_dir": 0.524375,
+    "random_dir_max": 0.63
    },
    {
     "layer": 2,
-    "logreg": 0.809524,
+    "logreg": 0.84,
     "logreg_ci": [
-     0.690476,
-     0.928571
+     0.753212,
+     0.90569
     ],
-    "logreg_auc": 0.904762,
-    "diffmeans": 0.761905,
+    "logreg_auc": 0.882,
+    "diffmeans": 0.76,
     "diffmeans_ci": [
-     0.642857,
-     0.880952
+     0.664265,
+     0.839775
     ],
-    "diffmeans_auc": 0.861678,
-    "shuffled": 0.531746,
-    "shuffled_max": 0.595238,
-    "l2": 10.0,
-    "mean_gap": 0.166972
+    "diffmeans_auc": 0.7652,
+    "shuffled": 0.47,
+    "shuffled_max": 0.5,
+    "l2": 0.1,
+    "cv_acc": 0.817139,
+    "mean_gap": 0.171169,
+    "random_dir": 0.540312,
+    "random_dir_max": 0.65
    },
    {
     "layer": 3,
-    "logreg": 0.833333,
+    "logreg": 0.84,
     "logreg_ci": [
-     0.714286,
-     0.928571
+     0.753212,
+     0.90569
     ],
-    "logreg_auc": 0.9161,
-    "diffmeans": 0.785714,
+    "logreg_auc": 0.9184,
+    "diffmeans": 0.74,
     "diffmeans_ci": [
-     0.642857,
-     0.904762
+     0.642688,
+     0.822606
     ],
-    "diffmeans_auc": 0.861678,
-    "shuffled": 0.47619,
-    "shuffled_max": 0.547619,
+    "diffmeans_auc": 0.7572,
+    "shuffled": 0.54,
+    "shuffled_max": 0.56,
     "l2": 0.1,
-    "mean_gap": 0.213197
+    "cv_acc": 0.852339,
+    "mean_gap": 0.214885,
+    "random_dir": 0.535312,
+    "random_dir_max": 0.66
    },
    {
     "layer": 4,
-    "logreg": 0.928571,
+    "logreg": 0.9,
     "logreg_ci": [
-     0.833333,
-     1.0
+     0.823777,
+     0.950995
     ],
-    "logreg_auc": 0.988662,
-    "diffmeans": 0.857143,
+    "logreg_auc": 0.984,
+    "diffmeans": 0.82,
     "diffmeans_ci": [
-     0.738095,
-     0.952381
+     0.730523,
+     0.889689
     ],
-    "diffmeans_auc": 0.900227,
-    "shuffled": 0.412698,
-    "shuffled_max": 0.452381,
-    "l2": 0.001,
-    "mean_gap": 0.327628
+    "diffmeans_auc": 0.8916,
+    "shuffled": 0.526667,
+    "shuffled_max": 0.54,
+    "l2": 0.1,
+    "cv_acc": 0.930499,
+    "mean_gap": 0.313885,
+    "random_dir": 0.550312,
+    "random_dir_max": 0.66
    },
    {
     "layer": 5,
-    "logreg": 1.0,
+    "logreg": 0.98,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.929616,
+     0.997569
     ],
-    "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "logreg_auc": 0.9996,
+    "diffmeans": 0.97,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.914824,
+     0.99377
     ],
-    "diffmeans_auc": 1.0,
-    "shuffled": 0.539683,
-    "shuffled_max": 0.714286,
+    "diffmeans_auc": 0.9996,
+    "shuffled": 0.48,
+    "shuffled_max": 0.56,
     "l2": 0.001,
-    "mean_gap": 0.683713
+    "cv_acc": 0.991228,
+    "mean_gap": 0.630834,
+    "random_dir": 0.640625,
+    "random_dir_max": 0.83
    },
    {
     "layer": 6,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
-    "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "logreg_auc": 0.9996,
+    "diffmeans": 0.98,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.929616,
+     0.997569
     ],
-    "diffmeans_auc": 1.0,
-    "shuffled": 0.420635,
-    "shuffled_max": 0.452381,
+    "diffmeans_auc": 0.9996,
+    "shuffled": 0.476667,
+    "shuffled_max": 0.52,
     "l2": 0.001,
-    "mean_gap": 0.979626
+    "cv_acc": 0.991228,
+    "mean_gap": 0.938279,
+    "random_dir": 0.639687,
+    "random_dir_max": 0.89
    },
    {
     "layer": 7,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.97,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.914824,
+     0.99377
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.452381,
-    "shuffled_max": 0.571429,
+    "shuffled": 0.496667,
+    "shuffled_max": 0.5,
     "l2": 0.001,
-    "mean_gap": 0.884749
+    "cv_acc": 0.991228,
+    "mean_gap": 0.842892,
+    "random_dir": 0.621875,
+    "random_dir_max": 0.86
    },
    {
     "layer": 8,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.97,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.914824,
+     0.99377
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.484127,
-    "shuffled_max": 0.5,
-    "l2": 0.001,
-    "mean_gap": 1.370565
+    "shuffled": 0.483333,
+    "shuffled_max": 0.54,
+    "l2": 10.0,
+    "cv_acc": 0.991228,
+    "mean_gap": 1.298503,
+    "random_dir": 0.648438,
+    "random_dir_max": 0.82
    },
    {
     "layer": 9,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.97,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.914824,
+     0.99377
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.468254,
-    "shuffled_max": 0.47619,
-    "l2": 0.001,
-    "mean_gap": 2.061707
+    "shuffled": 0.523333,
+    "shuffled_max": 0.54,
+    "l2": 1.0,
+    "cv_acc": 0.991228,
+    "mean_gap": 1.948843,
+    "random_dir": 0.703125,
+    "random_dir_max": 0.93
    },
    {
     "layer": 10,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.97,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.914824,
+     0.99377
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.460317,
-    "shuffled_max": 0.619048,
-    "l2": 0.001,
-    "mean_gap": 3.082398
+    "shuffled": 0.466667,
+    "shuffled_max": 0.51,
+    "l2": 0.1,
+    "cv_acc": 0.995614,
+    "mean_gap": 2.913487,
+    "random_dir": 0.717188,
+    "random_dir_max": 0.98
    },
    {
     "layer": 11,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.96,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.900743,
+     0.988996
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.507937,
-    "shuffled_max": 0.642857,
+    "shuffled": 0.51,
+    "shuffled_max": 0.53,
     "l2": 0.001,
-    "mean_gap": 3.393315
+    "cv_acc": 0.995614,
+    "mean_gap": 3.159324,
+    "random_dir": 0.7075,
+    "random_dir_max": 0.98
    },
    {
     "layer": 12,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.96,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.900743,
+     0.988996
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.452381,
-    "shuffled_max": 0.52381,
+    "shuffled": 0.54,
+    "shuffled_max": 0.57,
     "l2": 0.001,
-    "mean_gap": 3.701441
+    "cv_acc": 0.995614,
+    "mean_gap": 3.461188,
+    "random_dir": 0.694375,
+    "random_dir_max": 0.94
    },
    {
     "layer": 13,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.96,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.900743,
+     0.988996
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.5,
-    "shuffled_max": 0.571429,
+    "shuffled": 0.473333,
+    "shuffled_max": 0.48,
     "l2": 0.001,
-    "mean_gap": 4.155041
+    "cv_acc": 0.995614,
+    "mean_gap": 3.869289,
+    "random_dir": 0.722187,
+    "random_dir_max": 0.95
    },
    {
     "layer": 14,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.96,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.900743,
+     0.988996
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.587302,
-    "shuffled_max": 0.642857,
+    "shuffled": 0.47,
+    "shuffled_max": 0.54,
     "l2": 0.001,
-    "mean_gap": 4.811144
+    "cv_acc": 0.995614,
+    "mean_gap": 4.485245,
+    "random_dir": 0.720938,
+    "random_dir_max": 0.95
    },
    {
     "layer": 15,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.96,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.900743,
+     0.988996
     ],
     "diffmeans_auc": 1.0,
     "shuffled": 0.5,
-    "shuffled_max": 0.5,
+    "shuffled_max": 0.55,
     "l2": 0.001,
-    "mean_gap": 5.284184
+    "cv_acc": 0.995614,
+    "mean_gap": 4.942964,
+    "random_dir": 0.660625,
+    "random_dir_max": 0.94
    },
    {
     "layer": 16,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.97,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.914824,
+     0.99377
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.412698,
-    "shuffled_max": 0.452381,
+    "shuffled": 0.526667,
+    "shuffled_max": 0.56,
     "l2": 0.001,
-    "mean_gap": 5.82847
+    "cv_acc": 0.995614,
+    "mean_gap": 5.476036,
+    "random_dir": 0.684688,
+    "random_dir_max": 0.95
    },
    {
     "layer": 17,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.97,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.914824,
+     0.99377
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.468254,
-    "shuffled_max": 0.547619,
+    "shuffled": 0.523333,
+    "shuffled_max": 0.56,
     "l2": 0.001,
-    "mean_gap": 6.236251
+    "cv_acc": 0.995614,
+    "mean_gap": 5.808756,
+    "random_dir": 0.661875,
+    "random_dir_max": 0.9
    },
    {
     "layer": 18,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.97,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.914824,
+     0.99377
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.507937,
-    "shuffled_max": 0.52381,
+    "shuffled": 0.51,
+    "shuffled_max": 0.57,
     "l2": 0.001,
-    "mean_gap": 6.600447
+    "cv_acc": 0.995614,
+    "mean_gap": 6.1488,
+    "random_dir": 0.647813,
+    "random_dir_max": 0.93
    },
    {
     "layer": 19,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.97,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.914824,
+     0.99377
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.507937,
-    "shuffled_max": 0.595238,
+    "shuffled": 0.453333,
+    "shuffled_max": 0.47,
     "l2": 0.01,
-    "mean_gap": 7.055822
+    "cv_acc": 0.991341,
+    "mean_gap": 6.552758,
+    "random_dir": 0.597813,
+    "random_dir_max": 0.81
    },
    {
     "layer": 20,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.98,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.929616,
+     0.997569
     ],
-    "diffmeans_auc": 1.0,
-    "shuffled": 0.555556,
-    "shuffled_max": 0.595238,
+    "diffmeans_auc": 0.9996,
+    "shuffled": 0.516667,
+    "shuffled_max": 0.58,
     "l2": 0.1,
-    "mean_gap": 7.722001
+    "cv_acc": 0.991341,
+    "mean_gap": 7.157105,
+    "random_dir": 0.586562,
+    "random_dir_max": 0.77
    },
    {
     "layer": 21,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
-    "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "logreg_auc": 0.9996,
+    "diffmeans": 0.97,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.914824,
+     0.99377
     ],
-    "diffmeans_auc": 1.0,
-    "shuffled": 0.531746,
-    "shuffled_max": 0.595238,
-    "l2": 0.1,
-    "mean_gap": 8.375902
+    "diffmeans_auc": 0.9996,
+    "shuffled": 0.486667,
+    "shuffled_max": 0.53,
+    "l2": 0.001,
+    "cv_acc": 0.991341,
+    "mean_gap": 7.740483,
+    "random_dir": 0.579687,
+    "random_dir_max": 0.75
    },
    {
     "layer": 22,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
-    "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "logreg_auc": 0.9996,
+    "diffmeans": 0.97,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.914824,
+     0.99377
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.484127,
-    "shuffled_max": 0.619048,
-    "l2": 0.1,
-    "mean_gap": 9.181526
+    "shuffled": 0.486667,
+    "shuffled_max": 0.52,
+    "l2": 0.001,
+    "cv_acc": 0.991341,
+    "mean_gap": 8.485893,
+    "random_dir": 0.587187,
+    "random_dir_max": 0.74
    },
    {
     "layer": 23,
-    "logreg": 1.0,
+    "logreg": 0.99,
     "logreg_ci": [
-     1.0,
-     1.0
+     0.945541,
+     0.999747
     ],
     "logreg_auc": 1.0,
-    "diffmeans": 1.0,
+    "diffmeans": 0.98,
     "diffmeans_ci": [
-     1.0,
-     1.0
+     0.929616,
+     0.997569
     ],
     "diffmeans_auc": 1.0,
-    "shuffled": 0.492063,
-    "shuffled_max": 0.52381,
-    "l2": 0.1,
-    "mean_gap": 11.142255
+    "shuffled": 0.523333,
+    "shuffled_max": 0.54,
+    "l2": 0.01,
+    "cv_acc": 0.991341,
+    "mean_gap": 10.090803,
+    "random_dir": 0.604375,
+    "random_dir_max": 0.77
    }
   ],
-  "best": 5,
+  "best": 10,
   "pca_ratio": [
    [
-    0.172837,
-    0.107648
+    0.160961,
+    0.102595
    ],
    [
-    0.127768,
-    0.091494
+    0.133743,
+    0.090996
    ],
    [
-    0.124417,
-    0.099624
+    0.138511,
+    0.090797
    ],
    [
-    0.160302,
-    0.11238
+    0.178824,
+    0.097922
    ],
    [
-    0.161893,
-    0.126016
+    0.19534,
+    0.09162
    ],
    [
-    0.198027,
-    0.132548
+    0.164654,
+    0.144386
    ],
    [
-    0.257928,
-    0.12495
+    0.207024,
+    0.163273
    ],
    [
-    0.237353,
-    0.162405
+    0.206067,
+    0.185742
    ],
    [
-    0.364631,
-    0.123595
+    0.303891,
+    0.16686
    ],
    [
-    0.518901,
-    0.091656
+    0.442607,
+    0.129702
    ],
    [
-    0.656988,
-    0.056614
+    0.582681,
+    0.086078
    ],
    [
-    0.677548,
-    0.056057
+    0.596007,
+    0.0892
    ],
    [
-    0.665516,
-    0.057322
+    0.581379,
+    0.089433
    ],
    [
-    0.662578,
-    0.05472
+    0.572197,
+    0.08871
    ],
    [
-    0.659353,
-    0.059139
+    0.563574,
+    0.098241
    ],
    [
-    0.615319,
-    0.079662
+    0.522762,
+    0.124183
    ],
    [
-    0.499159,
-    0.108972
+    0.409484,
+    0.159511
    ],
    [
-    0.465998,
-    0.117001
+    0.378436,
+    0.164373
    ],
    [
-    0.436522,
-    0.138596
+    0.353704,
+    0.184408
    ],
    [
-    0.220184,
-    0.070892
+    0.168559,
+    0.087212
    ],
    [
-    0.163153,
-    0.062192
+    0.126085,
+    0.07281
    ],
    [
-    0.163281,
-    0.061917
+    0.126286,
+    0.074723
    ],
    [
-    0.161874,
-    0.064694
+    0.125317,
+    0.07887
    ],
    [
-    0.152937,
-    0.112198
+    0.134033,
+    0.106274
    ]
   ],
   "pool": "last",
@@ -717,80 +840,295 @@
    "The city of Kathmandu is in Nepal.",
    "The city of Havana is in Cuba.",
    "The city of Reykjavik is in Iceland.",
-   "The city of Paris is in Italy.",
-   "The city of Lyon is in Vietnam.",
-   "The city of Berlin is in Kenya.",
-   "The city of Munich is in Austria.",
-   "The city of Madrid is in Ghana.",
-   "The city of Barcelona is in New Zealand.",
-   "The city of Rome is in New Zealand.",
-   "The city of Milan is in Japan.",
-   "The city of Lisbon is in the Philippines.",
-   "The city of Porto is in Iceland.",
-   "The city of Vienna is in Nepal.",
-   "The city of Warsaw is in Iran.",
-   "The city of Krakow is in Portugal.",
-   "The city of Budapest is in Finland.",
-   "The city of Athens is in Nigeria.",
-   "The city of Dublin is in China.",
-   "The city of Oslo is in Hungary.",
-   "The city of Stockholm is in China.",
-   "The city of Helsinki is in Vietnam.",
-   "The city of Copenhagen is in Canada.",
-   "The city of Amsterdam is in Russia.",
-   "The city of Brussels is in the United States.",
-   "The city of Zurich is in Ghana.",
-   "The city of Toronto is in Pakistan.",
-   "The city of Vancouver is in Thailand.",
-   "The city of Chicago is in the Philippines.",
-   "The city of Houston is in Portugal.",
-   "The city of Mexico City is in Cuba.",
-   "The city of Guadalajara is in Iceland.",
-   "The city of Rio de Janeiro is in Chile.",
-   "The city of Buenos Aires is in Turkey.",
-   "The city of Lima is in Belgium.",
-   "The city of Santiago is in Sweden.",
-   "The city of Cairo is in Iran.",
-   "The city of Lagos is in Morocco.",
-   "The city of Nairobi is in Peru.",
-   "The city of Accra is in Canada.",
-   "The city of Addis Ababa is in Iraq.",
-   "The city of Casablanca is in Kenya.",
-   "The city of Johannesburg is in India.",
-   "The city of Cape Town is in Russia.",
-   "The city of Tokyo is in South Africa.",
-   "The city of Osaka is in Finland.",
-   "The city of Seoul is in Pakistan.",
-   "The city of Busan is in Morocco.",
-   "The city of Beijing is in Mexico.",
-   "The city of Shanghai is in Norway.",
-   "The city of Mumbai is in Ghana.",
-   "The city of Delhi is in Bangladesh.",
-   "The city of Bangalore is in the United States.",
-   "The city of Karachi is in Peru.",
-   "The city of Lahore is in Argentina.",
+   "The city of Marseille is in France.",
+   "The city of Toulouse is in France.",
+   "The city of Hamburg is in Germany.",
+   "The city of Cologne is in Germany.",
+   "The city of Seville is in Spain.",
+   "The city of Bilbao is in Spain.",
+   "The city of Naples is in Italy.",
+   "The city of Florence is in Italy.",
+   "The city of Turin is in Italy.",
+   "The city of Salzburg is in Austria.",
+   "The city of Gdansk is in Poland.",
+   "The city of Prague is in the Czech Republic.",
+   "The city of Brno is in the Czech Republic.",
+   "The city of Bratislava is in Slovakia.",
+   "The city of Bucharest is in Romania.",
+   "The city of Sofia is in Bulgaria.",
+   "The city of Belgrade is in Serbia.",
+   "The city of Zagreb is in Croatia.",
+   "The city of Thessaloniki is in Greece.",
+   "The city of Cork is in Ireland.",
+   "The city of Bergen is in Norway.",
+   "The city of Gothenburg is in Sweden.",
+   "The city of Rotterdam is in the Netherlands.",
+   "The city of Antwerp is in Belgium.",
+   "The city of Geneva is in Switzerland.",
+   "The city of London is in the United Kingdom.",
+   "The city of Liverpool is in the United Kingdom.",
+   "The city of Edinburgh is in the United Kingdom.",
+   "The city of Tallinn is in Estonia.",
+   "The city of Riga is in Latvia.",
+   "The city of Vilnius is in Lithuania.",
+   "The city of Saint Petersburg is in Russia.",
+   "The city of Lviv is in Ukraine.",
+   "The city of Montreal is in Canada.",
+   "The city of Calgary is in Canada.",
+   "The city of New York is in the United States.",
+   "The city of Los Angeles is in the United States.",
+   "The city of Seattle is in the United States.",
+   "The city of Monterrey is in Mexico.",
+   "The city of Sao Paulo is in Brazil.",
+   "The city of Brasilia is in Brazil.",
+   "The city of Bogota is in Colombia.",
+   "The city of Medellin is in Colombia.",
+   "The city of Caracas is in Venezuela.",
+   "The city of Quito is in Ecuador.",
+   "The city of Montevideo is in Uruguay.",
+   "The city of Asuncion is in Paraguay.",
+   "The city of Valparaiso is in Chile.",
+   "The city of Cusco is in Peru.",
+   "The city of Santo Domingo is in the Dominican Republic.",
+   "The city of Abuja is in Nigeria.",
+   "The city of Mombasa is in Kenya.",
+   "The city of Kumasi is in Ghana.",
+   "The city of Marrakesh is in Morocco.",
+   "The city of Durban is in South Africa.",
+   "The city of Dakar is in Senegal.",
+   "The city of Tunis is in Tunisia.",
+   "The city of Algiers is in Algeria.",
+   "The city of Kampala is in Uganda.",
+   "The city of Dar es Salaam is in Tanzania.",
+   "The city of Luanda is in Angola.",
+   "The city of Harare is in Zimbabwe.",
+   "The city of Lusaka is in Zambia.",
+   "The city of Kyoto is in Japan.",
+   "The city of Sapporo is in Japan.",
+   "The city of Incheon is in South Korea.",
+   "The city of Guangzhou is in China.",
+   "The city of Shenzhen is in China.",
+   "The city of Chengdu is in China.",
+   "The city of Kolkata is in India.",
+   "The city of Chennai is in India.",
+   "The city of Islamabad is in Pakistan.",
+   "The city of Chittagong is in Bangladesh.",
+   "The city of Chiang Mai is in Thailand.",
+   "The city of Ho Chi Minh City is in Vietnam.",
+   "The city of Surabaya is in Indonesia.",
+   "The city of Cebu is in the Philippines.",
+   "The city of Ulaanbaatar is in Mongolia.",
+   "The city of Tashkent is in Uzbekistan.",
+   "The city of Almaty is in Kazakhstan.",
+   "The city of Colombo is in Sri Lanka.",
+   "The city of Isfahan is in Iran.",
+   "The city of Ankara is in Turkey.",
+   "The city of Jeddah is in Saudi Arabia.",
+   "The city of Dubai is in the United Arab Emirates.",
+   "The city of Doha is in Qatar.",
+   "The city of Amman is in Jordan.",
+   "The city of Beirut is in Lebanon.",
+   "The city of Basra is in Iraq.",
+   "The city of Pokhara is in Nepal.",
+   "The city of Adelaide is in Australia.",
+   "The city of Wellington is in New Zealand.",
+   "The city of Christchurch is in New Zealand.",
+   "The city of Akureyri is in Iceland.",
+   "The city of Paris is in Peru.",
+   "The city of Lyon is in Romania.",
+   "The city of Berlin is in Bangladesh.",
+   "The city of Munich is in Jordan.",
+   "The city of Madrid is in Tanzania.",
+   "The city of Barcelona is in Sri Lanka.",
+   "The city of Rome is in Portugal.",
+   "The city of Milan is in Lithuania.",
+   "The city of Lisbon is in Spain.",
+   "The city of Porto is in New Zealand.",
+   "The city of Vienna is in Vietnam.",
+   "The city of Warsaw is in India.",
+   "The city of Krakow is in Switzerland.",
+   "The city of Budapest is in Egypt.",
+   "The city of Athens is in Latvia.",
+   "The city of Dublin is in Egypt.",
+   "The city of Oslo is in Colombia.",
+   "The city of Stockholm is in the Netherlands.",
+   "The city of Helsinki is in Japan.",
+   "The city of Copenhagen is in Turkey.",
+   "The city of Amsterdam is in Zimbabwe.",
+   "The city of Brussels is in Ethiopia.",
+   "The city of Zurich is in Lithuania.",
+   "The city of Toronto is in Croatia.",
+   "The city of Vancouver is in Chile.",
+   "The city of Chicago is in Mongolia.",
+   "The city of Houston is in South Africa.",
+   "The city of Mexico City is in Uruguay.",
+   "The city of Guadalajara is in Colombia.",
+   "The city of Rio de Janeiro is in Nigeria.",
+   "The city of Buenos Aires is in Saudi Arabia.",
+   "The city of Lima is in Malaysia.",
+   "The city of Santiago is in the Dominican Republic.",
+   "The city of Cairo is in the United Arab Emirates.",
+   "The city of Lagos is in Iceland.",
+   "The city of Nairobi is in Ukraine.",
+   "The city of Accra is in Spain.",
+   "The city of Addis Ababa is in Senegal.",
+   "The city of Casablanca is in Thailand.",
+   "The city of Johannesburg is in Japan.",
+   "The city of Cape Town is in Brazil.",
+   "The city of Tokyo is in Ukraine.",
+   "The city of Osaka is in Angola.",
+   "The city of Seoul is in China.",
+   "The city of Busan is in Poland.",
+   "The city of Beijing is in the Philippines.",
+   "The city of Shanghai is in Algeria.",
+   "The city of Mumbai is in the Dominican Republic.",
+   "The city of Delhi is in Sweden.",
+   "The city of Bangalore is in Morocco.",
+   "The city of Karachi is in Ireland.",
+   "The city of Lahore is in Mexico.",
    "The city of Dhaka is in Canada.",
-   "The city of Bangkok is in Turkey.",
-   "The city of Hanoi is in Italy.",
-   "The city of Jakarta is in Thailand.",
-   "The city of Manila is in the Netherlands.",
-   "The city of Kuala Lumpur is in Spain.",
-   "The city of Sydney is in South Africa.",
-   "The city of Melbourne is in Argentina.",
-   "The city of Brisbane is in Saudi Arabia.",
-   "The city of Auckland is in Nepal.",
-   "The city of Tehran is in Indonesia.",
-   "The city of Istanbul is in Germany.",
-   "The city of Riyadh is in Turkey.",
-   "The city of Moscow is in India.",
-   "The city of Kyiv is in Switzerland.",
-   "The city of Baghdad is in Belgium.",
-   "The city of Kathmandu is in Ethiopia.",
-   "The city of Havana is in Poland.",
-   "The city of Reykjavik is in France."
+   "The city of Bangkok is in Greece.",
+   "The city of Hanoi is in Uruguay.",
+   "The city of Jakarta is in Iran.",
+   "The city of Manila is in Iraq.",
+   "The city of Kuala Lumpur is in Estonia.",
+   "The city of Sydney is in Uganda.",
+   "The city of Melbourne is in Serbia.",
+   "The city of Brisbane is in Colombia.",
+   "The city of Auckland is in Chile.",
+   "The city of Tehran is in Mexico.",
+   "The city of Istanbul is in Switzerland.",
+   "The city of Riyadh is in Sri Lanka.",
+   "The city of Moscow is in Croatia.",
+   "The city of Kyiv is in Lebanon.",
+   "The city of Baghdad is in Ukraine.",
+   "The city of Kathmandu is in Latvia.",
+   "The city of Havana is in Ecuador.",
+   "The city of Reykjavik is in Ukraine.",
+   "The city of Marseille is in Morocco.",
+   "The city of Toulouse is in Uganda.",
+   "The city of Hamburg is in India.",
+   "The city of Cologne is in the Czech Republic.",
+   "The city of Seville is in Ukraine.",
+   "The city of Bilbao is in Zambia.",
+   "The city of Naples is in Latvia.",
+   "The city of Florence is in Senegal.",
+   "The city of Turin is in China.",
+   "The city of Salzburg is in Zimbabwe.",
+   "The city of Gdansk is in Paraguay.",
+   "The city of Prague is in Malaysia.",
+   "The city of Brno is in Uzbekistan.",
+   "The city of Bratislava is in Iraq.",
+   "The city of Bucharest is in Latvia.",
+   "The city of Sofia is in Greece.",
+   "The city of Belgrade is in Greece.",
+   "The city of Zagreb is in Greece.",
+   "The city of Thessaloniki is in Austria.",
+   "The city of Cork is in the Dominican Republic.",
+   "The city of Bergen is in Japan.",
+   "The city of Gothenburg is in South Africa.",
+   "The city of Rotterdam is in Bulgaria.",
+   "The city of Antwerp is in Colombia.",
+   "The city of Geneva is in Ecuador.",
+   "The city of London is in Ethiopia.",
+   "The city of Liverpool is in Austria.",
+   "The city of Edinburgh is in Chile.",
+   "The city of Tallinn is in Uganda.",
+   "The city of Riga is in Poland.",
+   "The city of Vilnius is in Tunisia.",
+   "The city of Saint Petersburg is in Kazakhstan.",
+   "The city of Lviv is in Tanzania.",
+   "The city of Montreal is in Ireland.",
+   "The city of Calgary is in Indonesia.",
+   "The city of New York is in Vietnam.",
+   "The city of Los Angeles is in Qatar.",
+   "The city of Seattle is in Venezuela.",
+   "The city of Monterrey is in Kazakhstan.",
+   "The city of Sao Paulo is in Serbia.",
+   "The city of Brasilia is in Sweden.",
+   "The city of Bogota is in the United Kingdom.",
+   "The city of Medellin is in Nigeria.",
+   "The city of Caracas is in Chile.",
+   "The city of Quito is in Mongolia.",
+   "The city of Montevideo is in the Dominican Republic.",
+   "The city of Asuncion is in Cuba.",
+   "The city of Valparaiso is in Sri Lanka.",
+   "The city of Cusco is in Zambia.",
+   "The city of Santo Domingo is in the Philippines.",
+   "The city of Abuja is in Mongolia.",
+   "The city of Mombasa is in Greece.",
+   "The city of Kumasi is in Italy.",
+   "The city of Marrakesh is in Argentina.",
+   "The city of Durban is in Jordan.",
+   "The city of Dakar is in Cuba.",
+   "The city of Tunis is in Indonesia.",
+   "The city of Algiers is in Pakistan.",
+   "The city of Kampala is in France.",
+   "The city of Dar es Salaam is in Mongolia.",
+   "The city of Luanda is in Russia.",
+   "The city of Harare is in Brazil.",
+   "The city of Lusaka is in Colombia.",
+   "The city of Kyoto is in Estonia.",
+   "The city of Sapporo is in Indonesia.",
+   "The city of Incheon is in Bangladesh.",
+   "The city of Guangzhou is in Venezuela.",
+   "The city of Shenzhen is in the United Arab Emirates.",
+   "The city of Chengdu is in Turkey.",
+   "The city of Kolkata is in the Czech Republic.",
+   "The city of Chennai is in Canada.",
+   "The city of Islamabad is in Australia.",
+   "The city of Chittagong is in Ecuador.",
+   "The city of Chiang Mai is in the United Arab Emirates.",
+   "The city of Ho Chi Minh City is in Greece.",
+   "The city of Surabaya is in the Czech Republic.",
+   "The city of Cebu is in Uzbekistan.",
+   "The city of Ulaanbaatar is in Denmark.",
+   "The city of Tashkent is in Peru.",
+   "The city of Almaty is in China.",
+   "The city of Colombo is in Norway.",
+   "The city of Isfahan is in Cuba.",
+   "The city of Ankara is in Austria.",
+   "The city of Jeddah is in the Czech Republic.",
+   "The city of Dubai is in Argentina.",
+   "The city of Doha is in Greece.",
+   "The city of Amman is in Ghana.",
+   "The city of Beirut is in Denmark.",
+   "The city of Basra is in Spain.",
+   "The city of Pokhara is in Iceland.",
+   "The city of Adelaide is in Bulgaria.",
+   "The city of Wellington is in Argentina.",
+   "The city of Christchurch is in Uganda.",
+   "The city of Akureyri is in Russia."
   ],
-  "n": 142,
-  "n_test": 42,
+  "n": 330,
+  "n_test": 100,
+  "paired": true,
+  "interval": "exact binomial (Clopper-Pearson), 95%",
+  "best_by": "cross-validated accuracy inside the training half",
+  "cut": -0.634973,
+  "words": {
+   "acc": 0.43,
+   "ci": [
+    0.331391,
+    0.532866
+   ],
+   "vocabulary": 275,
+   "p_vs_best": 0.0,
+   "right_only_probe": 57,
+   "right_only_words": 1
+  },
+  "random_directions": 32,
+  "meanings": {
+   "acc": 0.56,
+   "ci": [
+    0.457187,
+    0.659164
+   ],
+   "p_vs_best": 0.0,
+   "right_only_probe": 43,
+   "right_only_meanings": 0,
+   "of": "the average input embedding of each text's own tokens"
+  },
   "directions_note": "dirs_dm and dirs_lr are unit vectors, one row per entry of layers"
  },
  "arrays": {
@@ -799,7 +1137,7 @@
    "dtype": "f16",
    "shape": [
     24,
-    142,
+    330,
     2
    ]
   },
@@ -807,14 +1145,14 @@
    "file": "labels.bin",
    "dtype": "u8",
    "shape": [
-    142
+    330
    ]
   },
   "is_test": {
    "file": "is_test.bin",
    "dtype": "u8",
    "shape": [
-    142
+    330
    ]
   },
   "dirs_dm": {
@@ -837,7 +1175,7 @@
    "file": "scores_best.bin",
    "dtype": "f32",
    "shape": [
-    142
+    330
    ]
   }
  },
@@ -847,6 +1185,7 @@
   "title": "Where does Qwen 3.5 2B know a statement is true?",
   "question": "Is \"this sentence is true\" written in a straight line inside the model, and from which layer?",
   "model": "qwen3.5-2b-base",
+  "precision": "fp32",
   "dataset": "builtin:cities",
   "layers": "all",
   "pool": "last",
@@ -862,11 +1201,11 @@
   }
  },
  "provenance": {
-  "spec_hash": "258dd1fd43306a32",
+  "spec_hash": "c35e413ced1e47b5",
   "seed": 0,
-  "runtime_s": 191.1,
-  "finished": "2026-10-27T09:42:24Z",
-  "commit": "14c6059ac81cb2ad47023a8365c865eba6d46a5a",
+  "runtime_s": 474.2,
+  "finished": "2026-10-27T14:08:07Z",
+  "commit": "21f42a4e5706a7e6ad2228628d4f8af003d38e0b",
   "bench_dirty": false,
   "python": "3.14.3",
   "torch": "2.10.0+cu128",

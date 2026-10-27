@@ -11,6 +11,7 @@ export async function render(el, p) {
   const d = p.data;
   const rows = d.rows || [];
   const A = d.a, B = d.b;
+  const ss = d.steer_split || {};
 
   /* ---------------- where */
   const where = section('Where the change lives', 'diff-where', {
@@ -70,7 +71,7 @@ with ${d.format === 'chat' ? 'the chat template' : 'raw text'}; the activation-d
   if (d.kl) {
     bet = section('How much the next-word bet changed', 'diff-kl', {
       1: '<p>For each prompt, how differently the two models bet on the next word. Zero means identical bets; bigger means the tuned model would write something else.</p>',
-      2: '<p>KL(B ‖ A) of the next-token distributions in nats, averaged over positions and then over prompts, with a bootstrap interval. The list shows the prompts where the bets differ most, a quick way to see what kind of text the training changed.</p>',
+      2: `<p>KL(B ‖ A) of the next-token distributions in nats, averaged over positions and then over prompts, with a ${/KL: Student/.test(d.interval || '') ? 'Student t' : 'bootstrap'} interval over prompts. The list shows the prompts where the bets differ most, a quick way to see what kind of text the training changed.</p>`,
       3: '<p>KL is asymmetric; KL(B‖A) weights the tokens the tuned model likes. It measures the size of the behavioural change, not its direction; the steering test below asks whether one vector carries it.</p>',
     });
     bet.body.appendChild(h('div.stats', null, stat('Average KL', fmt(d.kl.mean, 3) + ' nats', d.kl.ci ? `95% interval ${fmt(d.kl.ci[0], 3)} to ${fmt(d.kl.ci[1], 3)}` : '')));
@@ -88,21 +89,31 @@ with ${d.format === 'chat' ? 'the chat template' : 'raw text'}; the activation-d
   if (d.steer && d.steer.length) {
     vec = section('Can one vector reproduce the change?', 'diff-vec', {
       1: `<p>If the training mostly added one fixed "nudge" to the model's thinking, then adding that same nudge to the
-<b>before</b> model should make it bet like the <b>after</b> model. Blue: how much of the gap the average nudge closes. Gray: a
-random nudge of the same size, which should close nothing.</p>`,
-      2: `<p>The average shift Δ̄ = mean(h<sub>B</sub> − h<sub>A</sub>) at one layer is added to model A at every position, and the next-token KL to model
-B is measured again. "Closed" is 1 − KL<sub>steered</sub> ÷ KL<sub>original</sub>, per prompt, then averaged with a bootstrap interval. 100% would
-mean the whole behavioural difference is one direction at that layer.</p>`,
+<b>before</b> model should make it bet like the <b>after</b> model.${ss.held_out ? ' The nudge is made from half the prompts and tested on the other half, so it cannot just memorise them.' : ''} Blue: how much of the gap the average nudge closes. Gray: random
+nudges of the same size, which should close nothing.</p>`,
+      2: `<p>The average shift Δ̄ = mean(h<sub>B</sub> − h<sub>A</sub>) at one layer${ss.held_out ? `, over the ${ss.fit} fitting prompts,` : ''} is added to model A at every position, and the
+next-token KL to model B is measured again${ss.held_out ? ` on the ${ss.eval} other prompts` : ''}. "Closed" is 1 − (total KL after ÷ total KL before), a ratio of means, with a
+bootstrap interval that resamples prompts whole. ${ss.held_out ? 'The starred row is the layer and dose that did best on the fitting prompts; its score here is on the others. ' : ''}100% would mean the whole behavioural difference is one direction
+at that layer.</p>`,
       3: '<p>A fine-tune that installs a single direction (as reported for some narrow fine-tunes and refusal) closes much of the gap; a diffuse change closes little. The random vector controls for "any push of this size moves the distribution". Negative values mean the push moved A further from B.</p>',
     });
     const c = h('div');
     vec.body.appendChild(c);
+    const fit = (s) => (s.delta.closed_fit ?? s.delta.closed);
+    const star = d.steer.reduce((a, s) => (fit(s) > fit(a) ? s : a), d.steer[0]);
+    const R = (d.steer[0].random && (d.steer[0].random.n || (d.steer[0].random.closed_all || []).length)) || 1;
+    // a push that overshoots (−200% at the last layer, say) would squash every other row against zero, so the scale
+    // stops at −60% (or the lowest random control, if lower) and an arrow at the edge carries anything beyond it
+    const ctrls = d.steer.flatMap((s) => (s.random ? (s.random.closed_all || [s.random.closed]) : [])).filter(Number.isFinite);
+    const lowest = Math.min(...d.steer.flatMap((s) => [s.delta.closed, ...(s.delta.closed_ci || [])]).filter(Number.isFinite), ...ctrls);
+    const floor = lowest < -0.6 ? Math.min(-0.6, ...ctrls) : undefined;
     intervals(c, {
-      rows: d.steer.map((s) => ({ label: `layer ${s.layer}, dose ${fmt(s.dose, 1)}`, est: s.delta.closed, lo: s.delta.closed_ci && s.delta.closed_ci[0],
-        hi: s.delta.closed_ci && s.delta.closed_ci[1], ctrl: s.random ? [s.random.closed] : [] })),
-      x: { label: 'share of the KL gap closed', fmt: (v) => pct(v) }, ref: 0,
-      estName: 'average shift (95% interval)', ctrlName: 'random vector, same size',
-      caption: 'Further right is better; the gray dot is the control.',
+      rows: d.steer.map((s) => ({ label: `layer ${s.layer}, dose ${fmt(s.dose, 1)}${ss.held_out && s === star ? ' ★' : ''}`,
+        short: `L${s.layer} dose ${fmt(s.dose, 1)}${ss.held_out && s === star ? ' ★' : ''}`, est: s.delta.closed, lo: s.delta.closed_ci && s.delta.closed_ci[0],
+        hi: s.delta.closed_ci && s.delta.closed_ci[1], ctrl: s.random ? (s.random.closed_all || [s.random.closed]) : [] })),
+      x: { label: `share of the KL gap closed${ss.held_out ? ', on held-out prompts' : ''}`, fmt: (v) => pct(v), min: floor }, ref: 0,
+      estName: 'average shift (95% interval)', ctrlName: `${R === 1 ? 'a random vector' : R + ' random vectors'}, same size`,
+      caption: `Further right is better; gray dots are the random controls.${ss.held_out ? ' ★ marks the layer and dose picked on the fitting prompts.' : ''}${floor !== undefined ? ` The scale stops at ${pct(floor)}; an arrow at the edge marks a push that went further, with its value.` : ''}`,
     });
   }
 

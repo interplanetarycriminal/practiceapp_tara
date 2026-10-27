@@ -8,10 +8,10 @@ against a control, so every claim it makes says how it could have been wrong.
 | engine | the question it answers | the control |
 |---|---|---|
 | `steer` | Does pushing along one direction change a behaviour, how much per unit of push, and what does it break? | the same pushes along random directions; loss on neutral text |
-| `probe` | Is a property written in a straight line inside the model, and from which layer? | the same probe trained and scored on shuffled labels (a permutation test) |
+| `probe` | Is a property written in a straight line inside the model, from which layer, and does it carry over to other wording? | the same probe trained and scored on shuffled labels (a permutation test); probes on the words alone and on what they mean; 32 random directions; optionally a probe for a rival property |
 | `features` | What does one dictionary feature respond to, and what does it make the model say? | the dictionary's reconstruction quality on this model |
-| `diff` | What did post-training (or a fine-tune) change inside the model, and where? | a random vector of the same size as the measured shift |
-| `circuit` | Which dictionary features carry a behaviour, and how do they feed each other? | patching the top features for real, against random active features |
+| `diff` | What did post-training (or a fine-tune) change inside the model, and where? | random vectors of the same size as the measured shift, on prompts the shift was not made from |
+| `circuit` | Which dictionary features carry a behaviour, and how do they feed each other? | patching the top features for real on pairs they were not ranked on, against random active features |
 | `graph` | The same through circuit-tracer's transcoders, for models that have them (Qwen 3, Gemma 3) | the graph's own error nodes; interventions |
 
 The result format is in [PACKS.md](PACKS.md). The specs in `specs/` are the first experiments; copy one to start a
@@ -32,11 +32,43 @@ takes different kernels through the whole network, so a log-prob moves by about 
 Qwen 3.5 2B on the 3090), and an effect smaller than a few hundredths of a nat is below bf16's resolution;
 `setup_check.py` measures it for each model. Qwen 3.5 2B in float32 peaks at about 7 GB, so its specs pin
 `"precision": "fp32"`. A 9B model takes about 19 GB in bf16, so with ComfyUI holding its models it loads in 4-bit
-NF4 (about 6.5 GB). Dictionaries follow the model's precision when they fit beside it; a 9B dictionary is about 1 GB
-per layer in bf16, and when several do not fit the engines keep them on the CPU instead, which is slower but works.
+NF4 (about 6.5 GB), and the 9B specs pin `"precision": "nf4"` so a run does not change with what else is loaded.
+Dictionaries follow the model's precision when they fit beside it; a 9B dictionary is about 1 GB per layer in bf16,
+and when several do not fit the engines keep them on the CPU instead, which is slower but works. `setup_check.py
+--model <name> --precision nf4` measures a precision's resolution before a run.
 
-Probes hold matched pairs out whole (every built-in contrast set is one: the same city, task or message once with
-each label), and report held-out accuracy with an exact binomial interval, which stays honest at a perfect score.
+## How the numbers are kept honest
+
+- **Nothing is scored on what chose it.** A probe's best layer is picked by cross-validation inside its training
+  half; a circuit's features are ranked on half the pairs and patched on the other half; a diff's shift vector is
+  made, and its layer and dose chosen, on half the prompts and scored on the rest.
+- **Intervals fit the statistic.** A mean over prompts or pairs gets a Student t interval (a percentile bootstrap of
+  eight prompts covered the truth 88% of the time, against 95% for t, and of one prompt it has no width at all, so
+  one prompt cannot make a supported claim). A share of a gap is a ratio of means with a bootstrap that resamples
+  whole items. A probe's accuracy gets the exact binomial interval, which stays honest at a perfect score.
+- **Controls are numerous and matched.** 32 random directions for steering, 10 random feature sets for a circuit,
+  8 random vectors for a diff, all the same size as the real intervention.
+- **Probes face the words.** Matched pairs are held out whole (every built-in contrast set is one: the same city,
+  task or message once with each label), and every probe is compared, on the same held-out texts and by an exact
+  McNemar test, with a probe that sees only which tokens each text contains. When the words alone give the label
+  away (formal against casual wording does), a perfect probe says nothing about the model. A second probe reads what
+  the words mean: each text's average input embedding, before any layer has combined the words. Synonyms share an
+  embedding direction, so it carries a label across wordings that share no tokens, and what the layers add is the
+  step from it to the probe. (The bench's layer 0 is the output of the first block, which has already mixed in
+  context, so it is not this control.)
+- **Probes face random directions.** 32 random directions in the probe's standardised space, each pointed the way it
+  splits the training texts and cut like the probe, are scored on the same texts. When two kinds of text differ in
+  many ways at once, a random direction separates them too; a probe's direction is supported only when its interval
+  clears the best of them by 5 points. When the words do not give the label away and random directions still read
+  it (true against false facts in the 2B: 72% on average at layer 10), the label is a major axis of the model's state
+  there, which says the property is big, not that the probe's direction is special; the pack's note says which.
+- **Transfer is the stronger test.** With `"test_dataset"` a probe trains on one set and is scored on another that
+  carries the label in other words; part of the new set (`"dev_fraction"`, by pairs) re-centres each probe's cut and
+  picks the layer, and every control is scored the same way. `"controls": {"confound": {"dataset": ..., "name": ...}}`
+  adds a probe for a rival property, pointed the way it runs in the training texts. The eval-awareness specs use
+  both: trained on prompts that say outright whether they are a test (`builtin:eval_deploy`), scored on other tasks
+  whose cues are only implied (`builtin:eval_deploy_implicit`, written so that neither shared words, register,
+  letter case nor length gives the label away), against a formality probe.
 
 ## On the 3090 PC
 

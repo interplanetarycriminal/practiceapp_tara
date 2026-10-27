@@ -354,6 +354,18 @@ class LM:
         return out
 
     @torch.no_grad()
+    def mean_embeddings(self, texts):
+        """[N, D] float32 on the CPU: the average input embedding of each text's own tokens (no chat template, no
+        special tokens), before any layer has combined them. What the words mean to the model, with no context and
+        no order: the word-meaning control for a probe."""
+        E = self.model.get_input_embeddings().weight
+        out = []
+        for t in texts:
+            ids = self.tok(t, add_special_tokens=False)['input_ids'] or [self.tok.eos_token_id]
+            out.append(E[torch.tensor(ids, device=E.device)].float().mean(0).cpu())
+        return torch.stack(out)
+
+    @torch.no_grad()
     def last_logprobs(self, seqs, setup=None):
         """[N, V] float32 log-probabilities of the next token after each sequence. Below float32 the scored
         positions go through head32, so the scores carry no output rounding; the residual stream itself is still
@@ -414,7 +426,10 @@ class LM:
         return texts
 
     def unload(self):
-        self.model = None
+        """Lets go of the weights. The layer list and the final norm point into the model too, so they go as well:
+        held, they kept a 9B's decoder layers (3.4 GB in NF4) on the GPU while the next model loaded."""
+        self.model = self.layers = self.final_norm = None
+        self._gain, self._stats = None, {}
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

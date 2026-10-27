@@ -107,8 +107,10 @@ export async function resultView(view, id) {
   return null;
 }
 
+const usesResult = (id) => (m) => m.result === id || (m.more || []).some(([r]) => r === id);
+
 function related(id) {
-  const ms = MISSIONS.filter((m) => m.result === id);
+  const ms = MISSIONS.filter(usesResult(id));
   if (!ms.length) return h('div');
   return h('section', null, h('h2', null, 'Missions that use this result'),
     h('ul', null, ms.map((m) => h('li', null, h('a', { href: `#missions/week-${m.week}` }, `Week ${m.week}: ${m.title}`)))));
@@ -134,7 +136,7 @@ async function pendingView(view, id) {
   add('Data', spec.dataset || spec.pairs || spec.prompts && (Array.isArray(spec.prompts) ? `${spec.prompts.length} prompts` : spec.prompts) || spec.corpus && spec.corpus.source);
   add('Dictionary', spec.dictionary && (spec.dictionary.repo || spec.dictionary));
   add('Transcoders', spec.transcoders);
-  const ms = MISSIONS.filter((m) => m.result === id);
+  const ms = MISSIONS.filter(usesResult(id));
   mount(wrap,
     h('div.row', null, h('a.small.muted', { href: '#results' }, '← All results'), h('span.pill', null, k.name), h('span.pill', null, 'not run yet')),
     h('h1', null, spec.title || id),

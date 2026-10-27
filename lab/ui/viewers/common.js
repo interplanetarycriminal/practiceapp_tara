@@ -12,16 +12,16 @@ export const KINDS = {
     control: 'the same pushes along random directions of the same size, and loss on neutral text' },
   probe: { name: 'Probe', short: 'probe',
     asks: 'Is a property written in a straight line inside the model, and from which layer?',
-    control: 'the same probe trained and scored on shuffled labels (a permutation test)' },
+    control: 'the same probe trained and scored on shuffled labels (a permutation test), probes on the words alone and on what they mean, with no context, and random directions' },
   features: { name: 'Features', short: 'features',
     asks: 'What does one dictionary feature respond to, and what does it make the model say?',
     control: 'how well the dictionary reconstructs this model at all' },
   diff: { name: 'Model diff', short: 'model diff',
     asks: 'What did post-training (or a fine-tune) change inside the model, and where?',
-    control: 'a random vector of the same size as the measured shift' },
+    control: 'random vectors of the same size as the measured shift, scored on prompts the shift was not made from' },
   circuit: { name: 'Circuit', short: 'circuit',
     asks: 'Which dictionary features carry a behaviour, and how do they feed each other?',
-    control: 'patching the top features for real, against random active features' },
+    control: 'patching the top features for real on pairs they were not ranked on, against random active features' },
   graph: { name: 'Attribution graph', short: 'graph',
     asks: 'Which transcoder features, at which positions, push the model toward its next token?',
     control: 'the graph\'s own error nodes; any claim needs an intervention to back it' },
@@ -122,12 +122,16 @@ const STAMP_MEANING = {
 
 export function ledger(p) {
   const claims = p.claims || [];
+  // probe packs made before 27 October 2026 point their difference-of-means claim back at the first claim's bar, which
+  // stopped being the claim just above once the rival and random-direction controls came between them
+  const testOf = (c) => c.test === 'same bar as above' && claims[0] && claims[0].test
+    ? `${claims[0].test}, the first claim's bar` : c.test;
   return h('section', null,
     h('h2', null, 'What was found'),
     claims.length ? h('div.ledger', null, claims.map((c) => h('div.claim', null,
       stamp(c.status),
       h('div.claim-text', null, c.text),
-      c.test ? h('div.claim-test', null, 'Test it had to pass: ' + c.test) : null,
+      c.test ? h('div.claim-test', null, 'Test it had to pass: ' + testOf(c)) : null,
       c.evidence ? h('details.evidence', null, h('summary', null, 'The numbers behind it'), evidence(c.evidence)) : null)))
       : h('p.muted', null, 'This result makes no claims.'),
     notes(p.notes),
@@ -138,10 +142,15 @@ means it failed. A page with a weak claim on it is more trustworthy, not less: i
       2: `<p>Each claim states its test. <b>Supported</b>: the 95% interval clears the control (by a margin the test names).
 <b>Weak</b>: the estimate points the right way but the interval overlaps the control. <b>Not supported</b>: it fails. The
 control for this kind of result: ${kindOf(p.kind).control}.</p>`,
-      3: `<p>Intervals are 95%: bootstrap intervals over the items (prompts or pairs), with the seed in the spec, except a
-probe's held-out accuracy, which gets the exact binomial interval (a bootstrap of a perfect score collapses to 100% to 100%). Controls are matched to the intervention (same norm, same layer, same number of features). Thresholds are fixed in
-the bench before any run, so a claim cannot be stamped after looking. Multiple comparisons are not corrected for; treat a
-single supported claim among many as a lead, not a finding.</p>`,
+      3: `<p>Intervals are 95%. A mean over prompts or pairs gets a Student t interval: a percentile bootstrap of eight
+prompts covers the truth only about 88% of the time, and of one prompt it gives no width at all. A share of a gap (how much
+of it a patch or a vector closes) is a ratio of means, with a bootstrap that resamples whole items and the seed in the
+spec. A probe's held-out accuracy gets the exact binomial interval (a bootstrap of a perfect score collapses to 100% to
+100%). Whatever a test picks (a probe's layer, a circuit's top features, a shift vector's layer and dose) is picked on
+items the test then leaves out, so the score is not the best of many tries. Controls are matched to the intervention
+(same norm, same layer, same number of features). Thresholds are fixed in the bench before any run, so a claim cannot be
+stamped after looking. Multiple comparisons are not corrected for; treat a single supported claim among many as a lead,
+not a finding.</p>`,
     })));
 }
 
@@ -225,5 +234,6 @@ export function classNames(p) {
   if (p.spec && Array.isArray(p.spec.classes)) return p.spec.classes;
   const ds = p.spec && p.spec.dataset;
   return { 'builtin:cities': ['false statement', 'true statement'], 'builtin:formal_casual': ['casual', 'formal'],
-    'builtin:eval_deploy': ['real use', 'test-style'] }[ds] || ['label 0', 'label 1'];
+    'builtin:eval_deploy': ['real request', 'test prompt'], 'builtin:eval_deploy_implicit': ['real request', 'test prompt'] }[ds]
+    || ['label 0', 'label 1'];
 }
