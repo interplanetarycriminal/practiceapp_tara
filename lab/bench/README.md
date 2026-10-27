@@ -59,7 +59,9 @@ and when several do not fit the engines keep them on the CPU instead, which is s
 - **Probes face random directions.** 32 random directions in the probe's standardised space, each pointed the way it
   splits the training texts and cut like the probe, are scored on the same texts. When two kinds of text differ in
   many ways at once, a random direction separates them too; a probe's direction is supported only when its interval
-  clears the best of them by 5 points.
+  clears the best of them by 5 points. When the words do not give the label away and random directions still read
+  it (true against false facts in the 2B: 72% on average at layer 10), the label is a major axis of the model's state
+  there, which says the property is big, not that the probe's direction is special; the pack's note says which.
 - **Transfer is the stronger test.** With `"test_dataset"` a probe trains on one set and is scored on another that
   carries the label in other words; part of the new set (`"dev_fraction"`, by pairs) re-centres each probe's cut and
   picks the layer, and every control is scored the same way. `"controls": {"confound": {"dataset": ..., "name": ...}}`

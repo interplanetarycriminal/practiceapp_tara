@@ -290,10 +290,23 @@ def run(spec, ctx):
         notes.append('Readable already at layer 0, right after the first block, though probes on the words alone and '
                      'on what they mean do not get there: the first block already combines them.')
     if n_rand and br['random_dir_max'] > bar:
-        notes.append(f"Random directions separate these texts too: at layer {br['layer']} the best of {n_rand} gets "
-                     f"{br['random_dir_max']:.0%} (average {br['random_dir']:.0%}). The two kinds of text differ in so many "
-                     "ways there that a direction picked at random reads the label, so the probe's direction is only as "
-                     "special as its lead over them.")
+        lead = (f"Random directions separate these texts too: at layer {br['layer']} the best of {n_rand} gets "
+                f"{br['random_dir_max']:.0%} (average {br['random_dir']:.0%}). ")
+        if not transfer and lo_bow <= bar and lo_mn <= bar:
+            # the words do not tell the two labels apart (true and false facts built from the same words, say), so
+            # the random directions are not reading other differences between the texts: the label itself is big
+            notes.append(lead + "Neither the words nor what they mean give the label away here, so this is not the "
+                         "texts differing on the surface: " + (
+                             "the label accounts for so much of the variation in the model's state at this layer that a "
+                             "direction picked at random catches part of it. That makes it a major axis there, which is "
+                             "not evidence that the probe's own direction is special"
+                             if br['random_dir'] >= 0.6 else
+                             "the label is large enough in the model's state at this layer that some directions picked at "
+                             "random catch part of it, so the probe's own direction is less special than its accuracy "
+                             "suggests") + "; steering along it tests whether the model uses it.")
+        else:
+            notes.append(lead + "The two kinds of text differ in so many ways there that a direction picked at random "
+                         "reads the label, so the probe's direction is only as special as its lead over them.")
     if conf and br['confound_ci'][0] > bar:
         notes.append(f"A probe for {c_name} alone reads this label at {br['confound']:.0%}: part of what the probe finds "
                      f"may be {c_name}.")
