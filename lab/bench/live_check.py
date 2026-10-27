@@ -266,7 +266,7 @@ def free_port():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--url', default='http://127.0.0.1:8787')
+    ap.add_argument('--url', default='http://127.0.0.1:8790')
     ap.add_argument('--model', default=None)
     ap.add_argument('--tiny', action='store_true', help='start a server on the tiny random model and check that')
     ap.add_argument('--quick', action='store_true', help='skip the slower checks')

@@ -818,7 +818,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
-def serve(live, host='127.0.0.1', port=8787, extra_hosts=()):
+def serve(live, host='127.0.0.1', port=8790, extra_hosts=()):
     Handler.live = live
     Handler.hosts = LOCAL_HOSTS + tuple(extra_hosts)
     srv = ThreadingHTTPServer((host, port), Handler)

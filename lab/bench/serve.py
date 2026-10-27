@@ -4,7 +4,7 @@ card, for the Lab page's model picker (lab/core/remote.js is its client).
     python serve.py --lock Z:/tara-lab/gpulock.py --nf4-cache Z:/tara-lab/live/nf4 --hf-home Z:/tara-lab/hf
     python serve.py --models tiny-qwen3.5          # the plumbing on a tiny random model, no GPU needed
 
-It listens on http://127.0.0.1:8787 and answers only the lab's pages. Nothing goes onto the GPU until a page asks
+It listens on http://127.0.0.1:8790 and answers only the lab's pages. Nothing goes onto the GPU until a page asks
 for a model, every request takes the GPU lock, and after --idle seconds without requests the process holding the model
 exits, so the card gets every byte back. To start it with Windows, run it with pythonw.exe and --log (no window).
 lab/bench/live_check.py checks a running server end to end."""
@@ -19,7 +19,7 @@ sys.path.insert(0, str(HERE))
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--port', type=int, default=8787)
+    ap.add_argument('--port', type=int, default=8790, help='8790: wrangler dev already holds 8787 on the PC')
     ap.add_argument('--host', default='127.0.0.1', help='the address to listen on (keep it on this computer)')
     ap.add_argument('--lock', default='', help='a .py file defining hold(): take turns with other GPU users')
     ap.add_argument('--lock-timeout', type=float, default=180, help='seconds to wait for the GPU before giving up')
