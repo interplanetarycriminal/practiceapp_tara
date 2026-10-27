@@ -57,6 +57,7 @@ def run(spec, ctx):
         prog(done)
     lpB = B.last_logprobs(seqs)
     B_info = B.info()
+    hs = b = None             # the last batch's states sit on the GPU; they go with the model
     ctx.drop(spec['b'])
 
     # ---- the causal test's split: the shift vector is made (and its layer and dose chosen) on the fit prompts and

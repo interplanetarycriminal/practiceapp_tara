@@ -414,7 +414,10 @@ class LM:
         return texts
 
     def unload(self):
-        self.model = None
+        """Lets go of the weights. The layer list and the final norm point into the model too, so they go as well:
+        held, they kept a 9B's decoder layers (3.4 GB in NF4) on the GPU while the next model loaded."""
+        self.model = self.layers = self.final_norm = None
+        self._gain, self._stats = None, {}
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

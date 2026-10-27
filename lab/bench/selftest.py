@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import traceback
+import weakref
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -108,6 +109,10 @@ def invariants(lm, dict_dir):
     on = lm16._head32
     lm16._head32 = False
     lp16raw = lm16.last_logprobs(seqs)
+    # 2c. unloading frees the weights, so a second model (a diff's base) loads into the memory the first one held
+    first_layer = weakref.ref(lm16.layers[0])
+    lm16.unload()
+    check('unloading a model lets go of its weights', first_layer() is None)
     del lm16
     e32, e16 = float((lp16 - lp_batch).abs().max()), float((lp16raw - lp_batch).abs().max())
     check('in bf16 the float32 head switches on and scores stay near float32', on is True and e32 < 0.1,
