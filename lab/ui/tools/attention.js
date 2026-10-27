@@ -3,7 +3,7 @@
    on random tokens repeated twice (lab/data/heads.json, or recomputed here), plus the same summaries on your text. */
 
 import { h, mount as put, fmt, tokText, debounce } from '../dom.js';
-import { toolPage, field, textArea, select, presets, whenReady, LAYERS, HEADS, intParam, tk, toolLink } from './kit.js';
+import { toolPage, field, textArea, select, presets, whenReady, intParam, tk, toolLink, CFG, layerOpts, headOpts, hix, nHeads, nearestAttn, onGPT2, whereRun } from './kit.js';
 import { engine } from '../engine.js';
 import { grid, tokens, tipRow } from '../charts.js';
 
@@ -41,6 +41,12 @@ repeat. Fingerprint scores are from 0 to 1 (1 = all of the attention goes where 
 redoes them here with 4 sequences, so expect small differences. On-your-text scores average over every query token
 after the first.</p>`,
   },
+  qwen: `<p>Qwen 3.5 9B mixes tokens in two ways. Every fourth layer (3, 7, 11 and so on up to 31) is ordinary
+attention with 16 heads, and only those have a pattern to draw, so only they are on this page. The other 24 layers are
+Gated DeltaNet: instead of looking back at every earlier token, each of its 32 heads keeps a running memory (a small
+matrix) that every token updates and reads, so there is no "who looks at whom" table to show. The habits measured
+here (previous token, induction, resting on the first token) are computed live on the 3090 from random tokens
+repeated twice, since no list of named heads exists for this model.</p>`,
   why: {
     1: `<p>Induction heads are the first circuit most people meet in mechanistic interpretability, and they matter: they
 appear suddenly during training, at the same moment the model gets good at learning from its prompt.</p>`,
@@ -55,8 +61,8 @@ patterns with DLA, OV circuits or patching before claiming a function.</p>`,
 
 const DURSLEY = 'Mr and Mrs Dursley, of number four, Privet Drive, were proud to say that they were perfectly normal, thank you very much. Mr and Mrs Dursley, of number four, Privet Drive, were proud to say that they were perfectly normal, thank you very much.';
 const EXAMPLES = [
-  { label: 'A plain sentence', text: 'The quick brown fox jumps over the lazy dog while the cat sleeps in the sun.', layer: 4, head: 11 },
-  { label: 'A repeated passage', text: DURSLEY, layer: 5, head: 5, color: 'induction' },
+  { label: 'A plain sentence', text: 'The quick brown fox jumps over the lazy dog while the cat sleeps in the sun.', layer: 4, head: 11, pick: 'prev' },
+  { label: 'A repeated passage', text: DURSLEY, layer: 5, head: 5, color: 'induction', pick: 'induction' },
   { label: 'Mary and John', text: 'When Mary and John went to the store, John gave a drink to', layer: 9, head: 9 },
 ];
 const PRINTS = {
@@ -80,23 +86,31 @@ async function headsData() {
 const bosName = (p) => (p === '<|endoftext|>' ? '⟨bos⟩' : p);
 
 export function mount(el, meta, api) {
-  const P = api.params, life = { dead: false };
-  const st = { text: P.text ?? EXAMPLES[0].text, layer: intParam(P.layer, 0, 11, 4), head: intParam(P.head, 0, 11, 11), color: PRINTS[P.color] ? P.color : 'prev', query: null };
+  const P = api.params, life = { dead: false }, gpt2 = onGPT2();
+  const AL = CFG.attnLayers, HC = Math.max(...AL.map((l) => nHeads(l))), nAll = AL.reduce((a, l) => a + nHeads(l), 0);
+  const l0 = P.layer !== undefined ? nearestAttn(intParam(P.layer, 0, CFG.L - 1, 0)) : gpt2 ? 4 : AL[0];
+  const st = { text: P.text ?? EXAMPLES[0].text, layer: l0, head: intParam(P.head, 0, nHeads(l0) - 1, gpt2 ? 11 : 0), color: PRINTS[P.color] ? P.color : 'prev', query: null };
   const page = toolPage(el, meta, TEACH);
   const save = debounce(() => api.setParams({ text: st.text, layer: st.layer, head: st.head, color: st.color === 'prev' ? null : st.color }), 300);
   const count = h('span');
   const ta = textArea(st.text, { rows: 2, oninput: (e) => { st.text = e.target.value; st.query = null; save(); go(); } });
-  const lSel = select(LAYERS, st.layer, (v) => { st.layer = Number(v); save(); drawHead(); drawPrint(); });
-  const hSel = select(HEADS, st.head, (v) => { st.head = Number(v); save(); drawHead(); drawPrint(); });
+  const lSel = select(layerOpts(AL), st.layer, (v) => { st.layer = Number(v); save(); drawHead(); drawPrint(); });
+  const hSel = select(headOpts(st.layer), st.head, (v) => { st.head = Number(v); save(); drawHead(); drawPrint(); });
+  const pickHead = (l, hh) => { st.layer = l; st.head = hh; lSel.value = String(l); hSel.value = String(hh); };
   put(page.controls,
     field('Your text', ta, count),
-    presets(EXAMPLES, (x) => { ta.value = st.text = x.text; st.layer = x.layer; st.head = x.head; if (x.color) st.color = x.color; lSel.value = String(x.layer); hSel.value = String(x.head); st.query = null; save(); go.now(); drawPrint(); }),
-    h('div.fields.two', { style: { marginTop: '10px' } }, field('Layer', lSel), field('Head', hSel)));
+    presets(EXAMPLES, (x) => {
+      ta.value = st.text = x.text; if (x.color) st.color = x.color; st.query = null;
+      if (gpt2) pickHead(x.layer, x.head);
+      else if (x.pick && prints) { const b = strongest(x.pick); if (b) pickHead(...b); }
+      save(); go.now(); drawPrint();
+    }),
+    h('div.fields.two', { style: { marginTop: '10px' } }, field(gpt2 ? 'Layer' : 'Layer (attention layers only)', lSel), field('Head', hSel)));
 
   const printBox = h('div'), printChips = h('div'), printNote = h('p.small.muted'), recompute = h('div.small');
   const headTitle = h('h3'), headSum = h('p.small'), patBox = h('div'), stripBox = h('div'), stripNote = h('p.small.muted');
   put(page.result, h('div.res-cols', null,
-    h('div', null, h('h3', null, 'All 144 heads'), printChips, printBox, printNote, recompute),
+    h('div', null, h('h3', null, gpt2 ? `All ${nAll} heads` : `All ${nAll} attention heads`), printChips, printBox, printNote, recompute),
     h('div', null, headTitle, headSum, patBox)),
   h('div.subhead', null, h('h3', null, 'Where one token looks'), stripNote), stripBox);
 
@@ -114,26 +128,36 @@ export function mount(el, meta, api) {
 
   function printValue(id, l, hh) {
     const pr = PRINTS[id];
+    if (hh >= nHeads(l)) return NaN;
     if (pr.src === 'random') return prints ? prints[pr.key][l][hh] : NaN;
     if (!cur) return NaN;
-    const v = cur.r[pr.key][l * 12 + hh];
+    const v = cur.r[pr.key][hix(l, hh)];
     return pr.key === 'entropy' ? v / Math.log(Math.max(2, cur.T - 1)) : v;
+  }
+
+  /* the head with the highest score of one kind (on random tokens), for the presets on a model without known heads */
+  function strongest(key) {
+    let best = null, bv = -Infinity;
+    for (const l of AL) for (let hh = 0; hh < nHeads(l); hh++) { const v = prints[key][l][hh]; if (Number.isFinite(v) && v > bv) { bv = v; best = [l, hh]; } }
+    return best;
   }
 
   function drawPrint() {
     const id = st.color, pr = PRINTS[id];
     grid(printBox, {
-      rows: 12, cols: 12, cell: 40, minCell: 22, aspect: 0.75, scale: 'seq', min: 0, max: 1, fmt: (v) => fmt(v, 0),
-      value: (l, hh) => printValue(id, l, hh),
-      text: (l, hh) => { const v = printValue(id, l, hh); return v >= 0.5 ? String(Math.round(v * 100)) : ''; },
-      rowLabels: [...Array(12).keys()].map((l) => 'L' + l), colLabels: [...Array(12).keys()].map((x) => 'H' + x),
-      selected: [st.layer, st.head],
-      tip: (l, hh) => [h('div.tip-head', null, `L${l}H${hh}`), tipRow(fmt(printValue(id, l, hh), 2), pr.desc)],
-      onPick: (l, hh) => { st.layer = l; st.head = hh; lSel.value = String(l); hSel.value = String(hh); save(); drawHead(); },
-      caption: 'Rows: layers 0 (top) to 11. Columns: heads 0 to 11. Numbers show scores of 0.5 and above, as percentages.',
+      rows: AL.length, cols: HC, cell: 40, minCell: 22, aspect: 0.75, scale: 'seq', min: 0, max: 1, fmt: (v) => fmt(v, 0),
+      value: (r, hh) => printValue(id, AL[r], hh),
+      text: (r, hh) => { const v = printValue(id, AL[r], hh); return v >= 0.5 ? String(Math.round(v * 100)) : ''; },
+      rowLabels: AL.map((l) => 'L' + l), colLabels: [...Array(HC).keys()].map((x) => 'H' + x),
+      selected: [AL.indexOf(st.layer), st.head],
+      tip: (r, hh) => [h('div.tip-head', null, `L${AL[r]}H${hh}`), tipRow(fmt(printValue(id, AL[r], hh), 2), pr.desc)],
+      onPick: (r, hh) => { pickHead(AL[r], hh); save(); drawHead(); },
+      caption: gpt2 ? 'Rows: layers 0 (top) to 11. Columns: heads 0 to 11. Numbers show scores of 0.5 and above, as percentages.'
+        : `Rows: the ${AL.length} attention layers (${AL.join(', ')}); the other ${CFG.L - AL.length} layers are Gated DeltaNet, which has no attention pattern to draw. Columns: heads. Numbers show scores of 0.5 and above, as percentages.`,
     });
     put(printNote, pr.src === 'random'
-      ? (prints && prints.source === 'here' ? 'Computed on this device just now, from 4 sequences of 50 random tokens repeated twice.' : 'Computed from 32 sequences of 50 random tokens, each repeated twice, so only the head\'s habit can explain the score.')
+      ? (!prints ? (gpt2 ? '' : `Measuring every head on random tokens ${whereRun()}…`)
+        : prints.source === 'here' ? `Computed ${whereRun()} just now, from 4 sequences of 50 random tokens repeated twice.` : 'Computed from 32 sequences of 50 random tokens, each repeated twice, so only the head\'s habit can explain the score.')
       : 'Measured on your text, averaged over every token after the first.');
   }
 
@@ -143,7 +167,8 @@ export function mount(el, meta, api) {
     if (!cur) return;
     const { T, r, pieces } = cur;
     const A = r.patterns[st.layer], hh = st.head, q = (st.query ?? T - 1);
-    const i = st.layer * 12 + hh;
+    if (!A) { put(patBox, h('p.muted', null, `Layer ${st.layer} has no attention pattern.`)); return; }
+    const i = hix(st.layer, hh);
     put(headSum, `On average across your text it puts ${pc(r.prev[i])} of its attention on the previous token, ${pc(r.bos[i])} on the first token and ${pc(r.self[i])} on itself. `,
       toolLink('ov', { layer: st.layer, head: hh }, 'What does it write?'));
     const labels = pieces.map(bosName);
@@ -165,6 +190,7 @@ export function mount(el, meta, api) {
     if (!cur) return;
     const { T, r, pieces } = cur;
     const A = r.patterns[st.layer], hh = st.head, q = st.query ?? T - 1;
+    if (!A) { put(stripBox); return; }
     const vals = pieces.map((_, k) => (k <= q ? A[(hh * T + q) * T + k] : NaN));
     tokens(stripBox, { pieces, values: vals, scale: 'seq', max: 1, min: 0, selected: q,
       tip: (k) => k > q ? [h('div', null, 'Later than the chosen token: out of its reach.')] : [h('div.tip-head', null, h('span.tok-inline', null, tokText(bosName(pieces[k])))),
@@ -192,22 +218,28 @@ export function mount(el, meta, api) {
     } finally { page.result.classList.remove('busy'); }
   }, 350);
 
-  const reBtn = h('button.btn.small.ghost', { type: 'button' }, 'Recompute on this device');
-  reBtn.addEventListener('click', async () => {
-    reBtn.disabled = true; reBtn.textContent = 'Recomputing… (about 10 seconds on a processor)';
+  const label = gpt2 ? 'Recompute on this device' : 'Measure again on the 3090';
+  const reBtn = h('button.btn.small.ghost', { type: 'button' }, label);
+  async function measure() {
+    reBtn.disabled = true; reBtn.textContent = gpt2 ? 'Recomputing… (about 10 seconds on a processor)' : 'Measuring…';
     try {
       const r = await engine.recipe('headScores', { seqLen: 50, batch: 4, seed: 7 });
-      const as2d = (a) => [...Array(12).keys()].map((l) => Array.from(a.slice(l * 12, l * 12 + 12)));
+      const as2d = (a) => [...Array(CFG.L).keys()].map((l) => Array.from(a.slice(l * CFG.H, (l + 1) * CFG.H)));
       prints = { prev: as2d(r.prev), dup: as2d(r.dup), induction: as2d(r.induction), bos: as2d(r.bos), source: 'here' };
       if (!life.dead) drawPrint();
-      reBtn.textContent = 'Recomputed';
-    } catch (e) { reBtn.disabled = false; reBtn.textContent = 'Recompute on this device'; put(recompute, reBtn, h('span.err', null, ' ' + (e.message || e))); }
-  });
+      reBtn.disabled = false; reBtn.textContent = gpt2 ? 'Recomputed' : label;
+    } catch (e) {
+      reBtn.disabled = false; reBtn.textContent = label;
+      if (!/cancelled/.test(String(e && e.message))) put(recompute, reBtn, h('span.err', null, ' ' + (e.message || e)));
+    }
+  }
+  reBtn.addEventListener('click', measure);
   put(recompute, reBtn);
 
   headTitle.textContent = `Layer ${st.layer}, head ${st.head} on your text`;
-  headsData().then((d) => { if (!prints) prints = d; if (!life.dead) drawPrint(); });
-  whenReady(page, life, () => go.now());
+  if (gpt2) headsData().then((d) => { if (!prints) prints = d; if (!life.dead) drawPrint(); });
+  else drawPrint();
+  whenReady(page, life, async () => { go.now(); if (!gpt2 && !prints) await measure(); });
   return { destroy() { life.dead = true; } };
 }
 

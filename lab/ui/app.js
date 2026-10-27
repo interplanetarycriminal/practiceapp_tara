@@ -1,13 +1,14 @@
 /* lab/ui/app.js: the lab's shell. Hash routes:
      #today                      this week's mission, the newest results, the river map
-     #tools  #tool/<id>?...      the live GPT-2 tools (parameters ride in the URL, so a mission is a link)
+     #tools  #tool/<id>?...      the live tools, on GPT-2 in this browser or Qwen 3.5 9B on the 3090 (parameters ride
+                                 in the URL, so a mission is a link)
      #results  #results/<id>     result packs from the bench (lab/findings)
      #missions  #missions/week-N
      #about                      what the lab is, how the halves fit, credits */
 
 import { h, mount, clear, parseHash, hashFor, rescan, store, tiers } from './dom.js';
-import { engineChip, engine } from './engine.js';
-import { TOOLS, toolById, nodeIndex } from './tools/index.js';
+import { engineChip, engine, CFG } from './engine.js';
+import { TOOLS, toolById, nodeIndex, blurbOf, costOf } from './tools/index.js';
 import { cancelAll } from './tools/kit.js';
 import { MISSIONS, WEEKS, weekNow, missionsFor } from './missions.js';
 import { riverMap } from './river.js';
@@ -65,7 +66,9 @@ async function today() {
   const res = h('div.grid3');
   const wrap = h('div.wrap', null,
     h('h1', null, h('span.tape', null, 'The Lab')),
-    h('p.lede', null, 'A real language model you can take apart in your browser, and results from bigger models run on the 3090. Every number on these pages was computed; none was drawn by hand.'),
+    h('p.lede', null, engine.remote
+      ? `A real language model you can take apart: ${CFG.name}, running on your PC's 3090 (the model button at the top switches to GPT-2 in this browser), and results from the bench. Every number on these pages was computed; none was drawn by hand.`
+      : 'A real language model you can take apart in your browser, and results from bigger models run on the 3090. Every number on these pages was computed; none was drawn by hand.'),
     h('div.spread', null, h('h2', null, `This week · W${w} · ${wk.title}`), h('a.small', { href: `#missions/week-${w}` }, `All week ${w} missions →`)),
     ms.length ? h('div.grid2', null, ms.slice(0, 2).map((m) => missionCard(m))) : h('p.muted', null, 'No mission this week.'),
     h('div.spread', null, h('h2', null, 'Latest results'), h('a.small', { href: '#results' }, 'All results →')),
@@ -82,7 +85,9 @@ function riverBlock() {
   return h('div.split', null,
     h('div.card', null, riverMap()),
     h('div', null, tiers('river', RIVER_TEACH),
-      h('p.small.muted', null, 'Tap a pin to open that tool. Each one runs GPT-2 small on this device.')));
+      h('p.small.muted', null, engine.remote
+        ? `Tap a pin to open that tool. The river is drawn for GPT-2; each tool runs on ${CFG.name} ${CFG.place}, where the river is 32 layers deep.`
+        : 'Tap a pin to open that tool. Each one runs GPT-2 small on this device.')));
 }
 
 /* ---------------------------------------------------------------- tools */
@@ -90,12 +95,14 @@ function riverBlock() {
 function toolsView() {
   view.appendChild(h('div.wrap', null,
     h('h1', null, 'Tools'),
-    h('p.lede', null, 'Twelve instruments for GPT-2 small, each pinned where it looks inside the model. They run on this device after one 133 MB download.'),
+    h('p.lede', null, engine.remote
+      ? `Twelve instruments for ${CFG.name}, each pinned where it looks inside the model. They run on your PC's 3090 through the lab server; the model button at the top switches to GPT-2 in this browser.`
+      : 'Twelve instruments for GPT-2 small, each pinned where it looks inside the model. They run on this device after one 133 MB download.'),
     riverBlock(),
     h('h2', null, 'Every tool'),
     h('div.grid3', null, TOOLS.map((t) => h('a.card.toolcard', { href: `#tool/${t.id}` },
-      h('h3', null, t.name), h('p', null, t.blurb),
-      h('div.meta', null, ...t.weeks.map((w) => h('span.week', null, 'W' + w)), h('span.muted.small', null, t.cost)))))));
+      h('h3', null, t.name), h('p', null, blurbOf(t, engine.remote)),
+      h('div.meta', null, ...t.weeks.map((w) => h('span.week', null, 'W' + w)), h('span.muted.small', null, costOf(t, engine.remote))))))));
 }
 
 async function toolView(id, params) {
@@ -128,7 +135,8 @@ function missionCard(m) {
     h('h3', null, m.title),
     h('p', null, m.why),
     h('ol', null, m.steps.map((s) => h('li', null, s))),
-    h('details.reveal', null, h('summary', null, 'What you should see (guess first)'), h('p', null, m.look)),
+    h('details.reveal', null, h('summary', null, engine.remote && m.tool ? 'What GPT-2 shows (guess first)' : 'What you should see (guess first)'), h('p', null, m.look),
+      engine.remote && m.tool ? h('p.small.muted', null, `Checked on GPT-2 small. On ${CFG.name} the same steps give its own numbers, and comparing the two is an experiment in itself.`) : null),
     h('div.row', null,
       h('a.btn.accent', { href }, m.tool ? 'Open the tool' : m.result ? 'Open the result' : 'How to run the bench'),
       m.tool && m.result ? h('a.btn.ghost', { href: `#results/${m.result}` }, m.resultLabel || 'The bench result') : null,
@@ -158,7 +166,8 @@ function missionsView(part) {
   const total = MISSIONS.length, doneN = MISSIONS.filter((x) => done[x.id]).length;
   view.appendChild(h('div.wrap', null,
     h('h1', null, 'Missions'),
-    h('p.lede', null, `One question each, answered in a few minutes with a tool or a result. Guess first, then look. ${doneN} of ${total} done.`),
+    h('p.lede', null, `One question each, answered in a few minutes with a tool or a result. Guess first, then look. ${doneN} of ${total} done.`,
+      engine.remote ? ` The answers were checked on GPT-2 small; the tools now run on ${CFG.name}, so expect its own numbers.` : ''),
     h('nav.weekstrip', { 'aria-label': 'TARA weeks' }, WEEKS.map((wk) => h('a', {
       href: `#missions/week-${wk.n}`, 'aria-current': wk.n === w ? 'true' : 'false', class: wk.n === now ? 'now' : null,
       title: `Week ${wk.n}: ${wk.title}${wk.n === now ? ' (this week)' : ''}` }, 'W' + wk.n))),
@@ -171,4 +180,5 @@ function missionsView(part) {
 
 engineChip(document.getElementById('engine-chip'));
 addEventListener('hashchange', route);
+addEventListener('lab:model', () => { lastKey = ''; route(); });     // another model: the open view mounts afresh
 route();

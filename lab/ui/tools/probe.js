@@ -4,7 +4,7 @@
    scored on labels that mean nothing. The statistics live in lab/core/probes.js. */
 
 import { h, mount as put, debounce, fmt, pct } from '../dom.js';
-import { toolPage, field, textArea, select, presets, runner, whenReady, LAYERS, memo } from './kit.js';
+import { toolPage, field, textArea, select, presets, runner, whenReady, layerOpts, memo, CFG } from './kit.js';
 import { engine, isGPU } from '../engine.js';
 import { lineChart, scatter, stat, col } from '../charts.js';
 import { PRESETS } from '../missions.js';
@@ -51,6 +51,10 @@ flip is a clue too: something flips between training and testing, such as a word
 folds and on the other in the test fold. Readable is not the same as used: a probe shows the information is there,
 and steering is how to test whether the model acts on it.</p>`,
   },
+  qwen: `<p>On Qwen 3.5 9B each sentence becomes 4,096 numbers at each of 32 layers, so a probe has far more room
+to fit noise with a few dozen sentences than it has on GPT-2's 768. The shuffled-label control is what keeps it
+honest: the result is the gap between the real line and the gray band, not the height of the line. The 3090 reads the
+sentences; the probes are then fitted in this browser, in the background, which takes a few seconds.</p>`,
   why: {
     1: `<p>Probes are the cheapest test of whether a model represents something at all, and they are how monitors work:
 read one direction, and raise a flag when it moves.</p>`,
@@ -86,7 +90,7 @@ export function mount(el, meta, api) {
     }),
     h('div.fields.two', { style: { marginTop: '10px' } }, h('label.field', null, posLab, posIn), h('label.field', null, negLab, negIn)),
     h('div', { style: { marginTop: '10px' } }, field('Read each sentence at', poolSel)),
-    h('div.row', { style: { marginTop: '10px' } }, run.btn, h('span.small.muted', null, isGPU() ? 'A few seconds.' : 'Under a minute on a processor; it can run while you read.')),
+    h('div.row', { style: { marginTop: '10px' } }, run.btn, h('span.small.muted', null, engine.remote ? 'Seconds on the 3090, then a few more here.' : isGPU() ? 'A few seconds.' : 'Under a minute on a processor; it can run while you read.')),
     slot);
 
   const tiles = h('div.stats'), chart = h('div'), pcaCtl = h('div.row'), pcaBox = h('div'), note = h('p.small');
@@ -110,8 +114,9 @@ export function mount(el, meta, api) {
     }
     if (life.dead) return;
     onP(texts.length, texts.length + 1, 'Fitting probes at every layer…');
-    await new Promise((r) => setTimeout(r, 30));
-    st.res = probeAll(X, y, texts.length, pos.length === neg.length);
+    st.res = await fitInWorker(X, y, texts.length, pos.length === neg.length, { L: CFG.L, D: CFG.D }, ctl,
+      (done, total) => onP(texts.length + done / total, texts.length + 1, `Fitting probes: layer ${done} of ${total}`));
+    if (life.dead) return;
     st.res.texts = texts; st.res.y = y; st.res.paired = pos.length === neg.length;
     st.show = st.res.best;
     draw();
@@ -121,12 +126,12 @@ export function mount(el, meta, api) {
     const R = st.res, n = R.n;
     const floor = Math.max(...R.layers.map((x) => x.shufMax));
     const from = R.layers.findIndex((x) => x.acc > floor && wilson(x.acc, n)[0] > 0.5);
-    const b = R.layers[R.best], nullMean = R.layers.reduce((u, x) => u + x.shufMean, 0) / L;
+    const L = R.layers.length, b = R.layers[R.best], nullMean = R.layers.reduce((u, x) => u + x.shufMean, 0) / L;
     put(tiles,
       stat('Best layer', `layer ${R.best}`, `${pct(b.acc)} of held-out sentences right (difference of means ${pct(b.dm)})`),
       stat('Readable from', from < 0 ? 'not shown' : `layer ${from}`, from < 0 ? `no layer beats every shuffled run (best ${pct(floor)}) at this sample size` : `the first layer that beats every shuffled run (best ${pct(floor)})`),
       stat('Shuffled labels', pct(nullMean), `average of ${SHUFFLES * L} runs on meaningless labels; best run ${pct(floor)}`));
-    const xs = R.layers.map((_, l) => l);
+    const xs = R.layers.map((_, l) => l).filter((l) => L <= 12 || l % 4 === 0 || l === L - 1);
     lineChart(chart, { height: 250,
       x: { label: 'layer', fmt: (v) => 'L' + v, ticks: xs },
       y: { label: 'held-out accuracy', min: 0, max: 1, fmt: (v) => pct(v) },
@@ -141,7 +146,7 @@ export function mount(el, meta, api) {
     put(note, b.acc - floor < 0.1 ? 'Close to the shuffled control: at this sample size the probe cannot tell this property from noise. More sentences, or a sharper contrast, would.'
       : low.length ? `Worse than a coin flip at ${low.length > 1 ? 'layers' : 'layer'} ${low.join(', ')}: the probe found something that flips between the sentences it trained on and the ones it was tested on, such as a word that sits on one side in training and on the other in testing. Below chance is a clue about your sentences, not noise.`
       : wilson(l0.acc, n)[0] > 0.5 ? `Layer 0 already gets ${pct(l0.acc)} right, after a single block: the two sets probably differ in their words. Try sentences that share their words and differ only in the property, as the city facts do.` : '');
-    const lSel = select(LAYERS, st.show, (v) => { st.show = Number(v); drawPCA(); });
+    const lSel = select(layerOpts(), st.show, (v) => { st.show = Number(v); drawPCA(); });
     put(pcaCtl, field('Layer', lSel));
     drawPCA();
   }
@@ -159,6 +164,26 @@ export function mount(el, meta, api) {
 
   whenReady(page, life, () => {});
   return { destroy() { life.dead = true; } };
+}
+
+/* probes.js in a worker (lab/core/probeworker.js), so the page stays live while every layer is fitted; Stop ends it.
+   Falls back to fitting on the page where module workers are missing. */
+function fitInWorker(X, y, n, paired, shape, ctl, onLayer) {
+  return new Promise((resolve, reject) => {
+    let w = null;
+    try { w = new Worker(new URL('../../core/probeworker.js', import.meta.url), { type: 'module' }); } catch (e) { w = null; }
+    const here = () => { try { resolve(probeAll(X, y, n, paired, shape)); } catch (e) { reject(e); } };
+    if (!w) { setTimeout(here, 30); return; }
+    ctl.stopWaiting = () => { w.terminate(); reject(new Error('cancelled')); };
+    w.onmessage = (ev) => {
+      const m = ev.data;
+      if (m.progress) { onLayer(m.progress.done, m.progress.total); return; }
+      w.terminate(); ctl.stopWaiting = null;
+      if (m.ok) resolve(m.res); else reject(new Error(m.error));
+    };
+    w.onerror = () => { w.terminate(); ctl.stopWaiting = null; here(); };
+    w.postMessage({ X, y, n, paired, shape });
+  });
 }
 
 function lines(s) { return String(s || '').split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 64); }

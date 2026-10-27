@@ -3,7 +3,7 @@
    text in two and compare the halves. */
 
 import { h, mount as put, fmt, tokText, debounce } from '../dom.js';
-import { toolPage, field, textArea, presets, whenReady, ordinal, tk } from './kit.js';
+import { toolPage, field, textArea, presets, whenReady, ordinal, tk, CFG } from './kit.js';
 import { engine } from '../engine.js';
 import { tokens, lineChart, stat, tipRow, col } from '../charts.js';
 
@@ -37,6 +37,10 @@ first copy with a second, or ordinary words with an odd sentence.</p>`,
     3: `<p>Rank counts tokens with a strictly higher logit (the argmax is the 1st choice). Averages are over scored tokens
 only. Two halves of equal surprise per token can still differ in total, because they differ in length.</p>`,
   },
+  qwen: `<p>Same measure, different model: −ln p of each real next token, under Qwen 3.5 9B's bets over 248,320
+tokens. Its tokens are longer on average, so the same text is fewer tokens and each one carries more; compare
+averages within one model, not across the two, because a loss per token depends on what a token is. Expect it to be
+less surprised than GPT-2 by almost any ordinary text: it is about 70 times bigger and trained on far more text.</p>`,
   why: {
     1: `<p>This one number connects most of the course: it is the loss in week 1, the reason the second copy of a text is
 easy (induction heads, week 3), and a crude monitor in week 9: text that surprises a small model is often text that
@@ -72,8 +76,8 @@ export function mount(el, meta, api) {
   const tiles = h('div.stats'), strip = h('div'), shape = h('p.small.muted'), line = h('div'), splitNote = h('p.small.muted');
   const idsBox = h('div.toklist', { 'data-tara-noglossary': true });
   put(page.result, tiles, strip, splitNote, line, shape,
-    h('details.more', null, h('summary', null, 'The numbers GPT-2 actually receives'),
-      h('p.small.muted', null, 'Each token becomes one integer, its id in GPT-2\'s vocabulary of 50,257. This list of integers is the whole input.'), idsBox));
+    h('details.more', null, h('summary', null, `The numbers ${CFG.short} actually receives`),
+      h('p.small.muted', null, `Each token becomes one integer, its id in ${CFG.short}'s vocabulary of ${CFG.V.toLocaleString('en')}. This list of integers is the whole input.`), idsBox));
 
   let cur = null;
   const go = debounce(async () => {
@@ -105,13 +109,13 @@ export function mount(el, meta, api) {
     let worst = 1;
     for (let i = 2; i < T; i++) if (s(i) > s(worst)) worst = i;
     const tipFor = (i) => {
-      if (i === 0) return [h('div.tip-head', null, '⟨bos⟩'), h('div', null, 'The start marker GPT-2 reads first. It is not scored.')];
+      if (i === 0) return [h('div.tip-head', null, '⟨bos⟩'), h('div', null, `The start marker ${CFG.short} reads first. It is not scored.`)];
       const p = Math.exp(-s(i)), rank = r.nextRank[i - 1];
       const guesses = [];
       for (let j = 0; j < k; j++) guesses.push(`${tokText(piece.get(r.top[(i - 1) * k + j]))} ${pctx(r.prob[(i - 1) * k + j])}`);
       return [h('div.tip-head', null, h('span.tok-inline', null, tokText(pieces[i]))),
         tipRow(`${fmt(s(i), 2)} nats`, `surprise (${fmt(s(i) / Math.LN2, 1)} bits)`),
-        tipRow(pctx(p), `GPT-2's bet on it, its ${ordinal(rank + 1)} choice`),
+        tipRow(pctx(p), `${CFG.short}'s bet on it, its ${ordinal(rank + 1)} choice`),
         h('div.tip-sub', null, 'It expected: ' + guesses.join(', '))];
     };
     tokens(strip, { pieces, values: vals, scale: 'seq', max: MAXS, min: 0, skip: new Set([0]), tip: tipFor,
@@ -134,7 +138,7 @@ export function mount(el, meta, api) {
       series: [{ name: 'surprise', color: col('s1'), pts, marker: T < 60 }],
       vlines: st.split ? [{ x: st.split - 0.5 }] : [],
       tipExtra: (x) => h('div', null, h('span.tok-inline', null, tokText(pieces[x])), ` (${ordinal(r.nextRank[x - 1] + 1)} choice)`) });
-    put(shape, `GPT-2 receives this text as ${T} token ids, counting the start marker: a tensor of shape [1, ${T}]. The embedding turns each id into 768 numbers, so the first layer sees shape [1, ${T}, 768].`);
+    put(shape, `${CFG.short} receives this text as ${T} token ids, counting the start marker: a tensor of shape [1, ${T}]. The embedding turns each id into ${CFG.D.toLocaleString('en')} numbers, so the first layer sees shape [1, ${T}, ${CFG.D}].`);
     put(idsBox, ...pieces.map((p, i) => h('span', { title: `token ${i}` }, p === '<|endoftext|>' ? '⟨bos⟩' : tokText(p), h('span.muted', null, ' ' + ids[i]))));
   }
 

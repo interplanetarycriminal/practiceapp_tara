@@ -3,7 +3,7 @@
    would say if it had to answer now. Drawn as the river flows: the embedding at the bottom, the output at the top. */
 
 import { h, mount as put, fmt, tokText, debounce } from '../dom.js';
-import { toolPage, field, textArea, textInput, select, presets, runner, whenReady, ordinal, tk, toolLink } from './kit.js';
+import { toolPage, field, textArea, textInput, select, presets, runner, whenReady, ordinal, tk, toolLink, CFG } from './kit.js';
 import { engine, isGPU } from '../engine.js';
 import { grid, lineChart, tipRow, col } from '../charts.js';
 
@@ -37,6 +37,11 @@ to follow the target up that column instead of the last one.</p>`,
 rank. On a processor the lab reads only the last few positions by default: every cell is one unembedding, 39 million
 multiply-adds.</p>`,
   },
+  qwen: `<p>Qwen 3.5 9B has 32 layers, so the grid has 33 rows, and its final norm is an RMS norm (it rescales the
+stream without centring it). The lens applies that norm and Qwen's own output head, exactly as it does for GPT-2. In a
+model this deep the early rows are often unreadable and the answer appears only in the last third: the stream there is
+written in a basis the output head does not read yet. That is a known limit of the logit lens on large models, and the
+reason the tuned lens (Belrose et al., 2023) trains a small map per layer.</p>`,
   why: {
     1: `<p>The logit lens is the cheapest way to ask "where does the model decide?", and it sets up week 3: once you know
 which layer the answer appears in, you know which heads to inspect.</p>`,
@@ -106,11 +111,11 @@ export function mount(el, meta, api) {
     const byTarget = st.colour === 'target' && target !== null;
     const sOf = (row) => S - 1 - row;               // row 0 is the top (the output)
     const q = (s, j) => s * Pn + j;
-    const name = (s) => (s === 0 ? 'embedding' : s === S - 1 ? 'L11 = output' : `after L${s - 1}`);
+    const name = (s) => (s === 0 ? 'embedding' : s === S - 1 ? `L${S - 2} = output` : `after L${s - 1}`);
     const gEl = h('div');
     put(out, gEl);
     grid(gEl, {
-      rows: S, cols: Pn, cell: 120, minCell: 30, cellH: 30,
+      rows: S, cols: Pn, cell: 120, minCell: 30, cellH: S > 13 ? 22 : 30,
       value: (row, c) => { const s = sOf(row); return byTarget ? r.tProb[q(s, c)] : r.prob[q(s, c) * k]; },
       scale: 'seq', max: 1, min: 0, fmt: (v) => fmt(v, 0),
       rowLabels: [...Array(S).keys()].map((row) => { const s = sOf(row); return s === 0 ? 'embed' : `L${s - 1}`; }),
@@ -141,10 +146,10 @@ export function mount(el, meta, api) {
       h('span.small.muted', null, 'tap a column above to follow another position')), box,
       h('p.small.muted', null, 'Want to know which heads wrote it? ', toolLink('dla', { text: st.text, answer: st.target }, 'Split the answer by component'), '.'));
     lineChart(box, { height: 200, legend: false,
-      x: { label: 'depth', fmt: (v) => (v === 0 ? 'emb' : `L${v - 1}`), ticks: [...Array(S).keys()] },
+      x: { label: 'depth', fmt: (v) => (v === 0 ? 'emb' : `L${v - 1}`), ticks: [...Array(S).keys()].filter((v) => S <= 13 || v % 4 === 0 || v === S - 1) },
       y: { label: 'probability', min: 0, max: 1, fmt: (v) => Math.round(v * 100) + '%' },
       series: [{ name: `probability of ${tokText(targetPiece)}`, color: col('s1'), pts }],
-      tipExtra: (s) => h('div.tip-sub', null, `${ordinal(r.tRank[s * Pn + j] + 1)} choice of 50,257`) });
+      tipExtra: (s) => h('div.tip-sub', null, `${ordinal(r.tRank[s * Pn + j] + 1)} choice of ${CFG.V.toLocaleString('en')}`) });
   }
 
   whenReady(page, life, () => run.go());

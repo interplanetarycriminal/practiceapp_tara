@@ -3,7 +3,7 @@
    because the residual stream is a sum and the final layer norm's scale is fixed for this prompt. */
 
 import { h, mount as put, fmt, tokText, debounce } from '../dom.js';
-import { toolPage, field, textArea, textInput, presets, whenReady, ordinal, tk, toolLink } from './kit.js';
+import { toolPage, field, textArea, textInput, presets, whenReady, ordinal, tk, toolLink, CFG, nHeads, hix, isAttn, absMax, onGPT2 } from './kit.js';
 import { engine } from '../engine.js';
 import { grid, bars, lineChart, stat, tipRow, col } from '../charts.js';
 
@@ -37,6 +37,11 @@ MLPs and the embeddings.</p>`,
 the position embedding and the ln_f bias term together. Neurons are listed separately; their sum is each layer's MLP
 contribution minus the MLP output bias.</p>`,
   },
+  qwen: `<p>The split is just as exact on Qwen 3.5 9B, with three differences. Its final norm is an RMS norm: it
+divides the stream by its root-mean-square without subtracting the mean, so nothing is centred and the page divides by
+the RMS measured on your prompt. A Gated DeltaNet layer's output is also a sum over its 32 heads, so DeltaNet layers
+appear in the grid as rows of 32 heads, and attention layers as rows of 16. There is no position embedding and no
+norm bias, so the running total starts from the token's own embedding.</p>`,
   why: {
     1: `<p>This is the first move in nearly every circuit analysis: find who wrote the answer, then ask why they did.</p>`,
     2: `<p>A logit difference is also a clean scorer (week 8): it has no sampling noise and measures how strongly the model
@@ -101,63 +106,69 @@ export function mount(el, meta, api) {
     const name = b ? `${tokText(a.piece)} minus ${tokText(b.piece)}` : `the logit of ${tokText(a.piece)}`;
     put(tiles,
       stat(b ? 'Logit difference' : 'Logit', signed(r.actual), name),
-      stat(`Chance of ${tokText(a.piece)}`, pc(r.probs[0]), `GPT-2's ${ordinal(r.ranks[0] + 1)} choice`),
+      stat(`Chance of ${tokText(a.piece)}`, pc(r.probs[0]), `${CFG.short}'s ${ordinal(r.ranks[0] + 1)} choice`),
       b ? stat(`Chance of ${tokText(b.piece)}`, pc(r.probs[1]), `its ${ordinal(r.ranks[1] + 1)} choice`) : null);
     put(check, `The pieces below add up to ${signed(r.sum)}; the model's own ${b ? 'logit difference' : 'logit'} is ${signed(r.actual)} (they differ by ${fmt(Math.abs(r.sum - r.actual), 4)}, rounding error).`);
 
     /* the running total */
+    const gpt2 = onGPT2(), L = CFG.L, mix = (l) => (isAttn(l) ? 'attention' : 'DeltaNet');
     const start = r.embed + r.posEmbed + r.constant;
-    const pts = [[0, start]], steps = [{ name: 'start: embeddings and ln_f bias', v: start }];
+    const pts = [[0, start]], steps = [{ name: gpt2 ? 'start: embeddings and ln_f bias' : 'start: the token\'s embedding', v: start }];
     let run = start;
-    for (let l = 0; l < 12; l++) {
+    for (let l = 0; l < L; l++) {
       let at = r.attnBias[l];
-      for (let x = 0; x < 12; x++) at += r.heads[l * 12 + x];
-      run += at; pts.push([2 * l + 1, run]); steps.push({ name: `layer ${l} attention (12 heads)`, v: at });
+      for (let x = 0; x < nHeads(l); x++) at += r.heads[hix(l, x)];
+      run += at; pts.push([2 * l + 1, run]); steps.push({ name: `layer ${l} ${mix(l)} (${nHeads(l)} heads)`, v: at });
       run += r.mlp[l]; pts.push([2 * l + 2, run]); steps.push({ name: `layer ${l} MLP`, v: r.mlp[l] });
     }
+    const every = L > 12 ? 4 : 1;
     lineChart(line, { height: 210, legend: false,
-      x: { label: 'up through the model (each layer: attention, then MLP)', fmt: (v) => (v === 0 ? 'start' : v % 2 ? `L${(v - 1) / 2} attn` : `L${v / 2 - 1}`), ticks: [...Array(13).keys()].map((i) => 2 * i) },
+      x: { label: gpt2 ? 'up through the model (each layer: attention, then MLP)' : 'up through the model (each layer: attention or DeltaNet, then MLP)',
+        fmt: (v) => (v === 0 ? 'start' : v % 2 ? `L${(v - 1) / 2} ${gpt2 ? 'attn' : mix((v - 1) / 2)}` : `L${v / 2 - 1}`),
+        ticks: [...Array(L + 1).keys()].filter((i) => i % every === 0 || i === L).map((i) => 2 * i) },
       y: { label: 'logits' }, hlines: [{ y: 0 }],
       series: [{ name: 'running total', color: col('s1'), pts }],
       tipExtra: (v) => h('div.tip-sub', null, `${steps[v].name}: ${signed(steps[v].v)}`) });
 
     /* heads */
-    let m = 1e-9;
-    for (const v of r.heads) m = Math.max(m, Math.abs(v));
+    const m = absMax(r.heads);
     const choose = (l, x) => {
+      if (x >= nHeads(l)) return;
       st.pick = [l, x];
-      const v = r.heads[l * 12 + x];
-      put(pickBox, h('b', null, `L${l}H${x}`), ` wrote ${signed(v)} logits directly${v > 0 ? ` towards ${tokText(a.piece)}` : b ? ` towards ${tokText(b.piece)}` : ''}. `,
-        toolLink('attention', { text: st.text, layer: l, head: x }, 'Where does it look?'), ' · ',
-        toolLink('ov', { layer: l, head: x, tokens: [a.piece, b && b.piece].filter(Boolean).map((s) => s.trim()).join(', ') }, 'What does it write?'), ' · ',
+      const v = r.heads[hix(l, x)];
+      put(pickBox, h('b', null, `L${l}H${x}`), gpt2 ? '' : ` (${mix(l)})`, ` wrote ${signed(v)} logits directly${v > 0 ? ` towards ${tokText(a.piece)}` : b ? ` towards ${tokText(b.piece)}` : ''}. `,
+        isAttn(l) ? [toolLink('attention', { text: st.text, layer: l, head: x }, 'Where does it look?'), ' · ',
+          toolLink('ov', { layer: l, head: x, tokens: [a.piece, b && b.piece].filter(Boolean).map((s) => s.trim()).join(', ') }, 'What does it write?'), ' · '] : null,
         toolLink('ablate', { text: st.text, answer: st.answer, foil: st.foil }, 'Knock heads out'));
     };
     grid(headGrid, {
-      rows: 12, cols: 12, cell: 40, minCell: 22, aspect: 0.75, scale: 'div', max: m, fmt: (v) => fmt(v, 1),
-      value: (l, x) => r.heads[l * 12 + x],
-      text: (l, x) => { const v = r.heads[l * 12 + x]; return Math.abs(v) >= 0.3 * m ? fmt(v, 1) : ''; },
-      rowLabels: [...Array(12).keys()].map((l) => 'L' + l), colLabels: [...Array(12).keys()].map((x) => 'H' + x),
+      rows: L, cols: CFG.H, cell: 40, minCell: L > 12 ? 16 : 22, aspect: 0.75, scale: 'div', max: m, fmt: (v) => fmt(v, 1),
+      value: (l, x) => r.heads[hix(l, x)],
+      text: (l, x) => { const v = r.heads[hix(l, x)]; return Math.abs(v) >= 0.3 * m ? fmt(v, 1) : ''; },
+      rowLabels: [...Array(L).keys()].map((l) => 'L' + l), colLabels: [...Array(CFG.H).keys()].map((x) => 'H' + x),
       loLabel: b ? `for ${tokText(b.piece)}` : 'down', hiLabel: `for ${tokText(a.piece)}`,
       selected: st.pick,
-      tip: (l, x) => [h('div.tip-head', null, `L${l}H${x}`), tipRow(signed(r.heads[l * 12 + x]), 'logits, written directly')],
+      tip: (l, x) => (x >= nHeads(l) ? [h('div', null, `Layer ${l} has ${nHeads(l)} heads.`)] : [h('div.tip-head', null, `L${l}H${x}`, gpt2 ? '' : ` · ${mix(l)}`), tipRow(signed(r.heads[hix(l, x)]), 'logits, written directly')]),
       onPick: choose,
-      caption: 'Rows: layers 0 (top) to 11. Columns: heads. Blue: pushes towards the answer. Red: towards the foil.',
+      caption: gpt2 ? 'Rows: layers 0 (top) to 11. Columns: heads. Blue: pushes towards the answer. Red: towards the foil.'
+        : `Rows: layers 0 (top) to ${L - 1}. Columns: heads; attention layers (${CFG.attnLayers.join(', ')}) have ${nHeads(CFG.attnLayers[0])}, so their rows stop halfway. Blue: pushes towards the answer. Red: towards the foil.`,
     });
     if (st.pick) choose(...st.pick);
     else put(pickBox, h('span.muted', null, 'Tap a head for links to look at it more closely.'));
 
     /* the biggest pieces of any kind */
-    const all = [{ label: 'token embedding', value: r.embed }, { label: 'position embedding', value: r.posEmbed }, { label: 'final norm bias', value: r.constant, title: 'The final layer norm\'s bias: a constant, the same for every prompt' }];
-    for (let l = 0; l < 12; l++) {
+    const all = [{ label: 'token embedding', value: r.embed }];
+    if (gpt2) all.push({ label: 'position embedding', value: r.posEmbed }, { label: 'final norm bias', value: r.constant, title: 'The final layer norm\'s bias: a constant, the same for every prompt' });
+    for (let l = 0; l < L; l++) {
       all.push({ label: `L${l} MLP`, value: r.mlp[l] });
-      for (let x = 0; x < 12; x++) all.push({ label: `L${l}H${x}`, value: r.heads[l * 12 + x] });
+      for (let x = 0; x < nHeads(l); x++) all.push({ label: `L${l}H${x}`, value: r.heads[hix(l, x)] });
     }
     all.sort((u, v) => Math.abs(v.value) - Math.abs(u.value));
     bars(top, { items: all.slice(0, 12), signed: true, fmtv: signed });
 
     /* neurons */
     const link = ([i, v]) => {
-      const l = Math.floor(i / 3072), n = i % 3072;
+      const l = Math.floor(i / CFG.M), n = i % CFG.M;
       return h('a.bar-row', { href: `#tool/neurons?layer=${l}&neuron=${n}&text=${encodeURIComponent(st.text)}`, style: { textDecoration: 'none' }, title: 'Open in the neuron explorer' },
         h('span.bar-label', null, `L${l} N${n}`), h('span.bar-val', null, signed(v)), h('span.bar-note', null, '→'));
     };

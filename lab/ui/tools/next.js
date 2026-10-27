@@ -4,7 +4,7 @@
    engine's sampler uses (lab/core/host.js sample()), so what the bars show is what Write draws from. */
 
 import { h, mount as put, fmt, tokText, debounce } from '../dom.js';
-import { toolPage, field, textArea, textInput, slider, select, presets, runner, whenReady, ordinal, tk, numParam, intParam } from './kit.js';
+import { toolPage, field, textArea, textInput, slider, select, presets, runner, whenReady, ordinal, tk, numParam, intParam, CFG } from './kit.js';
 import { engine } from '../engine.js';
 import { bars, stat, tip, tipRow, seqRGB, inkOn } from '../charts.js';
 
@@ -45,6 +45,10 @@ distribution (not the dial-adjusted one), the same colour scale as the Surprise 
 that token came next. Rank 0 is the argmax; ranks count tokens with strictly higher logits. Multi-token words are scored
 on their first token only, so " Parisian" and " Paris" share a first piece and are not distinguished.</p>`,
   },
+  qwen: `<p>Qwen 3.5 9B bets over 248,320 tokens instead of 50,257, so more words are a single token and the tail
+holds far more options. It is post-trained to be an assistant, so plain text often continues the way a helpful reply
+would rather than the way a web page would. Its distributions are usually sharper than GPT-2's, so the same
+temperature spreads them less.</p>`,
   why: {
     1: `<p>Every chatbot reply you have read came out of this loop: bet, draw, append, repeat. It explains why the same
 question gets different answers, and why evaluators often set temperature to 0: a fixed answer is easier to compare,
@@ -92,7 +96,7 @@ const pc = (p) => (p >= 0.995 ? (100 * p).toFixed(0) : p >= 0.1 ? (100 * p).toFi
 
 export function mount(el, meta, api) {
   const P = api.params, life = { dead: false };
-  const st = { text: P.text ?? 'The capital of France is', T: numParam(P.temp, 0, 2, 1), K: intParam(P.topk, 0, 50257, 0),
+  const st = { text: P.text ?? 'The capital of France is', T: numParam(P.temp, 0, 2, 1), K: intParam(P.topk, 0, CFG.V, 0),
     Pp: numParam(P.topp, 0.05, 1, 1), find: P.find ?? ' Paris', len: intParam(P.n, 5, 120, 40) };
   const page = toolPage(el, meta, TEACH);
   const save = debounce(() => api.setParams({ text: st.text, temp: st.T === 1 ? null : st.T, topk: st.K || null, topp: st.Pp < 1 ? st.Pp : null, find: st.find || null }), 400);
@@ -123,7 +127,7 @@ export function mount(el, meta, api) {
   put(page.result,
     tiles,
     h('div.split', null,
-      h('div', null, h('div.small-caps', null, 'GPT-2\'s bets'), left),
+      h('div', null, h('div.small-caps', null, `${CFG.short}'s bets`), left),
       h('div', null, rightHead, right)),
     h('h3', { style: { marginTop: '16px' } }, 'Look up any next word'),
     field('Word or token', findIn), findOut,
@@ -135,7 +139,7 @@ export function mount(el, meta, api) {
   let cur = null;   // {lg, order, rank, lse, H, ids, pieces}
   const go = debounce(async () => {
     const text = st.text;
-    if (!text.trim()) { put(left, h('p.muted', null, 'Type something to see what GPT-2 expects next.')); put(right); put(tiles); count.textContent = ''; return; }
+    if (!text.trim()) { put(left, h('p.muted', null, `Type something to see what ${CFG.short} expects next.`)); put(right); put(tiles); count.textContent = ''; return; }
     try {
       const tk0 = await engine.tok(text);
       count.textContent = `${tk0.ids.length - 1} tokens`;
@@ -177,7 +181,7 @@ export function mount(el, meta, api) {
     let restP = 0;
     for (let r = SHOW; r < a.cut; r++) restP += a.q(r);
     put(tiles,
-      stat('Top bet', tokText(cur.pieces[0]), `${pc(p(0))} of GPT-2's belief`),
+      stat('Top bet', tokText(cur.pieces[0]), `${pc(p(0))} of ${CFG.short}'s belief`),
       stat('Spread', `${fmt(cur.H, 2)} nats`, `like choosing among ${Math.max(1, Math.round(Math.exp(cur.H))).toLocaleString('en')} equally likely tokens`),
       stat('Can be drawn', a.cut.toLocaleString('en'), a.cut > SHOW ? `the ${(a.cut - SHOW).toLocaleString('en')} not shown hold ${pc(restP)} after the dials` : 'tokens after the cuts'));
   }
@@ -191,7 +195,7 @@ export function mount(el, meta, api) {
       const r = cur.rank[t.id], p = Math.exp(cur.lg[t.id] - cur.lse), nats = -Math.log(p);
       const a = adjust(cur, st.T, st.K, st.Pp), q = a.q(r);
       put(findOut,
-        h('div', null, tk(t.piece), ` gets ${pc(p)}: GPT-2's ${ordinal(r + 1)} choice of 50,257. Seeing it next would cost a surprise of `,
+        h('div', null, tk(t.piece), ` gets ${pc(p)}: ${CFG.short}'s ${ordinal(r + 1)} choice of ${CFG.V.toLocaleString('en')}. Seeing it next would cost a surprise of `,
           h('b', null, `${fmt(nats, 2)} nats`), ` (${fmt(nats / Math.LN2, 1)} bits), which is −ln of ${pc(p)}.`,
           q > 0 ? ` After your dials it is drawn ${pc(q)} of the time.` : ' After your dials it can never be drawn.'),
         t.n > 1 ? h('div.muted', null, `"${s}" is ${t.n} tokens (${t.pieces.map((x) => JSON.stringify(x)).join(' + ')}); only the first is scored.`) : null);
@@ -220,7 +224,7 @@ export function mount(el, meta, api) {
         const r0 = sp.getBoundingClientRect();
         tip.show([
           h('div.tip-head', null, 'Drew ', h('span.tok-inline', null, tokText(piece))),
-          tipRow(pc(Math.exp(lp)), rk >= 0 ? `GPT-2's belief (its ${ordinal(rk + 1)} choice)` : 'GPT-2\'s belief (outside its top 5)'),
+          tipRow(pc(Math.exp(lp)), rk >= 0 ? `${CFG.short}'s belief (its ${ordinal(rk + 1)} choice)` : `${CFG.short}'s belief (outside its top 5)`),
           tipRow(pc(q), 'chance after the dials'),
           tipRow(`${fmt(s, 1)} nats`, 'surprise'),
           h('div.tip-sub', null, 'It could have said: ' + alts.map(([a, p]) => `${tokText(a)} ${pc(p)}`).join(', ')),
