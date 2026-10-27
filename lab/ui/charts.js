@@ -129,7 +129,7 @@ function s(tag, attrs = {}, ...kids) {
 export function legend(items) {
   return h('div.legend', { 'data-tara-noglossary': true },
     items.map((it) => h('span.legend-item', null,
-      h('span.legend-key' + (it.kind === 'band' ? '.band' : it.kind === 'dot' ? '.dot' : ''),
+      h('span.legend-key' + (it.kind === 'band' ? '.band' : it.kind === 'dot' ? '.dot' : it.kind === 'dash' ? '.dash' : it.kind === 'dotted' ? '.dotted' : ''),
         { style: { '--k': it.color } }),
       it.name)));
 }
@@ -137,13 +137,14 @@ export function legend(items) {
 /* ---------------------------------------------------------------- line chart */
 
 /* opts: { height, x: {label, fmt, min, max, ticks}, y: {label, fmt, min, max, zero}, series: [{name, color, pts:
-   [[x, y]], band: [[x, lo, hi]], muted, dash, marker, width}], hlines: [{y, label}], vlines: [{x, label}],
+   [[x, y]], band: [[x, lo, hi]], muted, dash (true, or a dasharray drawn as dots in the legend), marker, width}],
+   hlines: [{y, label}], vlines: [{x, label}],
    legend: true, caption } */
 export function lineChart(el, opts) {
   clear(el);
   el.classList.add('chart');
   const leg = opts.legend === false ? null : legend(opts.series.filter((q) => !q.hideLegend).map((q) => ({
-    name: q.name, color: q.color, kind: q.band && !q.pts ? 'band' : 'line' })));
+    name: q.name, color: q.color, kind: q.band && !q.pts ? 'band' : q.dash ? (q.dash === true ? 'dash' : 'dotted') : 'line' })));
   if (leg && opts.series.filter((q) => !q.hideLegend).length > 1) el.appendChild(leg);
   const box = h('div.chart-box', { 'data-tara-noglossary': true });
   el.appendChild(box);
@@ -200,7 +201,7 @@ export function lineChart(el, opts) {
         const pts = q.pts.filter((p) => Number.isFinite(p[1]));
         g.appendChild(s('polyline', { points: pts.map((p) => `${X(p[0])},${Y(p[1])}`).join(' '), fill: 'none', stroke: col,
           'stroke-width': q.width || (q.muted ? 1.25 : 2), 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
-          'stroke-opacity': q.muted ? 0.75 : 1, 'stroke-dasharray': q.dash ? '4 4' : null }));
+          'stroke-opacity': q.muted ? 0.75 : 1, 'stroke-dasharray': q.dash ? (q.dash === true ? '4 4' : q.dash) : null }));
         if (q.marker !== false && !q.muted) for (const p of pts) g.appendChild(s('circle', { cx: X(p[0]), cy: Y(p[1]), r: 4, fill: col, class: 'mark' }));
         if (q.endLabel && pts.length) {
           const p = pts[pts.length - 1];

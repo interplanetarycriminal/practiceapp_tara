@@ -8,7 +8,7 @@ against a control, so every claim it makes says how it could have been wrong.
 | engine | the question it answers | the control |
 |---|---|---|
 | `steer` | Does pushing along one direction change a behaviour, how much per unit of push, and what does it break? | the same pushes along random directions; loss on neutral text |
-| `probe` | Is a property written in a straight line inside the model, from which layer, and does it carry over to other wording? | the same probe trained and scored on shuffled labels (a permutation test); a probe on the words alone; optionally a probe for a rival property |
+| `probe` | Is a property written in a straight line inside the model, from which layer, and does it carry over to other wording? | the same probe trained and scored on shuffled labels (a permutation test); probes on the words alone and on what they mean; 32 random directions; optionally a probe for a rival property |
 | `features` | What does one dictionary feature respond to, and what does it make the model say? | the dictionary's reconstruction quality on this model |
 | `diff` | What did post-training (or a fine-tune) change inside the model, and where? | random vectors of the same size as the measured shift, on prompts the shift was not made from |
 | `circuit` | Which dictionary features carry a behaviour, and how do they feed each other? | patching the top features for real on pairs they were not ranked on, against random active features |
@@ -51,7 +51,15 @@ and when several do not fit the engines keep them on the CPU instead, which is s
 - **Probes face the words.** Matched pairs are held out whole (every built-in contrast set is one: the same city,
   task or message once with each label), and every probe is compared, on the same held-out texts and by an exact
   McNemar test, with a probe that sees only which tokens each text contains. When the words alone give the label
-  away (formal against casual wording does), a perfect probe says nothing about the model.
+  away (formal against casual wording does), a perfect probe says nothing about the model. A second probe reads what
+  the words mean: each text's average input embedding, before any layer has combined the words. Synonyms share an
+  embedding direction, so it carries a label across wordings that share no tokens, and what the layers add is the
+  step from it to the probe. (The bench's layer 0 is the output of the first block, which has already mixed in
+  context, so it is not this control.)
+- **Probes face random directions.** 32 random directions in the probe's standardised space, each pointed the way it
+  splits the training texts and cut like the probe, are scored on the same texts. When two kinds of text differ in
+  many ways at once, a random direction separates them too; a probe's direction is supported only when its interval
+  clears the best of them by 5 points.
 - **Transfer is the stronger test.** With `"test_dataset"` a probe trains on one set and is scored on another that
   carries the label in other words; part of the new set (`"dev_fraction"`, by pairs) re-centres each probe's cut and
   picks the layer, and every control is scored the same way. `"controls": {"confound": {"dataset": ..., "name": ...}}`

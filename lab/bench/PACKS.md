@@ -26,7 +26,8 @@ Every bench engine writes one pack; every viewer in the lab reads one. A pack is
 | `provenance` | `spec_hash`, `seed`, `commit` (the bench's git commit), `bench_dirty`, `runtime_s`, `finished`, `torch`, `transformers`, `gpu`, `cuda`, `python`, `os` |
 
 A claim is only as good as its `test`. Every engine compares against a control: random directions for steering,
-shuffled labels and the words alone for probes, random active features for circuits, random vectors for model diffs.
+shuffled labels, the words alone, word meanings and random directions for probes, random active features for
+circuits, random vectors for model diffs.
 Packs from 27 October 2026 on also keep whatever a test picks apart from what it scores (see the README).
 
 ## data, by kind
@@ -38,12 +39,15 @@ Packs from 27 October 2026 on also keep whatever a test picks apart from what it
 [random, doses], `direction` [d_model].
 
 **probe**: `layers`, `rows` [{layer, logreg, logreg_ci, logreg_auc, diffmeans, diffmeans_ci, diffmeans_auc,
-shuffled, shuffled_max, l2, cv_acc, mean_gap, and in a transfer test dev_acc, dev_auc; with a rival probe confound,
+shuffled, shuffled_max, random_dir and random_dir_max (the average and best of the random directions), l2, cv_acc,
+mean_gap, and in a transfer test dev_acc, dev_auc; with a rival probe confound,
 confound_ci, confound_sign, and in a transfer test confound_any (its best case on the new set)}] (the `_ci` pairs are
 exact binomial 95% intervals; packs before 27 October 2026 bootstrapped them), `best` (index into rows), `best_by`,
 `cut` (the difference-of-means cut at the best layer), `pca_ratio`, `texts`, `n`, `n_test`, `paired` (matched pairs
 held out whole), `interval`, `words` {acc, ci, vocabulary, p_vs_best, right_only_probe, right_only_words} (the
-words-only control), and when present `transfer` {train, test, n_train, n_dev, n_test, cut} and `confound` {dataset,
+words-only control), `meanings` {acc, ci, p_vs_best, right_only_probe, right_only_meanings, of} (the word-meaning
+control: each text's average input embedding), `random_directions` (how many), and when present `transfer` {train,
+test, n_train, n_dev, n_test, cut} and `confound` {dataset,
 name, n, acc, ci, sign, best_case, p_vs_best, right_only_probe, right_only_confound}. Arrays: `pca` [layers, n, 2],
 `labels` [n], `is_test` [n] (the scored texts), `source` [n] (transfer tests: 0 training set, 1 new set), `dirs_dm`
 and `dirs_lr` [layers, d_model] (unit vectors, usable by a steer spec as `{"from": "pack", "pack": "<id>", "layer":

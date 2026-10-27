@@ -19,6 +19,8 @@ export async function render(el, p) {
   const nTrain = tr ? tr.n_train : d.n - d.n_test;
   const w = d.words || null;
   const cf = d.confound || null;
+  const mn = d.meanings || null;
+  const R = rows[0].random_dir_max !== undefined ? d.random_directions : 0;
   const floor = Math.max(...rows.map((r) => r.shuffled_max ?? 0.5));
   const setName = (s) => (typeof s === 'string' && s.startsWith('builtin:') ? s.slice(8) : 'a custom set');
   const fp = (v) => (v < 0.001 ? 'below 0.001' : '= ' + v.toPrecision(2));
@@ -33,7 +35,10 @@ gets them right. The gray band is the same ruler placed using <i>shuffled</i> la
 Only blue well above gray counts.${tr ? ` Here the ruler is placed on one set of texts (${setName(tr.train)}) and tested on a
 different one (${setName(tr.test)}: other items, and the label shows only in how they read). If it still works there, it
 found the idea, not the first set's words.` : ''}${w ? ` The dashed gray line is a ruler that sees only which words each text
-contains, with no model at all: if blue does no better, the words gave the answer away.` : ''}${cf ? ` The aqua line is a
+contains, with no model at all: if blue does no better, the words gave the answer away.` : ''}${mn ? ` The dotted gray line
+knows what each word means to the model but not how the words combine: if blue does no better, the meanings of the words
+gave the answer away.` : ''}${R ? ` The thin gray line is the best of ${R} rulers pointed in random directions: when two
+kinds of text differ in many ways at once, even a random ruler can separate them.` : ''}${cf ? ` The aqua line is a
 ruler for a rival idea (${cf.name}), placed on its own texts: if it does as well as blue, blue may be reading ${cf.name}.` : ''}</p>`,
     2: `<p>For each of ${d.n} texts, the residual stream ${d.pool === 'last' ? 'at the last token' : 'averaged over the tokens'} is
 read after every layer. ${tr ? `A logistic regression is fit on the ${nTrain} texts of ${setName(tr.train)}. The ${d.n - nTrain} texts of
@@ -47,7 +52,10 @@ The orange line fits nothing: it uses only the difference between the two class 
 simplest possible probe. The gray band is the permutation control, a probe trained and scored on shuffled labels
 (average to best of ${p.spec && p.spec.controls && p.spec.controls.shuffle || 'several'}): with ${p.models && p.models[0] && p.models[0].d_model || 'hundreds of'} dimensions and only ${nTrain}
 training examples, a line can fit noise, and the control shows how well.${w ? ` The words-only probe is a logistic regression on
-which of the ${w.vocabulary} tokens of the training texts each text contains.` : ''}${cf ? ` The ${cf.name} probe is trained on
+which of the ${w.vocabulary} tokens of the training texts each text contains.` : ''}${mn ? ` The word-meaning probe is the
+same logistic regression on the average input embedding of each text's own tokens (no chat template), before any layer has
+combined them.` : ''}${R ? ` The random directions are ${R} unit vectors in the probe's standardised space, each pointed the
+way it splits the training texts and cut like the probe.` : ''}${cf ? ` The ${cf.name} probe is trained on
 ${setName(cf.dataset)} (${cf.n} texts) at each layer, pointed the way ${cf.name} runs in the training texts (a probe that only
 read ${cf.name} would inherit that sign) and re-centred like the probe.` : ''}</p>
 <div data-angle="analogy"><p>A metal detector swept over a beach: it beeps over coins (the property is there) but says nothing
@@ -55,18 +63,21 @@ about whether anyone ever spends them. Steering and patching test the spending.<
     3: `<p>Accuracy is the mean over held-out items; ${d.interval ? `intervals are exact binomial (Clopper-Pearson), which stay
 honest at a perfect score: ${d.n_test} of ${d.n_test} right only pins the true rate above ${pct(0.025 ** (1 / d.n_test), 1)} (at 95% confidence), where a
 bootstrap would say 100% to 100%` : 'intervals bootstrap the items'}.${d.paired ? ' The control swaps labels within pairs, so it keeps the pairs balanced.' : ''} The stamp needs the interval's lower bound to
-clear max(best shuffled probe, 50%) by 5 points. ${w ? 'The words-only and rival probes are compared with the best layer on the same texts by an exact McNemar test, which counts only the texts where exactly one of the two is right. ' : ''}Linear decodability is evidence of a representation, not of use: a
+clear max(best shuffled probe, 50%) by 5 points. ${w ? `The words-only${mn ? ', word-meaning' : ''} and rival probes are compared with the best layer on the same texts by an exact McNemar test, which counts only the texts where exactly one of the two is right. ` : ''}${R ? 'Against the random directions the stamp needs the interval\'s lower bound to clear the best of them by 5 points. ' : ''}Linear decodability is evidence of a representation, not of use: a
 probe with enough capacity can read information the model never reads itself (Hewitt and Liang's control tasks make the
 same point). Marks and Tegmark (2023) found difference-of-means directions generalise better than logistic ones and are
 the better steering vectors; both are saved in this result (one unit vector per layer) for a steering spec to test.${tr ? ' A probe that carries over to new wording is the stronger evidence: it cannot be matching the training texts\' surface, though it can still be reading a property the two sets share by accident; the rival probe tests the likeliest one.' : ''}</p>`,
   });
   const chart = h('div');
   const picker = h('div.chips', { role: 'group', 'aria-label': 'Layer to show below' });
-  const lo = Math.min(0.4, ...rows.map((r) => Math.min(r.logreg_ci[0], r.diffmeans, r.shuffled ?? 1, r.confound ?? 1)), w ? w.acc : 1);
+  const lo = Math.min(0.4, ...rows.map((r) => Math.min(r.logreg_ci[0], r.diffmeans, r.shuffled ?? 1, r.confound ?? 1, r.random_dir_max ?? 1)),
+    w ? w.acc : 1, mn ? mn.acc : 1);
   const series = [
     { name: 'shuffled-label control (average to best)', color: col('ctrl'), muted: true, band: rows.filter((r) => r.shuffled !== null).map((r) => [r.layer, r.shuffled, r.shuffled_max]), noTip: true },
   ];
   if (w) series.push({ name: 'words alone, no model', color: col('ctrl'), dash: true, marker: false, width: 1.4, noTip: true, pts: rows.map((r) => [r.layer, w.acc]) });
+  if (mn) series.push({ name: 'word meanings, no context', color: col('ctrl'), dash: '0 5', marker: false, width: 2.4, noTip: true, pts: rows.map((r) => [r.layer, mn.acc]) });
+  if (R) series.push({ name: `random directions (best of ${R})`, color: col('ctrl'), width: 1.4, noTip: true, pts: rows.map((r) => [r.layer, r.random_dir_max]) });
   if (cf) series.push({ name: `${cf.name} probe (rival)`, color: col('s3'), pts: rows.map((r) => [r.layer, r.confound]) });
   series.push({ name: `logistic probe${tr ? ', new wording' : ''} (95% interval)`, color: col('s1'), pts: rows.map((r) => [r.layer, r.logreg]), band: rows.map((r) => [r.layer, r.logreg_ci[0], r.logreg_ci[1]]) });
   series.push({ name: 'difference of means', color: col('s2'), pts: rows.map((r) => [r.layer, r.diffmeans]) });
@@ -81,6 +92,7 @@ the better steering vectors; both are saved in this result (one unit vector per 
       if (!r) return null;
       return h('div', null, tipRow(`${pct(r.diffmeans_ci[0])} to ${pct(r.diffmeans_ci[1])}`, 'difference of means, 95% interval', col('s2')),
         r.shuffled !== null ? tipRow(`${pct(r.shuffled)} (best ${pct(r.shuffled_max)})`, 'shuffled labels', col('ctrl')) : null,
+        r.random_dir_max !== undefined ? tipRow(`${pct(r.random_dir)} (best ${pct(r.random_dir_max)})`, `random directions, ${R}`, col('ctrl')) : null,
         r.confound !== undefined ? tipRow(pct(r.confound), `${cf.name} probe`, col('s3')) : null,
         r.confound_any !== undefined && r.confound_any_sign !== r.confound_sign ? tipRow(pct(r.confound_any), `${cf.name} probe the other way round`) : null,
         tr && r.dev_acc !== undefined ? tipRow(pct(r.dev_acc), 'on the dev texts (picks the layer)') : null,
@@ -90,6 +102,8 @@ the better steering vectors; both are saved in this result (one unit vector per 
   });
   const tiles = [stat(`Layer ${best.layer} ★`, pct(best.logreg), `exact 95%: ${pct(best.logreg_ci[0], 1)} to ${pct(best.logreg_ci[1], 1)}`)];
   if (w) tiles.push(stat('Words alone', pct(w.acc), `no model; McNemar p ${fp(w.p_vs_best)}`));
+  if (mn) tiles.push(stat('Word meanings', pct(mn.acc), `no context; McNemar p ${fp(mn.p_vs_best)}`));
+  if (R) tiles.push(stat('Random directions', `at most ${pct(best.random_dir_max)}`, `best of ${R} at layer ${best.layer}`));
   if (cf) tiles.push(stat(`${cf.name[0].toUpperCase()}${cf.name.slice(1)} probe`, pct(cf.acc), `rival idea; McNemar p ${fp(cf.p_vs_best)}`));
   tiles.push(stat('Shuffled labels', `at most ${pct(floor)}`, 'the luck bar'));
   if (tr) tiles.push(stat('On the training wording', pct(best.cv_acc), `layer ${best.layer}, cross-validated`));

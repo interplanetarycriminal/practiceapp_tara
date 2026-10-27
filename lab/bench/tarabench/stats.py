@@ -270,18 +270,24 @@ def right_side(scores, y, test, calib=None, thr=0.0):
     return (s[test] > thr) == (y[test] == 1)
 
 
-def words_probe(seqs, y, train, test, seed=0, groups=None, grid=None, calib=None):
-    """The words-only control for a probe: logistic regression on which tokens each text contains (the training
-    half's vocabulary, present or absent), with the L2 strength cross-validated as for the real probe and the cut
-    re-centred on calib when given (as for the real probe in a transfer test). Returns (correct on each test item,
-    vocabulary size)."""
+def feature_probe(F, y, train, test, seed=0, groups=None, grid=None, calib=None):
+    """A control probe on fixed features of each text (which words it contains, what they mean), fit and scored the
+    way the real probe is: logistic regression with the L2 strength cross-validated inside the training texts, and the
+    cut re-centred on calib when given (as for the real probe in a transfer test). Returns which test items it gets
+    right."""
     y = np.asarray(y)
+    l2 = choose_l2(F[train], y[train], seed=seed, groups=groups, **({'grid': grid} if grid else {}))
+    return right_side(probe_scores(fit_logistic(F[train], y[train], l2), F), y, test, calib)
+
+
+def words_probe(seqs, y, train, test, seed=0, groups=None, grid=None, calib=None):
+    """The words-only control for a probe: a feature_probe on which tokens each text contains (the training half's
+    vocabulary, present or absent). Returns (correct on each test item, vocabulary size)."""
     vocab = {t: j for j, t in enumerate(sorted({t for i in train for t in seqs[i]}))}
     W = np.zeros((len(seqs), len(vocab)))
     for i, sq in enumerate(seqs):
         W[i, [vocab[t] for t in sq if t in vocab]] = 1.0
-    l2 = choose_l2(W[train], y[train], seed=seed, groups=groups, **({'grid': grid} if grid else {}))
-    return right_side(probe_scores(fit_logistic(W[train], y[train], l2), W), y, test, calib), len(vocab)
+    return feature_probe(W, y, train, test, seed, groups, grid, calib), len(vocab)
 
 
 def diff_means(X, y):

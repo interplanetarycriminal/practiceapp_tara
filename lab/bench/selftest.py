@@ -114,6 +114,11 @@ def invariants(lm, dict_dir):
     lm16.unload()
     check('unloading a model lets go of its weights', first_layer() is None)
     del lm16
+    # 2d. the word-meaning control averages the input embeddings of a text's own tokens: no order, no chat template
+    a, b = lm.mean_embeddings(['Paris is in France .', '. France in is Paris'])
+    want = lm.model.get_input_embeddings().weight[lm.tok('Paris is in France .', add_special_tokens=False)['input_ids']]
+    check('the word-meaning control averages a text\'s own input embeddings, with no order and no template',
+          float((a - b).abs().max()) < 1e-6 and float((a - want.float().mean(0)).abs().max()) < 1e-6)
     e32, e16 = float((lp16 - lp_batch).abs().max()), float((lp16raw - lp_batch).abs().max())
     check('in bf16 the float32 head switches on and scores stay near float32', on is True and e32 < 0.1,
           f'largest error against float32: {e32:.3g} through the float32 head, {e16:.3g} from the bf16 logits')
@@ -278,12 +283,17 @@ def engines(out, dict_dir):
                       pd.get('paired') is True and pd['n_test'] % 2 == 0 and 'exact' in pd.get('interval', '') and
                       all(0 <= r['logreg_ci'][0] <= r['logreg'] <= r['logreg_ci'][1] <= 1 for r in pd['rows']),
                       f"{pd['n_test']} of {pd['n']} held out")
-                w = pd.get('words') or {}
-                check('the probe picks its layer inside the training half and reports the words-only control',
-                      all('cv_acc' in r for r in pd['rows']) and 'training' in pd.get('best_by', '') and
-                      0 <= w.get('ci', [2])[0] <= w.get('acc', -1) <= w['ci'][1] <= 1 and
-                      any('more than the words' in c['text'] for c in meta['claims']),
-                      f"words alone {w.get('acc', float('nan')):.0%} on {w.get('vocabulary')} tokens")
+                w, mn = pd.get('words') or {}, pd.get('meanings') or {}
+                check('the probe picks its layer inside the training half and reports the words-only and word-meaning '
+                      'controls', all('cv_acc' in r for r in pd['rows']) and 'training' in pd.get('best_by', '') and
+                      all(0 <= c.get('ci', [2])[0] <= c.get('acc', -1) <= c['ci'][1] <= 1 for c in (w, mn)) and
+                      any('more than the words' in c['text'] for c in meta['claims']) and
+                      any('more than word meanings' in c['text'] for c in meta['claims']) and
+                      pd.get('random_directions') == 32 and all(0 <= r['random_dir'] <= r['random_dir_max'] <= 1
+                                                                for r in pd['rows']) and
+                      any('more than any direction' in c['text'] for c in meta['claims']),
+                      f"words alone {w.get('acc', float('nan')):.0%} on {w.get('vocabulary')} tokens, "
+                      f"word meanings {mn.get('acc', float('nan')):.0%}")
             if spec['id'] == 'selftest-probe-transfer':
                 pd, tt = meta['data'], meta['data'].get('transfer') or {}
                 is_test = np.fromfile(Path(d) / meta['arrays']['is_test']['file'], np.uint8)
@@ -294,8 +304,11 @@ def engines(out, dict_dir):
                       where.min() >= tt['n_train'] and 'dev' in pd.get('best_by', '') and
                       all('dev_acc' in r and 'confound' in r for r in pd['rows']) and pd['confound']['name'] == 'formality'
                       and any('carries over' in t for t in texts) and any('shared words' in t for t in texts) and
-                      any('not just formality' in t for t in texts),
-                      f"words alone {pd['words']['acc']:.0%}, formality {pd['confound']['acc']:.0%}")
+                      any('not just formality' in t for t in texts) and 'meanings' in pd and
+                      any('more than word meanings' in t and 'trained on the same texts' in t for t in texts) and
+                      any('more than any direction' in t and 're-centred like the probe' in t for t in texts),
+                      f"words alone {pd['words']['acc']:.0%}, word meanings {pd['meanings']['acc']:.0%}, "
+                      f"formality {pd['confound']['acc']:.0%}")
             if spec['id'] == 'selftest-steer':
                 ev = [c['evidence'] for c in meta['claims']]
                 check('steering intervals are Student t, around their own estimates',

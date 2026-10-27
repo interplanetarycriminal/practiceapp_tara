@@ -12,7 +12,7 @@ export const KINDS = {
     control: 'the same pushes along random directions of the same size, and loss on neutral text' },
   probe: { name: 'Probe', short: 'probe',
     asks: 'Is a property written in a straight line inside the model, and from which layer?',
-    control: 'the same probe trained and scored on shuffled labels (a permutation test), and a probe on the words alone, with no model' },
+    control: 'the same probe trained and scored on shuffled labels (a permutation test), probes on the words alone and on what they mean, with no context, and random directions' },
   features: { name: 'Features', short: 'features',
     asks: 'What does one dictionary feature respond to, and what does it make the model say?',
     control: 'how well the dictionary reconstructs this model at all' },
