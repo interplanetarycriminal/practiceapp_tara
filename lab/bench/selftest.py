@@ -25,7 +25,8 @@ from tarabench.models import LM, load  # noqa: E402
 from tarabench.packs import DTYPES  # noqa: E402
 from tarabench.runner import run_spec  # noqa: E402
 from tarabench.sae import TopKSAE  # noqa: E402
-from tarabench.stats import binom_ci, mcnemar, mean_ci, null_labels, ratio_ci, split, t_quantile, words_probe  # noqa: E402
+from tarabench.stats import (binom_ci, mcnemar, mean_ci, null_labels, ratio_ci, right_side, split, t_quantile,  # noqa: E402
+                             words_probe)
 
 RESULTS = []
 
@@ -67,6 +68,12 @@ def statistics():
     check('the words-only control reads words, not word order',
           by_word.mean() == 1 and abs(by_order.mean() - 0.5) <= 0.2 and mcnemar(by_word, by_order)[2] < 0.05,
           f'one-token label {by_word.mean():.0%}, order label {by_order.mean():.0%}')
+    # a probe carried to a new set keeps its direction, not its offset: re-centring on other texts of that set finds it
+    y2 = np.arange(40) % 2
+    moved = (2.0 * y2 - 1) + 10
+    as_fit, recentred = right_side(moved, y2, np.arange(20, 40)), right_side(moved, y2, np.arange(20, 40), np.arange(20))
+    check('re-centring a carried probe on other texts of the new set', as_fit.mean() == 0.5 and recentred.mean() == 1,
+          f'cut as fit {as_fit.mean():.0%}, re-centred {recentred.mean():.0%}')
     num, den = np.random.default_rng(3).normal(1, 1, 40), np.random.default_rng(4).normal(2, 0.5, 40)
     est, lo, hi = ratio_ci(num, den)
     check('a share\'s interval brackets its own ratio of means', lo <= est <= hi and
@@ -226,6 +233,9 @@ def engines(out, dict_dir):
          'controls': {'random': 2}},
         {'engine': 'probe', 'id': 'selftest-probe', 'model': 'tiny-qwen3.5', 'dataset': 'builtin:cities',
          'layers': 'all', 'controls': {'shuffle': 2}},
+        {'engine': 'probe', 'id': 'selftest-probe-transfer', 'model': 'tiny-qwen3.5', 'dataset': 'builtin:eval_deploy',
+         'test_dataset': 'builtin:eval_deploy_implicit', 'format': 'chat', 'layers': 'all',
+         'controls': {'shuffle': 2, 'confound': {'dataset': 'builtin:formal_casual', 'name': 'formality'}}},
         {'engine': 'steer', 'id': 'selftest-steer-pack', 'model': 'tiny-qwen3.5',
          'direction': {'from': 'pack', 'pack': 'selftest-probe', 'layer': 2}, 'doses': [0, 0.2],
          'metric': {'kind': 'prob', 'prompts': ['The city of Paris is in'], 'target': ['France', 'Spain']},
@@ -269,6 +279,18 @@ def engines(out, dict_dir):
                       0 <= w.get('ci', [2])[0] <= w.get('acc', -1) <= w['ci'][1] <= 1 and
                       any('more than the words' in c['text'] for c in meta['claims']),
                       f"words alone {w.get('acc', float('nan')):.0%} on {w.get('vocabulary')} tokens")
+            if spec['id'] == 'selftest-probe-transfer':
+                pd, tt = meta['data'], meta['data'].get('transfer') or {}
+                is_test = np.fromfile(Path(d) / meta['arrays']['is_test']['file'], np.uint8)
+                where = np.flatnonzero(is_test)
+                texts = [c['text'] for c in meta['claims']]
+                check('a transfer probe trains on one set and is scored only on the other, with every control',
+                      tt.get('n_train') == 120 and tt.get('n_dev') == 60 and tt.get('n_test') == 60 == len(where) and
+                      where.min() >= tt['n_train'] and 'dev' in pd.get('best_by', '') and
+                      all('dev_acc' in r and 'confound' in r for r in pd['rows']) and pd['confound']['name'] == 'formality'
+                      and any('carries over' in t for t in texts) and any('shared words' in t for t in texts) and
+                      any('not just formality' in t for t in texts),
+                      f"words alone {pd['words']['acc']:.0%}, formality {pd['confound']['acc']:.0%}")
             if spec['id'] == 'selftest-steer':
                 ev = [c['evidence'] for c in meta['claims']]
                 check('steering intervals are Student t, around their own estimates',

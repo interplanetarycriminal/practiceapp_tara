@@ -22,6 +22,7 @@ export async function render(el, p) {
   const xLabel = d.units === 'resid' ? 'push (× the typical size of the residual stream)' : 'push (raw units)';
   const yLabel = METRIC[d.metric && d.metric.kind] || 'metric';
   const nP = per ? per.shape[1] : (d.metric && d.metric.n_prompts) || 0;
+  const tInt = /Student/.test(d.interval || '');
   const rmax = (j) => {
     if (!rnd || j0 < 0) return null;
     let m = 0;
@@ -36,8 +37,8 @@ after its thoughts are pushed along the direction by that much. Higher means mor
 are pushes of exactly the same size along random directions. If the blue line climbs and the gray ones stay flat, it
 is the <i>direction</i> that matters, not just the size of the push.</p>`,
     2: `<p>x is the dose: the push added to the residual stream at layer ${L}, in multiples of its typical size there
-(${d.resid_norm && d.resid_norm[L] ? fmt(d.resid_norm[L], 1) : 'the median norm'}). y is the metric averaged over ${nP} prompts, with a 95%
-bootstrap interval across prompts as the band. With no push it sits at ${fmt(base, 2)}; at dose ${fd(top.dose)} it reaches
+(${d.resid_norm && d.resid_norm[L] ? fmt(d.resid_norm[L], 1) : 'the median norm'}). y is the metric averaged over ${nP} prompt${nP === 1 ? '' : 's'}, with a 95%
+${tInt ? 'Student t' : 'bootstrap'} interval across prompts as the band${nP < 2 ? ' (one prompt gives none)' : ''}. With no push it sits at ${fmt(base, 2)}; at dose ${fd(top.dose)} it reaches
 ${fmt(top.mean, 2)}, a shift of ${signed(top.mean - base, 2)}, while ${R} random directions of the same size move it by at most
 ${fmt(rmax(doses.length - 1), 2)}.</p>
 <div data-angle="analogy"><p>A dimmer switch tested against random switches on the same wall: if only one switch dims the
@@ -45,7 +46,7 @@ light, it is wired to the light.</p></div>`,
     3: `<p>Intervention: x<sub>L</sub> ← x<sub>L</sub> + α·‖r‖·d̂ at every position, with ‖r‖ the median residual norm at layer ${L}
 over a reference corpus and d̂ the unit direction. Controls are isotropic random unit vectors at the same α, so they match
 the perturbation's norm but not its direction. The stamp needs the effect (relative to α = 0) to have a CI excluding
-zero and to exceed both 3 sd and the maximum of the random effects. Dose curves are not linear: past a point the stream
+zero and to exceed both 3 sd and the maximum of the random effects.${tInt ? ' Intervals are Student t over prompts, because a percentile bootstrap of a few prompts is too narrow; one prompt has no interval, so it cannot earn the stamp.' : ''} Dose curves are not linear: past a point the stream
 leaves the distribution the later layers were trained on, which the loss panel below measures.</p>`,
   });
   const modeRow = h('div.chips', { role: 'group', 'aria-label': 'What the curve shows' });

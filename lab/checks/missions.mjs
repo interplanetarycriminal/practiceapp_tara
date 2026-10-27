@@ -40,6 +40,13 @@ const near = (x, lo, hi) => x >= lo && x <= hi;
 const mission = (id) => MISSIONS.find((m) => m.id === id);
 const order = (arr, sign = 1) => [...arr.keys()].sort((a, b) => sign * (arr[b] - arr[a]));
 const lcg = (seed) => { let s = seed; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; };
+/* a bench result pack from lab/findings, as the Results pages read it */
+const packOf = (id) => {
+  const dir = path.join(lab, 'findings', 'packs', id), meta = JSON.parse(fs.readFileSync(path.join(dir, 'pack.json')));
+  const arr = (name, T) => { const b = fs.readFileSync(path.join(dir, meta.arrays[name].file)); return new T(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); };
+  return { ...meta, arr };
+};
+const status = (p, re) => (p.claims.find((c) => re.test(c.text)) || {}).status;
 
 let fails = 0;
 function claim(id, text, ok, got) {
@@ -250,6 +257,45 @@ const CHECKS = {
     const P = PRESETS.probe.cities, cities = (xs) => xs.map((s) => s.match(/of (.+) is/)[1]), countries = (xs) => xs.map((s) => s.match(/is in (.+)\./)[1]);
     const same = (a, b) => [...a].sort().join() === [...b].sort().join();
     claim('w4-probe', 'every city and every country appears once in a true sentence and once in a false one', same(cities(P.pos), cities(P.neg)) && same(countries(P.pos), countries(P.neg)), 'checked on the preset\'s sentences');
+    const b = packOf('gpt2-probe-truth'), d = b.data, br = d.rows[d.best];
+    const first = (b.claims.find((c) => /readable by layer/.test(c.text)) || {}).evidence;
+    claim('w4-probe', 'the bench run: 165 cities, 81% at layer 7, readable from layer 6, words alone 44%',
+      d.n === 330 && br.layer === 7 && Math.round(100 * br.logreg) === 81 && first && first.layer === 6 && Math.round(100 * d.words.acc) === 44,
+      `${d.n / 2} pairs, layer ${br.layer} ${pc(br.logreg)}, readable from ${first && first.layer}, words ${pc(d.words.acc)}`);
+    const s = b.arr('scores_best', Float32Array), y = b.arr('labels', Uint8Array), t = b.arr('is_test', Uint8Array);
+    const mu = [0, 1].map((c) => { let u = 0, k = 0; for (let i = 0; i < d.n; i++) if (!t[i] && y[i] === c) { u += s[i]; k++; } return u / k; });
+    const cut = (mu[0] + mu[1]) / 2, sg = mu[1] >= mu[0] ? 1 : -1, wrong = [];
+    for (let i = 0; i < d.n; i++) if (t[i] && (((s[i] - cut) * sg > 0) ? 1 : 0) !== y[i]) wrong.push(i);
+    const trueMiss = wrong.filter((i) => y[i] === 1).map((i) => d.texts[i].match(/of (.+) is/)[1]);
+    claim('w4-probe', 'its wrong-side list is mostly true facts read as false, Brno, Riga and Cusco among them',
+      trueMiss.length > wrong.length / 2 && ['Brno', 'Riga', 'Cusco'].every((c) => trueMiss.includes(c)), `${trueMiss.length} of ${wrong.length} misses are true facts: ${trueMiss.slice(0, 6).join(', ')}...`);
+  },
+
+  async 'w6-diff'() {
+    const b = packOf('qwen35-2b-diff-post-training'), d = b.data;
+    const peak = d.rows.reduce((a, r) => (r.rel_median > a.rel_median ? r : a));
+    const best = d.steer.reduce((a, r) => (r.delta.closed_fit > a.delta.closed_fit ? r : a));
+    const ci = best.delta.closed_ci;
+    claim('w6-diff', 'the change peaks around layer 22 at about half the state; the shift there closes -2% (-7% to 3%) on held-out prompts, not supported',
+      peak.layer === 22 && near(peak.rel_median, 0.45, 0.55) && best.layer === 22 && Math.round(100 * best.delta.closed) === -2 &&
+      Math.round(100 * ci[0]) === -7 && Math.round(100 * ci[1]) === 3 && d.steer_split.held_out && status(b, /^Adding one vector/) === 'not-supported',
+      `peak layer ${peak.layer} (${pc(peak.rel_median)}); layer ${best.layer} dose ${best.dose}: ${pc(best.delta.closed)} (${pc(ci[0])} to ${pc(ci[1])}), random at most ${pc(best.random.closed_max)}`);
+    claim('w6-diff', 'no layer or dose tested closes more than a few percent', d.steer.every((r) => r.delta.closed < 0.05),
+      d.steer.map((r) => `L${r.layer}x${r.dose} ${pc(r.delta.closed)}`).join(', '));
+  },
+
+  async 'w7-leak'() {
+    const b = packOf('gpt2-probe-formality'), d = b.data;
+    claim('w7-leak', '100% from layer 0, the words alone 100% too, "more than the words" not supported',
+      d.rows[0].logreg === 1 && d.words.acc === 1 && status(b, /more than the words/) === 'not-supported', `layer 0 ${pc(d.rows[0].logreg)}, words ${pc(d.words.acc)}`);
+  },
+
+  async 'w8-variance'() {
+    const b = packOf('gpt2-steer-sentiment'), ev = b.claims.map((c) => ({ ...c.evidence, status: c.status }));
+    const pos = ev.find((e) => e.dose > 0), neg = ev.find((e) => e.dose < 0);
+    claim('w8-variance', 'the positive push clears its control; the negative push is weak, inside three standard deviations of the random pushes',
+      pos.status === 'supported' && neg.status === 'weak' && Math.abs(neg.delta) < 3 * neg.random_sd && Math.abs(neg.delta) > neg.random_max,
+      `+1: ${f2(pos.delta)} (${pos.status}); -1: ${f2(neg.delta)} against 3 sd = ${(3 * neg.random_sd).toFixed(2)} (${neg.status})`);
   },
 
   async 'w4-neurons'() {

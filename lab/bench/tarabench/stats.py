@@ -253,18 +253,35 @@ def choose_l2(X, y, grid=(1e-3, 1e-2, 1e-1, 1.0, 10.0), folds=3, seed=0, groups=
     return (best, best_acc) if with_acc else best
 
 
-def words_probe(seqs, y, train, test, seed=0, groups=None, grid=None):
+def midpoint(scores, y):
+    """The cut half-way between two classes' mean scores."""
+    s, y = np.asarray(scores, dtype=np.float64), np.asarray(y) > 0.5
+    return float((s[y].mean() + s[~y].mean()) / 2)
+
+
+def right_side(scores, y, test, calib=None, thr=0.0):
+    """Which test items a probe gets right: score above the cut means positive. The cut is the probe's own (thr)
+    unless calib names examples to re-centre it on, half-way between their two class means. A probe carried to a new
+    set keeps its direction but not its offset (the whole set can sit to one side), so a transfer test fits that one
+    number on examples from the new set, never on the scored ones."""
+    s, y = np.asarray(scores, dtype=np.float64), np.asarray(y)
+    if calib is not None:
+        thr = midpoint(s[calib], y[calib])
+    return (s[test] > thr) == (y[test] == 1)
+
+
+def words_probe(seqs, y, train, test, seed=0, groups=None, grid=None, calib=None):
     """The words-only control for a probe: logistic regression on which tokens each text contains (the training
-    half's vocabulary, present or absent), with the L2 strength cross-validated as for the real probe. Returns
-    (correct on each test item, vocabulary size)."""
+    half's vocabulary, present or absent), with the L2 strength cross-validated as for the real probe and the cut
+    re-centred on calib when given (as for the real probe in a transfer test). Returns (correct on each test item,
+    vocabulary size)."""
     y = np.asarray(y)
     vocab = {t: j for j, t in enumerate(sorted({t for i in train for t in seqs[i]}))}
     W = np.zeros((len(seqs), len(vocab)))
     for i, sq in enumerate(seqs):
         W[i, [vocab[t] for t in sq if t in vocab]] = 1.0
     l2 = choose_l2(W[train], y[train], seed=seed, groups=groups, **({'grid': grid} if grid else {}))
-    s = probe_scores(fit_logistic(W[train], y[train], l2), W[test])
-    return (s > 0) == (y[test] == 1), len(vocab)
+    return right_side(probe_scores(fit_logistic(W[train], y[train], l2), W), y, test, calib), len(vocab)
 
 
 def diff_means(X, y):
