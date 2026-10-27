@@ -45,8 +45,13 @@ let errs = [];
 page.on('console', (m) => { if (m.type() === 'error') errs.push(`console: ${m.text()}`); });
 page.on('pageerror', (e) => errs.push(`page error: ${e.message}`));
 
-const BUSY = /stayed busy with another job|^the model was not ready after \d+ s \("waiting"\)|still running after \d+ s while the card was busy/;
+const BUSY = /stayed busy with another job|^the model was not ready after \d+ s \("waiting"\)|while the card was busy$/;
 let failed = 0, busy = 0;
+const cardBusy = async () => ((await page.evaluate(() => window.__lab.engine.status.state)) === 'waiting' ? ' while the card was busy' : '');
+/* a run a tool starts on its own (patching, say) shows Stop on its button: wait for every one to finish */
+const settle = () => page.waitForFunction(() => ![...document.querySelectorAll('#view button.btn.primary')]
+  .some((b) => b.offsetParent !== null && b.textContent.trim() === 'Stop'), null, { timeout: RUN_S * 1000 })
+  .catch(async () => errs.push(`a run was still going after ${RUN_S} s${await cardBusy()}`));
 for (const id of process.argv.slice(2).length ? process.argv.slice(2) : TOOLS) {
   errs = [];
   const t0 = Date.now(), lines = [];
@@ -62,6 +67,7 @@ for (const id of process.argv.slice(2).length ? process.argv.slice(2) : TOOLS) {
   await page.waitForFunction(() => window.__lab.engine.status.state === 'ready', null, { timeout: READY_S * 1000 })
     .catch(async () => errs.push(`the model was not ready after ${READY_S} s (${await page.evaluate(() => JSON.stringify(window.__lab.engine.status.state))})`));
   await page.waitForTimeout(2500);
+  await settle();
   const pressed = new Set();
   for (let round = 0; round < 4; round++) {
     let any = false;
@@ -73,12 +79,13 @@ for (const id of process.argv.slice(2).length ? process.argv.slice(2) : TOOLS) {
       await b.click();
       await page.waitForTimeout(400);
       await page.waitForFunction((el) => !el.isConnected || el.textContent.trim() !== 'Stop', b, { timeout: RUN_S * 1000 })
-        .catch(async () => errs.push(`"${label}" was still running after ${RUN_S} s${await page.evaluate(() => window.__lab.engine.status.state) === 'waiting' ? ' while the card was busy' : ''}`));
+        .catch(async () => errs.push(`"${label}" was still running after ${RUN_S} s${await cardBusy()}`));
       await page.waitForTimeout(800);
       lines.push(`       pressed "${label}": ${((Date.now() - t1) / 1000).toFixed(1)} s`);
     }
     if (!any) break;
   }
+  await settle();
   await page.waitForTimeout(1500);
   const boxes = await page.$$eval('#view .err, #view .engine-card.err', (els) => els.filter((e) => e.offsetParent !== null).map((e) => e.textContent.trim().slice(0, 300)));
   for (const b of boxes) errs.push(`error box: ${b}`);
