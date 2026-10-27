@@ -22,7 +22,8 @@ def main():
     ap.add_argument('--port', type=int, default=8790, help='8790: wrangler dev already holds 8787 on the PC')
     ap.add_argument('--host', default='127.0.0.1', help='the address to listen on (keep it on this computer)')
     ap.add_argument('--lock', default='', help='a .py file defining hold(): take turns with other GPU users')
-    ap.add_argument('--lock-timeout', type=float, default=180, help='seconds to wait for the GPU before giving up')
+    ap.add_argument('--lock-timeout', type=float, default=1800,
+                    help='seconds a request waits for the GPU before giving up (a render can hold it for many minutes)')
     ap.add_argument('--idle', type=float, default=1200, help='let the card go after this many seconds without requests')
     ap.add_argument('--models', nargs='*', default=None, help='models to offer (default: qwen3.5-9b)')
     ap.add_argument('--stats', default='', help="folder for each model's measured residual norms (default: work/live)")

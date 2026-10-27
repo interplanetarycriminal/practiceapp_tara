@@ -160,6 +160,7 @@ export function statusLine(s = active.status) { return engine.remote ? remoteLin
 /* load times: seconds for a short one, minutes and seconds for the 9B's few minutes */
 const clock = (t) => (t < 90 ? `${t} s` : `${Math.floor(t / 60)} min ${String(t % 60).padStart(2, '0')} s`);
 const about = (t) => { if (t < 90) return `${t} s`; const h = Math.round(t / 30); return `${Math.floor(h / 2)}${h % 2 ? '½' : ''} minutes`; };
+const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
 const EXPECT = 330;              // the 9B from its 4-bit copy on the PC; the server sends each model's own figure
 
 function remoteLine(s, n) {
@@ -220,8 +221,9 @@ function remoteCard(el, s, compact, retry) {
       h('div.muted.small', null, `${clock(s.elapsed || 0)} of about ${about(s.expect || EXPECT)}. ${(s.elapsed || 0) > (s.expect || EXPECT) ? 'Taking longer than usual: a render on the 3090 or a slow read from Z: stretches it.' : 'It stays loaded while you work and leaves the card after 20 idle minutes.'}`)));
   } else if (s.state === 'waiting') {
     mount(el, h('div.engine-card', null, h('div.engine-title', null, 'Waiting for the graphics card'),
-      h('p', null, s.note || 'Another job is using the 3090 (a ComfyUI render, say). This starts by itself once it is free.'),
-      h('div.progress.indeterminate', null, h('span'))));
+      h('p', null, s.note ? cap(s.note.replace(/^Waiting for the graphics card: /, '')) : 'Another job is using the 3090 (a ComfyUI render, say). This starts by itself once it is free.'),
+      h('div.progress.indeterminate', null, h('span')),
+      compact ? null : h('div.row', null, gpt2)));
   } else if (s.state === 'error') {
     mount(el, h('div.engine-card.err', null, h('div.engine-title', null, `${n} did not start`),
       h('p', null, s.error || 'Unknown error'),

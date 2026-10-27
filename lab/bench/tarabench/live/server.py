@@ -62,15 +62,16 @@ def say(*parts):
     print(time.strftime('%H:%M:%S'), *parts, flush=True)
 
 
-def lock_factory(path, label, timeout):
-    """The studio's GPU lock (a .py file defining hold()), or no lock. hold() is entered and left in one thread."""
+def lock_factory(path, label):
+    """The studio's GPU lock (a .py file defining hold()), or no lock. hold(timeout) is entered and left in one thread;
+    entering it raises TimeoutError when the timeout runs out first."""
     if not path:
-        return lambda: contextlib.nullcontext()
+        return lambda timeout=None: contextlib.nullcontext()
     spec = importlib.util.spec_from_file_location('gpulock_live', path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
-    def hold():
+    def hold(timeout=None):
         for kw in ({'label': label, 'timeout': timeout}, {'label': label}, {}):
             try:
                 return mod.hold(**kw)
@@ -149,12 +150,14 @@ class Job:
 class Card:
     """Holds at most one model on the graphics card and runs the web process's requests on it, one at a time."""
 
-    def __init__(self, conn, offer, lock=None, lock_timeout=180, stats_dir=None, nf4_cache=None, device=None, local=None):
+    TURN = 5.0                  # seconds per try at the GPU lock: a Stop or a closed page ends a wait within one turn
+
+    def __init__(self, conn, offer, lock=None, lock_timeout=1800, stats_dir=None, nf4_cache=None, device=None, local=None):
         import torch
         from .. import models
         models.LOCAL.update(local or {})
         self.conn, self.offer = conn, offer
-        self.hold = lock_factory(lock, 'tara-lab live', lock_timeout)
+        self.hold = lock_factory(lock, 'tara-lab live')
         self.lock_timeout = lock_timeout
         self.stats_dir = Path(stats_dir) if stats_dir else None
         self.nf4_cache = Path(nf4_cache) if nf4_cache else None
@@ -166,7 +169,10 @@ class Card:
 
     def send(self, msg):
         with self.send_lock:
-            self.conn.send(msg)
+            try:
+                self.conn.send(msg)
+            except (OSError, ValueError):               # the web process has gone: nobody is left to tell
+                pass
 
     def say(self, *parts):
         self.send(('log', ' '.join(str(p) for p in parts)))
@@ -215,7 +221,7 @@ class Card:
                 frame = pack({'ok': False, 'error': 'The graphics card ran out of memory for this request. Try a shorter '
                                                     'text, or free memory on the card (ComfyUI holds its models there).'})
             except Exception as e:  # noqa: BLE001 - every failure goes back to the page
-                self.say(f'{job.op} refused: {e}' if isinstance(e, ValueError) else traceback.format_exc())
+                self.say(f'{job.op} refused: {e}' if isinstance(e, (ValueError, Busy)) else traceback.format_exc())
                 frame = pack({'ok': False, 'error': str(e) or e.__class__.__name__})
             self.jobs.pop(job.id, None)
             self.send(('frame', job.id, frame))
@@ -227,15 +233,26 @@ class Card:
         self.unload()
 
     def gpu(self, job):
-        """The studio's GPU lock for one request, telling the page when it has to wait for another job."""
-        waiting = threading.Timer(0.6, lambda: job.stage({'stage': 'waiting', 'note': 'Waiting for the graphics card: another job is using it.'}))
+        """The studio's GPU lock for one request. A render can hold the card for many minutes, so the request asks in
+        short turns and tells the page how long it has waited; a Stop, a newer request on its channel or a closed page
+        ends the wait, and only lock_timeout (30 minutes unless --lock-timeout says otherwise) gives up on it."""
+        t0 = time.time()
+        waiting = threading.Timer(0.6, lambda: job.stage(wait_note(0)))
         waiting.start()
-        ctx = self.hold()
         try:
-            ctx.__enter__()
-        except Exception as e:  # noqa: BLE001 - a timeout, whatever the lock calls it
-            raise RuntimeError(f'The graphics card stayed busy with another job for {self.lock_timeout:.0f} s; try again '
-                               f'when it is free ({e.__class__.__name__}).') from None
+            while True:
+                ctx = self.hold(self.TURN)
+                try:
+                    ctx.__enter__()
+                    break
+                except Exception as e:  # noqa: BLE001 - the lock's own timeout error, or a fault in the lock itself
+                    if not (isinstance(e, TimeoutError) or 'timeout' in type(e).__name__.lower()):
+                        raise RuntimeError(f'The studio GPU lock failed: {e.__class__.__name__}: {e}') from None
+                waited = time.time() - t0
+                if waited >= self.lock_timeout:
+                    raise Busy(f'The graphics card stayed busy with another job for {span(waited)}; try again when it is free.')
+                job.check()
+                job.stage(wait_note(waited))
         finally:
             waiting.cancel()
         job.stage({'stage': 'running'})
@@ -420,6 +437,21 @@ class Card:
         return self.sae_meta
 
 
+class Busy(RuntimeError):
+    """Another job held the graphics card for longer than the request was willing to wait."""
+
+
+def span(seconds):
+    t = round(seconds)
+    return f'{t // 60} min {t % 60:02d} s' if t >= 60 else f'{t} s'
+
+
+def wait_note(waited):
+    return {'stage': 'waiting', 'waited': round(waited),
+            'note': 'Waiting for the graphics card: another job (a render, say) is using it'
+                    + (f', {span(waited)} so far' if round(waited) else '') + '. Your run starts by itself when it is free.'}
+
+
 def card_main(conn, opts):
     """The card process's entry point (started by Live with the spawn method, so it shares nothing by accident)."""
     log, spawned = opts.pop('log', None), opts.pop('spawned', None)
@@ -474,7 +506,7 @@ class Request:
 
 
 class Live:
-    def __init__(self, models=None, lock=None, lock_timeout=180, idle=1200, stats_dir=None, nf4_cache=None,
+    def __init__(self, models=None, lock=None, lock_timeout=1800, idle=1200, stats_dir=None, nf4_cache=None,
                  device=None, local=None, log=None):
         self.offer = {k: v for k, v in LIVE.items() if k in (models or DEFAULT)}
         self.opts = dict(offer=self.offer, lock=lock, lock_timeout=lock_timeout, device=device, local=dict(local or {}),

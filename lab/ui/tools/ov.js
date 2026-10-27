@@ -95,7 +95,7 @@ export function mount(el, meta, api) {
   const scan = runner('Scan every head', scanSlot, (onP, ctl) => scanAll(onP, ctl));
   put(page.result, tiles, gridBox, h('div.subhead', null, h('h3', null, 'Across the whole vocabulary')), vocab,
     h('div.subhead', null, h('h3', null, 'Which heads copy?'), h('span.small.muted', null, `the same test on these tokens for all ${AL.reduce((a, l) => a + nHeads(l), 0)} attention heads`)),
-    h('div.row', null, scan.btn, h('span.small.muted', null, gpt2 ? 'A few minutes on a processor; seconds on a graphics card.' : `Seconds ${whereRun()}.`)), scanSlot,
+    h('div.row', null, scan.btn, h('span.small.muted', null, gpt2 ? 'A few minutes on a processor; seconds on a graphics card.' : `Under a minute ${whereRun()} (${AL.reduce((n, l) => n + nHeads(l), 0)} heads, one request each).`)), scanSlot,
     h('div.res-cols', null, scanBox, scanList));
 
   const go = debounce(async () => {

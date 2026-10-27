@@ -1,6 +1,7 @@
 /* lab/checks/tools.mjs: opens every Lab tool in a real browser, presses its run buttons in page order (a button that
    appears after the first run, such as "Push it" once a dictionary is loaded, is pressed in the next round), and
-   reports page errors, console errors and error boxes per tool, with a full-page screenshot of each.
+   reports page errors, console errors and error boxes per tool, with a full-page screenshot of each. A tool that could
+   not run because another job (a render) held the 3090 the whole time is reported as BUSY, not as a failure.
 
      python -m http.server 8080 --bind 127.0.0.1        from the repo root (the Lab reads ../intuition for its links)
      node lab/checks/tools.mjs [tool ...]
@@ -13,7 +14,8 @@
      BROWSER  chromium (default, Playwright's own), msedge or chrome (an installed browser, so playwright-core is enough)
      OUT      folder for the screenshots (the system's temp folder)
 
-   It needs Playwright (npm i playwright-core, or playwright). The exit code is 1 if any tool failed. */
+   It needs Playwright (npm i playwright-core, or playwright). The exit code is 1 if any tool failed, 2 if none failed
+   but some were BUSY. */
 
 import os from 'os';
 import path from 'path';
@@ -29,7 +31,7 @@ const [DEV_URL, DEV_MODEL] = (process.env.DEV || '').split(',');
 const BROWSER = process.env.BROWSER || 'chromium';
 const OUT = process.env.OUT || os.tmpdir();
 const TOOLS = ['next', 'surprise', 'lens', 'attention', 'ov', 'dla', 'ablate', 'patch', 'neurons', 'features', 'steer', 'probe'];
-const RUN_S = 900, READY_S = 600;      // the 9B's first load from the original weights takes minutes
+const RUN_S = 900, READY_S = 900;      // a cold 9B start (process, then the load) takes up to 8 minutes on the PC
 
 const browser = await chromium.launch({ args: ['--no-proxy-server'], ...(BROWSER === 'chromium' ? {} : { channel: BROWSER }) });
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -43,7 +45,8 @@ let errs = [];
 page.on('console', (m) => { if (m.type() === 'error') errs.push(`console: ${m.text()}`); });
 page.on('pageerror', (e) => errs.push(`page error: ${e.message}`));
 
-let failed = 0;
+const BUSY = /stayed busy with another job|^the model was not ready after \d+ s \("waiting"\)|still running after \d+ s while the card was busy/;
+let failed = 0, busy = 0;
 for (const id of process.argv.slice(2).length ? process.argv.slice(2) : TOOLS) {
   errs = [];
   const t0 = Date.now(), lines = [];
@@ -70,7 +73,7 @@ for (const id of process.argv.slice(2).length ? process.argv.slice(2) : TOOLS) {
       await b.click();
       await page.waitForTimeout(400);
       await page.waitForFunction((el) => !el.isConnected || el.textContent.trim() !== 'Stop', b, { timeout: RUN_S * 1000 })
-        .catch(() => errs.push(`"${label}" was still running after ${RUN_S} s`));
+        .catch(async () => errs.push(`"${label}" was still running after ${RUN_S} s${await page.evaluate(() => window.__lab.engine.status.state) === 'waiting' ? ' while the card was busy' : ''}`));
       await page.waitForTimeout(800);
       lines.push(`       pressed "${label}": ${((Date.now() - t1) / 1000).toFixed(1)} s`);
     }
@@ -81,11 +84,13 @@ for (const id of process.argv.slice(2).length ? process.argv.slice(2) : TOOLS) {
   for (const b of boxes) errs.push(`error box: ${b}`);
   const shot = path.join(OUT, `lab-${PICK}-${id}.png`);
   await page.screenshot({ path: shot, fullPage: true });
-  if (errs.length) failed++;
-  console.log(`${errs.length ? 'FAIL' : 'ok  '}  ${id} (${((Date.now() - t0) / 1000).toFixed(1)} s) ${shot}`);
+  const verdict = !errs.length ? 'ok  ' : errs.every((e) => BUSY.test(e.replace(/^(console: Error: |error box: )/, ''))) ? 'BUSY' : 'FAIL';
+  if (verdict === 'FAIL') failed++;
+  if (verdict === 'BUSY') busy++;
+  console.log(`${verdict}  ${id} (${((Date.now() - t0) / 1000).toFixed(1)} s) ${shot}`);
   for (const l of lines) console.log(l);
   for (const e of errs) console.log('       ' + e);
 }
 await browser.close();
-console.log(failed ? `${failed} tool(s) failed.` : 'Every tool ran without an error.');
-process.exit(failed ? 1 : 0);
+console.log(failed ? `${failed} tool(s) failed.` : busy ? `No errors, but ${busy} tool(s) could not run: another job held the graphics card.` : 'Every tool ran without an error.');
+process.exit(failed ? 1 : busy ? 2 : 0);
