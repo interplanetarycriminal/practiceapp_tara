@@ -10,8 +10,10 @@ layers are the same quantity taken through a downstream node instead of the logi
 al., Sparse Feature Circuits (2024), with Qwen-Scope's residual dictionaries in place of their per-module ones.
 
 The check that keeps it honest: patch the top-k features to their corrupt values for real (no approximation) and
-measure how much of the clean-corrupt gap disappears, against k random features that were active on the same
-prompts. The graph is written in the same JSON layout circuit-tracer produces, so one viewer draws both."""
+measure how much of the clean-corrupt gap disappears, against sets of k random features that were active on the same
+prompts. The features are ranked on one half of the pairs and patched on the other half, so the check is not scored
+on the pairs that picked them. The graph is written in the same JSON layout circuit-tracer produces, so one viewer
+draws both."""
 import numpy as np
 import torch
 
@@ -20,7 +22,7 @@ from ..data import pairs as read_pairs
 from ..hooks import Hooks
 from ..packs import claim
 from ..sae import dictionary_spec, load_many
-from ..stats import bootstrap_ci
+from ..stats import mean_ci, ratio_ci
 
 
 def metric(logits, ans, foil):
@@ -132,6 +134,13 @@ def run(spec, ctx):
     say(f'{len(items)} pairs usable, skipped {skipped}')
     aligned = spec.get('positions', 'auto') != 'sum' and len({len(it['clean']) for it in items}) == 1
     T = len(items[0]['clean'])
+    # pairs for the real-patching check are held out of the ranking that picks the features to patch
+    vs = spec.get('validate') or {}
+    n_val = min(int(vs.get('items', 24)), len(items) // 2)
+    held_out = n_val > 0
+    val_idx = sorted(np.random.default_rng(seed + 5).permutation(len(items))[:n_val].tolist()) if held_out \
+        else list(range(len(items)))
+    rank_idx = set(range(len(items))) - set(val_idx) if held_out else set(range(len(items)))
 
     ds = dictionary_spec(spec['dictionary'])
     layers = sorted(layer_list(ds.get('layers', ds.get('layer')), lm.n_layers))
@@ -145,6 +154,7 @@ def run(spec, ctx):
     shape = (T, F) if aligned else (F,)
     zeros = lambda shp: torch.zeros(shp, dtype=torch.float64, device=sdev)
     eff = {L: zeros(shape) for L in layers}
+    eff_rank = {L: zeros(shape) for L in layers}
     eff_err = {L: zeros(T if aligned else 1) for L in layers}
     act = {L: zeros(shape) for L in layers}
     layer_sum = {L: [] for L in layers}
@@ -171,6 +181,8 @@ def run(spec, ctx):
                         ge += g[1] / steps
                     e_f, e_e = (fc - fk) * gf, ((ec - ek) * ge).sum(-1)
                     eff[L] += (e_f if aligned else e_f.sum(0)).double()
+                    if n in rank_idx:
+                        eff_rank[L] += (e_f if aligned else e_f.sum(0)).double()
                     eff_err[L] += (e_e if aligned else e_e.sum(0, keepdim=True)).double()
                     layer_sum[L].append(float(e_f.sum() + e_e.sum()))
             else:
@@ -181,6 +193,8 @@ def run(spec, ctx):
                     e_f = (dense(saes[L], cc[L]) - dense(saes[L], ck[L])) * grads[i]
                     e_e = ((cc[L][2] - ck[L][2]) * grads[len(layers) + i]).sum(-1)
                     eff[L] += (e_f if aligned else e_f.sum(0)).double()
+                    if n in rank_idx:
+                        eff_rank[L] += (e_f if aligned else e_f.sum(0)).double()
                     eff_err[L] += (e_e if aligned else e_e.sum(0, keepdim=True)).double()
                     layer_sum[L].append(float(e_f.sum() + e_e.sum()))
         for L in layers:
@@ -191,6 +205,7 @@ def run(spec, ctx):
     N = len(items)
     for L in layers:
         eff[L] /= N
+        eff_rank[L] /= len(rank_idx)
         eff_err[L] /= N
         act[L] /= N
 
@@ -285,10 +300,17 @@ def run(spec, ctx):
         links = links[:keep_links]
 
     # ---- validation: patch the top-k features for real, against random active features ------------------------
-    ks = [int(k) for k in (spec.get('validate') or {}).get('k', [1, 3, 10, 30])]
-    n_rand = int((spec.get('validate') or {}).get('random', 3))
-    n_val = min(N, int((spec.get('validate') or {}).get('items', 24)))
-    feat_rank = [(L, t, f) for _, L, t, f in cand]
+    # ranked on the ranking pairs only, patched on the held-out ones
+    ks = [int(k) for k in vs.get('k', [1, 3, 10, 30])]
+    n_rand = int(vs.get('random', 10))
+    ranked = []
+    for L in layers:
+        flat = eff_rank[L].reshape(-1)
+        vals, ix = flat.abs().topk(min(max(top_n, max(ks)), flat.numel()))
+        for v, i in zip(vals.tolist(), ix.tolist()):
+            ranked.append((v, L, *((i // F, i % F) if aligned else (-1, i))))
+    ranked.sort(reverse=True)
+    feat_rank = [(L, t, f) for _, L, t, f in ranked]
     rng = np.random.default_rng(seed + 3)
     curves = []
     for k in ks:
@@ -304,7 +326,7 @@ def run(spec, ctx):
                 rs.append((L, int(pick[0]), int(pick[1])) if aligned else (L, -1, int(pick[0])))
             rand_sets.append(rs)
         top_frac, rand_frac = [], [[] for _ in range(n_rand)]
-        for it_i in range(n_val):
+        for it_i in val_idx:
             it = items[it_i]
             cc, ck = store_codes[it_i]
             ids_c = torch.tensor([it['clean']], device=lm.device)
@@ -333,17 +355,11 @@ def run(spec, ctx):
             return float(rows[:, 0].mean() / rows[:, 1].mean()) if abs(rows[:, 1].mean()) > 1e-9 else float('nan')
 
         tf = np.asarray(top_frac)
-        boot = []
-        for b_ in range(500):
-            ix = rng.integers(0, len(tf), len(tf))
-            den = tf[ix, 1].mean()
-            boot.append(tf[ix, 0].mean() / den if abs(den) > 1e-9 else np.nan)
-        curves.append({'k': k, 'top': ratio(top_frac), 'top_ci': [float(np.nanquantile(boot, 0.025)),
-                                                                  float(np.nanquantile(boot, 0.975))],
-                       'random': [ratio(r) for r in rand_frac]})
+        est, lo, hi = ratio_ci(tf[:, 0], tf[:, 1], seed=seed)
+        curves.append({'k': k, 'top': est, 'top_ci': [lo, hi], 'random': [ratio(r) for r in rand_frac]})
         say(f"k={k}: top features remove {curves[-1]['top']:.0%} of the gap, random {np.nanmean(curves[-1]['random']):.0%}")
 
-    gap_ci = bootstrap_ci(np.asarray(m_clean) - np.asarray(m_corrupt), seed=seed)
+    gap_ci = mean_ci(np.asarray(m_clean) - np.asarray(m_corrupt))
     claims = [claim(
         f"The task works: the model prefers the answer over the foil by {np.mean(m_clean):+.2f} on clean prompts and "
         f"{np.mean(m_corrupt):+.2f} on corrupt ones (gap {gap_ci[0]:.2f}, 95% CI {gap_ci[1]:.2f} to {gap_ci[2]:.2f}).",
@@ -354,13 +370,18 @@ def run(spec, ctx):
         if c['k'] == max(ks):
             rmax = np.nanmax(c['random']) if c['random'] else float('nan')
             ok = c['top_ci'][0] > (rmax if rmax == rmax else 0) + 0.1
+            where = (f"ranked on {len(rank_idx)} pairs and patched on {len(val_idx)} others" if held_out else
+                     f"ranked and patched on the same {len(val_idx)} pair{'s' if len(val_idx) != 1 else ''}, too few "
+                     f"to hold any out")
             claims.append(claim(
-                f"Patching just the top {c['k']} features (of {F} at each of {len(layers)} layers) to their corrupt "
-                f"values removes {c['top']:.0%} of the clean-corrupt gap (95% CI {c['top_ci'][0]:.0%} to "
-                f"{c['top_ci'][1]:.0%}); {c['k']} random active features remove at most {rmax:.0%}.",
-                'supported' if ok else 'weak' if c['top'] > rmax else 'not-supported',
-                {'k': c['k'], 'top': c['top'], 'ci': c['top_ci'], 'random': c['random']},
-                test='CI lower bound beats the best random set by 10 points; real patching, not the approximation'))
+                f"Patching just the top {c['k']} features (of {F} at each of {len(layers)} layers; {where}) to their "
+                f"corrupt values removes {c['top']:.0%} of the clean-corrupt gap (95% CI {c['top_ci'][0]:.0%} to "
+                f"{c['top_ci'][1]:.0%}); {len(c['random'])} sets of {c['k']} random active features remove at most "
+                f"{rmax:.0%}.",
+                'supported' if ok and held_out else 'weak' if c['top'] > rmax else 'not-supported',
+                {'k': c['k'], 'top': c['top'], 'ci': c['top_ci'], 'random': c['random'], 'held_out': held_out},
+                test='CI lower bound beats the best random set by 10 points, on pairs that played no part in '
+                     'ranking the features; real patching, not the approximation'))
     approx = {L: (float(np.mean(layer_sum[L])) / gap if abs(gap) > 1e-9 else None) for L in layers}
 
     pack = ctx.pack('circuit')
@@ -375,10 +396,14 @@ def run(spec, ctx):
                                           'nodes': nodes, 'links': links})
     data = {'layers': layers, 'aligned': aligned, 'positions': T, 'method': method, 'graph': graph_file,
             'n_items': N, 'skipped': skipped, 'validation': curves, 'completeness': approx,
+            'validation_split': {'held_out': held_out, 'ranked_on': len(rank_idx), 'patched_on': len(val_idx),
+                                 'random_sets': n_rand},
+            'interval': 'gap: Student t over pairs; shares: bootstrap over pairs, 95%',
             'completeness_note': 'per layer: summed node effects divided by the real clean-corrupt gap; near 1 means the first-order estimate is trustworthy',
             'tokens': lm.decode_tokens(items[0]['clean']), 'examples': [
                 {'clean': it['text'], 'answer': it['answer'], 'foil': it['foil_text'], 'm_clean': m_clean[i],
                  'm_corrupt': m_corrupt[i]} for i, it in enumerate(items[:12])]}
-    summary = {'headline': f"top {max(ks)} features carry {curves[-1]['top']:.0%} of the gap" if curves else ''}
+    summary = {'headline': (f"top {max(ks)} features carry {curves[-1]['top']:.0%} of the gap"
+                            + (' on held-out pairs' if held_out else '')) if curves else ''}
     return pack.save(models=[lm.info()], summary=summary, claims=claims, data=data, provenance=ctx.provenance(),
                      dictionary={**next(iter(saes.values())).meta, 'layers': layers})

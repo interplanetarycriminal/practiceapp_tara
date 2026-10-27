@@ -25,7 +25,7 @@ from tarabench.models import LM, load  # noqa: E402
 from tarabench.packs import DTYPES  # noqa: E402
 from tarabench.runner import run_spec  # noqa: E402
 from tarabench.sae import TopKSAE  # noqa: E402
-from tarabench.stats import binom_ci, null_labels, split  # noqa: E402
+from tarabench.stats import binom_ci, mcnemar, mean_ci, null_labels, ratio_ci, split, t_quantile, words_probe  # noqa: E402
 
 RESULTS = []
 
@@ -50,6 +50,27 @@ def statistics():
     yp = null_labels(ys, np.random.default_rng(1), g)
     check('the paired null swaps labels within pairs', all(sorted(yp[g == v]) == [0, 1] for v in np.unique(g)) and
           (yp != ys).any())
+    # Student t quantiles against the tables, a t interval by hand, and a share's bootstrap around its own estimate
+    tq = [t_quantile(0.975, df) for df in (1, 7, 30)]
+    check('t quantiles match the tables', all(abs(a - b) < 1e-5 for a, b in zip(tq, (12.70620, 2.36462, 2.04227))),
+          f'df 7: {tq[1]:.5f}')
+    _, lo, hi = mean_ci([1.0, 2.0, 3.0, 4.0])      # 2.5 +- 3.18245 x 1.29099 / 2
+    check('a mean\'s t interval matches a hand computation, and one item gives none',
+          abs(lo - 0.44574) < 1e-4 and abs(hi - 4.55426) < 1e-4 and np.isnan(mean_ci([1.0])[1]), f'{lo:.5f} to {hi:.5f}')
+    # the words-only control reads a label carried by one token, and cannot read one carried by word order
+    r = np.random.default_rng(5)
+    noise = [list(r.integers(20, 60, 6)) for _ in range(120)]
+    ys = np.arange(120) % 2
+    tr, te = np.arange(80), np.arange(80, 120)
+    by_word, _ = words_probe([n + [7 if y else 8] for n, y in zip(noise, ys)], ys, tr, te)
+    by_order, _ = words_probe([n + ([5, 9] if y else [9, 5]) for n, y in zip(noise, ys)], ys, tr, te)
+    check('the words-only control reads words, not word order',
+          by_word.mean() == 1 and abs(by_order.mean() - 0.5) <= 0.2 and mcnemar(by_word, by_order)[2] < 0.05,
+          f'one-token label {by_word.mean():.0%}, order label {by_order.mean():.0%}')
+    num, den = np.random.default_rng(3).normal(1, 1, 40), np.random.default_rng(4).normal(2, 0.5, 40)
+    est, lo, hi = ratio_ci(num, den)
+    check('a share\'s interval brackets its own ratio of means', lo <= est <= hi and
+          abs(est - num.mean() / den.mean()) < 1e-12, f'{est:.3f} in {lo:.3f} to {hi:.3f}')
 
 
 def invariants(lm, dict_dir):
@@ -242,6 +263,34 @@ def engines(out, dict_dir):
                       pd.get('paired') is True and pd['n_test'] % 2 == 0 and 'exact' in pd.get('interval', '') and
                       all(0 <= r['logreg_ci'][0] <= r['logreg'] <= r['logreg_ci'][1] <= 1 for r in pd['rows']),
                       f"{pd['n_test']} of {pd['n']} held out")
+                w = pd.get('words') or {}
+                check('the probe picks its layer inside the training half and reports the words-only control',
+                      all('cv_acc' in r for r in pd['rows']) and 'training' in pd.get('best_by', '') and
+                      0 <= w.get('ci', [2])[0] <= w.get('acc', -1) <= w['ci'][1] <= 1 and
+                      any('more than the words' in c['text'] for c in meta['claims']),
+                      f"words alone {w.get('acc', float('nan')):.0%} on {w.get('vocabulary')} tokens")
+            if spec['id'] == 'selftest-steer':
+                ev = [c['evidence'] for c in meta['claims']]
+                check('steering intervals are Student t, around their own estimates',
+                      'Student t' in meta['data'].get('interval', '') and
+                      all(e['ci'][0] <= e['delta'] <= e['ci'][1] for e in ev), f'{len(ev)} claims')
+            if spec['id'] in ('selftest-steer-seq', 'selftest-steer-pack'):
+                check(f"one prompt gives no interval and no supported claim ({spec['id']})",
+                      all(c['status'] != 'supported' and 'one prompt' in c['text'] for c in meta['claims']),
+                      ', '.join(c['status'] for c in meta['claims']))
+            if spec['id'] == 'selftest-circuit':
+                vs, cv = meta['data']['validation_split'], meta['data']['validation']
+                check('the circuit check patches pairs held out of the ranking',
+                      vs['held_out'] and vs['patched_on'] == 6 and vs['ranked_on'] + vs['patched_on'] == meta['data']['n_items']
+                      and all(c['top_ci'][0] <= c['top'] <= c['top_ci'][1] for c in cv),
+                      f"ranked on {vs['ranked_on']}, patched on {vs['patched_on']}")
+            if spec['id'] == 'selftest-diff':
+                ss, rows = meta['data']['steer_split'], meta['data']['steer']
+                check('the diff test scores its vector on held-out prompts, inside its own interval',
+                      ss['held_out'] and ss['fit'] + ss['eval'] == meta['data']['n_prompts'] and
+                      all(r['delta']['closed_ci'][0] <= r['delta']['closed'] <= r['delta']['closed_ci'][1] for r in rows)
+                      and all(len(r['random']['closed_all']) == ss['random'] for r in rows),
+                      f"fit {ss['fit']}, scored on {ss['eval']}, {ss['random']} random vectors")
             if spec['engine'] == 'circuit':
                 g = json.loads((Path(d) / meta['data']['graph']).read_text(encoding='utf-8'))
                 ids = {n['node_id'] for n in g['nodes']}

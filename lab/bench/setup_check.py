@@ -113,13 +113,13 @@ def selftest():
         (HERE / 'work' / 'selftest.log').write_text(r.stdout + '\n' + r.stderr, encoding='utf-8')
 
 
-def real_model(name, dict_layer, lock):
+def real_model(name, dict_layer, lock, precision='auto'):
     import torch
     from tarabench.common import gpu_lock
     from tarabench.data import NEUTRAL
     from tarabench.models import load
     t0 = time.time()
-    lm = load(name)
+    lm = load(name, precision=precision)
     lm.hold = gpu_lock(lock)
     note(f'load {name}', True, f'{lm.precision}, {lm.n_layers} layers, width {lm.d_model}, {time.time() - t0:.0f}s')
     seqs = lm.encode(['The capital of France is', 'Here is a short story about a lighthouse keeper:',
@@ -131,18 +131,18 @@ def real_model(name, dict_layer, lock):
     single = torch.cat([lm.last_logprobs([s]) for s in seqs])
     gap = (single - lp).abs()
     d, dm, same = float(gap.max()), float(gap.mean()), bool((single.argmax(-1) == lp.argmax(-1)).all())
-    # float32 is exact. In bf16 a batch takes different matrix kernels through the whole network, so scores differ by
-    # rounding (about 0.02 nats on average for Qwen 3.5 2B); a padding bug changes the top token or moves a score by
-    # whole nats, which is what this looks for there, and the rounding is reported as the run's resolution
+    # float32 is exact. In bf16 (or 4-bit) a batch takes different matrix kernels through the whole network, so scores
+    # differ by rounding (about 0.02 nats on average for Qwen 3.5 2B in bf16); a padding bug changes the top token or
+    # moves a score by whole nats, which is what this looks for there, and the rounding is reported as the resolution
     gap_s = f'log-prob difference, batched against single: max {d:.3g}, mean {dm:.2g}, same top token: {same}'
     if lm.dtype == torch.float32:
         note('batching is exact on this model', d < 1e-3, f'{gap_s} (fp32)',
              'report this: batched runs disagree with single runs by more than rounding')
     else:
         bug = not same or d >= 0.5
-        note('batching agrees up to bf16 rounding', False if bug else None if dm > 0.01 else True,
+        note(f'batching agrees up to {lm.precision} rounding', False if bug else None if dm > 0.01 else True,
              f'{gap_s} ({lm.precision}; float32 head {"on" if lm._head32 else "off"})' +
-             ('' if bug else f'; effects smaller than about {3 * dm:.2g} nats are below bf16 rounding here'),
+             ('' if bug else f'; effects smaller than about {3 * dm:.2g} nats are below {lm.precision} rounding here'),
              'report this: batched runs disagree with single runs by more than rounding' if bug else
              'set "precision": "fp32" in a spec when the model fits in float32 (Qwen 3.5 2B does)')
     REPORT['model'] = lm.info()
@@ -168,6 +168,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--model', default=None)
     ap.add_argument('--dict-layer', type=int, default=None)
+    ap.add_argument('--precision', default='auto', help='auto, fp32, bf16 or nf4, as in a spec')
     ap.add_argument('--lock', default='')
     ap.add_argument('--skip-selftest', action='store_true')
     a = ap.parse_args()
@@ -182,7 +183,7 @@ def main():
         selftest()
     if a.model:
         try:
-            real_model(a.model, a.dict_layer, a.lock)
+            real_model(a.model, a.dict_layer, a.lock, a.precision)
         except Exception as e:
             note(f'real model {a.model}', False, f'{type(e).__name__}: {e}')
     out = HERE / 'work'

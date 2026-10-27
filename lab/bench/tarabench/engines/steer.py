@@ -5,7 +5,8 @@ metric at each dose. Doses are in units of the layer's median residual norm (1.0
 residual vector), the convention of Lyra's neuron-explorer sweeps. The same ladder is run for norm-matched random
 directions, which is the bar a real direction has to clear, and the cost is read as the rise in loss on neutral
 text. Directions come from a contrast (difference of means, as in Rimsky et al.'s contrastive activation addition),
-an SAE feature's decoder column, or a direction saved by a probe pack."""
+an SAE feature's decoder column, or a direction saved by a probe pack. Intervals are Student t over the metric's
+prompts (a percentile bootstrap is too narrow for the eight or so prompts a metric has); one prompt gives none."""
 import json
 
 import numpy as np
@@ -16,7 +17,7 @@ from ..data import labelled, texts
 from ..metrics import Metric
 from ..packs import claim
 from ..sae import TopKSAE, dictionary_spec
-from ..stats import auc, bootstrap_ci
+from ..stats import auc, mean_ci
 
 
 def get_direction(lm, d, ctx):
@@ -92,7 +93,7 @@ def run(spec, ctx):
         per_prompt.append(base if d == 0 else metric(setup_for(unit, d)))
         say(f'dose {d:+.3f}: metric {per_prompt[-1].mean():+.3f}')
     per_prompt = np.stack(per_prompt)
-    curve = [bootstrap_ci(v, seed=seed) for v in per_prompt]
+    curve = [mean_ci(v) for v in per_prompt]
 
     R = int((spec.get('controls') or {}).get('random', 8))
     g = torch.Generator().manual_seed(seed + 7919)
@@ -130,21 +131,24 @@ def run(spec, ctx):
     for j in ([len(doses) - 1] if doses[-1] > 0 else []) + ([0] if doses[0] < 0 else []):
         d = doses[j]
         delta = per_prompt[j] - per_prompt[j0]
-        est, lo, hi = bootstrap_ci(delta, seed=seed)
+        est, lo, hi = mean_ci(delta)
         rd = rand_curve[:, j] - rand_curve[:, j0]
         sd = float(rd.std(ddof=1)) if R > 1 else float('nan')
         beats = R > 1 and abs(est) > 3 * sd and abs(est) > np.abs(rd).max()
         ci_clear = lo > 0 or hi < 0
-        status = 'supported' if ci_clear and beats else 'weak' if ci_clear else 'not-supported'
+        one = len(delta) < 2
+        status = 'supported' if ci_clear and beats else 'weak' if ci_clear or (one and beats) else 'not-supported'
         dn = nll_v[j] - nll0
         claims.append(claim(
             f"Pushing {'along' if d > 0 else 'against'} the direction at layer{'s' if len(apply) > 1 else ''} "
-            f"{', '.join(map(str, apply))} (dose {d:+g}) shifts the metric by {est:+.3f} "
-            f"(95% CI {lo:+.3f} to {hi:+.3f}); {R} random directions of the same size shift it by at most "
-            f"{np.abs(rd).max():.3f}. Loss on neutral text changes by {dn:+.3f} nats.",
+            f"{', '.join(map(str, apply))} (dose {d:+g}) shifts the metric by {est:+.3g} "
+            + ("(one prompt, so no interval)" if one else f"(95% CI {lo:+.3g} to {hi:+.3g}, over {len(delta)} prompts)")
+            + f"; {R} random directions of the same size shift it by at most {np.abs(rd).max():.3g}. "
+            f"Loss on neutral text changes by {dn:+.3g} nats.",
             status, {'dose': d, 'delta': est, 'ci': [lo, hi], 'random_sd': sd, 'random_max': float(np.abs(rd).max()),
                      'nll_delta': dn, 'random_nll_delta': [nr[j] - nll0 for nr in nll_r]},
-            test='effect CI excludes zero and exceeds 3 sd and the maximum of the random-direction controls'))
+            test='effect CI (Student t over prompts) excludes zero, and the effect exceeds 3 sd and the maximum of '
+                 'the random-direction controls'))
 
     pack = ctx.pack('steer')
     pack.array('per_prompt', per_prompt, 'f32')
@@ -153,12 +157,14 @@ def run(spec, ctx):
     data = {'doses': doses, 'units': units, 'layers': apply, 'resid_norm': norms, 'direction': dinfo,
             'metric': {'kind': metric.kind, 'describe': metric.describe(), 'n_prompts': len(metric.prompts),
                        'prompts': metric.prompts, 'warn': metric.warn},
+            'interval': 'Student t over prompts, 95%',
             'curve': [{'dose': d, 'mean': c[0], 'lo': c[1], 'hi': c[2]} for d, c in zip(doses, curve)],
             'random': {'n': R, 'mean': rand_curve.mean(0), 'sd': rand_curve.std(0, ddof=1) if R > 1 else None},
             'nll': {'base': nll0, 'direction': nll_v, 'random': nll_r, 'n_texts': len(nseq)},
             'samples': samples, 'logit_lens': lens}
     head = claims[0]['evidence'] if claims else {}
-    summary = {'headline': (f"dose {head.get('dose', 0):+g} shifts the metric by {head.get('delta', 0):+.2f} "
-                            f"against a random band of ±{3 * (head.get('random_sd') or 0):.2f}") if claims else ''}
+    summary = {'headline': (f"dose {head.get('dose', 0):+g} shifts the metric by {head.get('delta', 0):+.3g}; "
+                            f"random directions of the same size, at most {head.get('random_max', 0):.3g}")
+               if claims else ''}
     return pack.save(models=[lm.info()], summary=summary, claims=claims, data=data,
                      provenance=ctx.provenance(), dictionary=dinfo.get('dictionary'))

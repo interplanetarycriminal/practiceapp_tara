@@ -1,5 +1,5 @@
-"""The statistics every engine leans on: bootstrap and exact binomial intervals, train/test splits that keep matched
-pairs together, linear probes, difference-of-means directions, PCA.
+"""The statistics every engine leans on: Student-t, bootstrap and exact binomial intervals, train/test splits that
+keep matched pairs together, linear probes, difference-of-means directions, PCA.
 
 Everything runs on the CPU in float32 or float64; the arrays are small (examples x model width)."""
 import math
@@ -21,6 +21,77 @@ def bootstrap_ci(values, n=1000, seed=0, stat=np.mean, alpha=0.05):
 
 def bootstrap_acc(correct, n=1000, seed=0):
     return bootstrap_ci(np.asarray(correct, dtype=np.float64), n=n, seed=seed)
+
+
+def ratio_ci(num, den, n=1000, seed=0, alpha=0.05):
+    """A share such as "fraction of the gap removed": sum(num) / sum(den) over items, with a percentile bootstrap that
+    resamples items whole, so the interval is for the same ratio of means as the estimate (a mean of per-item ratios
+    is a different number, and blows up on items whose denominator is near zero). Returns (estimate, low, high)."""
+    a, b = np.asarray(num, dtype=np.float64), np.asarray(den, dtype=np.float64)
+    if a.size == 0 or abs(b.mean()) < 1e-12:
+        return float('nan'), float('nan'), float('nan')
+    idx = np.random.default_rng(seed).integers(0, a.size, size=(n, a.size))
+    da = b[idx].mean(1)
+    boots = np.where(np.abs(da) > 1e-12, a[idx].mean(1) / np.where(np.abs(da) > 1e-12, da, 1), np.nan)
+    return (float(a.mean() / b.mean()), float(np.nanquantile(boots, alpha / 2)),
+            float(np.nanquantile(boots, 1 - alpha / 2)))
+
+
+def _betacf(a, b, x):
+    """The continued fraction of the incomplete beta function (Lentz's method, as in Numerical Recipes 6.4)."""
+    tiny = 1e-300
+    c, d = 1.0, 1.0 - (a + b) * x / (a + 1)
+    d = 1.0 / (d if abs(d) > tiny else tiny)
+    h = d
+    for m in range(1, 300):
+        for aa in (m * (b - m) * x / ((a + 2 * m - 1) * (a + 2 * m)),
+                   -(a + m) * (a + b + m) * x / ((a + 2 * m) * (a + 2 * m + 1))):
+            d = 1.0 + aa * d
+            d = 1.0 / (d if abs(d) > tiny else tiny)
+            c = 1.0 + aa / c
+            c = c if abs(c) > tiny else tiny
+            h *= d * c
+        if abs(d * c - 1.0) < 1e-15:
+            break
+    return h
+
+
+def _betainc(a, b, x):
+    """The regularised incomplete beta function I_x(a, b)."""
+    if x <= 0:
+        return 0.0
+    if x >= 1:
+        return 1.0
+    front = math.exp(math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) + a * math.log(x) + b * math.log1p(-x))
+    if x < (a + 1) / (a + b + 2):
+        return front * _betacf(a, b, x) / a
+    return 1.0 - front * _betacf(b, a, 1 - x) / b
+
+
+def t_quantile(p, df):
+    """The p quantile of Student's t with df degrees of freedom, by bisection on its CDF (the bench has no scipy)."""
+    def cdf(t):
+        tail = 0.5 * _betainc(df / 2, 0.5, df / (df + t * t))
+        return 1 - tail if t > 0 else tail
+    lo, hi = -1e4, 1e4
+    for _ in range(100):
+        m = (lo + hi) / 2
+        lo, hi = (m, hi) if cdf(m) < p else (lo, m)
+    return (lo + hi) / 2
+
+
+def mean_ci(values, alpha=0.05):
+    """A mean over items (prompts, pairs) with its Student-t interval: (estimate, low, high). Engines average a
+    handful of prompts, where the percentile bootstrap is too narrow (by about a fifth at 8 prompts, since it
+    ignores that the spread itself is estimated); one item gives no interval at all (nan, nan)."""
+    v = np.asarray(values, dtype=np.float64).ravel()
+    if v.size == 0:
+        return float('nan'), float('nan'), float('nan')
+    m = float(v.mean())
+    if v.size < 2:
+        return m, float('nan'), float('nan')
+    h = t_quantile(1 - alpha / 2, v.size - 1) * float(v.std(ddof=1)) / math.sqrt(v.size)
+    return m, m - h, m + h
 
 
 def _binom_cdf(k, n, p):
@@ -53,6 +124,17 @@ def binom_ci(k, n, alpha=0.05):
     lo = 0.0 if k <= 0 else solve(lambda p: 1 - _binom_cdf(k - 1, n, p), alpha / 2)     # P(X >= k) rises with p
     hi = 1.0 if k >= n else solve(lambda p: -_binom_cdf(k, n, p), -alpha / 2)           # P(X <= k) falls with p
     return lo, hi
+
+
+def mcnemar(a_correct, b_correct):
+    """Exact McNemar test for two classifiers scored on the same items: only the items where they disagree carry
+    information, and if neither is better each of those is a coin flip. Returns (right only for a, right only for b,
+    two-sided p)."""
+    a, b = np.asarray(a_correct, dtype=bool), np.asarray(b_correct, dtype=bool)
+    only_a, only_b = int((a & ~b).sum()), int((~a & b).sum())
+    if only_a + only_b == 0:
+        return only_a, only_b, 1.0
+    return only_a, only_b, min(1.0, 2 * _binom_cdf(min(only_a, only_b), only_a + only_b, 0.5))
 
 
 def exact_acc(correct, alpha=0.05):
@@ -144,8 +226,9 @@ def probe_direction(model):
     return d / (np.linalg.norm(d) + 1e-12)
 
 
-def choose_l2(X, y, grid=(1e-3, 1e-2, 1e-1, 1.0, 10.0), folds=3, seed=0, groups=None):
-    """The L2 strength with the best cross-validated accuracy; with groups, each fold holds whole groups."""
+def choose_l2(X, y, grid=(1e-3, 1e-2, 1e-1, 1.0, 10.0), folds=3, seed=0, groups=None, with_acc=False):
+    """The L2 strength with the best cross-validated accuracy; with groups, each fold holds whole groups. with_acc
+    also returns that accuracy, which picks a probe's best layer without looking at the held-out set."""
     y = np.asarray(y)
     rng = np.random.default_rng(seed)
     fold = np.empty(len(y), dtype=np.int64)
@@ -167,7 +250,21 @@ def choose_l2(X, y, grid=(1e-3, 1e-2, 1e-1, 1.0, 10.0), folds=3, seed=0, groups=
         acc = float(np.mean(accs)) if accs else 0
         if acc > best_acc + 1e-9:
             best, best_acc = l2, acc
-    return best
+    return (best, best_acc) if with_acc else best
+
+
+def words_probe(seqs, y, train, test, seed=0, groups=None, grid=None):
+    """The words-only control for a probe: logistic regression on which tokens each text contains (the training
+    half's vocabulary, present or absent), with the L2 strength cross-validated as for the real probe. Returns
+    (correct on each test item, vocabulary size)."""
+    y = np.asarray(y)
+    vocab = {t: j for j, t in enumerate(sorted({t for i in train for t in seqs[i]}))}
+    W = np.zeros((len(seqs), len(vocab)))
+    for i, sq in enumerate(seqs):
+        W[i, [vocab[t] for t in sq if t in vocab]] = 1.0
+    l2 = choose_l2(W[train], y[train], seed=seed, groups=groups, **({'grid': grid} if grid else {}))
+    s = probe_scores(fit_logistic(W[train], y[train], l2), W[test])
+    return (s > 0) == (y[test] == 1), len(vocab)
 
 
 def diff_means(X, y):
