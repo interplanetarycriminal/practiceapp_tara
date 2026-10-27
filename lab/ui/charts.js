@@ -17,9 +17,10 @@ export const tip = {
     return tipEl;
   },
   show(content, x, y) {
+    if (!content) { this.hide(); return; }
     const t = this.el();
     clear(t);
-    for (const c of [].concat(content)) t.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    for (const c of [].concat(content)) if (c) t.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
     t.hidden = false;
     const r = t.getBoundingClientRect(), W = innerWidth, H = innerHeight;
     let left = x + 14, top = y + 14;
@@ -654,15 +655,19 @@ export function columns(el, { bins, height = 160, x = {}, y = {}, caption, color
   el.appendChild(box);
   if (caption) el.appendChild(h('div.chart-cap', null, caption));
   const vmax = Math.max(1e-9, ...bins.map((b) => b.value));
-  const yf = y.fmt || ((v) => fmt(v, 0));
+  /* y.log: powers of ten from just below the smallest bar, so a heavy tail stays visible */
+  const pos = bins.map((b) => b.value).filter((v) => v > 0);
+  const lo = y.log ? Math.floor(Math.log10(Math.min(...pos, vmax))) : 0, hi = y.log ? Math.max(lo + 1, Math.ceil(Math.log10(vmax))) : 0;
+  const yf = y.fmt || (y.log ? (v) => (v >= 1e6 ? +(v / 1e6).toPrecision(3) + 'M' : v >= 1e3 ? +(v / 1e3).toPrecision(3) + 'k' : v >= 1 ? String(Math.round(v)) : String(+v.toPrecision(1))) : (v) => fmt(v, 0));
   const draw = (W) => {
     clear(box);
-    const m = { l: 40, r: 8, t: 8, b: x.label ? 40 : 24 };
+    const m = { l: 44, r: 8, t: 8, b: x.label ? 40 : 24 };
     const pw = Math.max(40, W - m.l - m.r), ph = height - m.t - m.b, bw = pw / bins.length;
-    const Y = (v) => m.t + (1 - v / vmax) * ph;
+    const Y = y.log ? (v) => m.t + (1 - (Math.log10(Math.max(v, 10 ** lo)) - lo) / (hi - lo)) * ph : (v) => m.t + (1 - v / vmax) * ph;
     const svg = s('svg', { viewBox: `0 0 ${W} ${height}`, width: W, height, role: 'img', 'aria-label': caption || 'histogram' });
-    for (const t of niceTicks(0, vmax, 3)) {
-      svg.appendChild(s('line', { x1: m.l, x2: m.l + pw, y1: Y(t), y2: Y(t), class: t === 0 ? 'axis' : 'grid' }));
+    const ticks = y.log ? Array.from({ length: hi - lo + 1 }, (_, i) => 10 ** (lo + i)).filter((t, i, a) => a.length <= 4 || i % 2 === (a.length - 1) % 2) : niceTicks(0, vmax, 3);
+    for (const t of ticks) {
+      svg.appendChild(s('line', { x1: m.l, x2: m.l + pw, y1: Y(t), y2: Y(t), class: (y.log ? t === 10 ** lo : t === 0) ? 'axis' : 'grid' }));
       svg.appendChild(s('text', { x: m.l - 6, y: Y(t) + 4, class: 'tick', 'text-anchor': 'end' }, yf(t)));
     }
     // callers that blank some labels have already chosen which to show

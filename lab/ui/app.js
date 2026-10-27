@@ -90,7 +90,7 @@ function riverBlock() {
 function toolsView() {
   view.appendChild(h('div.wrap', null,
     h('h1', null, 'Tools'),
-    h('p.lede', null, 'Eleven instruments for GPT-2 small, each pinned where it looks inside the model. They run on this device after one 133 MB download.'),
+    h('p.lede', null, 'Twelve instruments for GPT-2 small, each pinned where it looks inside the model. They run on this device after one 133 MB download.'),
     riverBlock(),
     h('h2', null, 'Every tool'),
     h('div.grid3', null, TOOLS.map((t) => h('a.card.toolcard', { href: `#tool/${t.id}` },

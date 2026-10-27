@@ -5,7 +5,7 @@
 import { BPE } from './bpe.js';
 import { CFG, GPT2, loadWeights, logSoftmax, topk } from './gpt2.js';
 import { GPUEngine, gpuAvailable } from './gpu.js';
-import { RECIPES } from './recipes.js';
+import { RECIPES, saeFrom } from './recipes.js';
 
 const MODEL = new URL('../model/', import.meta.url);
 const DATA = new URL('../data/', import.meta.url);
@@ -209,7 +209,34 @@ export class Host {
       cpu: this.cpu, gpu: this.gpu, E: this.E, tok: this.tok, cfg: CFG, stats: this.stats, ctx,
       forward: (opts) => this.E.forward(opts),
       async unembedRows(X, N) { return host.unembedRows(X, N); },
+      sae: this.sae || null,
     };
+  }
+
+  /* A layer's SAE (the int8 copy the GPU precompute writes to lab/data/sae/L{ll}/), loaded once into the engine so
+     the features tool can encode text where the model runs. Scales are fp16 in the file and float32 here. */
+  async saeLoad({ layer = 7 }, ctx) {
+    if (this.sae && this.sae.layer === layer) return this.sae.meta;
+    const dir = new URL(`sae/L${String(layer).padStart(2, '0')}/`, DATA);
+    const info = await this.fetchJSON(new URL('info.json', dir));
+    const res = await fetch(new URL('sae.bin', dir).href);
+    if (!res.ok) throw new Error('sae.bin ' + res.status);
+    const total = Number(res.headers.get('content-length')) || 0, parts = [];
+    let got = 0, last = 0;
+    const rd = res.body.getReader();
+    for (;;) {
+      const { done, value } = await rd.read();
+      if (done) break;
+      parts.push(value); got += value.length;
+      const now = Date.now();
+      if (ctx.progress && now - last > 150) { last = now; ctx.progress({ done: got, total }); }
+    }
+    const buf = new Uint8Array(got);
+    let o = 0;
+    for (const x of parts) { buf.set(x, o); o += x.length; }
+    this.sae = saeFrom(info, buf.buffer, layer);
+    this.sae.meta = { layer, F: info.d_sae, bytes: got, check: info.check, int8: info.int8_check, centred: !!info.centred_input };
+    return this.sae.meta;
   }
 
   /* logits for N rows of 768 that have already been through ln_f (or any 768-d vectors) */
@@ -231,6 +258,7 @@ export class Host {
     if (op === 'probe') return this.probe();
     if (op === 'load') return this.load(args);
     if (op === 'forget') return this.forget();
+    if (op === 'saeLoad') return this.saeLoad(args, ctx);
     if (!this.ready && this.pending) await this.pending;
     if (!this.ready) throw new Error('GPT-2 is not loaded yet: start it with the button at the top of this tool.');
     await this.ready;

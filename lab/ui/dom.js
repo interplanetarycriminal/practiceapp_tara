@@ -64,7 +64,7 @@ export function tokText(s) {
 export function debounce(fn, ms) {
   let t = null;
   const d = (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
-  d.now = (...a) => { clearTimeout(t); fn(...a); };
+  d.now = (...a) => { clearTimeout(t); return fn(...a); };
   return d;
 }
 

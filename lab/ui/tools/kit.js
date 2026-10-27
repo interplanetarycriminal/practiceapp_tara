@@ -196,4 +196,15 @@ export async function answerToken(s, warnSlot) {
   return t;
 }
 
+/* the single-token forms of a word, in the order tried (the form typed first): " rain", "rain", " Rain", "Rain" */
+export async function wordForms(w) {
+  const b = w.replace(/^\s+/, ''), cap = b.charAt(0).toUpperCase() + b.slice(1), low = b.charAt(0).toLowerCase() + b.slice(1);
+  const out = [];
+  for (const c of [...new Set([' ' + b, b, ' ' + cap, cap, ' ' + low, low])]) {
+    const t = await engine.token(c);
+    if (t.whole && !out.some((x) => x.id === t.id)) out.push({ id: t.id, piece: t.piece });
+  }
+  return out;
+}
+
 export { rescan };
