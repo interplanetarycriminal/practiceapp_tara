@@ -157,10 +157,15 @@ export const isGPU = () => engine.remote || lab.status.engine === 'webgpu';
 /* one line on where the engine is, for the header and for a run that waits */
 export function statusLine(s = active.status) { return engine.remote ? remoteLine(s, CFG.short) : browserLine(s); }
 
+/* load times: seconds for a short one, minutes and seconds for the 9B's few minutes */
+const clock = (t) => (t < 90 ? `${t} s` : `${Math.floor(t / 60)} min ${String(t % 60).padStart(2, '0')} s`);
+const about = (t) => { if (t < 90) return `${t} s`; const h = Math.round(t / 30); return `${Math.floor(h / 2)}${h % 2 ? '½' : ''} minutes`; };
+const EXPECT = 330;              // the 9B from its 4-bit copy on the PC; the server sends each model's own figure
+
 function remoteLine(s, n) {
   return {
     connecting: `${n}: connecting…`, offline: `${n}: server not running`, idle: `${n}: asleep on the 3090`,
-    loading: `${n}: loading ${s.elapsed ? s.elapsed + ' s' : '…'}`, waiting: `${n}: waiting for the card`,
+    loading: `${n}: loading ${s.elapsed ? clock(s.elapsed) : '…'}`, waiting: `${n}: waiting for the card`,
     ready: `${n} ready · 3090`, error: `${n}: error`,
   }[s.state] || n;
 }
@@ -178,7 +183,7 @@ export function waitLine(s = active.status) {
   if (engine.remote) {
     if (s.state === 'offline' || s.state === 'connecting') return `Waiting for the lab server on this computer; this run starts once ${CFG.name} answers.`;
     if (s.state === 'waiting') return s.note || 'Waiting for the graphics card: another job is using it. This run starts by itself.';
-    if (s.state === 'loading') return `${CFG.name} is loading onto the 3090 (${s.elapsed || 0} s of about ${s.expect || 90} s); this run starts by itself.`;
+    if (s.state === 'loading') return `${CFG.name} is loading onto the 3090 (${clock(s.elapsed || 0)} of about ${about(s.expect || EXPECT)}); this run starts by itself.`;
     return `Waiting for ${CFG.name}; this run starts by itself.`;
   }
   return s.state === 'needs-download' || s.state === 'idle'
@@ -212,7 +217,7 @@ function remoteCard(el, s, compact, retry) {
     mount(el, h('div.engine-card', null,
       h('div.engine-title', null, what),
       h('div.progress', null, h('span', { style: { width: Math.round(frac * 100) + '%' } })),
-      h('div.muted.small', null, `${s.elapsed || 0} s of about ${s.expect || 90} s. ${(s.elapsed || 0) > (s.expect || 90) ? 'Taking longer than usual; the first load after the PC starts reads 7 GB from Z:.' : 'It stays loaded while you work and leaves the card after 20 idle minutes.'}`)));
+      h('div.muted.small', null, `${clock(s.elapsed || 0)} of about ${about(s.expect || EXPECT)}. ${(s.elapsed || 0) > (s.expect || EXPECT) ? 'Taking longer than usual: a render on the 3090 or a slow read from Z: stretches it.' : 'It stays loaded while you work and leaves the card after 20 idle minutes.'}`)));
   } else if (s.state === 'waiting') {
     mount(el, h('div.engine-card', null, h('div.engine-title', null, 'Waiting for the graphics card'),
       h('p', null, s.note || 'Another job is using the 3090 (a ComfyUI render, say). This starts by itself once it is free.'),

@@ -107,6 +107,8 @@ def run(s, rep, quick=False):
     cfg = rep.timed('load', lambda: s.call('load', stages=stages))
     L, H, D, M = cfg['L'], cfg['H'], cfg['D'], cfg['M']
     print(f'loaded in {rep.times["load"]} s: L {L} H {H} D {D} M {M} V {cfg["V"]}, attention layers {cfg["attnLayers"]}', flush=True)
+    if cfg.get('loadPhases'):
+        print('  load steps:', ', '.join(f'{k} {v} s' for k, v in cfg['loadPhases'].items()), flush=True)
     rep.check('the shape before loading matches the loaded model', all(shape[k] == cfg[k] for k in ('L', 'H', 'D', 'M', 'V', 'heads', 'kinds', 'attnLayers')))
     rep.check('the dose unit is measured for every layer', len(cfg['residNorm']) == L and all(x > 0 for x in cfg['residNorm']))
     rep.check('loading reported its progress', any(x.get('stage') in ('loading', 'running') for x in stages) or not stages, len(stages))
@@ -136,7 +138,8 @@ def run(s, rep, quick=False):
     al = cfg['attnLayers'][0]
     pat = A['patterns'][al]
     rows = np.asarray(pat, dtype=np.float64).reshape(cfg['heads'][al], T, T).sum(-1)
-    rep.check('attention rows sum to 1', np.allclose(rows, 1, atol=2e-3), float(np.abs(rows - 1).max()))
+    tol = 1e-2 if real else 2e-3                    # a real model's patterns come back in bf16, about 3 digits
+    rep.check('attention rows sum to 1', np.allclose(rows, 1, atol=tol), float(np.abs(rows - 1).max()))
     rep.check('DeltaNet layers draw no pattern', all((A['patterns'][l] is None) == (cfg['kinds'][l] != 'attention') for l in range(L)))
 
     HS = rep.timed('headScores', lambda: s.recipe('headScores', {'seqLen': 20, 'batch': 2, 'seed': 7}))
@@ -220,7 +223,8 @@ def run(s, rep, quick=False):
             E = rep.timed('saeEncode', lambda: s.recipe('saeEncode', {'ids': long_ids, 'k': 4, 'top': 10}))
             rep.check('the dictionary keeps at most k features per token', int(np.max(E['l0'])) <= meta['k'], f'max {int(np.max(E["l0"]))}, k {meta["k"]}')
             if real:
-                rep.check('the dictionary explains most of the stream', E['ev'] > 0.3, round(E['ev'], 3))
+                # one short prompt and a borrowed dictionary: the 9B gave 0.31 here; a wiring fault gives about 0 or less
+                rep.check('the dictionary rebuilds a fair share of the stream', E['ev'] > 0.2, round(E['ev'], 3))
             f0, v0, p0 = E['strongest'][0]
             St = rep.timed('saeTrace', lambda: s.recipe('saeTrace', {'ids': long_ids, 'feature': int(f0)}))
             rep.check('a feature\'s trace peaks where the encoder said', abs(float(St['acts'][p0]) - v0) < 0.02 * max(1.0, abs(v0)), f'{float(St["acts"][p0]):.3f} vs {v0:.3f}')
@@ -279,7 +283,7 @@ def run(s, rep, quick=False):
     rep.check('release ends the card process', not i2.get('card'))
     if free0 is not None and i2.get('gpu'):
         rep.check('the card gets its memory back', i2['gpu']['free'] >= free0 - (300 << 20), f'{free0 / 2**30:.2f} GB free before, {i2["gpu"]["free"] / 2**30:.2f} GB after')
-    return {'model': s.model, 'cfg': {k: cfg[k] for k in ('L', 'H', 'D', 'M', 'V', 'heads', 'kinds', 'attnLayers', 'residNorm', 'loadS')},
+    return {'model': s.model, 'cfg': {k: cfg[k] for k in ('L', 'H', 'D', 'M', 'V', 'heads', 'kinds', 'attnLayers', 'residNorm', 'loadS', 'loadPhases') if k in cfg},
             'peakGB': round((i1.get('peak') or 0) / 2**30, 2), 'memGB': round((i1.get('mem') or 0) / 2**30, 2)}
 
 
@@ -297,6 +301,9 @@ def main():
     ap.add_argument('--quick', action='store_true', help='skip the slower checks')
     ap.add_argument('--out', default='', help='write the results to this JSON file')
     a = ap.parse_args()
+    for f in (sys.stdout, sys.stderr):              # a Windows console's code page cannot print every token
+        if hasattr(f, 'reconfigure'):
+            f.reconfigure(encoding='utf-8', errors='replace')
     proc = None
     if a.tiny:
         port = free_port()

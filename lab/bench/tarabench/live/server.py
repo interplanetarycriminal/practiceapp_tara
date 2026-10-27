@@ -39,8 +39,9 @@ VERSION = 1
 # The models the lab can pick. precision: how it is held on the 24 GB card beside ComfyUI. sae: the Qwen-Scope
 # dictionaries that read it (trained on the Base model; the post-trained model borrows them). gb: memory on the card.
 # load_s: seconds to load from the 4-bit copy (or the only copy); first_s: the first load, from the original weights.
+# The 9B's are the PC's on 27 October 2026 (venv, weights and the 4-bit copy on its network drive Z:).
 LIVE = {
-    'qwen3.5-9b': dict(label='Qwen 3.5 9B', precision='nf4', sae='qwen3.5-9b', gb=7.1, load_s=90, first_s=240,
+    'qwen3.5-9b': dict(label='Qwen 3.5 9B', precision='nf4', sae='qwen3.5-9b', gb=7.1, load_s=330, first_s=450,
                        note='Qwen 3.5 9B, post-trained, held in 4-bit on the 3090'),
     'qwen3.5-2b': dict(label='Qwen 3.5 2B', precision='bf16', sae='qwen3.5-2b', gb=4.6, load_s=30,
                        note='Qwen 3.5 2B, post-trained, in bf16: quicker'),
@@ -160,6 +161,7 @@ class Card:
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         self.m = self.mid = self.cfg = self.sae_key = self.sae_meta = None
         self.q, self.jobs, self.save_after = queue.Queue(), {}, None
+        self.phases, self.t_mark = {}, time.time()
         self.send_lock = threading.Lock()
 
     def send(self, msg):
@@ -221,7 +223,7 @@ class Card:
             if self.device == 'cuda':
                 self.send(('state', {'mem': torch.cuda.memory_allocated(), 'peak': torch.cuda.max_memory_allocated()}))
         if self.save_after and self.m is not None:
-            self.save_nf4()                             # the copy is worth the wait: later loads take a third of the time
+            self.save_nf4()                             # a copy that is already 4-bit skips reading 19 GB and quantising
         self.unload()
 
     def gpu(self, job):
@@ -268,6 +270,22 @@ class Card:
         folder = self.nf4_cache / mid if self.nf4_cache else None
         return folder if folder and (folder / 'config.json').exists() else None
 
+    def mark(self, name):
+        """Notes how long the load's last step took: the log and the model's description list the steps."""
+        now = time.time()
+        self.phases[name] = round(now - self.t_mark, 1)
+        self.t_mark = now
+
+    @staticmethod
+    def warm(folder):
+        """Reads the copy's weight files straight through once, so the loader's scattered reads can come from the
+        system's file cache. On the PC's network drive a straight read of the 7 GB took about a minute while the whole
+        load took 330 s; the load's steps in the log show whether this pays."""
+        for f in sorted(folder.glob('*.safetensors')):
+            with open(f, 'rb', buffering=0) as fh:
+                while fh.read(64 << 20):
+                    pass
+
     def ensure(self, mid, job):
         import torch
         from .model import LiveModel
@@ -279,6 +297,7 @@ class Card:
         expect = spec['load_s'] if spec['precision'] != 'nf4' or self.cached_copy(mid) else spec.get('first_s', spec['load_s'])
         self.send(('state', {'loading': mid, 'expect': expect}))
         t0 = time.time()
+        self.phases, self.t_mark = {}, t0
         stop = threading.Event()
 
         def tick():
@@ -292,12 +311,15 @@ class Card:
                 if free < need:
                     raise RuntimeError(f'The 3090 has {free:.1f} GB free and {spec["label"]} needs about {need:.0f} GB. '
                                        f'Unload a model in ComfyUI, or pick a smaller model.')
+                self.mark('waking the card')
             lm = self.load_lm(mid, spec)
             job.stage({'stage': 'measuring', 'model': mid, 'elapsed': round(time.time() - t0), 'expect': expect})
             m = LiveModel(lm, self.stats_dir)
             m.stats()
-            self.m, self.mid, self.cfg = m, mid, {**m.describe(), 'label': spec['label'], 'loadS': round(time.time() - t0)}
-            self.say(f'loaded {mid} in {time.time() - t0:.0f} s')
+            self.mark('stream sizes')
+            self.m, self.mid = m, mid
+            self.cfg = {**m.describe(), 'label': spec['label'], 'loadS': round(time.time() - t0), 'loadPhases': dict(self.phases)}
+            self.say(f'loaded {mid} in {time.time() - t0:.0f} s ({", ".join(f"{k} {v:.0f} s" for k, v in self.phases.items())})')
         finally:
             stop.set()
             self.send(('state', {'loading': None, 'loaded': self.mid, 'cfg': self.cfg}))
@@ -305,7 +327,9 @@ class Card:
     def load_lm(self, mid, spec):
         from .. import models
         if mid.startswith('tiny'):
-            return models.load(mid)
+            lm = models.load(mid)
+            self.mark('building the model')
+            return lm
         cached = self.cached_copy(mid) if spec['precision'] == 'nf4' else None
         if cached:
             try:
@@ -313,6 +337,7 @@ class Card:
             except Exception as e:  # noqa: BLE001 - a broken copy falls back to the original weights
                 self.say(f'the 4-bit copy of {mid} did not load ({e}); reading the original weights')
         lm = models.load(mid, precision=spec['precision'], device=self.device)
+        self.mark('reading the original weights' + (' and quantising' if spec['precision'] == 'nf4' else ''))
         if spec['precision'] == 'nf4' and self.nf4_cache:
             self.save_after = time.time() + 20          # write the 4-bit copy once the page has had its first answers
         return lm
@@ -321,16 +346,20 @@ class Card:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         from ..models import LM, resolve
+        self.mark('imports')
         info = json.loads((folder / 'tara-live.json').read_text())
+        self.warm(folder)
+        self.mark('reading the 4-bit copy')
         tok = AutoTokenizer.from_pretrained(folder)
         model = AutoModelForCausalLM.from_pretrained(folder, device_map={'': self.device}, dtype=torch.bfloat16)
+        self.mark('building the model')
         model.eval()
         model.requires_grad_(False)
         entry = {**resolve(mid), 'files': str(folder)}
         return LM(model, tok, entry, 'nf4', info.get('revision'), f'4-bit copy in {folder}')
 
     def save_nf4(self):
-        """A 4-bit copy of the loaded model, which loads in a third of the time of the 19 GB original."""
+        """A 4-bit copy of the loaded model (7 GB instead of the 19 GB original, and nothing to quantise)."""
         folder = self.nf4_cache / self.mid
         try:
             tmp = folder.with_name(folder.name + '.part')
@@ -393,14 +422,17 @@ class Card:
 
 def card_main(conn, opts):
     """The card process's entry point (started by Live with the spawn method, so it shares nothing by accident)."""
-    log = opts.pop('log', None)
+    log, spawned = opts.pop('log', None), opts.pop('spawned', None)
     if log:
         try:
             f = open(Path(log).with_suffix('.card.log'), 'a', buffering=1, encoding='utf-8')
             sys.stdout = sys.stderr = f
         except OSError:
             pass
-    Card(conn, **opts).serve()
+    card = Card(conn, **opts)
+    if spawned:
+        card.say(f'card process ready {time.time() - spawned:.0f} s after it was started (Python and torch imported)')
+    card.serve()
 
 
 def sae_repo(offer, mid):
@@ -647,7 +679,7 @@ class Live:
         req.put({'stage': {'stage': 'starting', 'note': 'Starting the graphics card process'}})
         ctx = mp.get_context('spawn')
         here, there = ctx.Pipe()
-        proc = ctx.Process(target=card_main, args=(there, dict(self.opts)), name='tara-live-card', daemon=True)
+        proc = ctx.Process(target=card_main, args=(there, {**self.opts, 'spawned': time.time()}), name='tara-live-card', daemon=True)
         proc.start()
         there.close()
         self.proc, self.conn = proc, here

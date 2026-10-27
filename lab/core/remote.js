@@ -142,7 +142,7 @@ export class RemoteClient {
   /* a frame's {stage} as the client's status */
   stage(x, call) {
     const st = this.status.state;
-    if (x.stage === 'starting') this.setStatus({ state: 'loading', phase: 'starting', elapsed: 0, expect: (this.status.entry || {}).loadS || 90, note: null });
+    if (x.stage === 'starting') this.setStatus({ state: 'loading', phase: 'starting', elapsed: 0, expect: (this.status.entry || {}).loadS || 330, note: null });
     else if (x.stage === 'loading' || x.stage === 'measuring') this.setStatus({ state: 'loading', phase: x.stage, elapsed: x.elapsed || 0, expect: x.expect || this.status.expect, note: null });
     else if (x.stage === 'waiting') { if (st !== 'waiting') this.before = st; this.setStatus({ state: 'waiting', note: x.note || null }); }
     else if (x.stage === 'running') { if (st === 'waiting') this.setStatus({ state: this.before === 'ready' ? 'ready' : this.before, note: null }); }
