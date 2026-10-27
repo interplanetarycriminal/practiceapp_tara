@@ -37,7 +37,7 @@ export function examplesView(el, { examples, names, top, onTry, what = 'it', lim
 
 /* hist: 17 counts (16 bins of 0 .. scale, then "off"); log scale, because most firing is weak */
 export function histView(el, { hist, scale, what = 'it' }) {
-  const total = hist.reduce((a, b) => a + b, 0) || 1, off = hist[16] / total;
+  const total = hist.reduce((a, b) => a + b, 0) || 1, off = hist[16] / total, offText = off > 0.999 && off < 1 ? `all but ${pct(1 - off, 3)}` : pct(off, 1);
   const bins = hist.slice(0, 16).map((c, i) => {
     const lo = (i / 16) * scale, hi = ((i + 1) / 16) * scale, per = (c / total) * 1e6;
     return { value: per, label: i % 4 === 0 ? fmt(lo, 1) : '',
@@ -45,7 +45,7 @@ export function histView(el, { hist, scale, what = 'it' }) {
         tipRow(per >= 10 ? Math.round(per).toLocaleString('en') : fmt(per, 1), 'tokens per million'), tipRow(c.toLocaleString('en'), 'tokens in all')] };
   });
   columns(el, { bins, height: 150, x: { label: 'activation' }, y: { label: 'per million', log: true },
-    caption: `Off (zero or below) on ${pct(off, 1)} of tokens. The bars share out the rest by strength, on a log scale: each gridline is ten times the one below, so the rare strong firings at the right still show.` });
+    caption: `Off (zero or below) on ${offText} of tokens. The bars share out the rest by strength, on a log scale: each gridline is ten times the one below, so the rare strong firings at the right still show.` });
   return { off };
 }
 
@@ -145,8 +145,13 @@ export function sweepView(el, { S, base, u, names, unitLabel }) {
     ? h('div.chips', { style: { marginTop: '6px' } }, th.words.map((w) => h('span.chip.static', { title: `in ${w.n} of ${th.R} rollouts; random pushes: ${pct(w.p, 1)} of theirs (z = ${fmt(w.z, 1)})` },
       h('code.tok-inline', null, tokText(piece(names, w.t))), ` ${w.n}/${th.R}`)))
     : h('p.small.muted', null, 'No word turns up in its rollouts much more often than in the random pushes\', so it has no clear theme at these doses.');
+  // at the sweep's doses a random push often changes every rollout too, and then the count says nothing
+  const ctrl = th.ctrlChanged >= th.R ? `all ${th.R} rollouts, for each of ${S.C} random directions` : `${fmt(th.ctrlChanged, 1)} of ${th.R} rollouts on average, over ${S.C} random directions`;
+  const lead = th.ctrlChanged >= 0.9 * th.R
+    ? `At these doses any push changes the text, random ones included (${ctrl}), so the test is which words pushing ${unitLabel} brings in.`
+    : `Pushing ${unitLabel} changes the start of the text in ${th.changed} of its ${th.R} rollouts; random directions pushed just as hard change ${fmt(th.ctrlChanged, 1)} on average (${S.C} of them).`;
   mount(el,
-    h('p.small', null, `${unitLabel} changes the start of the text in ${th.changed} of its ${th.R} rollouts; random directions pushed just as hard change ${fmt(th.ctrlChanged, 1)} on average (${S.C} of them).`),
+    h('p.small', null, lead),
     h('div.small-caps', null, 'Words it makes GPT-2 write, beyond what random pushes do'), words,
     h('div.sweep', null, groups),
     h('p.small.muted', null, `Greedy continuations of ${S.T} tokens, with the push added after its layer at every position, in units of the stream's typical size there. Muted text is the same as with no push. The design and the random-direction controls (${S.C} per layer) follow Lyra's neuron-explorer.`));

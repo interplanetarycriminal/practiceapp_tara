@@ -160,6 +160,7 @@ class LM:
         self.hold = contextlib.nullcontext
         self._stats = {}
         self._gain = None
+        self._head32 = None       # None until head32 has checked itself; then True or False
         if self.tok.pad_token_id is None:
             self.tok.pad_token = self.tok.eos_token
 
@@ -216,14 +217,18 @@ class LM:
                 mask[r, :len(seqs[i])] = 1
             yield Batch(ids.to(self.device), mask.to(self.device), [len(seqs[i]) for i in idx], idx)
 
-    def call(self, b, setup=None):
+    def call(self, b, setup=None, final=None):
         """One forward pass under the GPU lock, with hooks set up by setup(hooks, batch). Returns the logits, or
-        None when a hook stopped the pass early."""
+        None when a hook stopped the pass early. With final={} the final norm's input (the residual stream after the
+        last layer) is kept as final['h'], for head32."""
         out = None
         with self.hold():
             with Hooks(self.layers) as hk:
                 if setup:
                     setup(hk, b)
+                if final is not None:
+                    hk.handles.append(self.final_norm.register_forward_pre_hook(
+                        lambda mod, args: final.__setitem__('h', args[0].detach())))
                 out = self.model(input_ids=b.ids, attention_mask=b.mask, use_cache=False).logits
         return out
 
@@ -313,13 +318,52 @@ class LM:
 
     # ---- outputs -----------------------------------------------------------------------------------------------
     @torch.no_grad()
+    def head32(self, h, ref):
+        """Float32 logits [N, V] from residual-stream rows h [N, D] after the last layer: the final norm and the
+        unembedding again, in float32, in slices of the vocabulary. A bf16 model hands back bf16 logits, and a bf16
+        logit between 16 and 32 can only move in steps of 0.125, which would swamp a small patching or steering
+        effect. ref is the model's own logits for the same rows; the first call checks that the two agree to within
+        bf16 rounding, and if they do not (a model that caps or rescales its logits, say) the model's own are used
+        from then on."""
+        if self._head32 is False:
+            return ref
+        n, W = self.final_norm, self.unembed()
+        x = h.float()
+        if isinstance(n, torch.nn.LayerNorm):
+            x = torch.nn.functional.layer_norm(x, n.normalized_shape, None if n.weight is None else n.weight.float(),
+                                               None if n.bias is None else n.bias.float(), n.eps)
+        else:
+            x = n(x).float()          # the RMSNorms in use compute in float32 and keep a float32 input's dtype
+        out = torch.empty(x.shape[0], W.shape[0], device=x.device, dtype=torch.float32)
+        for a in range(0, W.shape[0], 16384):
+            out[:, a:a + 16384] = x @ W[a:a + 16384].float().T
+        bias = getattr(self.model.get_output_embeddings(), 'bias', None)
+        if bias is not None:
+            out += bias.float()
+        if self._head32 is None:
+            gap, top = float((out - ref).abs().max()), float(ref.abs().max())
+            self._head32 = gap <= 0.02 * top + 0.05
+            say(f'float32 head: {"on" if self._head32 else "off"} (largest gap to the model\'s own logits {gap:.3g}, '
+                f'largest logit {top:.3g})')
+            if not self._head32:
+                return ref
+        return out
+
+    @torch.no_grad()
     def last_logprobs(self, seqs, setup=None):
-        """[N, V] float32 log-probabilities of the next token after each sequence."""
+        """[N, V] float32 log-probabilities of the next token after each sequence. Below float32 the scored
+        positions go through head32, so the scores carry no output rounding; the residual stream itself is still
+        the model's own precision."""
         out = [None] * len(seqs)
         for b in self.batches(seqs):
-            logits = self.call(b, setup)
+            final = {} if self.dtype != torch.float32 and self._head32 is not False else None
+            logits = self.call(b, setup, final)
+            rows, last = torch.arange(len(b.index), device=logits.device), torch.tensor([n - 1 for n in b.lengths], device=logits.device)
+            got = logits[rows, last].float()
+            if final and 'h' in final:
+                got = self.head32(final['h'][rows, last.to(final['h'].device)], got)
             for r, i in enumerate(b.index):
-                out[i] = torch.log_softmax(logits[r, b.lengths[r] - 1].float(), -1).cpu()
+                out[i] = torch.log_softmax(got[r], -1).cpu()
         return torch.stack(out)
 
     @torch.no_grad()

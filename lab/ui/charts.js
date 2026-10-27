@@ -665,11 +665,12 @@ export function columns(el, { bins, height = 160, x = {}, y = {}, caption, color
     const pw = Math.max(40, W - m.l - m.r), ph = height - m.t - m.b, bw = pw / bins.length;
     const Y = y.log ? (v) => m.t + (1 - (Math.log10(Math.max(v, 10 ** lo)) - lo) / (hi - lo)) * ph : (v) => m.t + (1 - v / vmax) * ph;
     const svg = s('svg', { viewBox: `0 0 ${W} ${height}`, width: W, height, role: 'img', 'aria-label': caption || 'histogram' });
-    const ticks = y.log ? Array.from({ length: hi - lo + 1 }, (_, i) => 10 ** (lo + i)).filter((t, i, a) => a.length <= 4 || i % 2 === (a.length - 1) % 2) : niceTicks(0, vmax, 3);
-    for (const t of ticks) {
+    // a log axis has a gridline at every power of ten; past four of them only every other one is labelled
+    const ticks = y.log ? Array.from({ length: hi - lo + 1 }, (_, i) => 10 ** (lo + i)) : niceTicks(0, vmax, 3);
+    ticks.forEach((t, i) => {
       svg.appendChild(s('line', { x1: m.l, x2: m.l + pw, y1: Y(t), y2: Y(t), class: (y.log ? t === 10 ** lo : t === 0) ? 'axis' : 'grid' }));
-      svg.appendChild(s('text', { x: m.l - 6, y: Y(t) + 4, class: 'tick', 'text-anchor': 'end' }, yf(t)));
-    }
+      if (!y.log || ticks.length <= 4 || i % 2 === (ticks.length - 1) % 2) svg.appendChild(s('text', { x: m.l - 6, y: Y(t) + 4, class: 'tick', 'text-anchor': 'end' }, yf(t)));
+    });
     // callers that blank some labels have already chosen which to show
     const every = bins.some((b) => b.label === '') ? 1 : Math.max(1, Math.ceil(bins.length / Math.max(2, Math.floor(pw / 46))));
     bins.forEach((b, i) => {

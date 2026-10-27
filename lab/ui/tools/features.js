@@ -16,7 +16,7 @@ import * as corpus from '../corpus.js';
 import { examplesView, histView } from '../corpusviews.js';
 
 const LAYER = 7, MAXT = 128, LIST = 16, KTOK = 10;
-const DEFAULT_F = null;           // the feature a first visit opens before the dictionary is loaded (null: none)
+const DEFAULT_F = 7626;           // opened on a first visit before the dictionary loads: the " rain" feature, which writes bows, forest, drops
 
 const TEACH = {
   what: {
@@ -395,7 +395,10 @@ export function mount(el, meta, api) {
     if (life.dead) return;
     if (st.I) { st.F = st.I.d_sae; fIn.max = String(st.F - 1); }
     drawDict();
-    if (st.I && store.get('tara.lab.sae', false)) loadRun.go();     // loaded on an earlier visit: in the cache, so quick
+    // loaded on an earlier visit and still in this device's cache: load it again without asking (about a second)
+    const kept = st.I && store.get('tara.lab.sae', false) && await engine.lab.call('saeCached', { layer: LAYER }).then((r) => r.cached, () => false);
+    if (life.dead) return;
+    if (kept) loadRun.go();
     else await go.now();
     if (st.find) find();
   });

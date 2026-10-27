@@ -385,7 +385,7 @@ export function mount(el, meta, api) {
       const box = h('div');
       put(slot.sweep, h('div.subhead', null, h('h3', null, 'What it makes GPT-2 write'),
         h('span.small.muted', null, `ten pushed continuations, against ${S.C} random pushes (precomputed)`)), box);
-      sweepView(box, { S, base, u: n, names: PIECES, unitLabel: `Pushing L${l} N${n}` });
+      sweepView(box, { S, base, u: n, names: PIECES, unitLabel: `L${l} N${n}` });
     }
   }
 

@@ -5,6 +5,7 @@ reads each pack back. The numbers mean nothing; a pass means the machinery is so
 
     python selftest.py            # exit code 0 when everything passes
 """
+import copy
 import json
 import sys
 import tempfile
@@ -20,7 +21,7 @@ import torch  # noqa: E402
 
 from tarabench import tiny  # noqa: E402
 from tarabench.common import say  # noqa: E402
-from tarabench.models import load  # noqa: E402
+from tarabench.models import LM, load  # noqa: E402
 from tarabench.packs import DTYPES  # noqa: E402
 from tarabench.runner import run_spec  # noqa: E402
 from tarabench.sae import TopKSAE  # noqa: E402
@@ -47,6 +48,24 @@ def invariants(lm, dict_dir):
     lp_single = torch.cat([lm.last_logprobs([s]) for s in seqs])
     check('right padding is exact', float((lp_batch - lp_single).abs().max()) < 1e-4,
           f'max diff {float((lp_batch - lp_single).abs().max()):.2e}')
+    # 2b. the float32 head rebuilds the model's own logits from the final norm's input, and in bf16 it switches on
+    fin = {}
+    with torch.no_grad():
+        ref32 = lm.call(b, None, fin)[0].float()
+    got = lm.head32(fin['h'][0], ref32)
+    check('float32 head matches the model\'s logits', lm._head32 is True and float((got - ref32).abs().max()) < 1e-4,
+          f'max diff {float((got - ref32).abs().max()):.2e}')
+    # a bf16 copy, so the shared model keeps its float32 buffers (a round trip would round the rotary tables)
+    lm16 = LM(copy.deepcopy(lm.model).to(torch.bfloat16), lm.tok, lm.entry, 'bf16', 'tiny')
+    lm16.batch_size = lm.batch_size
+    lp16 = lm16.last_logprobs(seqs)
+    on = lm16._head32
+    lm16._head32 = False
+    lp16raw = lm16.last_logprobs(seqs)
+    del lm16
+    e32, e16 = float((lp16 - lp_batch).abs().max()), float((lp16raw - lp_batch).abs().max())
+    check('in bf16 the float32 head switches on and scores stay near float32', on is True and e32 < 0.1,
+          f'largest error against float32: {e32:.3g} through the float32 head, {e16:.3g} from the bf16 logits')
     pooled = lm.pooled(seqs, [1], 'last')[1]
     single = torch.cat([lm.pooled([s], [1], 'last')[1] for s in seqs])
     check('pooled activations are batch-independent', float((pooled - single).abs().max()) < 1e-4)
@@ -144,6 +163,12 @@ def layernorm_checkpoint(tmp):
     check('a LayerNorm model (GPT-2 layout) reads its gain and centres the logit lens',
           lm.layers_path == 'transformer.h' and float((lm.gain() - w).abs().max()) < 1e-6 and
           float((got - ref).abs().max()) < 1e-4, f'layers at {lm.layers_path}')
+    fin, b = {}, next(lm.batches(lm.encode(['The city of Paris is in France .'])))
+    with torch.no_grad():
+        ref32 = lm.call(b, None, fin)[0].float()
+    got = lm.head32(fin['h'][0], ref32)
+    check('float32 head matches a LayerNorm model\'s logits', lm._head32 is True and float((got - ref32).abs().max()) < 1e-4,
+          f'max diff {float((got - ref32).abs().max()):.2e}')
     lm.unload()
 
 

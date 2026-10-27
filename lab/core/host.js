@@ -10,6 +10,7 @@ import { RECIPES, saeFrom } from './recipes.js';
 const MODEL = new URL('../model/', import.meta.url);
 const DATA = new URL('../data/', import.meta.url);
 const CACHE = 'tara-lab-model';
+const SAE_CACHE = 'tara-lab-sae';
 const CHECK_IDS = [50256, 464, 3139, 286, 4881, 318];      // <|endoftext|>The capital of France is
 
 const hasCaches = () => typeof caches !== 'undefined';
@@ -214,29 +215,55 @@ export class Host {
   }
 
   /* A layer's SAE (the int8 copy the GPU precompute writes to lab/data/sae/L{ll}/), loaded once into the engine so
-     the features tool can encode text where the model runs. Scales are fp16 in the file and float32 here. */
+     the features tool can encode text where the model runs. Scales are fp16 in the file and float32 here. The file
+     (38 MB for layer 7) downloads once per device: it is kept in its own cache under the checksum info.json gives,
+     so a rebuilt dictionary replaces it and an unchanged one never downloads again. */
   async saeLoad({ layer = 7 }, ctx) {
     if (this.sae && this.sae.layer === layer) return this.sae.meta;
     const dir = new URL(`sae/L${String(layer).padStart(2, '0')}/`, DATA);
     const info = await this.fetchJSON(new URL('info.json', dir));
-    const res = await fetch(new URL('sae.bin', dir).href);
-    if (!res.ok) throw new Error('sae.bin ' + res.status);
-    const total = Number(res.headers.get('content-length')) || 0, parts = [];
-    let got = 0, last = 0;
-    const rd = res.body.getReader();
-    for (;;) {
-      const { done, value } = await rd.read();
-      if (done) break;
-      parts.push(value); got += value.length;
-      const now = Date.now();
-      if (ctx.progress && now - last > 150) { last = now; ctx.progress({ done: got, total }); }
+    const url = new URL('sae.bin', dir).href, key = info.sae_sha256 ? `${url}?sha256=${info.sae_sha256}` : null;
+    const cache = key && hasCaches() ? await caches.open(SAE_CACHE) : null;
+    const hit = cache ? await cache.match(key) : null;
+    let buf;
+    if (hit) buf = new Uint8Array(await hit.arrayBuffer());
+    else {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('sae.bin ' + res.status);
+      const total = Number(res.headers.get('content-length')) || 0, parts = [];
+      let got = 0, last = 0;
+      const rd = res.body.getReader();
+      for (;;) {
+        const { done, value } = await rd.read();
+        if (done) break;
+        parts.push(value); got += value.length;
+        const now = Date.now();
+        if (ctx.progress && now - last > 150) { last = now; ctx.progress({ done: got, total }); }
+      }
+      buf = new Uint8Array(got);
+      let o = 0;
+      for (const x of parts) { buf.set(x, o); o += x.length; }
+      if (key) {
+        const h = await sha256hex(buf.buffer);
+        if (h && h !== info.sae_sha256) throw new Error('The dictionary arrived damaged (its checksum does not match); try again.');
+      }
+      if (cache) {
+        for (const r of await cache.keys()) if (r.url.startsWith(url)) await cache.delete(r);
+        await cache.put(key, new Response(buf, { headers: { 'Content-Type': 'application/octet-stream' } })).catch(() => {});
+      }
     }
-    const buf = new Uint8Array(got);
-    let o = 0;
-    for (const x of parts) { buf.set(x, o); o += x.length; }
     this.sae = saeFrom(info, buf.buffer, layer);
-    this.sae.meta = { layer, F: info.d_sae, bytes: got, check: info.check, int8: info.int8_check, centred: !!info.centred_input };
+    this.sae.meta = { layer, F: info.d_sae, bytes: buf.length, cached: !!hit, check: info.check, int8: info.int8_check, centred: !!info.centred_input };
     return this.sae.meta;
+  }
+
+  /* whether a layer's dictionary is already on this device, so a later visit can load it without a download */
+  async saeCached({ layer = 7 }) {
+    if (this.sae && this.sae.layer === layer) return { cached: true };
+    if (!hasCaches()) return { cached: false };
+    const dir = new URL(`sae/L${String(layer).padStart(2, '0')}/`, DATA), info = await this.fetchJSON(new URL('info.json', dir));
+    if (!info.sae_sha256) return { cached: false };
+    return { cached: !!(await (await caches.open(SAE_CACHE)).match(`${new URL('sae.bin', dir).href}?sha256=${info.sae_sha256}`)) };
   }
 
   /* logits for N rows of 768 that have already been through ln_f (or any 768-d vectors) */
@@ -259,6 +286,7 @@ export class Host {
     if (op === 'load') return this.load(args);
     if (op === 'forget') return this.forget();
     if (op === 'saeLoad') return this.saeLoad(args, ctx);
+    if (op === 'saeCached') return this.saeCached(args);
     if (!this.ready && this.pending) await this.pending;
     if (!this.ready) throw new Error('GPT-2 is not loaded yet: start it with the button at the top of this tool.');
     await this.ready;

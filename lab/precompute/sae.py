@@ -16,6 +16,7 @@ and sae/L{ll}/info.json. Formats as in neurons.py; lens.bin is uint16 [F, 20] to
     python sae.py --sae Z:/tara-lab/data/sae --work Z:/tara-lab/work --layers 7 --lock Z:/tara-lab/gpulock.py
 """
 import argparse
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -200,7 +201,7 @@ def main(argv=None):
         info = {'source': 'jbloom/GPT2-Small-SAEs-Reformatted (SAELens release gpt2-small-res-jb)',
                 'hook': f'blocks.{l}.hook_resid_pre', 'd_sae': F, 'cfg': {k: cfg[k] for k in cfg if isinstance(cfg[k], (int, float, str, bool))},
                 'centred_input': bool(centre), 'apply_b_dec_to_input': bool(sub_dec), 'check': check, 'int8_check': qcheck,
-                'sae_bin': layout, 'group': G, 'corpus_contexts': N, 'tokens': ntok,
+                'sae_bin': layout, 'sae_sha256': hashlib.sha256((od / 'sae.bin').read_bytes()).hexdigest(), 'group': G, 'corpus_contexts': N, 'tokens': ntok,
                 'examples': {'k_top': K_TOP, 'k_mid': K_MID, 'window': WIN, 'band': list(BAND), 'bins': NB, 'chunk': CHUNK_F},
                 'neuronpedia': f'https://www.neuronpedia.org/gpt2-small/{l}-res-jb/'}
         (od / 'info.json').write_text(json.dumps(info, indent=1))

@@ -86,6 +86,9 @@ self.addEventListener('fetch', (event) => {
   /* The mech interp lab's model weights (lab/model/*, about 133 MB): the lab's own worker keeps them in
      its own cache, so this one passes them straight through. */
   if (/^lab\/model\//.test(url.pathname.slice(SCOPE.pathname.length))) return;
+  /* Its SAE dictionaries (lab/data/sae/L??/sae.bin, 38 MB each) likewise: the worker caches them under their
+     checksum. */
+  if (/^lab\/data\/sae\/[^/]+\/sae\.bin$/.test(url.pathname.slice(SCOPE.pathname.length))) return;
   /* Intuition films (intuition/*), the 3D objects (objects/*) and the lab (lab/*): their own pages, edited
      often, so always network-first and cached under their own URL, never as the shell. */
   if (/\/(intuition|objects|lab)\//.test(url.pathname.slice(SCOPE.pathname.length - 1))) {
