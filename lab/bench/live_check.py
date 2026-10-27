@@ -234,6 +234,11 @@ def run(s, rep, quick=False):
             rep.check('the feature lens reads every feature asked for', len(SLn['lens']) == len(fs) and all(len(x['up']) == 6 for x in SLn['lens']))
             best = SLn['lens'][0]['up'][0][1]
             rep.check('the strongest feature for a token writes some token at least that much', best >= sv[0] - 0.02 * max(1.0, abs(sv[0])), f'{best:.3f} vs {sv[0]:.3f}')
+            try:
+                s.recipe('saeRow', {'feature': 0, 'layer': (layer + 1) % L})
+                rep.check('a page asking for another layer\'s dictionary is told so', False)
+            except RuntimeError as e:
+                rep.check('a page asking for another layer\'s dictionary is told so', 'dictionary on the card is layer' in str(e), str(e)[:90])
 
     steps = []
     G = rep.timed('generate', lambda: s.call('generate', {'prompt': ids, 'R': 1, 'maxNew': 8, 'temperature': 0, 'alts': 3}, on=steps.append))

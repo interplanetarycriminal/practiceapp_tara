@@ -552,11 +552,24 @@ def lens_search(m, a, ctx):
 
 # ---------------------------------------------------------------- dictionaries (Qwen-Scope TopK SAEs)
 
-def _sae(m):
+def _sae(m, a=None):
+    """The dictionary on the card. A page names the layer it means (a['layer']), so a dictionary another page swapped
+    in, or none after the idle release, is an error the page answers by loading its own again."""
     S = getattr(m, 'sae', None)
     if S is None:
         raise ValueError('The dictionary is not loaded yet')
+    if a is not None and a.get('layer') is not None and int(a['layer']) != S.layer:
+        raise ValueError(f'The dictionary on the card is layer {S.layer}, not layer {int(a["layer"])} (another page loaded it)')
     return S
+
+
+DEC_CHUNK = 8192    # decoder columns per step when reading the whole dictionary in float32 (128 MB at 4096 wide)
+
+
+def _over_decoder(S, fn):
+    """fn(W_dec[:, a:b] in float32) for every chunk of features, concatenated: the whole dictionary at full precision
+    without a float32 copy of it on the card."""
+    return torch.cat([fn(S.W_dec[:, a:a + DEC_CHUNK].float()) for a in range(0, S.F, DEC_CHUNK)])
 
 
 def _codes(m, S, ids, check):
@@ -569,7 +582,7 @@ def _codes(m, S, ids, check):
 
 
 def sae_encode(m, a, ctx):
-    S = _sae(m)
+    S = _sae(m, a)
     ids, k, top = a['ids'], int(a.get('k', 6)), int(a.get('top', 40))
     T = len(ids)
     X, _, vals, idx = _codes(m, S, ids, ctx.check)
@@ -603,7 +616,7 @@ def sae_encode(m, a, ctx):
 
 
 def sae_trace(m, a, ctx):
-    S = _sae(m)
+    S = _sae(m, a)
     ids, j = a['ids'], int(a['feature'])
     _, _, vals, idx = _codes(m, S, ids, ctx.check)
     hit = (idx == j)
@@ -613,17 +626,17 @@ def sae_trace(m, a, ctx):
 
 
 def sae_row(m, a, ctx):
-    S = _sae(m)
+    S = _sae(m, a)
     return {'dec': S.W_dec[:, int(a['feature'])].float().cpu().numpy()}
 
 
 def sae_neighbors(m, a, ctx):
-    S = _sae(m)
+    S = _sae(m, a)
     j, k = int(a['feature']), int(a.get('k', 8))
     if getattr(S, 'dec_norm', None) is None:
-        S.dec_norm = S.W_dec.float().norm(dim=0).clamp_min(1e-9)
+        S.dec_norm = _over_decoder(S, lambda W: W.norm(dim=0)).clamp_min(1e-9)
     q = S.W_dec[:, j].float()
-    cos = (q @ S.W_dec.float()) / (S.dec_norm * S.dec_norm[j])
+    cos = _over_decoder(S, lambda W: q @ W) / (S.dec_norm * S.dec_norm[j])
     cos[j] = -2
     return {'near': [[f, float(cos[f])] for f in topk_ids(cos, k)]}
 
@@ -631,7 +644,7 @@ def sae_neighbors(m, a, ctx):
 def sae_lens(m, a, ctx):
     """What each feature's decoder direction writes, read through the unembedding as neuron_lens reads a neuron's
     output weights: logits per unit of activation, relative to the average word, at a typical final-layer scale."""
-    S = _sae(m)
+    S = _sae(m, a)
     fs, k = [int(f) for f in a['features']], int(a.get('k', 6))
     scale = math.sqrt(m.D) / (m.stats()[m.L - 1] or 100)
     X = S.W_dec[:, fs].T.float() if fs else None             # [n, D]
@@ -641,11 +654,11 @@ def sae_lens(m, a, ctx):
 def sae_search(m, a, ctx):
     """The features whose decoder direction writes one token most, out of the whole dictionary: lens_search for
     features, in the same units as sae_lens."""
-    S = _sae(m)
+    S = _sae(m, a)
     t, k = int(a['token']), int(a.get('k', 16))
     scale = math.sqrt(m.D) / (m.stats()[m.L - 1] or 100)
     u = (m.W_U[t].float() - m.mean_unembed()) * m.gF * scale
-    val = (u.to(S.W_dec.dtype) @ S.W_dec).float()           # [F]
+    val = _over_decoder(S, lambda W: u @ W)                  # [F]
     return {'up': [[f, float(val[f])] for f in topk_ids(val, k)]}
 
 
