@@ -53,9 +53,10 @@ per-row values) on both a WGSL and a JS engine, cross-checked on load. Bench: tr
 layers, right padding (exact for causal and recurrent layers), Qwen-Scope TopK SAEs, bf16 or NF4 by free VRAM, packs in
 <code>tara-pack/1</code> with provenance (spec hash, commit, versions, GPU). Live server (lab/bench/tarabench/live): a web
 process that answers this site only, and a card process that holds the model and runs the tools' recipes in PyTorch
-with the same hook names, streaming progress back in length-prefixed frames; a saved NF4 copy on Z: spares each load the
-19 GB read and the quantising (about 5½ minutes on the PC against 7½ the first time), and lab/bench/live_check.py checks
-it end to end.</p>`,
+with the same hook names, streaming progress back in length-prefixed frames. A card process waits in standby with its
+libraries already imported (minutes from the network drive) and no graphics memory, and a saved NF4 copy on Z: spares
+the 19 GB read and the quantising, so a load takes about 90 s on the PC; lab/bench/live_check.py checks it end to
+end.</p>`,
     }),
     h('h2', null, 'Being honest about what this can find'),
     tiers('about-honest', {

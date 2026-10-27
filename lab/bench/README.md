@@ -105,6 +105,20 @@ circuit-tracer pins transformers 4.x, which cannot load Qwen 3.5, so graph specs
 Gemma needs its licence accepted on Hugging Face and a read token on the PC (`hf auth login`, typed on the PC, never
 pasted into a chat).
 
+### The live lab server
+
+The Lab's model picker runs every tool on Qwen 3.5 9B through a small server on the PC (`tarabench/live`):
+
+    Z:\tara-lab\venv\Scripts\pythonw.exe serve.py --lock Z:/tara-lab/gpulock.py --nf4-cache Z:/tara-lab/live/nf4 --hf-home Z:/tara-lab/hf --log Z:/tara-lab/live/serve.log
+    Z:\tara-lab\venv\Scripts\python.exe live_check.py --out Z:\tara-lab\live\check.json
+
+It answers on http://127.0.0.1:8790, only to the Lab's own pages. A card process waits in standby with its libraries
+imported and no graphics memory; the first request loads the model from its 4-bit copy (about 90 s on the PC), every
+request takes the studio lock (waiting behind renders for up to 30 minutes), and after 20 idle minutes the process
+exits so the card gets every byte back. `live_check.py` runs every request the tools make against the running server,
+with identities that must hold for any model (`--quick` skips the slow ones; `--tiny` tests the plumbing on a tiny
+random model with no GPU), and `lab/checks/tools.mjs` drives all twelve tools in Edge or Chrome.
+
 ## Being honest about what this can find
 
 A bench like this makes new, small findings possible; it does not make them likely by itself. The novelty has to

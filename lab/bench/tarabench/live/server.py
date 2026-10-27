@@ -40,9 +40,10 @@ VERSION = 1
 # The models the lab can pick. precision: how it is held on the 24 GB card beside ComfyUI. sae: the Qwen-Scope
 # dictionaries that read it (trained on the Base model; the post-trained model borrows them). gb: memory on the card.
 # load_s: seconds to load from the 4-bit copy (or the only copy); first_s: the first load, from the original weights.
-# The 9B's are the PC's on 27 October 2026 (venv, weights and the 4-bit copy on its network drive Z:).
+# The 9B's are the PC's on 27 October 2026 (venv, weights and the 4-bit copy on its network drive Z:), loading into a
+# card process in standby; first_s is the 438 s measured before standby, an overestimate now.
 LIVE = {
-    'qwen3.5-9b': dict(label='Qwen 3.5 9B', precision='nf4', sae='qwen3.5-9b', gb=7.1, load_s=330, first_s=450,
+    'qwen3.5-9b': dict(label='Qwen 3.5 9B', precision='nf4', sae='qwen3.5-9b', gb=7.1, load_s=90, first_s=450,
                        note='Qwen 3.5 9B, post-trained, held in 4-bit on the 3090'),
     'qwen3.5-2b': dict(label='Qwen 3.5 2B', precision='bf16', sae='qwen3.5-2b', gb=4.6, load_s=30,
                        note='Qwen 3.5 2B, post-trained, in bf16: quicker'),
