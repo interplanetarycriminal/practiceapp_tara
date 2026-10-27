@@ -220,6 +220,8 @@ class Card:
             self.send(('done', job.id))
             if self.device == 'cuda':
                 self.send(('state', {'mem': torch.cuda.memory_allocated(), 'peak': torch.cuda.max_memory_allocated()}))
+        if self.save_after and self.m is not None:
+            self.save_nf4()                             # the copy is worth the wait: later loads take a third of the time
         self.unload()
 
     def gpu(self, job):
@@ -333,7 +335,7 @@ class Card:
         try:
             tmp = folder.with_name(folder.name + '.part')
             self.say(f'writing a 4-bit copy of {self.mid} to {folder}')
-            self.m.model.save_pretrained(tmp, safe_serialization=True)
+            self.m.model.save_pretrained(tmp)
             self.m.tok.save_pretrained(tmp)
             (tmp / 'tara-live.json').write_text(json.dumps({'id': self.mid, 'revision': self.m.lm.revision,
                                                             'made': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}))
@@ -675,7 +677,7 @@ class Live:
             return
         say('letting the card go')
         self.tell(('quit',))
-        proc.join(60)
+        proc.join(900)                                  # it may first finish writing a 4-bit copy (7 GB)
         if proc.is_alive():
             proc.terminate()
             proc.join(5)
