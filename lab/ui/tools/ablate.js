@@ -4,7 +4,7 @@
    the model repairing itself. */
 
 import { h, mount as put, fmt, tokText, debounce } from '../dom.js';
-import { toolPage, field, textArea, textInput, select, presets, runner, whenReady, memo, toolLink } from './kit.js';
+import { toolPage, field, textArea, textInput, select, presets, runner, whenReady, memo, toolLink, CFG, headList, headCount, hix, isAttn, absMax, onGPT2 } from './kit.js';
 import { engine, isGPU } from '../engine.js';
 import { grid, scatter, bars, stat, tipRow, col } from '../charts.js';
 
@@ -39,6 +39,10 @@ cost more (it also mattered through other heads). Tap a head for links.</p>`,
 page does not recompute. Mean over the prompt's own positions includes positions where the head is idle, which is the
 usual ARENA convention for a single prompt.</p>`,
   },
+  qwen: `<p>Qwen 3.5 9B has 896 heads to knock out: 16 in each of its 8 attention layers and 32 in each of its 24 Gated
+DeltaNet layers. A DeltaNet head is knocked out the same way as an attention head: its slice of what goes into the
+layer's output projection is replaced by its average over this prompt (or by zero). Each knock-out is one batched
+forward pass on the 3090, so the whole sweep takes seconds there.</p>`,
   why: {
     1: `<p>Knock-outs are the first causal test: they ask "does the model need this?", not just "what does it look like?".
 Week 4's activation patching refines the same idea.</p>`,
@@ -67,7 +71,7 @@ export function mount(el, meta, api) {
   const fIn = textInput(st.foil, { oninput: (e) => { st.foil = e.target.value; save(); } });
   const mSel = select([['mean', 'mean over this prompt (recommended)'], ['zero', 'zero']], st.mode, (v) => { st.mode = v; save(); });
   const runSlot = h('div');
-  const run = runner('Knock out all 144 heads', runSlot, (onP, ctl) => compute(onP, ctl));
+  const run = runner(`Knock out all ${headCount()} heads`, runSlot, (onP, ctl) => compute(onP, ctl));
   const cost = h('span.small.muted');
   put(page.controls,
     field('Your text', ta, count),
@@ -101,10 +105,13 @@ export function mount(el, meta, api) {
   }
 
   function draw(res) {
-    const { sweep, heads, a, b } = res, D = sweep.delta;
-    let m = 1e-9, lo = 0, hi = 0;
-    for (let i = 0; i < 144; i++) { m = Math.max(m, Math.abs(D[i])); if (D[i] < D[lo]) lo = i; if (D[i] > D[hi]) hi = i; }
-    const nm = (i) => `L${Math.floor(i / 12)}H${i % 12}`;
+    const { sweep, heads, a, b } = res, D = sweep.delta, gpt2 = onGPT2(), H = CFG.H;
+    const all = headList().map(([l, x]) => hix(l, x));
+    const m = absMax(all.map((i) => D[i]));
+    let lo = all[0], hi = all[0];
+    for (const i of all) { if (D[i] < D[lo]) lo = i; if (D[i] > D[hi]) hi = i; }
+    const nm = (i) => `L${Math.floor(i / H)}H${i % H}`;
+    const kind = (i) => (gpt2 ? '' : isAttn(Math.floor(i / H)) ? ' (attention)' : ' (DeltaNet)');
     const ab = `${tokText(a.piece)} minus ${tokText(b.piece)}`;
     put(tiles,
       stat('With every head on', signed(sweep.clean), ab),
@@ -112,33 +119,34 @@ export function mount(el, meta, api) {
       stat('Helped most without', nm(hi), `${signed(D[hi])}: it was arguing for ${tokText(b.piece)}`));
     const choose = (l, x) => {
       st.pick = [l, x];
-      const i = l * 12 + x;
-      put(pickBox, h('b', null, nm(i)), `: knocking it out changes the score by ${signed(D[i])}; it wrote ${signed(heads[i])} directly. `,
-        toolLink('attention', { text: st.text, layer: l, head: x }, 'Where does it look?'), ' · ', toolLink('ov', { layer: l, head: x }, 'What does it write?'));
+      const i = hix(l, x);
+      if (!Number.isFinite(D[i])) return;
+      put(pickBox, h('b', null, nm(i)), kind(i), `: knocking it out changes the score by ${signed(D[i])}; it wrote ${signed(heads[i])} directly. `,
+        isAttn(l) ? [toolLink('attention', { text: st.text, layer: l, head: x }, 'Where does it look?'), ' · ', toolLink('ov', { layer: l, head: x }, 'What does it write?')] : null);
     };
     grid(gridBox, {
-      rows: 12, cols: 12, cell: 40, minCell: 22, aspect: 0.75, scale: 'div', max: m, fmt: (v) => fmt(v, 1),
-      value: (l, x) => D[l * 12 + x], text: (l, x) => { const v = D[l * 12 + x]; return Math.abs(v) >= 0.35 * m ? fmt(v, 1) : ''; },
-      rowLabels: [...Array(12).keys()].map((l) => 'L' + l), colLabels: [...Array(12).keys()].map((x) => 'H' + x),
+      rows: CFG.L, cols: H, cell: 40, minCell: CFG.L > 12 ? 16 : 22, aspect: 0.75, scale: 'div', max: m, fmt: (v) => fmt(v, 1),
+      value: (l, x) => D[hix(l, x)], text: (l, x) => { const v = D[hix(l, x)]; return Math.abs(v) >= 0.35 * m ? fmt(v, 1) : ''; },
+      rowLabels: [...Array(CFG.L).keys()].map((l) => 'L' + l), colLabels: [...Array(H).keys()].map((x) => 'H' + x),
       loLabel: 'answer weaker', hiLabel: 'answer stronger', selected: st.pick,
-      tip: (l, x) => [h('div.tip-head', null, nm(l * 12 + x)), tipRow(signed(D[l * 12 + x]), 'change when knocked out'), tipRow(signed(heads[l * 12 + x]), 'written directly')],
+      tip: (l, x) => { const i = hix(l, x); return Number.isFinite(D[i]) ? [h('div.tip-head', null, nm(i), kind(i)), tipRow(signed(D[i]), 'change when knocked out'), tipRow(signed(heads[i]), 'written directly')] : null; },
       onPick: choose,
-      caption: `Rows: layers 0 (top) to 11. Columns: heads. ${res.mode === 'mean' ? 'Mean' : 'Zero'} ablation, one head at a time.`,
+      caption: `Rows: layers 0 (top) to ${CFG.L - 1}. Columns: heads${gpt2 ? '' : `; the attention layers (${CFG.attnLayers.join(', ')}) have 16, so their rows stop halfway`}. ${res.mode === 'mean' ? 'Mean' : 'Zero'} ablation, one head at a time.`,
     });
     if (st.pick) choose(...st.pick); else put(pickBox, h('span.muted', null, 'Tap a head for links to look at it more closely.'));
     // tag the heads that stand out on either axis
-    const byD = [...Array(144).keys()].sort((u, v) => Math.abs(D[v]) - Math.abs(D[u])).slice(0, 4);
-    const byA = [...Array(144).keys()].sort((u, v) => Math.abs(heads[v]) - Math.abs(heads[u])).slice(0, 3);
+    const byD = all.slice().sort((u, v) => Math.abs(D[v]) - Math.abs(D[u])).slice(0, 4);
+    const byA = all.slice().sort((u, v) => Math.abs(heads[v]) - Math.abs(heads[u])).slice(0, 3);
     const tagged = new Set([...byD, ...byA]);
     scatter(sc, { height: 280, ticks: true,
       classes: [{ name: 'a head', color: col('s1') }],
-      points: [...Array(144).keys()].map((i) => ({ x: heads[i], y: D[i], c: 0, r: tagged.has(i) ? 5 : 3.5, tag: tagged.has(i) ? nm(i) : null,
+      points: all.map((i) => ({ x: heads[i], y: D[i], c: 0, r: tagged.has(i) ? 5 : 3.5, tag: tagged.has(i) ? nm(i) : null,
         head: nm(i), label: `wrote ${signed(heads[i])} directly; knocking it out changes the score by ${signed(D[i])}` })),
       x: { label: 'written directly (logits)' }, y: { label: 'change when knocked out' },
       ref: { slope: -1, intercept: 0, label: 'removes just what it wrote' },
       onPick: (p) => { const i = p.head.match(/L(\d+)H(\d+)/); choose(Number(i[1]), Number(i[2])); },
       caption: 'Each dot is one head. On the dashed line, knocking a head out removes exactly what it wrote. Above it: others made up for it. Below it: it mattered through other heads too.' });
-    const order = [...Array(144).keys()].sort((u, v) => D[u] - D[v]);
+    const order = all.slice().sort((u, v) => D[u] - D[v]);
     const hurt = h('div'), help = h('div');
     put(lists, h('div.res-cols', null,
       h('div', null, h('h3', null, 'Hurt most when removed'), hurt),
@@ -148,7 +156,7 @@ export function mount(el, meta, api) {
   }
 
   whenReady(page, life, async () => {
-    cost.textContent = isGPU() ? 'A few seconds on this graphics card.' : 'Two to three minutes on a processor; it can run while you read.';
+    cost.textContent = engine.remote ? 'Seconds on the 3090.' : isGPU() ? 'A few seconds on this graphics card.' : 'Two to three minutes on a processor; it can run while you read.';
     const t = await engine.tok(st.text);
     count.textContent = `${t.ids.length - 1} tokens`;
     // show a result straight away if this visit already computed it

@@ -36,18 +36,25 @@ export function aboutView(view) {
       1: `<p>The lab has two halves. <b>In your browser</b>, GPT-2 small (the model ARENA's interpretability chapter takes apart)
 runs on your own device, and twelve tools let you look inside it. <b>On the 3090</b>, a research bench runs bigger open
 models (Qwen 3.5, DeepSeek's distilled models, Z.ai's GLM) and writes each experiment as a result with its own
-evidence. Those results appear under Results, drawn by the same charts.</p>`,
+evidence. Those results appear under Results, drawn by the same charts. On the PC with the 3090, the twelve tools can also
+take apart <b>Qwen 3.5 9B</b> live: pick it with the model button at the top of the page.</p>`,
       2: `<p>Two halves. The <b>lab</b> is GPT-2 small (124M parameters, int8 weights, 133 MB) running in a Web Worker,
 on WebGPU when the browser offers a real graphics card and in plain JavaScript otherwise; each technique is a recipe
 over one engine with hooks for capture and intervention. The <b>bench</b> is a Python package that runs open models
 on the 3090 (Qwen 3.5 2B and 9B first, because the Qwen team published sparse autoencoders for every layer of them), one
-JSON spec per experiment, and writes a result pack: the arrays, the claims, the controls and the exact settings.</p>`,
+JSON spec per experiment, and writes a result pack: the arrays, the claims, the controls and the exact settings. The
+model button switches the tools to Qwen 3.5 9B, held in 4-bit on the 3090 by a small server on the PC (lab/bench/serve.py)
+that the page reaches at 127.0.0.1:8790; it takes the studio's GPU lock for each request and gives the card back after 20
+idle minutes.</p>`,
       3: `<p>Lab engine: GPT-2 small from OpenAI's checkpoint (via the ONNX Model Zoo export), int8 group-quantised (64-wide
 groups, fp16 scales; top-1 agreement 98.8% and mean KL 0.0005 against fp32), with TransformerLens-style hook points
 (resid_pre/mid/post, attn_z, attn_pattern, head_out, mlp_post) and interventions (add, set, mul, project_out, mean,
 per-row values) on both a WGSL and a JS engine, cross-checked on load. Bench: transformers 5, forward hooks on decoder
 layers, right padding (exact for causal and recurrent layers), Qwen-Scope TopK SAEs, bf16 or NF4 by free VRAM, packs in
-<code>tara-pack/1</code> with provenance (spec hash, commit, versions, GPU).</p>`,
+<code>tara-pack/1</code> with provenance (spec hash, commit, versions, GPU). Live server (lab/bench/tarabench/live): a web
+process that answers this site only, and a card process that holds the model and runs the tools' recipes in PyTorch
+with the same hook names, streaming progress back in length-prefixed frames; an NF4 copy on Z: makes a reload about 90 s,
+and lab/bench/live_check.py checks it end to end.</p>`,
     }),
     h('h2', null, 'Being honest about what this can find'),
     tiers('about-honest', {
@@ -76,8 +83,8 @@ clears the control's maximum (and, for steering, three standard deviations of it
     h('h2', null, 'Compared with neuron-explorer'),
     h('p', null, 'Lyra\'s neuron-explorer showed what a good neuron browser feels like: every neuron\'s top examples, what pushing it does, and pushes measured against random directions. The lab rebuilds those ideas (there is no licence on the original, so nothing is copied): every neuron\'s strongest and ordinary passages from 25 million tokens of web text, its histogram, co-firing partners, steer lens and steering sweep against random pushes, computed once on the 3090. It adds:'),
     h('ul', null,
-      h('li', null, 'the model runs on your device, offline, with no server;'),
-      h('li', null, 'ARENA\'s whole toolkit beside the neurons: logit lens, attention and head fingerprints, OV circuits, direct attribution, knock-outs, patching, steering, probes, and the layer-7 SAE ARENA uses, read live on your own text;'),
+      h('li', null, 'GPT-2 runs on your device, offline, with no server, and Qwen 3.5 9B runs live on your own 3090 with the same tools;'),
+      h('li', null, 'ARENA\'s whole toolkit beside the neurons: logit lens, attention and head fingerprints, OV circuits, direct attribution, knock-outs, patching, steering, probes, the layer-7 SAE ARENA uses and Qwen-Scope\'s dictionaries for every layer of the 9B, read live on your own text;'),
       h('li', null, 'search from a word to its neurons or features, by what they write or what pushing them makes GPT-2 say;'),
       h('li', null, 'the bench for models far bigger than GPT-2, with controls and claim ledgers on every result;'),
       h('li', null, 'three reading levels, missions for every TARA week, and links into the concept map, films and 3D objects.')),
@@ -89,5 +96,5 @@ clears the control's maximum (and, for steering, three standard deviations of it
       h('li', null, 'Steering: Turner et al. (ActAdd, 2023), Rimsky et al. (contrastive activation addition, 2024), Chen et al. (persona vectors, 2025). Probes: Marks and Tegmark (2023). Directional ablation: Arditi et al. (2024).'),
       h('li', null, 'Feature circuits: Marks et al. (2024). Attribution graphs: Ameisen et al. and Lindsey et al. (Anthropic, 2025); circuit-tracer (Hanna, Piotrowski et al.). Model diffing: Minder et al. (2025). Dictionaries: the Qwen team\'s Qwen-Scope (2026).'),
       h('li', null, 'Sparse autoencoders: Bricken et al. (2023), Cunningham et al. (2023); the GPT-2 dictionary is Joseph Bloom\'s gpt2-small-res-jb, loaded as in ARENA through SAELens. Corpus: OpenWebText (Gokaslan and Cohen, 2019).'),
-      h('li', null, 'Feature-card layout after Anthropic\'s feature browsers and Neuronpedia. GPT-2 by OpenAI, under its modified MIT licence.'))));
+      h('li', null, 'Feature-card layout after Anthropic\'s feature browsers and Neuronpedia. GPT-2 by OpenAI, under its modified MIT licence. Qwen 3.5 and the Qwen-Scope dictionaries by the Qwen team (Alibaba).'))));
 }

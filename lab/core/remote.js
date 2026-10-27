@@ -18,7 +18,7 @@ import { pack, unpack } from './wire.js';
 export const LIVE_URL = 'http://127.0.0.1:8790';
 
 /* the server's /v1/info, or null when nothing answers (not running, another device, or the browser said no) */
-export async function probeLive(url = LIVE_URL, timeout = 3000) {
+export async function probeLive(url = LIVE_URL, timeout = 8000) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeout);
   try {
@@ -84,11 +84,17 @@ export class RemoteClient {
   /* What the server says about this model. Resolves with the info (its .shape is this model's shape); rejects when
      the server does not answer, leaving the status 'offline'. */
   async boot() {
+    if (this.status.state === 'offline' || this.status.state === 'error') { this.booting = null; this.setStatus({ state: 'connecting', error: null }); }
     if (this.booting) return this.booting;
-    if (this.status.state === 'offline' || this.status.state === 'error') this.setStatus({ state: 'connecting', error: null });
     this.booting = (async () => {
-      const info = await probeLive(this.url);
-      if (!info) { this.setStatus({ state: 'offline', error: OFFLINE }); throw new Error(OFFLINE); }
+      let info = await probeLive(this.url);
+      const t0 = Date.now();
+      while (info && info.warming && Date.now() - t0 < 300000) {       // just started: reading the models' files
+        this.setStatus({ state: 'connecting', note: `The lab server is starting up (${Math.round(info.warmS || 0)} s so far; about a minute after the PC starts).` });
+        await new Promise((r) => setTimeout(r, 2000));
+        info = await probeLive(this.url);
+      }
+      if (!info) { this.setStatus({ state: 'offline', error: OFFLINE, note: null }); throw new Error(OFFLINE); }
       this.absorb(info);
       return this.info;
     })();
@@ -98,8 +104,10 @@ export class RemoteClient {
 
   /* /v1/info again (the reaper may have let the model go, or another tab loaded it) */
   async refresh() {
+    if (this.booting && this.status.state === 'connecting') return this.booting;
     const info = await probeLive(this.url);
-    if (!info) { this.setStatus({ state: 'offline', error: OFFLINE }); return null; }
+    if (!info) { this.setStatus({ state: 'offline', error: OFFLINE, note: null }); return null; }
+    if (info.warming) { this.booting = null; return this.boot(); }
     this.absorb(info);
     return info;
   }
@@ -111,8 +119,8 @@ export class RemoteClient {
     if (this.info.shape) Object.assign(s, { cfg: this.info.shape, residNorm: this.info.shape.residNorm || null });
     if (!m) { this.setStatus({ ...s, state: 'error', error: `The lab server on this computer does not offer ${this.model}.` }); return; }
     if (this.status.state === 'loading' || this.status.state === 'waiting') { this.setStatus(s); return; }
-    if (info.loading === this.model) this.setStatus({ ...s, state: 'loading', elapsed: 0, expect: m.loadS });
-    else this.setStatus({ ...s, state: info.loaded === this.model ? 'ready' : 'idle', error: null });
+    if (info.loading === this.model) this.setStatus({ ...s, state: 'loading', elapsed: 0, expect: m.loadS, note: null });
+    else this.setStatus({ ...s, state: info.loaded === this.model ? 'ready' : 'idle', error: null, note: null });
   }
 
   /* put the model on the card (the first request of any kind does this too) */

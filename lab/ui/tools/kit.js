@@ -3,18 +3,25 @@
 
 import { h, mount, tiers, rescan, hashFor, tokText } from '../dom.js';
 import { progress } from '../charts.js';
-import { needModel, engine } from '../engine.js';
+import { needModel, engine, CFG, waitLine, trackModel, isGPU } from '../engine.js';
 import { nodeIndex } from './index.js';
 
-/* teach = {what: {1,2,3}, read: {...}, why: {...}}; returns the slots a tool fills */
+export { CFG };
+
+/* teach = {what: {1,2,3}, read: {...}, why: {...}, qwen: html}; returns the slots a tool fills. The teaching copy is
+   written about GPT-2; on another model, teach.qwen says at the top what is different there. */
 export function toolPage(el, meta, teach) {
   const links = h('div.links');
+  const other = CFG.where !== 'browser';
+  const cost = other ? meta.costLive || 'seconds on the 3090' : meta.cost;
   const head = h('div.tool-head', null,
     h('div', null,
       h('h1', null, meta.name),
       h('div.row', null, ...(meta.weeks || []).map((w) => h('a.week', { href: `#missions/week-${w}`, title: `TARA week ${w} missions` }, 'W' + w)),
-        meta.cost ? h('span.muted.small', null, '· ' + meta.cost) : null)),
+        cost ? h('span.muted.small', null, '· ' + cost) : null,
+        other ? h('span.pill.model-pill', { title: `The tools are running on ${CFG.name}, ${CFG.place}. Change it in the header.` }, CFG.name) : null)),
     links);
+  const note = other && teach.qwen ? h('div.callout.model-note', null, h('b.k', null, `On ${CFG.name}`), h('div', { html: teach.qwen })) : null;
   const model = h('div');
   const controls = h('div.panel');
   const result = h('div.result', { 'aria-live': 'polite' });
@@ -23,6 +30,7 @@ export function toolPage(el, meta, teach) {
     tiers(`why-${meta.id}`, teach.why)) : null;
   mount(el,
     head,
+    note,
     teach.what ? tiers(`what-${meta.id}`, teach.what) : null,
     model, controls, result,
     read ? h('div.card.flat', { style: { marginTop: '14px' } }, h('div.small-caps', null, 'How to read it'), read) : null,
@@ -95,21 +103,32 @@ export function runner(label, slot, run) {
     if (busy) { if (ctl) ctl.cancel(); return; }
     busy = true;
     btn.textContent = 'Stop';
-    const bar = progress(slot);
+    const bar = progress(slot), client = engine.lab;
     bar.set(0, 'Starting…');
     ctl = {
       cancelled: false, ids: [],
       track(pr) { if (pr && pr.id) this.ids.push(pr.id); return pr; },
-      cancel() { this.cancelled = true; if (this.stopWaiting) this.stopWaiting(); for (const id of this.ids) engine.lab.cancel(id); },
+      cancel() { this.cancelled = true; if (this.stopWaiting) this.stopWaiting(); for (const id of this.ids) client.cancel(id); },
     };
     current.add(ctl);
-    let err = null;
+    let err = null, off = null;
     try {
-      if (!engine.ready()) await waitForModel(bar, ctl);
+      if (engine.remote) {
+        /* the 3090: a request loads the model itself (after an idle release) and waits its turn on the card; the bar
+           says so while it does */
+        if (['offline', 'error', 'connecting'].includes(engine.status.state)) await engine.boot();
+        let last = '';
+        off = engine.on((s) => {
+          if (s.state !== 'loading' && s.state !== 'waiting') { if (last) { bar.set(0, 'Running…'); last = ''; } return; }
+          last = waitLine(s);
+          bar.set(s.state === 'loading' && s.expect ? Math.min(0.97, (s.elapsed || 0) / s.expect) : 0, last);
+        });
+      } else if (!engine.ready()) await waitForModel(bar, ctl);
       await run((done, total, text) => bar.set(total ? done / total : 0, text || (total ? `${done} of ${total}` : '')), ctl);
     } catch (e) {
       if (!/cancelled/.test(String(e && e.message))) { err = e; console.error(e); }
     } finally {
+      if (off) off();
       current.delete(ctl);
       bar.done();
       if (err) slot.appendChild(h('div.err', null, String(err.message || err)));
@@ -130,10 +149,8 @@ function waitForModel(bar, ctl) {
     ctl.stopWaiting = () => end(reject, new Error('cancelled'));
     off = engine.on((s) => {
       if (s.state === 'ready') end(resolve);
-      else if (s.state === 'error') end(reject, new Error(s.error || 'GPT-2 did not start'));
-      else bar.set(s.total ? (s.loaded || 0) / s.total : 0, s.state === 'needs-download' || s.state === 'idle'
-        ? 'Waiting for GPT-2: press Download and start above, and this run begins once it has loaded.'
-        : 'Waiting for GPT-2 to finish loading; this run starts by itself.');
+      else if (s.state === 'error') end(reject, new Error(s.error || `${CFG.short} did not start`));
+      else bar.set(s.total ? (s.loaded || 0) / s.total : 0, waitLine(s));
     });
     if (settled) off();
   });
@@ -143,16 +160,40 @@ function waitForModel(bar, ctl) {
 export async function model(slot) { await needModel(slot); return engine; }
 
 /* Run fn once the model is ready, unless the reader has left the tool by then (life.dead, set by destroy). Tools never
-   await the model inside mount(), so the page finishes routing while the download card waits for a click. */
+   await the model inside mount(), so the page finishes routing while the download card waits for a click. On the
+   3090 the card comes back whenever the model is away (the server lets it go after 20 idle minutes). */
 export function whenReady(page, life, fn) {
-  model(page.model).then(() => { if (!life.dead) return fn(); }).catch((e) => { if (!life.dead) errorBox(page.result, e); });
+  model(page.model).then(() => { if (life.dead) return; trackModel(page.model); return fn(); })
+    .catch((e) => { if (!life.dead) errorBox(page.result, e); });
 }
 
 /* a link to another tool with its inputs filled in */
 export function toolLink(id, params, text) { return h('a', { href: hashFor('tool', [id], params) }, text); }
 
-export const LAYERS = [...Array(12).keys()].map((l) => [l, 'layer ' + l]);
-export const HEADS = [...Array(12).keys()].map((x) => [x, 'head ' + x]);
+/* ---------------------------------------------------------------- the model's shape
+   GPT-2 small: 12 layers of 12 attention heads. Qwen 3.5: 32 layers, every fourth one attention (16 heads) and the
+   rest Gated DeltaNet (32 value heads), so head arrays from the recipes are L x H with H the most heads in any layer
+   and NaN past a layer's own count. These read CFG when called, so a tool mounted after a switch gets the new model. */
+const range = (n) => [...Array(n).keys()];
+export const layerList = () => range(CFG.L);
+export const layerOpts = (ls) => (ls || range(CFG.L)).map((l) => [l, 'layer ' + l]);
+export const isAttn = (l) => CFG.kinds[l] === 'attention';
+export const nHeads = (l) => CFG.heads[l] ?? CFG.H;
+export const headOpts = (l) => range(nHeads(l)).map((x) => [x, 'head ' + x]);
+export const hix = (l, x) => l * CFG.H + x;                         // a head's place in the L x H arrays
+export const headList = (ls) => (ls || range(CFG.L)).flatMap((l) => range(nHeads(l)).map((x) => [l, x]));
+export const headCount = () => CFG.heads.reduce((a, b) => a + b, 0);
+export const neuronCount = () => CFG.L * CFG.M;
+export const kindOf = (l) => (isAttn(l) ? 'attention' : 'Gated DeltaNet');
+export const onGPT2 = () => CFG.id === 'gpt2';
+/* a GPT-2 layer (from a preset) at the same depth in the chosen model */
+export const scaleLayer = (l) => (CFG.L === 12 ? l : Math.round(l * (CFG.L - 1) / 11));
+export const nearestAttn = (l) => CFG.attnLayers.reduce((b, x) => (Math.abs(x - l) < Math.abs(b - l) ? x : b), CFG.attnLayers[0]);
+/* where the tools run, for "a few seconds ..." lines */
+export const whereRun = () => (CFG.where !== 'browser' ? 'on the 3090' : isGPU() ? 'on this graphics card' : 'on a processor');
+/* NaN-safe largest |value| and arg max of an array */
+export function absMax(a, floor = 1e-9) { let m = floor; for (const v of a) if (Number.isFinite(v) && Math.abs(v) > m) m = Math.abs(v); return m; }
+export function argBest(a, better = (u, v) => u > v) { let b = -1; for (let i = 0; i < a.length; i++) if (Number.isFinite(a[i]) && (b < 0 || better(a[i], a[b]))) b = i; return b; }
 
 /* clamp a URL parameter to an integer range */
 export function intParam(v, lo, hi, dflt) {
@@ -167,8 +208,8 @@ export function numParam(v, lo, hi, dflt) {
 /* expensive results kept for this visit, so coming back to a tool does not recompute them */
 const MEMO = new Map();
 export const memo = {
-  get(k) { return MEMO.get(k); },
-  set(k, v) { if (MEMO.size > 40) MEMO.delete(MEMO.keys().next().value); MEMO.set(k, v); },
+  get(k) { return MEMO.get(CFG.id + '|' + k); },
+  set(k, v) { if (MEMO.size > 40) MEMO.delete(MEMO.keys().next().value); MEMO.set(CFG.id + '|' + k, v); },
 };
 
 /* "1st", "2nd", "92nd" */

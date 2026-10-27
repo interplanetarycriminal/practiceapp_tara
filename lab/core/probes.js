@@ -3,15 +3,16 @@
    scaled down to a few dozen sentences: k-fold instead of one split, and the logistic probe fitted in its dual. */
 
 export const FOLDS = 5, SHUFFLES = 5, LAMBDA = 0.05;
-const D = 768, L = 12;
 
-/* X: n x L x D residual vectors, y: 0/1 labels. Per layer: cross-validated logistic and difference-of-means accuracy,
+/* X: n x L x D residual vectors (shape {L, D}: GPT-2 small's 12 x 768 unless given), y: 0/1 labels. onLayer(done, L)
+   reports progress. Per layer: cross-validated logistic and difference-of-means accuracy,
    the same logistic probe on null labels, which sentences it got right, and a PCA of the layer.
    paired (both lists the same length): sentence i and sentence i + n/2 are a matched pair, held out together so the
    probe is never tested on a sentence whose twin it trained on, and the null swaps the two labels within random
    pairs, which keeps every training fold balanced. Unpaired: stratified folds, and the null permutes all labels and
    re-stratifies on them, the same procedure on labels that mean nothing. */
-export function probeAll(X, y, n, paired = false) {
+export function probeAll(X, y, n, paired = false, shape = {}, onLayer = null) {
+  const L = shape.L || 12, D = shape.D || 768;
   const k = Math.min(FOLDS, count(y, 1), count(y, 0)), P = n / 2;
   const folds = paired ? pairFolds(P, k, 13) : stratified(y, k, 13);
   let s = 99;
@@ -26,10 +27,14 @@ export function probeAll(X, y, n, paired = false) {
   for (let l = 0; l < L; l++) {
     const rows = Array.from({ length: n }, (_, i) => X.subarray((i * L + l) * D, (i * L + l + 1) * D));
     const right = new Array(n).fill(false);
+    /* a fold's kernels depend only on which rows it holds out, so the paired null runs, which reuse the real folds,
+       reuse them too: the costly part of a layer is these n x n x D dot products */
+    const cache = new Map();
+    const kern = (te, tr) => { let K = cache.get(te); if (!K) { K = kernels(rows, tr, te); cache.set(te, K); } return K; };
     let dmRight = 0;
     for (const te of folds) {
       const tr = trainOf(te, n);
-      const { Ktr, Kte } = kernels(rows, tr, te);
+      const { Ktr, Kte } = kern(te, tr);
       const a = klr(Ktr, tr.map((i) => y[i]), LAMBDA);
       te.forEach((i, j) => { right[i] = (dotRow(Kte, j, tr.length, a) > 0) === (y[i] === 1); });
       dmRight += diffMeans(rows, y, tr, te);
@@ -37,7 +42,7 @@ export function probeAll(X, y, n, paired = false) {
     const sh = nulls.map((nl) => {
       let ok = 0;
       for (const te of nl.folds) {
-        const tr = trainOf(te, n), { Ktr, Kte } = kernels(rows, tr, te);
+        const tr = trainOf(te, n), { Ktr, Kte } = kern(te, tr);
         const ap = klr(Ktr, tr.map((i) => nl.y[i]), LAMBDA);
         te.forEach((i, j) => { if ((dotRow(Kte, j, tr.length, ap) > 0) === (nl.y[i] === 1)) ok++; });
       }
@@ -45,6 +50,7 @@ export function probeAll(X, y, n, paired = false) {
     });
     layers.push({ acc: right.filter(Boolean).length / n, dm: dmRight / n, right,
       shufMean: sh.reduce((u, v) => u + v, 0) / sh.length, shufMin: Math.min(...sh), shufMax: Math.max(...sh), pca: pca2(rows) });
+    if (onLayer) onLayer(l + 1, L);
   }
   let best = 0;
   layers.forEach((x, l) => { if (x.acc > layers[best].acc + 1e-9 || (Math.abs(x.acc - layers[best].acc) < 1e-9 && x.dm > layers[best].dm + 1e-9)) best = l; });
@@ -53,7 +59,7 @@ export function probeAll(X, y, n, paired = false) {
 
 /* standardise on the training rows, then K = z.z / D + 1 (the +1 is the bias) */
 function kernels(rows, tr, te) {
-  const mu = new Float64Array(D), sd = new Float64Array(D);
+  const D = rows[0].length, mu = new Float64Array(D), sd = new Float64Array(D);
   for (const i of tr) for (let d = 0; d < D; d++) mu[d] += rows[i][d];
   for (let d = 0; d < D; d++) mu[d] /= tr.length;
   for (const i of tr) for (let d = 0; d < D; d++) sd[d] += (rows[i][d] - mu[d]) ** 2;
@@ -137,7 +143,7 @@ function solve(A, b, n) {
 
 /* difference of class means on the raw vectors, threshold halfway; returns how many held-out rows it gets right */
 function diffMeans(rows, y, tr, te) {
-  const m1 = new Float64Array(D), m0 = new Float64Array(D);
+  const D = rows[0].length, m1 = new Float64Array(D), m0 = new Float64Array(D);
   let n1 = 0, n0 = 0;
   for (const i of tr) { const m = y[i] ? m1 : m0; for (let d = 0; d < D; d++) m[d] += rows[i][d]; if (y[i]) n1++; else n0++; }
   const dir = new Float64Array(D);
@@ -152,7 +158,7 @@ function diffMeans(rows, y, tr, te) {
 
 /* the two directions of greatest spread, through the n x n Gram matrix (power iteration with deflation) */
 function pca2(rows) {
-  const n = rows.length, mu = new Float64Array(D);
+  const n = rows.length, D = rows[0].length, mu = new Float64Array(D);
   for (const r of rows) for (let d = 0; d < D; d++) mu[d] += r[d] / n;
   const G = new Float64Array(n * n);
   for (let i = 0; i < n; i++) for (let j = i; j < n; j++) {

@@ -4,13 +4,13 @@
    every position of resid_post), live on one prompt. */
 
 import { h, mount as put, tokText, debounce, fmt } from '../dom.js';
-import { toolPage, field, textArea, textInput, select, slider, presets, runner, whenReady, LAYERS, intParam, numParam, memo, answerToken } from './kit.js';
+import { toolPage, field, textArea, textInput, select, slider, presets, runner, whenReady, layerOpts, intParam, numParam, memo, answerToken, CFG, scaleLayer } from './kit.js';
 import { engine, isGPU } from '../engine.js';
 import { lineChart, bars, stat, col } from '../charts.js';
 import { PRESETS } from '../missions.js';
 import { randomUnit } from '../../core/recipes.js';
 
-const D = 768, CONTROLS = 3, NEW = 32, STEPS = CONTROLS + 3;   // progress: sentences, the dial for each direction, writing
+const CONTROLS = 3, NEW = 32, STEPS = CONTROLS + 3;   // progress: sentences, the dial for each direction, writing
 
 const TEACH = {
   what: {
@@ -46,6 +46,11 @@ plus sixteen sentences, eight prompts, 95% intervals over prompts and eight rand
 as the rise in loss on neutral text. Mean-pooling over tokens is one choice; the last token is another, and they can
 disagree.</p>`,
   },
+  qwen: `<p>The recipe is the same on Qwen 3.5 9B: the difference of the two sets' average streams at one layer,
+added at every position while it writes, in units of that layer's typical stream size. The presets' layers are
+GPT-2's, moved to the same relative depth in Qwen's 32 (GPT-2's layer 6 becomes about 17). A dose of 1 is a push as
+long as a typical stream at that layer, on either model, so doses compare across the two. Qwen is a chat model, so a
+plain prompt may already pull it towards an assistant's voice; the no-push column is the baseline.</p>`,
   why: {
     1: `<p>Steering is how you check that a direction you found does something (a cause, not just a correlation), and it
 is one of the cheapest ways to change a model's behaviour at all.</p>`,
@@ -64,14 +69,14 @@ export function mount(el, meta, api) {
   const pr0 = PRESETS.steer[presetId];
   const st = {
     preset: presetId, pos: pr0.pos.join('\n'), neg: pr0.neg.join('\n'),
-    layer: intParam(P.layer, 0, 11, pr0.layer), prompt: P.prompt ?? pr0.prompt, target: P.target ?? pr0.target, foil: P.foil ?? pr0.foil,
+    layer: intParam(P.layer, 0, CFG.L - 1, scaleLayer(pr0.layer)), prompt: P.prompt ?? pr0.prompt, target: P.target ?? pr0.target, foil: P.foil ?? pr0.foil,
     dose: numParam(P.dose, -3, 3, 0.5),
   };
   const page = toolPage(el, meta, TEACH);
   const save = debounce(() => api.setParams({ preset: st.preset, layer: st.layer, prompt: st.prompt, target: st.target, foil: st.foil, dose: st.dose }), 400);
   const posIn = textArea(st.pos, { rows: 4, oninput: (e) => { st.pos = e.target.value; st.preset = null; save(); } });
   const negIn = textArea(st.neg, { rows: 4, oninput: (e) => { st.neg = e.target.value; st.preset = null; save(); } });
-  const lSel = select(LAYERS, st.layer, (v) => { st.layer = Number(v); save(); doseOut.textContent = doseText(); });
+  const lSel = select(layerOpts(), st.layer, (v) => { st.layer = Number(v); save(); doseOut.textContent = doseText(); });
   const pIn = textInput(st.prompt, { oninput: (e) => { st.prompt = e.target.value; save(); } });
   const tIn = textInput(st.target, { oninput: (e) => { st.target = e.target.value; save(); } });
   const fIn = textInput(st.foil, { oninput: (e) => { st.foil = e.target.value; save(); } });
@@ -82,7 +87,7 @@ export function mount(el, meta, api) {
   const run = runner('Build the direction and push', slot, (onP, ctl) => compute(onP, ctl));
   const choose = (id) => {
     const x = PRESETS.steer[id];
-    Object.assign(st, { preset: id, pos: x.pos.join('\n'), neg: x.neg.join('\n'), layer: x.layer, prompt: x.prompt, target: x.target, foil: x.foil });
+    Object.assign(st, { preset: id, pos: x.pos.join('\n'), neg: x.neg.join('\n'), layer: scaleLayer(x.layer), prompt: x.prompt, target: x.target, foil: x.foil });
     posIn.value = st.pos; negIn.value = st.neg; lSel.value = String(st.layer); pIn.value = st.prompt; tIn.value = st.target; fIn.value = st.foil;
     doseOut.textContent = doseText(); save();
   };
@@ -94,7 +99,7 @@ export function mount(el, meta, api) {
     h('div', { style: { marginTop: '10px' } }, field('Prompt to write from', pIn)),
     h('div', { style: { marginTop: '10px' } }, field('How hard to push while writing', dose, doseOut)),
     warn,
-    h('div.row', { style: { marginTop: '10px' } }, run.btn, h('span.small.muted', null, isGPU() ? 'A few seconds.' : 'Under a minute on a processor; it can run while you read.')),
+    h('div.row', { style: { marginTop: '10px' } }, run.btn, h('span.small.muted', null, engine.remote ? 'Seconds on the 3090.' : isGPU() ? 'A few seconds.' : 'Under a minute on a processor; it can run while you read.')),
     slot);
   function doseText() {
     const rn = (engine.status.residNorm || [])[st.layer];
@@ -126,7 +131,7 @@ export function mount(el, meta, api) {
       for (const s of [...pos, ...neg]) texts.push((await engine.tok(s)).ids);
       const r = await ctl.track(engine.recipe('residuals', { texts, hook: 'resid_post', pos: 'mean' },
         { onProgress: (x) => onP(x.done / x.total, STEPS, `Reading your sentences: ${x.done} of ${x.total}`) }));
-      const v = new Float32Array(D), Lc = 12;
+      const D = CFG.D, Lc = CFG.L, v = new Float32Array(D);
       texts.forEach((_, j) => {
         const w = j < pos.length ? 1 / pos.length : -1 / neg.length, o = (j * Lc + L) * D;
         for (let i = 0; i < D; i++) v[i] += w * r.vecs[o + i];
@@ -147,7 +152,7 @@ export function mount(el, meta, api) {
     const metric = { kind: 'logitdiff', a: a.id, b: b.id, pos: ids.length - 1 };
     let seed = 7;
     const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-    const dirs = [dir.unit, ...Array.from({ length: CONTROLS }, () => randomUnit(rand))];
+    const dirs = [dir.unit, ...Array.from({ length: CONTROLS }, () => randomUnit(rand, CFG.D))];
     const scaled = dirs.map((u) => u.map((x) => x * rn));
     const vals = [];
     for (let k = 0; k < dirs.length; k++) {

@@ -7,7 +7,7 @@
    neuronPush, lensSearch), the corpus views read the GPU precompute's files (lab/ui/corpus.js). */
 
 import { h, mount as put, tokText, debounce, fmt, pct } from '../dom.js';
-import { toolPage, field, textArea, textInput, select, slider, presets, runner, whenReady, LAYERS, intParam, numParam, tk, wordForms } from './kit.js';
+import { toolPage, field, textArea, textInput, select, slider, presets, runner, whenReady, layerOpts, intParam, numParam, tk, wordForms, CFG, onGPT2, neuronCount } from './kit.js';
 import { engine } from '../engine.js';
 import { tokens as strip, bars, stat, tipRow, intervals, progress } from '../charts.js';
 import { randomUnit } from '../../core/recipes.js';
@@ -15,7 +15,7 @@ import { topk } from '../../core/gpt2.js';
 import * as corpus from '../corpus.js';
 import { examplesView, histView, steerView, sweepView, sweepScores } from '../corpusviews.js';
 
-const M = 3072, MAXT = 128, LIST = 16;
+const LIST = 16;
 
 const TEACH = {
   what: {
@@ -74,6 +74,13 @@ it had and the live value can differ a little. The steer lens averages four fixe
 both sample a neuron's effect rather than exhaust it. The word search by "what it writes" ranks all 36,864 neurons
 exactly from the weights; by pushing, it reads each neuron's precomputed top 12 rising tokens.</p>`,
   },
+  qwen: `<p>Qwen 3.5 9B has 12,288 neurons in each of its 32 layers, 393,216 in all, and they work differently: a
+SwiGLU neuron multiplies two readings of the stream, silu(gate) × up, so its activation can be strongly negative as
+well as positive. Negative is a real signal (the neuron then writes the opposite of its "What it writes" list), so
+this page ranks neurons by the size of their activation and colours your text blue for positive and red for negative.
+The corpus views (strongest passages, co-firing, the steering sweep) come from a precompute that so far covers
+GPT-2 only; on Qwen, test a guess live: write a sentence that should switch the neuron on and one that should not.
+Texts are read up to 48 tokens, since every token carries 393,216 numbers back from the 3090.</p>`,
   why: {
     1: `<p>If each neuron meant one thing, reading a model would come down to naming 36,864 neurons. They mostly do not,
 and seeing that for yourself is the best reason for what comes next in the course: sparse autoencoders, which find
@@ -105,10 +112,14 @@ const LENS = new Map();
 
 export function mount(el, meta, api) {
   const P = api.params, life = { dead: false };
+  forModel(CFG.id);
+  /* GPT-2's GELU neurons are on (positive) or off; a SwiGLU neuron (Qwen) can be strongly negative too, so it is ranked
+     by the size of its activation and drawn on a two-sided scale */
+  const gpt2 = onGPT2(), M = CFG.M, MAXT = gpt2 ? 128 : 48, two = CFG.act !== 'gelu', mag = two ? Math.abs : (v) => v;
   const hasN = P.layer !== undefined && P.neuron !== undefined;
   const st = {
     text: P.text ?? EXAMPLES[0].text,
-    open: hasN ? [intParam(P.layer, 0, 11, 6), intParam(P.neuron, 0, M - 1, 974)] : P.text === undefined ? [6, 974] : null,
+    open: hasN ? [intParam(P.layer, 0, CFG.L - 1, 6), intParam(P.neuron, 0, M - 1, 974)] : P.text === undefined && gpt2 ? [6, 974] : null,
     auto: false, at: null, sort: 'stand', only: 'all',
     prompt: PROMPTS[0], dose: numParam(P.dose, -2, 2, 0.8),
     F: null, ids: null, pieces: null, ranked: [], tryAt: null,
@@ -121,9 +132,9 @@ export function mount(el, meta, api) {
   /* ---- controls */
   const count = h('span');
   const ta = textArea(st.text, { rows: 2, oninput: (e) => { st.text = e.target.value; st.at = null; save(); go(); } });
-  const lSel = select(LAYERS, st.open ? st.open[0] : 6);
+  const lSel = select(layerOpts(), st.open ? st.open[0] : Math.min(6, CFG.L - 1));
   const nIn = h('input', { type: 'number', min: 0, max: M - 1, step: 1, inputmode: 'numeric', style: { width: '7.5em' } });
-  nIn.value = String(st.open ? st.open[1] : 974);
+  nIn.value = String(st.open ? st.open[1] : gpt2 ? 974 : 0);
   nIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') openTyped(); });
   const openTyped = () => open(Number(lSel.value), intParam(nIn.value, 0, M - 1, 0));
   const findIn = textInput(st.find, { placeholder: 'a word, such as rain' });
@@ -134,21 +145,21 @@ export function mount(el, meta, api) {
     field('Your text', ta, count),
     presets(EXAMPLES, (x) => { ta.value = st.text = x.text; st.at = null; save(); go.now(); }),
     h('div.row', { style: { marginTop: '10px', alignItems: 'flex-end' } },
-      field('Layer', lSel), field('Neuron, 0 to 3,071', nIn),
+      field('Layer', lSel), field(`Neuron, 0 to ${(M - 1).toLocaleString('en')}`, nIn),
       h('button.btn', { type: 'button', onclick: openTyped }, 'Open'),
-      h('button.btn', { type: 'button', onclick: () => open(Math.floor(Math.random() * 12), Math.floor(Math.random() * M)) }, 'A random neuron')),
+      h('button.btn', { type: 'button', onclick: () => open(Math.floor(Math.random() * CFG.L), Math.floor(Math.random() * M)) }, 'A random neuron')),
     h('div.find-row', null, field('Or find the neurons for a word', findIn), field('by', bySel),
       h('button.btn', { type: 'button', onclick: () => find() }, 'Find')),
     findOut);
   corpusHave().then((H) => {
-    for (const o of bySel.options) if (o.value !== 'writes' && !H[o.value]) { o.disabled = true; o.textContent += ' (after the GPU precompute)'; }
+    for (const o of bySel.options) if (o.value !== 'writes' && !H[o.value]) { o.disabled = true; o.textContent += gpt2 ? ' (after the GPU precompute)' : ' (GPT-2 only for now)'; }
     if (!H[st.by] && st.by !== 'writes') bySel.value = st.by = 'writes';
   });
 
   /* ---- the list */
   const textStrip = h('div'), list = h('div.picklist'), listNote = h('p.small.muted');
   const sSel = select([['stand', 'most active, skipping neurons that are on almost everywhere'], ['peak', 'most active, all of them']], st.sort, (v) => { st.sort = v; drawList(); });
-  const oSel = select([['all', 'every layer'], ...LAYERS], st.only, (v) => { st.only = v; drawList(); });
+  const oSel = select([['all', 'every layer'], ...layerOpts()], st.only, (v) => { st.only = v; drawList(); });
   const card = h('div');
   put(page.result,
     h('div.subhead', null, h('h3', null, 'Strongest on your text'), h('span.small.muted', null, 'tap a word to rank the neurons on that word')),
@@ -206,21 +217,21 @@ export function mount(el, meta, api) {
   /* rank every neuron (or one layer's) by its activation on the chosen word, or at its peak */
   function rank() {
     const F = st.F, T = F.T, A = F.acts, at = st.at;
-    const layers = st.only === 'all' ? [...Array(12).keys()] : [Number(st.only)];
+    const layers = st.only === 'all' ? [...Array(CFG.L).keys()] : [Number(st.only)];
     const score = new Float32Array(layers.length * M).fill(-Infinity), info = [];
     layers.forEach((l, li) => {
       for (let n = 0; n < M; n++) {
         let sum = 0, peak = -Infinity, pt = 1;
-        for (let t = 1; t < T; t++) { const v = A[l * T * M + t * M + n]; sum += v; if (v > peak) { peak = v; pt = t; } }
-        const t0 = at ?? pt, a = A[l * T * M + t0 * M + n], mean = sum / Math.max(1, T - 1);
+        for (let t = 1; t < T; t++) { const v = mag(A[l * T * M + t * M + n]); sum += v; if (v > peak) { peak = v; pt = t; } }
+        const t0 = at ?? pt, a = mag(A[l * T * M + t0 * M + n]), mean = sum / Math.max(1, T - 1);
         score[li * M + n] = st.sort === 'stand' && T > 4 && mean > 0.5 * a ? -Infinity : a;
       }
     });
     for (const i of topk(score, LIST)) {
       const l = layers[Math.floor(i / M)], n = i % M;
       let pt = 1, on = 0, peak = -Infinity;
-      for (let t = 1; t < T; t++) { const v = A[l * T * M + t * M + n]; if (v > peak) { peak = v; pt = t; } }
-      for (let t = 1; t < T; t++) if (A[l * T * M + t * M + n] > Math.max(0.1, 0.5 * peak)) on++;
+      for (let t = 1; t < T; t++) { const v = mag(A[l * T * M + t * M + n]); if (v > peak) { peak = v; pt = t; } }
+      for (let t = 1; t < T; t++) if (mag(A[l * T * M + t * M + n]) > Math.max(0.1, 0.5 * peak)) on++;
       const t0 = at ?? pt;
       info.push({ l, n, t: t0, act: A[l * T * M + t0 * M + n], on });
     }
@@ -242,7 +253,7 @@ export function mount(el, meta, api) {
     put(list, rows.map((r) => r.b));
     const skip = st.sort === 'stand' && T > 4 ? ' Skipped: neurons whose average on this text is more than half of that, which are on almost everywhere.' : '';
     put(listNote, st.at !== null ? ['Ranked by how strongly each fires on ', tk(st.pieces[st.at]), '; tap the word again for the whole text.', skip]
-      : ['Ranked by each neuron\'s peak activation on this text.', skip]);
+      : [two ? 'Ranked by each neuron\'s largest activation on this text, either sign.' : 'Ranked by each neuron\'s peak activation on this text.', skip]);
     lensFor(rows.map((r) => r.gid)).then(() => { if (!life.dead) for (const r of rows) r.hint.textContent = hintText(r.gid); });
   }
 
@@ -266,15 +277,15 @@ export function mount(el, meta, api) {
     const seq = ++cardSeq, [l, n] = st.open, gid = l * M + n, F = st.F, T = F.T;
     const acts = Array.from({ length: T }, (_, t) => F.acts[l * T * M + t * M + n]);
     let pt = 1;
-    for (let t = 1; t < T; t++) if (acts[t] > acts[pt]) pt = t;
+    for (let t = 1; t < T; t++) if (mag(acts[t]) > mag(acts[pt])) pt = t;
     const peak = acts[pt], at = st.at ?? pt;
     let on = 0;
-    for (let t = 1; t < T; t++) if (acts[t] > Math.max(0.1, 0.5 * peak)) on++;
+    for (let t = 1; t < T; t++) if (mag(acts[t]) > Math.max(0.1, 0.5 * mag(peak))) on++;
     const tiles = h('div.stats'), actStrip = h('div'), writes = h('div'), feeds = h('div'), fedBy = h('div'), pushed = h('div');
     const slot = { tile: h('div.stat', { hidden: true }), examples: h('div'), cofire: h('div'), steer: h('div'), sweep: h('div') };
     doseOut.textContent = doseText();
     put(card,
-      h('div.subhead', null, h('h2', { style: { margin: '0' } }, `Layer ${l}, neuron ${n}`), h('span.small.muted', null, `L${l} N${n} · one of 36,864`)),
+      h('div.subhead', null, h('h2', { style: { margin: '0' } }, `Layer ${l}, neuron ${n}`), h('span.small.muted', null, `L${l} N${n} · one of ${neuronCount().toLocaleString('en')}`)),
       tiles,
       h('div.small-caps', { style: { marginTop: '8px' } }, 'Where it fires on your text'), actStrip,
       slot.examples,
@@ -291,17 +302,18 @@ export function mount(el, meta, api) {
       slot.sweep);
     drawCorpus(seq, l, n, peak, slot);
 
-    strip(actStrip, { pieces: st.pieces, values: acts.map((v) => Math.max(0, v)), scale: 'seq', max: Math.max(0.5, peak), skip: new Set([0]), selected: st.at ?? undefined,
-      tip: (t) => [h('div.tip-head', null, tokText(st.pieces[t])), tipRow(fmt(acts[t], 2), t === pt ? 'activation, its peak on this text' : 'activation'),
-        acts[t] < 0 ? h('div.tip-sub', null, 'GELU lets a neuron go slightly negative (down to −0.17); shown as off') : null],
+    strip(actStrip, { pieces: st.pieces, values: two ? acts : acts.map((v) => Math.max(0, v)), scale: two ? 'div' : 'seq', max: Math.max(0.5, mag(peak)), skip: new Set([0]), selected: st.at ?? undefined,
+      tip: (t) => [h('div.tip-head', null, tokText(st.pieces[t])), tipRow(fmt(acts[t], 2), t === pt ? 'activation, its largest on this text' : 'activation'),
+        !two && acts[t] < 0 ? h('div.tip-sub', null, 'GELU lets a neuron go slightly negative (down to −0.17); shown as off') : null,
+        two && acts[t] < 0 ? h('div.tip-sub', null, 'Negative: it writes the opposite of its "What it writes" list here') : null],
       onPick: (t) => { if (t === 0) return; st.at = st.at === t ? null : t; drawText(); drawList(); drawCard(); } });
 
     await lensFor([gid]);
     if (seq !== cardSeq || life.dead) return;
     const lens = LENS.get(gid), names = await vocabOf([...lens.up, ...lens.down].map((x) => x[0]));
     put(tiles,
-      stat('Peak on your text', fmt(peak, 2), ['on ', tokText(st.pieces[pt])]),
-      stat('Fires on', `${on} of ${T - 1}`, 'tokens, above half its peak'),
+      stat(two ? 'Largest on your text' : 'Peak on your text', fmt(peak, 2), ['on ', tokText(st.pieces[pt])]),
+      stat('Fires on', `${on} of ${T - 1}`, two ? 'tokens, above half its largest size' : 'tokens, above half its peak'),
       stat('Pushes most', tokText(names.get(lens.up[0][0])), `${signed(lens.up[0][1])} logits per unit, directly`),
       slot.tile);
     bars(writes, { signed: true, fmtv: signed,
@@ -322,7 +334,7 @@ export function mount(el, meta, api) {
       b.hint = hint; b.gid = g;
       return b;
     })) : h('p.small.muted', null, empty));
-    const fe = linkRows(links.feeds, 'Nothing: layer 11 is the last.'), fb = linkRows(links.fedBy, 'Nothing: layer 0 reads only the embeddings and attention.');
+    const fe = linkRows(links.feeds, `Nothing: layer ${CFG.L - 1} is the last.`), fb = linkRows(links.fedBy, gpt2 ? 'Nothing: layer 0 reads only the embeddings and attention.' : 'Nothing: layer 0 reads only the embeddings and its DeltaNet.');
     put(feeds, fe); put(fedBy, fb);
     lensFor([...links.feeds, ...links.fedBy].map((x) => x[0])).then(() => {
       if (seq !== cardSeq || life.dead) return;
@@ -342,6 +354,11 @@ export function mount(el, meta, api) {
     const stale = () => seq !== cardSeq || life.dead;
     const H = await corpusHave();
     if (stale()) return;
+    if (!gpt2) {
+      put(slot.examples, h('div.card.flat', { style: { marginTop: '12px' } }, h('div.small-caps', null, 'Its strongest passages across a large body of text'),
+        h('p.small', { style: { margin: '4px 0 0' } }, `The usual way to name a neuron is to collect the passages, out of millions, where it fires hardest. The lab's corpus precompute covers GPT-2 so far, not ${CFG.name}. The fastest test of a guess here is the text box above: write a sentence that should make this neuron fire, and one that should not.`)));
+      return;
+    }
     if (!H.neurons) {
       put(slot.examples, h('div.card.flat', { style: { marginTop: '12px' } }, h('div.small-caps', null, 'Its strongest passages across a large body of text'),
         h('p.small', { style: { margin: '4px 0 0' } }, 'The usual way to name a neuron is to collect the passages, out of millions, where it fires hardest. A graphics card does that once for all 36,864 neurons in the lab\'s GPU precompute, and its results are not in this copy of the lab yet. Until then the fastest test of a guess is the text box above: write a sentence that should make this neuron fire, and one that should not.')));
@@ -417,7 +434,7 @@ export function mount(el, meta, api) {
     const w = findIn.value.replace(/\s+$/, ''), by = bySel.value, seq = ++findSeq;
     st.find = w.trim() ? w : ''; st.by = by; save();
     if (!st.find) { put(findOut); return; }
-    if (!engine.ready()) { put(findOut, h('p.small.muted', null, 'The search starts once GPT-2 has loaded (the button at the top).')); return; }
+    if (!engine.ready() && !engine.remote) { put(findOut, h('p.small.muted', null, 'The search starts once GPT-2 has loaded (the button at the top).')); return; }
     const stale = () => seq !== findSeq || life.dead, bar = progress(findOut);
     bar.set(0, 'Looking…');
     try {
@@ -434,7 +451,7 @@ export function mount(el, meta, api) {
         const r = await engine.recipe('lensSearch', { token: v.id, k: LIST }, { channel: 'neurons-find' });
         if (stale()) return;
         rows = r.up.map(([g, x]) => ({ gid: g, v: signed(x), title: `adds ${signed(x)} logits to ${tokText(v.piece)} per unit of activation, directly` }));
-        head = ['The neurons that write ', tk(v.piece), ' most, directly, out of all 36,864'];
+        head = ['The neurons that write ', tk(v.piece), ` most, directly, out of all ${neuronCount().toLocaleString('en')}`];
         note = ['Logits added per unit of activation (the "What it writes" number on each card), ranked from the weights. Writing a word is not the same as firing on it: open one to see where it fires.',
           vars.length > 1 ? h('span.chips', { style: { display: 'inline-flex', marginLeft: '6px' } }, vars.map((x) => h('button.chip', { type: 'button', 'aria-pressed': x.id === v.id ? 'true' : 'false', onclick: () => find(x.id) }, tokText(x.piece)))) : null];
       } else if (by === 'steer') {
@@ -514,7 +531,7 @@ export function mount(el, meta, api) {
     /* three greedy continuations: no push, this neuron, one random direction at the same size */
     onP(1, 3, 'Writing three continuations…');
     let s = (l * M + n) * 2654435761 >>> 0;
-    const vec = randomUnit(() => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; });
+    const vec = randomUnit(() => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }, CFG.D);
     const rn = (engine.status.residNorm || [])[l] || 100;
     for (let i = 0; i < vec.length; i++) vec[i] *= rn;
     const iv = [{ hook: 'mlp_post', layer: l, neuron: n, op: 'addr', rows: [1], value: d }, { hook: 'mlp_out', layer: l, op: 'add', rows: [2], vec, value: d }];
@@ -535,9 +552,21 @@ export function mount(el, meta, api) {
 
 /* ---- the precompute and words */
 
-/* which GPU precompute jobs have run on a real corpus (checked once per visit), and the corpus's size in words */
+/* The caches below hold token ids and neuron numbers, which mean different things in another model: a page mounted
+   for a different model starts them afresh. */
+let MODEL = null;
+function forModel(id) {
+  if (MODEL === id) return;
+  MODEL = id;
+  LENS.clear(); PIECES.clear();
+  HAVE = null; PEAKS = null; peaksP = null;
+}
+
+/* which GPU precompute jobs have run on a real corpus (checked once per visit), and the corpus's size in words; the
+   precompute is GPT-2's, so another model has none */
 let HAVE = null;
 function corpusHave() {
+  if (!HAVE && !onGPT2()) HAVE = Promise.resolve({ neurons: false, steer: false, sweep: false, size: null });
   if (!HAVE) HAVE = (async () => {
     const [neurons, steer, sweep] = await Promise.all(['neurons', 'steer', 'sweep'].map((k) => corpus.done(k)));
     const s = await corpus.info().catch(() => ({}));

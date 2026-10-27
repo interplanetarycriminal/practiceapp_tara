@@ -3,7 +3,7 @@
    (noising): paste one piece of the corrupted run into the clean one and measure what breaks. */
 
 import { h, mount as put, fmt, tokText, debounce } from '../dom.js';
-import { toolPage, field, textArea, textInput, select, presets, runner, whenReady, memo, toolLink, tk } from './kit.js';
+import { toolPage, field, textArea, textInput, select, presets, runner, whenReady, memo, toolLink, tk, CFG, headCount, onGPT2 } from './kit.js';
 import { engine, isGPU } from '../engine.js';
 import { grid, stat, tipRow } from '../charts.js';
 
@@ -38,6 +38,10 @@ number of tokens, so that position p means the same slot in both.</p>`,
 so their columns are zero by construction (a free sanity check). Head patching swaps a head's output at every
 position at once.</p>`,
   },
+  qwen: `<p>On Qwen 3.5 9B the stream view has 32 rows, one per layer, and the head view covers all 896 heads: 16 in
+each attention layer and 32 in each Gated DeltaNet layer, so attention rows stop halfway. Patching a DeltaNet head
+replaces everything it writes at every position, just as for an attention head. Its tokenizer is not GPT-2's, so check
+that your two prompts still have the same number of tokens (the outlines below show where they differ).</p>`,
   why: {
     1: `<p>This is the workhorse of causal interpretability: it turns "this looks important" into "this is where the
 decision is carried", with a measurement.</p>`,
@@ -68,7 +72,7 @@ export function mount(el, meta, api) {
   const xIn = textArea(st.corrupt, { rows: 2, oninput: (e) => { st.corrupt = e.target.value; save(); check(); } });
   const aIn = textInput(st.answer, { oninput: (e) => { st.answer = e.target.value; save(); } });
   const fIn = textInput(st.foil, { oninput: (e) => { st.foil = e.target.value; save(); } });
-  const hSel = select([['resid_pre', 'the stream at every layer and token'], ['head', 'every attention head']], st.hook, (v) => { st.hook = v; save(); });
+  const hSel = select([['resid_pre', 'the stream at every layer and token'], ['head', onGPT2() ? 'every attention head' : `every head (${headCount()})`]], st.hook, (v) => { st.hook = v; save(); });
   const dSel = select([['denoise', 'clean into corrupted: what restores the answer?'], ['noise', 'corrupted into clean: what breaks it?']], st.direction, (v) => { st.direction = v; save(); });
   const pairBox = h('div.small'), runSlot = h('div'), cost = h('span.small.muted');
   const run = runner('Patch', runSlot, (onP, ctl) => compute(onP, ctl));
@@ -118,27 +122,33 @@ export function mount(el, meta, api) {
 
   function draw({ r, c, x, a, b, hook, direction }) {
     const val = (i) => (direction === 'noise' ? 1 - r.score[i] : r.score[i]);
-    let best = 0, m = 1;
-    for (let i = 0; i < r.score.length; i++) { m = Math.max(m, Math.abs(val(i))); if (val(i) > val(best)) best = i; }
+    let best = -1, m = 1;
+    for (let i = 0; i < r.score.length; i++) {
+      const v = val(i);
+      if (!Number.isFinite(v)) continue;                 // a head a layer does not have
+      m = Math.max(m, Math.abs(v));
+      if (best < 0 || v > val(best)) best = i;
+    }
+    best = Math.max(0, best);
     const ab = `${tokText(a.piece)} minus ${tokText(b.piece)}`;
     const label = (p) => (c.ids[p] === x.ids[p] ? (p === 0 ? '⟨bos⟩' : c.pieces[p]) : `${c.pieces[p]}/${x.pieces[p]}`);
-    const where = (i) => hook === 'head' ? `L${Math.floor(i / 12)}H${i % 12}` : `layer ${Math.floor(i / r.cols)}, at ${tokText(label(i % r.cols))}`;
+    const where = (i) => hook === 'head' ? `L${Math.floor(i / r.cols)}H${i % r.cols}` : `layer ${Math.floor(i / r.cols)}, at ${tokText(label(i % r.cols))}`;
     put(tiles,
       stat('Clean prompt', signed(r.clean), ab),
       stat('Corrupted prompt', signed(r.corrupt), ab),
       stat(direction === 'noise' ? 'Breaks the most' : 'Restores the most', hook === 'head' ? where(best) : `L${Math.floor(best / r.cols)}, ${tokText(label(best % r.cols))}`, `${Math.round(100 * val(best))}% of the difference`));
     const what = direction === 'noise' ? 'of the answer broken' : 'of the answer restored';
     grid(gridBox, {
-      rows: r.rows, cols: r.cols, cell: hook === 'head' ? 40 : 64, minCell: 22, aspect: hook === 'head' ? 0.75 : 0.5, scale: 'div', max: m, fmt: (v) => fmt(v, 1),
+      rows: r.rows, cols: r.cols, cell: hook === 'head' ? 40 : 64, minCell: r.rows > 12 || r.cols > 16 ? 16 : 22, aspect: hook === 'head' ? 0.75 : 0.5, scale: 'div', max: m, fmt: (v) => fmt(v, 1),
       value: (l, j) => val(l * r.cols + j),
       text: (l, j) => { const v = val(l * r.cols + j); return Math.abs(v) >= 0.25 ? String(Math.round(100 * v)) : ''; },
       rowLabels: [...Array(r.rows).keys()].map((l) => 'L' + l),
-      colLabels: hook === 'head' ? [...Array(12).keys()].map((j) => 'H' + j) : [...Array(r.cols).keys()].map(label),
+      colLabels: hook === 'head' ? [...Array(r.cols).keys()].map((j) => 'H' + j) : [...Array(r.cols).keys()].map(label),
       loLabel: 'the other way', hiLabel: direction === 'noise' ? 'all broken' : 'all restored', midLabel: '(gray = no change)',
-      tip: (l, j) => { const i = l * r.cols + j; return [h('div.tip-head', null, where(i)), tipRow(`${Math.round(100 * val(i))}%`, what), tipRow(signed(r.raw[i]), `${ab} after the swap`)]; },
+      tip: (l, j) => { const i = l * r.cols + j; return Number.isFinite(val(i)) ? [h('div.tip-head', null, where(i)), tipRow(`${Math.round(100 * val(i))}%`, what), tipRow(signed(r.raw[i]), `${ab} after the swap`)] : null; },
       caption: hook === 'head'
-        ? `Each cell: swap one head's output at every position (${direction === 'noise' ? 'corrupted into the clean run' : 'clean into the corrupted run'}). Rows: layers 0 (top) to 11. Numbers are percentages.`
-        : `Each cell: swap the stream entering one layer at one token (${direction === 'noise' ? 'corrupted into the clean run' : 'clean into the corrupted run'}). Rows: layers 0 (top) to 11. Columns: tokens. Numbers are percentages.`,
+        ? `Each cell: swap one head's output at every position (${direction === 'noise' ? 'corrupted into the clean run' : 'clean into the corrupted run'}). Rows: layers 0 (top) to ${r.rows - 1}. Numbers are percentages.`
+        : `Each cell: swap the stream entering one layer at one token (${direction === 'noise' ? 'corrupted into the clean run' : 'clean into the corrupted run'}). Rows: layers 0 (top) to ${r.rows - 1}. Columns: tokens. Numbers are percentages.`,
     });
     const dl = toolLink('dla', { text: st.clean, answer: st.answer, foil: st.foil }, 'Who wrote the answer');
     if (hook === 'head') put(note, 'Compare with ', dl, ': heads that matter here but wrote little there moved information rather than writing the answer.');
@@ -146,7 +156,7 @@ export function mount(el, meta, api) {
   }
 
   whenReady(page, life, async () => {
-    cost.textContent = isGPU() ? 'Seconds on this graphics card.' : 'A few minutes on a processor; it can run while you read.';
+    cost.textContent = engine.remote ? 'Seconds on the 3090.' : isGPU() ? 'Seconds on this graphics card.' : 'A few minutes on a processor; it can run while you read.';
     check.now();
     const [c, x] = await Promise.all([engine.tok(st.clean), engine.tok(st.corrupt)]);
     const a = await engine.token(st.answer), b = await engine.token(st.foil);
