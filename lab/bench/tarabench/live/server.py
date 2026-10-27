@@ -2,9 +2,10 @@
 a time under the studio's GPU lock, and answers only the lab's own pages (the published site and local copies).
 
 It is two processes. This one answers the web and never touches the graphics card: it tokenises, queues requests and
-says what is loaded. The model lives in a second process, the card process, started by the first request that needs
-it. After --idle seconds without requests the card process exits, which hands the whole card back: a process that has
-used CUDA keeps a few hundred MB of the card until it ends, however much it frees.
+says what is loaded. The model lives in a second process, the card process. After --idle seconds without requests the
+card process exits, which hands the whole card back: a process that has used CUDA keeps a few hundred MB of the card
+until it ends, however much it frees. A fresh card process then waits in standby: it imports its libraries at once
+(minutes from the PC's network drive) but touches no graphics memory until a request needs the model.
 
     GET  /v1/info            the models on offer and their shapes, which is loaded, the card's free memory
     POST /v1/call            {op, model, args, channel}: load, release, tokenize, decode, pieces, vocab, find,
@@ -202,6 +203,8 @@ class Card:
         from .model import Cancelled
         threading.Thread(target=self.listen, name='listen', daemon=True).start()
         self.send(('state', {'pid': os.getpid(), 'device': self.device}))
+        ready = threading.Thread(target=self.prewarm, name='prewarm', daemon=True)
+        ready.start()
         while True:
             try:
                 job = self.q.get(timeout=5)
@@ -212,6 +215,9 @@ class Card:
                 continue
             if job is None:
                 break
+            if ready.is_alive():
+                job.stage({'stage': 'starting', 'note': 'The graphics card process is still importing its libraries'})
+                ready.join()
             try:
                 frame = pack({'ok': True, 'result': self.run(job)})
             except Cancelled:
@@ -293,15 +299,40 @@ class Card:
         self.phases[name] = round(now - self.t_mark, 1)
         self.t_mark = now
 
-    @staticmethod
-    def warm(folder):
-        """Reads the copy's weight files straight through once, so the loader's scattered reads can come from the
-        system's file cache. On the PC's network drive a straight read of the 7 GB took about a minute while the whole
-        load took 330 s; the load's steps in the log show whether this pays."""
-        for f in sorted(folder.glob('*.safetensors')):
-            with open(f, 'rb', buffering=0) as fh:
-                while fh.read(64 << 20):
-                    pass
+    def prewarm(self):
+        """Imports what loading a model needs before any request asks. On the PC the libraries sit on the network
+        drive, and importing them took 262 s inside a 454 s load (27 October 2026), so a card process waiting in
+        standby does it ahead. Nothing here touches the graphics card: standby holds no graphics memory."""
+        import importlib
+        import torch
+        from .. import models
+        t0 = time.time()
+        try:
+            from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
+            from . import recipes  # noqa: F401 - the tools' maths and the model wrapper they use
+            for mid, spec in self.offer.items():
+                if mid.startswith('tiny'):
+                    continue
+                if spec['precision'] == 'nf4':
+                    for name in ('bitsandbytes', 'transformers.integrations.bitsandbytes',
+                                 'transformers.quantizers.quantizer_bnb_4bit'):
+                        try:
+                            importlib.import_module(name)
+                        except Exception:  # noqa: BLE001 - a module this version does not have
+                            pass
+                e = models.resolve(mid)
+                src = self.cached_copy(mid) or models.LOCAL.get(e['id'], e['hf'])
+                cfg = AutoConfig.from_pretrained(src)
+                with torch.device('meta'):                      # the model's own modules, with no memory behind them
+                    try:
+                        AutoModelForCausalLM.from_config(cfg)
+                    except ValueError:
+                        AutoModelForImageTextToText.from_config(cfg)
+                AutoTokenizer.from_pretrained(src)
+            self.say(f'card process ready for a model: libraries imported in {time.time() - t0:.0f} s')
+        except Exception as e:  # noqa: BLE001 - a load imports whatever is still missing itself
+            self.say(f'importing ahead stopped after {time.time() - t0:.0f} s ({e.__class__.__name__}: {e})')
+        self.send(('state', {'standby': True}))
 
     def ensure(self, mid, job):
         import torch
@@ -323,6 +354,7 @@ class Card:
         threading.Thread(target=tick, daemon=True).start()
         try:
             if self.device == 'cuda':
+                self.send(('state', {'gpu': True}))     # from here on this process holds memory on the card
                 free = torch.cuda.mem_get_info()[0] / 2 ** 30
                 need = spec['gb'] + 1.2
                 if free < need:
@@ -365,11 +397,10 @@ class Card:
         from ..models import LM, resolve
         self.mark('imports')
         info = json.loads((folder / 'tara-live.json').read_text())
-        self.warm(folder)
-        self.mark('reading the 4-bit copy')
-        tok = AutoTokenizer.from_pretrained(folder)
-        model = AutoModelForCausalLM.from_pretrained(folder, device_map={'': self.device}, dtype=torch.bfloat16)
-        self.mark('building the model')
+        tok = AutoTokenizer.from_pretrained(folder, local_files_only=True)
+        model = AutoModelForCausalLM.from_pretrained(folder, device_map={'': self.device}, dtype=torch.bfloat16,
+                                                     local_files_only=True)
+        self.mark('reading and building the model')
         model.eval()
         model.requires_grad_(False)
         entry = {**resolve(mid), 'files': str(folder)}
@@ -507,7 +538,7 @@ class Request:
 
 class Live:
     def __init__(self, models=None, lock=None, lock_timeout=1800, idle=1200, stats_dir=None, nf4_cache=None,
-                 device=None, local=None, log=None):
+                 device=None, local=None, log=None, standby=True):
         self.offer = {k: v for k, v in LIVE.items() if k in (models or DEFAULT)}
         self.opts = dict(offer=self.offer, lock=lock, lock_timeout=lock_timeout, device=device, local=dict(local or {}),
                          stats_dir=str(stats_dir) if stats_dir else None, nf4_cache=str(nf4_cache) if nf4_cache else None,
@@ -516,6 +547,7 @@ class Live:
         self.idle, self.stats_dir = idle, Path(stats_dir) if stats_dir else None
         self.q, self.jobs, self.channels, self.waits = queue.Queue(), {}, {}, {}
         self.proc = self.conn = None
+        self.standby, self.card_lock = standby, threading.Lock()
         self.running, self.last = None, time.time()
         self.state = {'loaded': None, 'loading': None, 'cfg': None, 'pid': None}
         self.words, self.words_lock, self.shapes = {}, threading.Lock(), {}
@@ -527,7 +559,8 @@ class Live:
 
     def warm(self):
         """The slow first-time work, done at start instead of inside a page's first request: importing transformers
-        from the NAS and reading each model's config and tokeniser take about a minute there."""
+        from the NAS and reading each model's config and tokeniser took over three minutes there. Then a card process
+        starts in standby."""
         try:
             for k in self.offer:
                 self.shape(k)
@@ -538,6 +571,8 @@ class Live:
             self.warm_s = round(time.time() - self.t_start, 1)
             self.warmed.set()
             say(f'ready to answer in {self.warm_s} s')
+        if self.standby:
+            self.spare()
 
     # ---- what the page sees ------------------------------------------------------------------------------------
     def info(self):
@@ -548,7 +583,10 @@ class Live:
                             'precision': v['precision'], 'sae': bool(v['sae']), 'cfg': self.shape(k) if warm else None}
                            for k, v in self.offer.items()],
                 'loaded': self.state['loaded'], 'loading': self.state['loading'], 'cfg': self.state['cfg'],
-                'card': self.proc is not None and self.proc.is_alive(), 'busy': self.running is not None,
+                'card': self.holding(), 'standby': self.alive() and not self.holding(),
+                'standbyReady': bool(self.alive() and not self.holding() and self.state.get('standby')),
+                'cardPid': self.proc.pid if self.alive() else None,
+                'busy': self.running is not None,
                 'queued': self.q.qsize(), 'idleS': self.idle, 'idleFor': round(time.time() - self.last),
                 'lock': self.locked, 'gpu': gpu_info() if warm else _GPU['v'], 'mem': self.state.get('mem'),
                 'peak': self.state.get('peak')}
@@ -705,20 +743,39 @@ class Live:
                 if not req.internal:
                     self.last = time.time()
 
+    def alive(self):
+        return self.proc is not None and self.proc.is_alive()
+
+    def holding(self):
+        """Whether the card process holds a model or memory on the graphics card (a process in standby holds neither)."""
+        return self.alive() and bool(self.state.get('loaded') or self.state.get('loading') or self.state.get('gpu'))
+
     def start_card(self, req):
-        if self.proc is not None and self.proc.is_alive():
-            return
-        req.put({'stage': {'stage': 'starting', 'note': 'Starting the graphics card process'}})
+        with self.card_lock:
+            if self.alive():
+                return
+            req.put({'stage': {'stage': 'starting', 'note': 'Starting the graphics card process'}})
+            self.spawn()
+
+    def spare(self):
+        """A card process in standby, so the next load finds its libraries already imported."""
+        with self.card_lock:
+            if not self.alive():
+                self.spawn('in standby')
+
+    def spawn(self, how=''):
         ctx = mp.get_context('spawn')
         here, there = ctx.Pipe()
-        proc = ctx.Process(target=card_main, args=(there, {**self.opts, 'spawned': time.time()}), name='tara-live-card', daemon=True)
+        t0 = time.time()
+        proc = ctx.Process(target=card_main, args=(there, {**self.opts, 'spawned': t0}), name='tara-live-card', daemon=True)
         proc.start()
         there.close()
         self.proc, self.conn = proc, here
-        threading.Thread(target=self.hear, args=(here, proc), name='hear', daemon=True).start()
-        say(f'card process {proc.pid} started')
+        self.state.update(gpu=None, standby=None)
+        threading.Thread(target=self.hear, args=(here, proc, t0), name='hear', daemon=True).start()
+        say(f'card process {proc.pid} started' + (f' {how}' if how else ''))
 
-    def hear(self, conn, proc):
+    def hear(self, conn, proc, t0):
         """The card process's messages: frames for the page, request ends, its state and its log."""
         while True:
             try:
@@ -745,7 +802,7 @@ class Live:
         say(f'card process {proc.pid} ended (exit code {proc.exitcode})')
         if self.proc is proc:
             self.proc = self.conn = None
-            self.state.update(loaded=None, loading=None, cfg=None, pid=None, mem=None, peak=None)
+            self.state.update(loaded=None, loading=None, cfg=None, pid=None, mem=None, peak=None, gpu=None, standby=None)
             for jid in list(self.waits):
                 ev = self.waits.pop(jid, None)
                 req = self.jobs.get(jid)
@@ -753,6 +810,13 @@ class Live:
                     req.end(False, GONE)
                 if ev is not None:
                     ev.set()
+        if self.standby:
+            if proc.exitcode not in (0, None) and time.time() - t0 < 60:
+                say(f'no process in standby: the last one failed {time.time() - t0:.0f} s after it started')
+            else:
+                t = threading.Timer(2.0, self.spare)
+                t.daemon = True
+                t.start()
 
     def stop_card(self):
         proc = self.proc
@@ -766,12 +830,12 @@ class Live:
             proc.join(5)
         if self.proc is proc:
             self.proc = self.conn = None
-            self.state.update(loaded=None, loading=None, cfg=None, pid=None, mem=None, peak=None)
+            self.state.update(loaded=None, loading=None, cfg=None, pid=None, mem=None, peak=None, gpu=None, standby=None)
 
     def reaper(self):
         while True:
             time.sleep(15)
-            if self.proc is not None and self.running is None and self.q.empty() and time.time() - self.last > self.idle:
+            if self.holding() and self.running is None and self.q.empty() and time.time() - self.last > self.idle:
                 say(f'no requests for {self.idle:.0f} s')
                 self.q.put(Request('release', {}, None, internal=True))
                 self.last = time.time()

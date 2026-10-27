@@ -6,7 +6,8 @@ card, for the Lab page's model picker (lab/core/remote.js is its client).
 
 It listens on http://127.0.0.1:8790 and answers only the lab's pages. Nothing goes onto the GPU until a page asks
 for a model, every request takes the GPU lock, and after --idle seconds without requests the process holding the model
-exits, so the card gets every byte back. To start it with Windows, run it with pythonw.exe and --log (no window).
+exits, so the card gets every byte back. A new one then waits in standby with its libraries imported and no graphics
+memory, so the next load skips the imports. To start it with Windows, run it with pythonw.exe and --log (no window).
 lab/bench/live_check.py checks a running server end to end."""
 import argparse
 import os
@@ -34,6 +35,8 @@ def main():
     ap.add_argument('--allow-host', action='append', default=[], help='another name this server may be reached by')
     ap.add_argument('--device', default=None)
     ap.add_argument('--log', default='', help='append what the server says to this file (for running it with pythonw)')
+    ap.add_argument('--no-standby', action='store_true',
+                    help='start the card process only when a request needs it, instead of keeping one ready')
     a = ap.parse_args()
     if a.log:
         Path(a.log).parent.mkdir(parents=True, exist_ok=True)
@@ -53,7 +56,7 @@ def main():
         models.LOCAL[name] = path
     live = Live(models=a.models, lock=a.lock or None, lock_timeout=a.lock_timeout, idle=a.idle,
                 stats_dir=a.stats or str(WORK / 'live'), nf4_cache=a.nf4_cache or None, device=a.device,
-                local=models.LOCAL, log=a.log or None)
+                local=models.LOCAL, log=a.log or None, standby=not a.no_standby)
     serve(live, a.host, a.port, a.allow_host)
 
 

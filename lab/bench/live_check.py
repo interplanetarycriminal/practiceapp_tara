@@ -280,9 +280,22 @@ def run(s, rep, quick=False):
     while time.time() - t0 < 90 and s.info().get('card'):
         time.sleep(1)
     i2 = s.info()
-    rep.check('release ends the card process', not i2.get('card'))
+    rep.check('release lets the card go', not i2.get('card'))
     if free0 is not None and i2.get('gpu'):
         rep.check('the card gets its memory back', i2['gpu']['free'] >= free0 - (300 << 20), f'{free0 / 2**30:.2f} GB free before, {i2["gpu"]["free"] / 2**30:.2f} GB after')
+    if 'standby' in i2:
+        t1 = time.time()
+        while time.time() - t1 < 30 and not i2.get('standby'):
+            time.sleep(1)
+            i2 = s.info()
+        rep.check('a fresh card process waits in standby', i2.get('standby'), f'process {i2.get("cardPid")}')
+        if not quick and i2.get('standby') and i2.get('gpu'):
+            base = i2['gpu']['free']                # measured before the new process imports its libraries
+            while time.time() - t1 < 900 and not i2.get('standbyReady'):
+                time.sleep(5)
+                i2 = s.info()
+            rep.check('a process in standby holds no graphics memory', i2.get('standbyReady') and i2['gpu']['free'] >= base - (200 << 20),
+                      f'{base / 2**30:.2f} GB free as it started, {i2["gpu"]["free"] / 2**30:.2f} GB once its libraries were in ({time.time() - t1:.0f} s)')
     return {'model': s.model, 'cfg': {k: cfg[k] for k in ('L', 'H', 'D', 'M', 'V', 'heads', 'kinds', 'attnLayers', 'residNorm', 'loadS', 'loadPhases') if k in cfg},
             'peakGB': round((i1.get('peak') or 0) / 2**30, 2), 'memGB': round((i1.get('mem') or 0) / 2**30, 2)}
 
