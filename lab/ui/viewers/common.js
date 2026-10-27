@@ -122,12 +122,16 @@ const STAMP_MEANING = {
 
 export function ledger(p) {
   const claims = p.claims || [];
+  // probe packs made before 27 October 2026 point their difference-of-means claim back at the first claim's bar, which
+  // stopped being the claim just above once the rival and random-direction controls came between them
+  const testOf = (c) => c.test === 'same bar as above' && claims[0] && claims[0].test
+    ? `${claims[0].test}, the first claim's bar` : c.test;
   return h('section', null,
     h('h2', null, 'What was found'),
     claims.length ? h('div.ledger', null, claims.map((c) => h('div.claim', null,
       stamp(c.status),
       h('div.claim-text', null, c.text),
-      c.test ? h('div.claim-test', null, 'Test it had to pass: ' + c.test) : null,
+      c.test ? h('div.claim-test', null, 'Test it had to pass: ' + testOf(c)) : null,
       c.evidence ? h('details.evidence', null, h('summary', null, 'The numbers behind it'), evidence(c.evidence)) : null)))
       : h('p.muted', null, 'This result makes no claims.'),
     notes(p.notes),

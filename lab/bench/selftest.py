@@ -291,7 +291,9 @@ def engines(out, dict_dir):
                       any('more than word meanings' in c['text'] for c in meta['claims']) and
                       pd.get('random_directions') == 32 and all(0 <= r['random_dir'] <= r['random_dir_max'] <= 1
                                                                 for r in pd['rows']) and
-                      any('more than any direction' in c['text'] for c in meta['claims']),
+                      any('more than any direction' in c['text'] for c in meta['claims']) and
+                      any('difference-of-means' in c['text'] and 'shuffled-label' in c.get('test', '')
+                          for c in meta['claims']),
                       f"words alone {w.get('acc', float('nan')):.0%} on {w.get('vocabulary')} tokens, "
                       f"word meanings {mn.get('acc', float('nan')):.0%}")
             if spec['id'] == 'selftest-probe-transfer':

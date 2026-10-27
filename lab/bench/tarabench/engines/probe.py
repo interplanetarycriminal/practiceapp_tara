@@ -261,7 +261,8 @@ def run(spec, ctx):
         f"({br['diffmeans_ci'][0]:.1%} to {br['diffmeans_ci'][1]:.1%}); it is saved for steering, which tests "
         f"whether the model actually uses it.",
         'supported' if br['diffmeans_ci'][0] > bar else 'weak',
-        {'acc': br['diffmeans'], 'ci': br['diffmeans_ci']}, test='same bar as above'))
+        {'acc': br['diffmeans'], 'ci': br['diffmeans_ci']},
+        test="CI lower bound clears the best shuffled-label probe by 5 points, the first claim's bar"))
 
     notes = []
     if transfer:
