@@ -9,12 +9,14 @@
 
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 import { loadWeights, GPT2, logSoftmax } from '../core/gpt2.js';
 import { BPE } from '../core/bpe.js';
-import { RECIPES, randomUnit } from '../core/recipes.js';
+import { RECIPES, randomUnit, saeFrom } from '../core/recipes.js';
 import { MISSIONS, PRESETS } from '../ui/missions.js';
 import { probeAll, wilson, SHUFFLES } from '../core/probes.js';
+import { half } from '../ui/corpus.js';
 
 const lab = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const L = 12, H = 12, D = 768, M = 3072;
@@ -44,6 +46,47 @@ function claim(id, text, ok, got) {
   if (!ok) fails++;
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${id}  ${text}\n        ${got}`);
 }
+
+/* ---- the GPU precompute's corpus files in lab/data, read as lab/ui/corpus.js reads them */
+const data = path.join(lab, 'data'), stats = JSON.parse(fs.readFileSync(path.join(data, 'stats.json')));
+const two = (l) => String(l).padStart(2, '0');
+function raw(file) {
+  const b = fs.readFileSync(path.join(data, file)), u = b[0] === 0x1f && b[1] === 0x8b ? zlib.gunzipSync(b) : b;
+  return u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength);
+}
+/* one unit's passages from an example file of n units: [{kind: 'top' | 'band', at (peak token), next, text}] */
+function passages(file, n, K, win, u, kTop) {
+  const b = raw(file), toks = new Uint16Array(b, 0, n * K * win), pk = new Uint8Array(b, 3 * n * K * win, n * K);
+  const val = half(new Uint16Array(b.slice(3 * n * K * win + n * K, 3 * n * K * win + 3 * n * K))), out = [];
+  for (let k = 0; k < K; k++) {
+    if (!(val[u * K + k] > 0)) continue;
+    const t = Array.from(toks.subarray((u * K + k) * win, (u * K + k + 1) * win)), p = Math.min(pk[u * K + k], win - 1);
+    out.push({ kind: k < kTop ? 'top' : 'band', at: t[p], next: t[p + 1], text: bpe.decode(t.filter((x) => x !== 50256)) });
+  }
+  return out;
+}
+function neuronPassages(l, n) {
+  const c = stats.neurons, ch = c.chunk_neurons;
+  return passages(`neurons/L${two(l)}.ex${Math.floor(n / ch)}.bin.gz`, ch, c.k_top + c.k_mid, c.window, n % ch, c.k_top);
+}
+const saeInfo = () => JSON.parse(fs.readFileSync(path.join(data, 'sae', 'L07', 'info.json')));
+function featurePassages(f) {
+  const I = saeInfo(), e = I.examples, c = Math.floor(f / e.chunk);
+  return passages(`sae/L07/ex${two(c)}.bin.gz`, Math.min(e.chunk, I.d_sae - c * e.chunk), e.k_top + e.k_mid, e.window, f % e.chunk, e.k_top);
+}
+/* a feature's decoder lens as lab/ui/tools/features.js shows it: {up: [[token, value]]}, values relative to the
+   average word (unscaled; the scale is the same for every feature) */
+function featureLens(f) {
+  const F = saeInfo().d_sae, b = raw('sae/L07/lens.bin'), t = new Uint16Array(b, 0, F * 20), v = new Int16Array(b, F * 40, F * 20);
+  const mu = new Float32Array(raw('sae/L07/lensmean.bin'));
+  return { up: Array.from({ length: 10 }, (_, q) => [t[f * 20 + q], v[f * 20 + q] / 100 - mu[f]]), all: { t, v, mu, F } };
+}
+/* the precomputed sweep's greedy rollouts of one neuron, as text */
+function sweepTexts(l, n) {
+  const c = stats.sweep, R = c.design.length, T = c.new_tokens, X = new Uint16Array(raw(`sweep/L${two(l)}.bin.gz`), 0, (c.neurons + c.controls) * R * T);
+  return c.design.map((_, r) => bpe.decode(Array.from(X.subarray((n * R + r) * T, (n * R + r + 1) * T)).filter((x) => x !== 50256)));
+}
+const word = (t) => bpe.decode([t]);
 
 /* surprise of each real token, in nats: the loss on token p is -log p(token p | tokens before it) */
 async function surprise(ids) {
@@ -219,25 +262,62 @@ const CHECKS = {
     const court = [atWord(xs[0], ' court'), atWord(xs[1], ' court')], win = [atWord(xs[0], ' win'), atWord(xs[1], ' win'), atWord(xs[2], ' win')];
     claim('w4-neurons', 'L0 N160 fires on "court" (law or tennis) and on "win" (election or match)', [...court, ...win].every((v, i) => v > 0.6 * peak(xs[i < 2 ? i : i - 2])),
       `court ${court.map((v) => v.toFixed(2)).join(', ')}; win ${win.map((v) => v.toFixed(2)).join(', ')}; peaks ${xs.map((x) => peak(x).toFixed(2)).join(', ')}`);
-    const wx = await fire('It was cold and the winds brought heavy rain.', 6, 974), quiet = await fire('The stock market fell sharply after the bank raised interest rates.', 6, 974);
-    const w3 = [' and', ' winds', ' rain'].map((w) => atWord(wx, w));
-    claim('w4-neurons', 'L6 N974 fires in weather sentences ("rain", "winds", even "and" after "It was cold") and not elsewhere', w3.every((v) => v > 0.5) && peak(quiet) < 0.5 * Math.min(...w3),
-      `and ${w3[0].toFixed(2)}, winds ${w3[1].toFixed(2)}, rain ${w3[2].toFixed(2)}; peak on a finance sentence ${peak(quiet).toFixed(2)}`);
+    const top160 = neuronPassages(0, 160).filter((x) => x.kind === 'top');
+    claim('w4-neurons', 'its twelve strongest passages in 25 million tokens of web text all peak on "but"', stats.neurons.tokens > 2e7 && top160.length === 12 && top160.every((x) => word(x.at).trim().toLowerCase() === 'but'),
+      `${(stats.neurons.tokens / 1e6).toFixed(0)}M tokens; peaks ${top160.map((x) => JSON.stringify(word(x.at))).join(' ')}`);
+    const WEATHER = /weather|degrees|sunny|forecast|climate|rain|overcast|windy|temperature|icy|snow|storm|humid/i;
+    const p974 = neuronPassages(6, 974), top974 = p974.filter((x) => x.kind === 'top'), band974 = p974.filter((x) => x.kind === 'band');
+    claim('w4-neurons', 'L6 N974\'s twelve strongest passages are all weather ("92 degrees and rain", "forecast to be mainly sunny")',
+      top974.length === 12 && top974.every((x) => WEATHER.test(x.text)) && ['92 degrees and rain', 'forecast to be mainly sunny'].every((q) => top974.some((x) => x.text.includes(q))),
+      `peaks ${top974.map((x) => JSON.stringify(word(x.at))).join(' ')}`);
+    claim('w4-neurons', 'at ordinary strength it drifts to unrelated words (the Atlantic, peak times)',
+      band974.filter((x) => !WEATHER.test(x.text)).length >= 4 && [' Atlantic', ' times'].every((w) => band974.some((x) => x.at === tok(w))),
+      `${band974.filter((x) => !WEATHER.test(x.text)).length} of ${band974.length} with no weather word; peaks ${band974.map((x) => JSON.stringify(word(x.at))).join(' ')}`);
     const lens = (await RECIPES.neuronLens(env, { neurons: [6 * M + 974], k: 6 })).lens[0], ups = lens.up.map(([t]) => t);
     claim('w4-neurons', 'L6 N974 writes temperatures, weather and rains', [' temperatures', ' weather', ' rains'].every((w) => ups.includes(tok(w))), `writes ${ups.map(piece).join(' ')}`);
-    const links = await RECIPES.neuronLinks(env, { layer: 6, neuron: 974, k: 8 }), feeds = links.feeds.filter(([, , c]) => c > 0).map(([g]) => g);
-    const fl = (await RECIPES.neuronLens(env, { neurons: feeds, k: 6 })).lens, rainy = new Set([' rains', ' rainy', ' weather'].map(tok));
-    const hit = feeds.filter((_, j) => fl[j].up.filter(([t]) => rainy.has(t)).length >= 2);
-    claim('w4-neurons', 'L6 N974 feeds later neurons that write rains, rainy and weather', hit.length > 0,
-      `feeds ${hit.map((g) => `L${Math.floor(g / M)} N${g % M}`).join(', ') || 'none'} writing ${hit.length ? fl[feeds.indexOf(hit[0])].up.map(([t]) => piece(t)).join(' ') : '-'}`);
-    const tl = [['I wrote a letter', ' letter'], ['The stock market fell sharply', ' sharply']];
-    const tv = [];
-    for (const [s, w] of tl) { const x = await fire(s, 10, 213); tv.push([atWord(x, w), peak(x)]); }
-    claim('w4-neurons', 'L10 N213 fires where a time phrase could come next ("I wrote a letter", "the market fell sharply")', tv.every(([v, p]) => v > 1 && v === p), tv.map(([v]) => v.toFixed(2)).join(', '));
+    const sw974 = sweepTexts(6, 974), hot = 'The temperature is expected to be at least 30 degrees';
+    claim('w4-neurons', `pushed hard it makes GPT-2 write "${hot}" (the precomputed sweep)`, sw974.some((t) => t.includes(hot)),
+      sw974.find((t) => /temperature/.test(t)) ? JSON.stringify(sw974.find((t) => /temperature/.test(t)).slice(0, 90)) : 'no rollout mentions a temperature');
+    const top213 = neuronPassages(10, 213).filter((x) => x.kind === 'top');
+    const VERB = new Set([' released', ' reported', ' said', ' announced'].map(tok)), TIME = new Set([' late', ' last', ' on', ' Tuesday', ' Monday', ' Wednesday', ' Thursday', ' Friday', ' this', ' earlier', ' yesterday'].map(tok));
+    const q213 = ['a report released last month', 'a national study released Tuesday', 'an NBC News poll released late last month'];
+    claim('w4-neurons', `L10 N213's strongest passages peak on a reporting verb just before a time phrase (${q213.map((q) => `"${q}"`).join(', ')})`,
+      top213.filter((x) => VERB.has(x.at)).length >= 8 && top213.filter((x) => TIME.has(x.next)).length >= 8 && q213.every((q) => top213.some((x) => x.text.includes(q))),
+      `peaks ${top213.map((x) => `${word(x.at).trim()}→${word(x.next).trim()}`).join(', ')}`);
     const ids = enc('I think the most important thing to remember is');
     const iv = [{ hook: 'mlp_post', layer: 10, neuron: 213, op: 'addr', rows: [1], value: 0.8 }];
     const out = cpu.generate({ prompt: ids, R: 2, maxNew: 24, iv }).map((o) => bpe.decode(o.tokens || o));
     claim('w4-neurons', 'pushing L10 N213 (the tool\'s default prompt and dose) makes GPT-2 write "last Friday"', out[1].includes('last Friday'), `pushed: ${JSON.stringify(out[1])}`);
+  },
+
+  async 'w4-features'() {
+    const I = saeInfo(), b = fs.readFileSync(path.join(data, 'sae', 'L07', 'sae.bin'));
+    const envS = { ...env, sae: saeFrom(I, b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength), 7) };
+    const ids = enc(mission('w4-features').params.text), E = await RECIPES.saeEncode(envS, { ids, k: 10, top: 40 }), l0 = mean(Array.from(E.l0).slice(1));
+    claim('w4-features', 'about 50 of 24,576 features are on at each token, rebuilding about 87% of the stream on this sentence', I.d_sae === 24576 && near(l0, 44, 56) && near(E.ev, 0.84, 0.9),
+      `L0 ${l0.toFixed(1)}, explained variance ${pc(E.ev)}`);
+    const at = ids.indexOf(tok(' rain'));
+    claim('w4-features', 'the top feature on " rain" is feature 7626', E.topF[at * E.k] === 7626, `top on " rain": F${E.topF[at * E.k]} at ${E.topV[at * E.k].toFixed(1)}`);
+    const p1 = featurePassages(7626).filter((x) => x.kind === 'top'), l1 = featureLens(7626).up.map(([t]) => word(t));
+    claim('w4-features', 'all twelve of its strongest passages peak on " rain"', p1.length === 12 && p1.every((x) => x.at === tok(' rain')), `peaks ${p1.map((x) => JSON.stringify(word(x.at))).join(' ')}`);
+    claim('w4-features', 'it writes "bows", "forest" and "drops"', ['bows', 'forest', 'drops'].every((w, i) => l1[i] === w), `writes ${l1.slice(0, 6).map((w) => JSON.stringify(w)).join(' ')}`);
+    const { dec } = await RECIPES.saeRow(envS, { feature: 7626 }), nn = Math.hypot(...dec), rn = cpu.residNorm[6];
+    const vec = Float32Array.from(dec, (v) => (v / nn) * rn), pids = enc('I think the most important thing to remember is');
+    const gen = cpu.generate({ prompt: pids, R: 2, maxNew: 24, iv: [{ hook: 'resid_pre', layer: 7, op: 'add', rows: [1], vec, value: 0.8 }] }).map((o) => bpe.decode(o.tokens || o));
+    claim('w4-features', 'pushed at +0.8 (the tool\'s default prompt) it makes GPT-2 write about "raindrops and clouds"', gen[1].includes('raindrops and clouds') && !/rain/.test(gen[0]),
+      `pushed: ${JSON.stringify(gen[1])}; no push: ${JSON.stringify(gen[0])}`);
+    const p2 = featurePassages(24134), top2 = p2.filter((x) => x.kind === 'top'), band2 = p2.filter((x) => x.kind === 'band'), Lz = featureLens(24134), l2 = Lz.up.map(([t]) => word(t));
+    claim('w4-features', 'feature 24134\'s strongest passages peak on heat, fog, drizzle, a blizzard and a breeze', [' heat', ' fog', 'zzle', 'izzard', ' breeze'].every((w) => top2.some((x) => word(x.at) === w)),
+      `peaks ${top2.map((x) => JSON.stringify(word(x.at))).join(' ')}`);
+    claim('w4-features', 'it writes temperatures, humidity and winds', [' temperatures', ' humidity', ' winds'].every((w, i) => l2[i] === w), `writes ${l2.slice(0, 6).map((w) => JSON.stringify(w)).join(' ')}`);
+    claim('w4-features', 'at ordinary strength it stays close to its theme (darkness, polluted air, low water conditions)',
+      [' darkness', ' air', ' conditions'].every((w) => band2.some((x) => word(x.at) === w)) && ['polluted air', 'low water conditions'].every((q) => band2.some((x) => x.text.includes(q))),
+      `peaks ${band2.map((x) => JSON.stringify(word(x.at))).join(' ')}`);
+    const A = Lz.all, hum = tok(' humidity'), found = [];
+    for (let f = 0; f < A.F; f++) for (let q = 0; q < 10; q++) if (A.t[f * 20 + q] === hum) { found.push([f, A.v[f * 20 + q] / 100 - A.mu[f]]); break; }
+    found.sort((a, c) => c[1] - a[1]);
+    claim('w4-features', 'the search for features that write humidity lists feature 24134 near the top', found.slice(0, 3).some(([f]) => f === 24134),
+      `top: ${found.slice(0, 4).map(([f]) => 'F' + f).join(', ')} of ${found.length}`);
   },
 
   async 'w5-value'() {

@@ -1,4 +1,5 @@
-"""Run every precompute job in order, skipping what is already done: corpus -> neurons -> steer lens -> sweep -> SAE.
+"""Run every precompute job in order, skipping what is already done: corpus -> neurons -> steer lens -> sweep -> SAE,
+then the list hints (summarise.py, CPU only).
 Each job runs in its own process, so GPU memory is handed back between jobs. Every job is resumable.
 
     python run_all.py --data Z:/tara-lab/data --work Z:/tara-lab/work --lock Z:/tara-lab/gpulock.py --smoke
@@ -68,6 +69,7 @@ def main():
         run('sweep.py', '--work', work, *lock, *dev)
     if 'sae' in only:
         run('sae.py', '--sae', data / 'sae', '--work', work, '--layers', a.sae_layers, *lock, *dev)
+    run('summarise.py')
     print('\nall jobs finished; outputs in', HERE.parent / 'data')
 
 

@@ -21,9 +21,9 @@ const TARGET = {
   next: [262, 52], surprise: [222, 58], dla: [246, 96],
   lens: [262, 222], probe: [262, 300], steer: [192, 342], patch: [122, 410],
   attention: [150, 368], ov: [200, 258], ablate: [130, 150],
-  neurons: [262, 186],
+  neurons: [262, 186], features: [130, 300],
 };
-const ORDER = ['next', 'surprise', 'dla', 'ablate', 'neurons', 'lens', 'ov', 'probe', 'steer', 'attention', 'patch'];
+const ORDER = ['next', 'surprise', 'dla', 'ablate', 'neurons', 'lens', 'ov', 'features', 'probe', 'steer', 'attention', 'patch'];
 
 export function riverMap({ onPick } = {}) {
   const svg = s('svg', { class: 'river', viewBox: '0 0 400 540', role: 'group', 'aria-label': 'GPT-2 as a river, with the lab\'s tools pinned where they look' });
@@ -88,5 +88,5 @@ export function riverMap({ onPick } = {}) {
 function short(name) {
   return { 'What comes next': 'Next token', 'Who wrote the answer': 'Who wrote it', 'Attention patterns': 'Attention',
     'Knock-out sweep': 'Knock-out', 'Activation patching': 'Patching', 'Neuron explorer': 'Neurons', 'Linear probe': 'Probe',
-    'Surprise meter': 'Surprise' }[name] || name;
+    'Surprise meter': 'Surprise', 'SAE features': 'Features' }[name] || name;
 }

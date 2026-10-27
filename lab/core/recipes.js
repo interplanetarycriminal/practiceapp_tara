@@ -610,7 +610,173 @@ export const RECIPES = {
       kl: kl(1), klCtrl: [...Array(controls).keys()].map((c) => kl(2 + c)), unit: rn, dose,
     };
   },
+
+  /* Every one of the 36,864 neurons ranked by how much it writes one token directly: neuronLens for a single token,
+     (W_U[t] − mean over the vocabulary) · (γ_f ⊙ centre(w_out)) at the same scale, so the values match the neuron
+     card's "What it writes". Weights only; a few hundredths of a second per layer. */
+  async lensSearch(env, { token, k = 40 }) {
+    const cpu = env.cpu, gF = cpu.W.lnfg, scale = Math.sqrt(D) / (cpu.residNorm[L - 1] || 100), N = linkNorms(cpu);
+    const mu = meanEmbed(cpu), e = cpu.embedRow(token, new Float32Array(D)), u = new Float32Array(D);
+    let su = 0;
+    for (let i = 0; i < D; i++) { u[i] = (e[i] - mu[i]) * gF[i] * scale; su += u[i]; }
+    const val = new Float32Array(L * M);
+    for (let l = 0; l < L; l++) {
+      await checkpoint(env);
+      const Z = writeDots(cpu.W.layers[l].proj, u);
+      for (let n = 0; n < M; n++) val[l * M + n] = Z[n] - N.wMean[l][n] * su;
+    }
+    return { up: topk(val, k).map((g) => [g, val[g]]), down: topk(val, k, -1).map((g) => [g, val[g]]) };
+  },
+
+  /* A sparse autoencoder's features on a text: the dictionary loaded by the host (saeLoad) reads the residual
+     stream entering its layer at every token, f = ReLU(W_enc (x − b_dec) + b_enc), with x centred first when the
+     SAE was trained that way. Returns each token's k strongest features, how many were on (L0), how far the
+     rebuilt stream x̂ = W_dec f + b_dec misses each token's (|x − x̂|² / |x|²), the explained variance over the whole
+     text (1 − Σ|x − x̂|² / Σ|x − x̄|², the measure the precompute reports for its corpus), and the features strongest
+     anywhere in the text. */
+  async saeEncode(env, { ids, k = 6, top = 40 }) {
+    const S = env.sae;
+    if (!S) throw new Error('The dictionary is not loaded yet');
+    const T = ids.length, F = S.F, G = S.G, NG = D / G;
+    const r = await env.forward({ ids, capture: { resid_pre: [S.layer] }, logits: 'none' });
+    const X = r.cap.resid_pre[S.layer];
+    const topF = new Int32Array(T * k).fill(-1), topV = new Float32Array(T * k), l0 = new Int16Array(T), miss = new Float32Array(T);
+    const XC = new Float32Array(T * D), ERR = new Float32Array(T);
+    const fmax = new Float32Array(F), farg = new Int16Array(F), xx = new Float32Array(D), f = new Float32Array(F);
+    for (let t = 1; t < T; t++) {
+      if (t % 4 === 1) { await checkpoint(env); if (env.ctx.progress) env.ctx.progress({ done: t, total: T - 1 }); }
+      let mu = 0;
+      for (let i = 0; i < D; i++) mu += X[t * D + i];
+      mu = S.centred ? mu / D : 0;
+      for (let i = 0; i < D; i++) xx[i] = X[t * D + i] - mu - (S.subDec ? S.bDec[i] : 0);
+      let on = 0;
+      for (let j = 0; j < F; j++) {
+        const qo = j * D, so = j * NG;
+        let y = 0;
+        for (let g = 0; g < NG; g++) {
+          let a = 0;
+          for (let i = g * G, e = i + G; i < e; i++) a += S.encQ[qo + i] * xx[i];
+          y += a * S.encS[so + g];
+        }
+        y += S.bEnc[j];
+        f[j] = y > 0 ? y : 0;
+        if (y > 0) { on++; if (y > fmax[j]) { fmax[j] = y; farg[j] = t; } }
+      }
+      l0[t] = on;
+      const best = topk(f, k);
+      best.forEach((j, q) => { if (f[j] > 0) { topF[t * k + q] = j; topV[t * k + q] = f[j]; } });
+      /* reconstruction from the active features: x̂ = Σ f_j d_j + b_dec, against the input it was given */
+      const rec = new Float32Array(D);
+      for (let j = 0; j < F; j++) {
+        if (!(f[j] > 0)) continue;
+        const qo = j * D, so = j * NG, a = f[j];
+        for (let i = 0; i < D; i++) rec[i] += a * S.decQ[qo + i] * S.decS[so + (i >> 6)];
+      }
+      let num = 0, den = 0;
+      for (let i = 0; i < D; i++) {
+        const x = X[t * D + i] - mu, d = x - (rec[i] + S.bDec[i]);
+        XC[t * D + i] = x; num += d * d; den += x * x;
+      }
+      ERR[t] = num;
+      miss[t] = num / Math.max(1e-9, den);
+    }
+    const xbar = new Float32Array(D);
+    for (let t = 1; t < T; t++) for (let i = 0; i < D; i++) xbar[i] += XC[t * D + i] / (T - 1);
+    let sErr = 0, sVar = 0;
+    for (let t = 1; t < T; t++) { sErr += ERR[t]; for (let i = 0; i < D; i++) sVar += (XC[t * D + i] - xbar[i]) ** 2; }
+    const strongest = topk(fmax, top).filter((j) => fmax[j] > 0).map((j) => [j, fmax[j], farg[j]]);
+    return { T, k, topF, topV, l0, miss, ev: T > 2 ? 1 - sErr / Math.max(1e-9, sVar) : NaN, strongest };
+  },
+
+  /* One feature's activation at every token of a text (the same encoder as saeEncode, one row of it). */
+  async saeTrace(env, { ids, feature }) {
+    const S = env.sae;
+    if (!S) throw new Error('The dictionary is not loaded yet');
+    const T = ids.length, G = S.G, NG = D / G, j = feature;
+    const r = await env.forward({ ids, capture: { resid_pre: [S.layer] }, logits: 'none' });
+    const X = r.cap.resid_pre[S.layer], out = new Float32Array(T);
+    for (let t = 1; t < T; t++) {
+      let mu = 0;
+      for (let i = 0; i < D; i++) mu += X[t * D + i];
+      mu = S.centred ? mu / D : 0;
+      let y = 0;
+      for (let g = 0; g < NG; g++) {
+        let a = 0;
+        for (let i = g * G, e = i + G; i < e; i++) a += S.encQ[j * D + i] * (X[t * D + i] - mu - (S.subDec ? S.bDec[i] : 0));
+        y += a * S.encS[j * NG + g];
+      }
+      y += S.bEnc[j];
+      out[t] = y > 0 ? y : 0;
+    }
+    return { acts: out };
+  },
+
+  /* One feature's decoder direction: what it adds to the stream per unit of activation (dequantised). */
+  async saeRow(env, { feature }) {
+    const S = env.sae;
+    if (!S) throw new Error('The dictionary is not loaded yet');
+    const NG = D / S.G, dec = new Float32Array(D);
+    for (let i = 0; i < D; i++) dec[i] = S.decQ[feature * D + i] * S.decS[feature * NG + Math.floor(i / S.G)];
+    return { dec };
+  },
+
+  /* The features whose decoder directions point most nearly the same way as one feature's (cosine over all of the
+     dictionary): near-duplicates that share out one concept are the signature of feature splitting. */
+  async saeNeighbors(env, { feature, k = 8 }) {
+    const S = env.sae;
+    if (!S) throw new Error('The dictionary is not loaded yet');
+    const F = S.F, G = S.G, NG = D / G;
+    if (!S.decNorm) {
+      S.decNorm = new Float32Array(F);
+      for (let j = 0; j < F; j++) {
+        let s = 0;
+        for (let i = 0; i < D; i++) { const v = S.decQ[j * D + i] * S.decS[j * NG + Math.floor(i / G)]; s += v * v; }
+        S.decNorm[j] = Math.sqrt(s) || 1;
+      }
+    }
+    const q = new Float32Array(D);
+    for (let i = 0; i < D; i++) q[i] = S.decQ[feature * D + i] * S.decS[feature * NG + Math.floor(i / G)];
+    const cos = new Float32Array(F);
+    for (let j = 0; j < F; j++) {
+      if (j % 4096 === 0) await checkpoint(env);
+      let y = 0;
+      for (let g = 0; g < NG; g++) {
+        let a = 0;
+        for (let i = g * G, e = i + G; i < e; i++) a += S.decQ[j * D + i] * q[i];
+        y += a * S.decS[j * NG + g];
+      }
+      cos[j] = y / (S.decNorm[j] * S.decNorm[feature]);
+    }
+    cos[feature] = -2;
+    return { near: topk(cos, k).map((j) => [j, cos[j]]) };
+  },
 };
+
+/* A layer's SAE from the precompute's int8 file (lab/data/sae/L{ll}/sae.bin, its layout in info.json), in the form
+   the sae recipes read: int8 rows with float32 group scales. The host loads it into env.sae; lab/checks does too. */
+export function saeFrom(info, buffer, layer) {
+  const lay = info.sae_bin, T = { int8: Int8Array, float16: Uint16Array, float32: Float32Array };
+  const view = (k) => new T[lay[k].dtype](buffer, lay[k].offset, lay[k].shape.reduce((a, b) => a * b, 1));
+  const half = (h) => {
+    const s = h & 0x8000 ? -1 : 1, e = (h >> 10) & 31, f = h & 1023;
+    return e === 0 ? s * f * 2 ** -24 : e === 31 ? (f ? NaN : s * Infinity) : s * (1 + f / 1024) * 2 ** (e - 15);
+  };
+  const f32 = (u) => Float32Array.from(u, half);
+  return {
+    layer, F: info.d_sae, G: info.group || 64, encQ: view('enc_q'), encS: f32(view('enc_s')), bEnc: view('b_enc'),
+    decQ: view('dec_q'), decS: f32(view('dec_s')), bDec: view('b_dec'),
+    centred: !!info.centred_input, subDec: info.apply_b_dec_to_input !== false,
+  };
+}
+
+/* the average token embedding (the unembedding is tied to it), for logits measured from the vocabulary's mean */
+function meanEmbed(cpu) {
+  if (cpu.meanEmbed) return cpu.meanEmbed;
+  const mu = new Float64Array(D), row = new Float32Array(D);
+  for (let v = 0; v < V; v++) { cpu.embedRow(v, row); for (let i = 0; i < D; i++) mu[i] += row[i]; }
+  cpu.meanEmbed = Float32Array.from(mu, (x) => x / V);
+  return cpu.meanEmbed;
+}
 
 /* Per layer, once: each neuron's mean write coordinate and centred write length, and the centred length of what each
    neuron reads (γ ⊙ w_in), for neuronLinks' cosines. About a tenth of a second on a slow processor. */

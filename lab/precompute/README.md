@@ -15,6 +15,7 @@ the browser does, and every job starts with a self-test against numbers computed
 | `steerlens.py` | `steer/`: the tokens each neuron's push makes more likely, through all later layers |
 | `sweep.py` | `sweep/`: ten greedy continuations per neuron with it pushed, plus random-direction controls |
 | `sae.py` | `sae/L07/`: gpt2-small-res-jb layer 7 features (examples, logit lens, density) and an int8 copy of the SAE |
+| `summarise.py` | `neurons/peaks.bin`, `sae/L07/peaks.bin`: the peak token of each unit's three strongest passages, for list hints (CPU, seconds) |
 
 Run (Windows paths shown; `--lock` takes turns with other GPU users through a `hold()` context manager):
 

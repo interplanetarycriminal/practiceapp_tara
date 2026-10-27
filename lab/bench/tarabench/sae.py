@@ -98,17 +98,21 @@ class TopKSAE:
 
 
 def load_many(lm, repo, layers, k=None, revision=None, headroom_gb=1.5):
-    """Dictionaries for several layers: on the GPU in bf16 when they fit beside the model with room to spare,
-    otherwise on the CPU in fp32 (slower, but a 9B model in 4-bit plus several 64K dictionaries does not fit a
-    shared 24 GB card). Returns ({layer: dictionary}, device)."""
+    """Dictionaries for several layers: on the GPU at the model's precision when they fit beside it with room to
+    spare (so a float32 model's spliced runs stay exact), else on the GPU in bf16, else on the CPU in fp32 (slower,
+    but a 9B model in 4-bit plus several 64K dictionaries does not fit a shared 24 GB card).
+    Returns ({layer: dictionary}, device)."""
     saes = {L: TopKSAE.load(repo, L, k, revision, 'cpu', torch.float32) for L in layers}
-    device = torch.device('cpu')
+    device, dtype = torch.device('cpu'), torch.float32
     if lm.device.type == 'cuda':
-        need = sum(s.nbytes() for s in saes.values()) / 2 / 2 ** 30
-        if need + headroom_gb < torch.cuda.mem_get_info()[0] / 2 ** 30:
+        free = torch.cuda.mem_get_info()[0] / 2 ** 30
+        full = sum(s.nbytes() for s in saes.values()) / 2 ** 30          # as loaded, in float32
+        if lm.dtype == torch.float32 and full + headroom_gb < free:
             device = lm.device
+        elif full / 2 + headroom_gb < free:
+            device, dtype = lm.device, torch.bfloat16
     for s in saes.values():
-        s.to(device, torch.bfloat16 if device.type == 'cuda' else torch.float32)
+        s.to(device, dtype)
     return saes, device
 
 

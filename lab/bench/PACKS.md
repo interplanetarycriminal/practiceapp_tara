@@ -37,7 +37,9 @@ shuffled labels for probes, random active features for circuits, a random vector
 [random, doses], `direction` [d_model].
 
 **probe**: `layers`, `rows` [{layer, logreg, logreg_ci, logreg_auc, diffmeans, diffmeans_ci, diffmeans_auc,
-shuffled, shuffled_max, l2, mean_gap}], `best` (index into rows), `pca_ratio`, `texts`, `n`, `n_test`. Arrays:
+shuffled, shuffled_max, l2, mean_gap}] (the `_ci` pairs are exact binomial 95% intervals; packs before 27 October 2026
+bootstrapped them), `best` (index into rows), `pca_ratio`, `texts`, `n`, `n_test`, `paired` (matched pairs held out
+whole), `interval`. Arrays:
 `pca` [layers, n, 2], `labels` [n], `is_test` [n], `dirs_dm` and `dirs_lr` [layers, d_model] (unit vectors,
 usable by a steer spec as `{"from": "pack", "pack": "<id>", "layer": L}`), `scores_best` [n].
 

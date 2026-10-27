@@ -23,13 +23,16 @@ gets them right. The gray band is the same ruler placed using <i>shuffled</i> la
 Only blue well above gray counts.</p>`,
     2: `<p>For each of ${d.n} texts, the residual stream ${d.pool === 'last' ? 'at the last token' : 'averaged over the tokens'} is
 read after every layer. A logistic regression is fit on ${nTrain} texts and scored on the ${d.n_test} held out (blue, with a 95%
-bootstrap interval). The orange line fits nothing: it uses only the difference between the two class averages, the
+${d.interval ? 'exact binomial' : 'bootstrap'} interval).${d.paired ? ` The texts come in matched pairs (the same item once with each label), and whole pairs
+are held out, so every held-out text is about something the probe never saw.` : ''} The orange line fits nothing: it uses only the difference between the two class averages, the
 simplest possible probe. The gray band is the permutation control, a probe trained and scored on shuffled labels
 (average to best of ${p.spec && p.spec.controls && p.spec.controls.shuffle || 'several'}): with ${p.models && p.models[0] && p.models[0].d_model || 'hundreds of'} dimensions and only ${nTrain}
 training examples, a line can fit noise, and the control shows how well.</p>
 <div data-angle="analogy"><p>A metal detector swept over a beach: it beeps over coins (the property is there) but says nothing
 about whether anyone ever spends them. Steering and patching test the spending.</p></div>`,
-    3: `<p>Accuracy is the mean over held-out items; intervals bootstrap the items. The stamp needs the interval's lower bound to
+    3: `<p>Accuracy is the mean over held-out items; ${d.interval ? `intervals are exact binomial (Clopper-Pearson), which stay
+honest at a perfect score: ${d.n_test} of ${d.n_test} right only pins the true rate above ${pct(0.025 ** (1 / d.n_test), 1)} (at 95% confidence), where a
+bootstrap would say 100% to 100%` : 'intervals bootstrap the items'}.${d.paired ? ' The control swaps labels within pairs, so it keeps the pairs balanced.' : ''} The stamp needs the interval's lower bound to
 clear max(best shuffled probe, 50%) by 5 points. Linear decodability is evidence of a representation, not of use: a
 probe with enough capacity can read information the model never reads itself (Hewitt and Liang's control tasks make the
 same point). Marks and Tegmark (2023) found difference-of-means directions generalise better than logistic ones and are

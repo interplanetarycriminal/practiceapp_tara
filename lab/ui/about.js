@@ -34,7 +34,7 @@ export function aboutView(view) {
     h('h1', null, 'About the lab'),
     tiers('about-what', {
       1: `<p>The lab has two halves. <b>In your browser</b>, GPT-2 small (the model ARENA's interpretability chapter takes apart)
-runs on your own device, and eleven tools let you look inside it. <b>On the 3090</b>, a research bench runs bigger open
+runs on your own device, and twelve tools let you look inside it. <b>On the 3090</b>, a research bench runs bigger open
 models (Qwen 3.5, DeepSeek's distilled models, Z.ai's GLM) and writes each experiment as a result with its own
 evidence. Those results appear under Results, drawn by the same charts.</p>`,
       2: `<p>Two halves. The <b>lab</b> is GPT-2 small (124M parameters, int8 weights, 133 MB) running in a Web Worker,
@@ -74,10 +74,11 @@ clears the control's maximum (and, for steering, three standard deviations of it
     h('p', null, 'The bench\'s own guide, with the commands for the PC, is ',
       h('a', { href: 'https://github.com/interplanetarycriminal/practiceapp_tara/blob/main/lab/bench/README.md' }, 'lab/bench/README.md'), '.'),
     h('h2', null, 'Compared with neuron-explorer'),
-    h('p', null, 'Lyra\'s neuron-explorer showed what a good neuron browser feels like: every neuron\'s top examples, what pushing it does, and pushes measured against random directions. The lab rebuilds those ideas (there is no licence on the original, so nothing is copied) and adds:'),
+    h('p', null, 'Lyra\'s neuron-explorer showed what a good neuron browser feels like: every neuron\'s top examples, what pushing it does, and pushes measured against random directions. The lab rebuilds those ideas (there is no licence on the original, so nothing is copied): every neuron\'s strongest and ordinary passages from 25 million tokens of web text, its histogram, co-firing partners, steer lens and steering sweep against random pushes, computed once on the 3090. It adds:'),
     h('ul', null,
       h('li', null, 'the model runs on your device, offline, with no server;'),
-      h('li', null, 'ARENA\'s whole toolkit beside the neurons: logit lens, attention and head fingerprints, OV circuits, direct attribution, knock-outs, patching, steering and probes;'),
+      h('li', null, 'ARENA\'s whole toolkit beside the neurons: logit lens, attention and head fingerprints, OV circuits, direct attribution, knock-outs, patching, steering, probes, and the layer-7 SAE ARENA uses, read live on your own text;'),
+      h('li', null, 'search from a word to its neurons or features, by what they write or what pushing them makes GPT-2 say;'),
       h('li', null, 'the bench for models far bigger than GPT-2, with controls and claim ledgers on every result;'),
       h('li', null, 'three reading levels, missions for every TARA week, and links into the concept map, films and 3D objects.')),
     h('h2', null, 'Credits'),
@@ -87,5 +88,6 @@ clears the control's maximum (and, for steering, three standard deviations of it
       h('li', null, 'Logit lens: nostalgebraist (2020). Induction heads: Olsson et al. (2022). IOI: Wang et al. (2022). Activation patching and its pitfalls: Heimersheim and Nanda (2024); Zhang and Nanda (2023).'),
       h('li', null, 'Steering: Turner et al. (ActAdd, 2023), Rimsky et al. (contrastive activation addition, 2024), Chen et al. (persona vectors, 2025). Probes: Marks and Tegmark (2023). Directional ablation: Arditi et al. (2024).'),
       h('li', null, 'Feature circuits: Marks et al. (2024). Attribution graphs: Ameisen et al. and Lindsey et al. (Anthropic, 2025); circuit-tracer (Hanna, Piotrowski et al.). Model diffing: Minder et al. (2025). Dictionaries: the Qwen team\'s Qwen-Scope (2026).'),
+      h('li', null, 'Sparse autoencoders: Bricken et al. (2023), Cunningham et al. (2023); the GPT-2 dictionary is Joseph Bloom\'s gpt2-small-res-jb, loaded as in ARENA through SAELens. Corpus: OpenWebText (Gokaslan and Cohen, 2019).'),
       h('li', null, 'Feature-card layout after Anthropic\'s feature browsers and Neuronpedia. GPT-2 by OpenAI, under its modified MIT licence.'))));
 }

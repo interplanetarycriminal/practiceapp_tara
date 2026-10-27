@@ -138,8 +138,8 @@ means it failed. A page with a weak claim on it is more trustworthy, not less: i
       2: `<p>Each claim states its test. <b>Supported</b>: the 95% interval clears the control (by a margin the test names).
 <b>Weak</b>: the estimate points the right way but the interval overlaps the control. <b>Not supported</b>: it fails. The
 control for this kind of result: ${kindOf(p.kind).control}.</p>`,
-      3: `<p>Intervals are bootstrap 95% intervals over the items (prompts, held-out examples or pairs), with the seed in the
-spec. Controls are matched to the intervention (same norm, same layer, same number of features). Thresholds are fixed in
+      3: `<p>Intervals are 95%: bootstrap intervals over the items (prompts or pairs), with the seed in the spec, except a
+probe's held-out accuracy, which gets the exact binomial interval (a bootstrap of a perfect score collapses to 100% to 100%). Controls are matched to the intervention (same norm, same layer, same number of features). Thresholds are fixed in
 the bench before any run, so a claim cannot be stamped after looking. Multiple comparisons are not corrected for; treat a
 single supported claim among many as a lead, not a finding.</p>`,
     })));
@@ -205,6 +205,17 @@ export function lensLists(up, down, { upName = 'Pushes up', downName = 'Pushes d
   return h('div.lens-cols', null,
     h('div', null, h('div.small-caps', null, '↑ ' + upName), list(up, 1)),
     h('div', null, h('div.small-caps', null, '↓ ' + downName), list(down, -1)));
+}
+
+/* a corpus spec in words: 'builtin:<name>', {hf: name}, or {parquet | jsonl | txt: path} */
+export function corpusName(src) {
+  if (!src) return 'a reference corpus';
+  if (typeof src === 'string') return src.startsWith('builtin:') ? `the bench's built-in ${src.slice(8)} texts` : src;
+  if (src.hf) return src.hf;
+  const p = src.parquet || src.jsonl || src.txt;
+  if (!p) return 'a reference corpus';
+  const base = String(p).replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+  return /^(owt|openwebtext)$/i.test(base) ? 'OpenWebText' : base;
 }
 
 /* the two halves of a probe's labelled set, named */

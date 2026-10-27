@@ -1,6 +1,9 @@
-"""The statistics every engine leans on: bootstrap intervals, linear probes, difference-of-means directions, PCA.
+"""The statistics every engine leans on: bootstrap and exact binomial intervals, train/test splits that keep matched
+pairs together, linear probes, difference-of-means directions, PCA.
 
 Everything runs on the CPU in float32 or float64; the arrays are small (examples x model width)."""
+import math
+
 import numpy as np
 import torch
 
@@ -20,9 +23,58 @@ def bootstrap_acc(correct, n=1000, seed=0):
     return bootstrap_ci(np.asarray(correct, dtype=np.float64), n=n, seed=seed)
 
 
-def split(n, test_fraction, seed, labels=None):
-    """A seeded train/test split, stratified by label when labels are given."""
+def _binom_cdf(k, n, p):
+    """P(X <= k) for X ~ Binomial(n, p), summed in log space."""
+    if k < 0:
+        return 0.0
+    if k >= n or p <= 0:
+        return 1.0
+    if p >= 1:
+        return 0.0
+    lp, lq, lc = math.log(p), math.log1p(-p), math.lgamma(n + 1)
+    terms = [lc - math.lgamma(i + 1) - math.lgamma(n - i + 1) + i * lp + (n - i) * lq for i in range(k + 1)]
+    m = max(terms)
+    return min(1.0, math.exp(m) * sum(math.exp(t - m) for t in terms))
+
+
+def binom_ci(k, n, alpha=0.05):
+    """Exact (Clopper-Pearson) interval for k successes in n trials: the success rates at which k or more, and k or
+    fewer, would each turn up with probability alpha / 2. A bootstrap of a perfect score resamples only successes and
+    says 100% to 100%; this says 42 of 42 is 91.6% to 100%."""
+    if n <= 0:
+        return float('nan'), float('nan')
+
+    def solve(f, want):            # f rises with p on [0, 1]
+        a, b = 0.0, 1.0
+        for _ in range(60):
+            m = (a + b) / 2
+            a, b = (m, b) if f(m) < want else (a, m)
+        return (a + b) / 2
+    lo = 0.0 if k <= 0 else solve(lambda p: 1 - _binom_cdf(k - 1, n, p), alpha / 2)     # P(X >= k) rises with p
+    hi = 1.0 if k >= n else solve(lambda p: -_binom_cdf(k, n, p), -alpha / 2)           # P(X <= k) falls with p
+    return lo, hi
+
+
+def exact_acc(correct, alpha=0.05):
+    """Held-out accuracy with its exact binomial interval: (estimate, low, high)."""
+    c = np.asarray(correct, dtype=bool)
+    if c.size == 0:
+        return float('nan'), float('nan'), float('nan')
+    lo, hi = binom_ci(int(c.sum()), int(c.size), alpha)
+    return float(c.mean()), lo, hi
+
+
+def split(n, test_fraction, seed, labels=None, groups=None):
+    """A seeded train/test split, stratified by label when labels are given. With groups (one id per example, shared
+    by the two halves of a matched pair) whole groups are held out together, so every held-out item is one the probe
+    never saw in any version; when each group holds one of each label the split is balanced as well."""
     rng = np.random.default_rng(seed)
+    if groups is not None:
+        g = np.asarray(groups)
+        ids = rng.permutation(np.unique(g))
+        k = max(1, int(round(len(ids) * test_fraction)))
+        test = np.isin(g, ids[:k])
+        return np.flatnonzero(~test), np.flatnonzero(test)
     if labels is None:
         perm = rng.permutation(n)
         k = max(1, int(round(n * test_fraction)))
@@ -35,6 +87,20 @@ def split(n, test_fraction, seed, labels=None):
         te.extend(idx[:k])
         tr.extend(idx[k:])
     return np.sort(np.array(tr)), np.sort(np.array(te))
+
+
+def null_labels(ys, rng, groups=None):
+    """Labels for a permutation control. With groups the labels are shuffled within each group (for a matched pair,
+    a coin-flip swap), so every pair still holds one of each label and a pair-held-out split stays balanced; without
+    groups, a plain permutation (split again on the result, so both halves stay balanced)."""
+    ys = np.asarray(ys)
+    if groups is None:
+        return rng.permutation(ys)
+    g, out = np.asarray(groups), ys.copy()
+    for v in np.unique(g):
+        idx = np.flatnonzero(g == v)
+        out[idx] = ys[rng.permutation(idx)]
+    return out
 
 
 class Standardise:
@@ -78,16 +144,22 @@ def probe_direction(model):
     return d / (np.linalg.norm(d) + 1e-12)
 
 
-def choose_l2(X, y, grid=(1e-3, 1e-2, 1e-1, 1.0, 10.0), folds=3, seed=0):
+def choose_l2(X, y, grid=(1e-3, 1e-2, 1e-1, 1.0, 10.0), folds=3, seed=0, groups=None):
+    """The L2 strength with the best cross-validated accuracy; with groups, each fold holds whole groups."""
     y = np.asarray(y)
     rng = np.random.default_rng(seed)
-    order = rng.permutation(len(y))
+    fold = np.empty(len(y), dtype=np.int64)
+    if groups is None:
+        fold[rng.permutation(len(y))] = np.arange(len(y)) % folds
+    else:
+        g = np.asarray(groups)
+        at = {v: i % folds for i, v in enumerate(rng.permutation(np.unique(g)))}
+        fold[:] = [at[v] for v in g]
     best, best_acc = grid[0], -1
     for l2 in grid:
         accs = []
         for f in range(folds):
-            te = order[f::folds]
-            tr = np.setdiff1d(order, te)
+            te, tr = np.flatnonzero(fold == f), np.flatnonzero(fold != f)
             if len(np.unique(y[tr])) < 2:
                 continue
             m = fit_logistic(X[tr], y[tr], l2=l2, iters=100)
