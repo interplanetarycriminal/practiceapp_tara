@@ -226,6 +226,14 @@ def run(s, rep, quick=False):
             rep.check('a feature\'s trace peaks where the encoder said', abs(float(St['acts'][p0]) - v0) < 0.02 * max(1.0, abs(v0)), f'{float(St["acts"][p0]):.3f} vs {v0:.3f}')
             rep.check('a feature\'s decoder row has the model\'s width', len(s.recipe('saeRow', {'feature': int(f0)})['dec']) == D)
             rep.timed('saeNeighbors', lambda: s.recipe('saeNeighbors', {'feature': int(f0), 'k': 4}))
+            SS = rep.timed('saeSearch', lambda: s.recipe('saeSearch', {'token': P['top'][0], 'k': 8}))
+            sv = [v for _, v in SS['up']]
+            rep.check('the feature search lists the strongest first', len(sv) == 8 and all(a >= b for a, b in zip(sv, sv[1:])), [round(v, 3) for v in sv[:3]])
+            fs = [int(f) for f, _ in SS['up'][:3]] + [int(f0)]
+            SLn = rep.timed('saeLens', lambda: s.recipe('saeLens', {'features': fs, 'k': 6}))
+            rep.check('the feature lens reads every feature asked for', len(SLn['lens']) == len(fs) and all(len(x['up']) == 6 for x in SLn['lens']))
+            best = SLn['lens'][0]['up'][0][1]
+            rep.check('the strongest feature for a token writes some token at least that much', best >= sv[0] - 0.02 * max(1.0, abs(sv[0])), f'{best:.3f} vs {sv[0]:.3f}')
 
     steps = []
     G = rep.timed('generate', lambda: s.call('generate', {'prompt': ids, 'R': 1, 'maxNew': 8, 'temperature': 0, 'alts': 3}, on=steps.append))

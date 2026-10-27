@@ -628,6 +628,27 @@ def sae_neighbors(m, a, ctx):
     return {'near': [[f, float(cos[f])] for f in topk_ids(cos, k)]}
 
 
+def sae_lens(m, a, ctx):
+    """What each feature's decoder direction writes, read through the unembedding as neuron_lens reads a neuron's
+    output weights: logits per unit of activation, relative to the average word, at a typical final-layer scale."""
+    S = _sae(m)
+    fs, k = [int(f) for f in a['features']], int(a.get('k', 6))
+    scale = math.sqrt(m.D) / (m.stats()[m.L - 1] or 100)
+    X = S.W_dec[:, fs].T.float() if fs else None             # [n, D]
+    return {'lens': _lens(m, X * m.gF * scale, k) if fs else [], 'scale': scale}
+
+
+def sae_search(m, a, ctx):
+    """The features whose decoder direction writes one token most, out of the whole dictionary: lens_search for
+    features, in the same units as sae_lens."""
+    S = _sae(m)
+    t, k = int(a['token']), int(a.get('k', 16))
+    scale = math.sqrt(m.D) / (m.stats()[m.L - 1] or 100)
+    u = (m.W_U[t].float() - m.mean_unembed()) * m.gF * scale
+    val = (u.to(S.W_dec.dtype) @ S.W_dec).float()           # [F]
+    return {'up': [[f, float(val[f])] for f in topk_ids(val, k)]}
+
+
 def dequant(lin):
     from .model import dequant as dq
     return dq(lin)
@@ -706,4 +727,5 @@ RECIPES = {
     'residuals': residuals, 'neuronWeights': neuron_weights, 'ovCircuit': ov_circuit, 'neuronLens': neuron_lens,
     'neuronLinks': neuron_links, 'neuronPush': neuron_push, 'lensSearch': lens_search,
     'saeEncode': sae_encode, 'saeTrace': sae_trace, 'saeRow': sae_row, 'saeNeighbors': sae_neighbors,
+    'saeLens': sae_lens, 'saeSearch': sae_search,
 }
