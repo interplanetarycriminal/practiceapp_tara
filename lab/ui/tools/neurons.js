@@ -80,9 +80,9 @@ and seeing that for yourself is the best reason for what comes next in the cours
 cleaner features spread across many neurons.</p>`,
     2: `<p>Superposition (Elhage et al., 2022) is the leading explanation: a model can store more features than it has
 neurons by giving each feature a direction that is nearly at right angles to the others, at the cost of a little
-interference. Week 6's SAEs, transcoders and attribution graphs are all ways of reading those directions, and the
-same four views (where it fires, what it writes, who it talks to, what pushing does) carry over unchanged to SAE
-features.</p>`,
+interference. Week 4's sparse autoencoders (the SAE features tool), transcoders and attribution graphs are all ways
+of reading those directions, and the same four views (where it fires, what it writes, who it talks to, what pushing
+does) carry over unchanged to SAE features.</p>`,
     3: `<p>Neuron tools in practice: Neuroscope-style max-activating examples, automated neuron explanations (Bills et al.,
 2023) and Lyra's neuron-explorer, whose card, push unit (the median residual norm) and random-direction controls this
 page reimplements for GPT-2; its wiring z-scores |S|, this page the cosine, so a few neurons with long write vectors
