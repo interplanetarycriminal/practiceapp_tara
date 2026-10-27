@@ -578,7 +578,13 @@ export function intervals(el, opts) {
         if (r.lo < x0) svg.appendChild(s('path', { d: `M${X(x0) + 7} ${y - 5} L${X(x0) + 1} ${y} L${X(x0) + 7} ${y + 5}`, stroke: col('s1'), fill: 'none', 'stroke-width': 2 }));
         if (r.hi > x1) svg.appendChild(s('path', { d: `M${X(x1) - 7} ${y - 5} L${X(x1) - 1} ${y} L${X(x1) - 7} ${y + 5}`, stroke: col('s1'), fill: 'none', 'stroke-width': 2 }));
       }
-      if (Number.isFinite(r.est)) svg.appendChild(s('circle', { cx: X(r.est), cy: y, r: 6, fill: col('s1'), class: 'mark' }));
+      if (Number.isFinite(r.est) && r.est >= x0 && r.est <= x1) svg.appendChild(s('circle', { cx: X(r.est), cy: y, r: 6, fill: col('s1'), class: 'mark' }));
+      else if (Number.isFinite(r.est)) {
+        // off the scale (opts.x.min or max cut it off): a solid arrow at that edge, with the value beside it
+        const left = r.est < x0, ex = X(left ? x0 : x1), k = left ? 1 : -1;
+        svg.appendChild(s('path', { d: `M${ex + 10 * k} ${y - 6} L${ex + k} ${y} L${ex + 10 * k} ${y + 6} Z`, fill: col('s1'), class: 'mark' }));
+        svg.appendChild(s('text', { x: ex + 14 * k, y: y + 4, class: 'tick', 'text-anchor': left ? 'start' : 'end' }, f(r.est)));
+      }
       const hit = s('rect', { x: 0, y: y - rowH / 2, width: W, height: rowH, fill: 'transparent' });
       const show = (ev) => tip.show([h('div.tip-head', null, r.label),
         tipRow(f(r.est), (opts.estName || 'estimate') + (Number.isFinite(r.lo) ? ` (${f(r.lo)} to ${f(r.hi)})` : ''), col('s1')),
@@ -587,7 +593,10 @@ export function intervals(el, opts) {
       hit.addEventListener('pointermove', show); hit.addEventListener('pointerdown', show); hit.addEventListener('pointerleave', () => tip.hide());
       svg.appendChild(hit);
       // shorten labels that do not fit the gutter
-      requestAnimationFrame(() => { try { while (lab.length > 4 && t.getComputedTextLength() > lw - 14) { lab = lab.slice(0, -2); t.textContent = lab + '…'; } } catch (e) { /* not rendered */ } });
+      requestAnimationFrame(() => { try {
+        if (r.short && t.getComputedTextLength() > lw - 14) { lab = String(r.short); t.textContent = lab; }
+        while (lab.length > 4 && t.getComputedTextLength() > lw - 14) { lab = lab.slice(0, -2); t.textContent = lab + '…'; }
+      } catch (e) { /* not rendered */ } });
     });
     box.appendChild(svg);
   };

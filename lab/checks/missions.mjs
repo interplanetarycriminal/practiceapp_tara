@@ -282,6 +282,14 @@ const CHECKS = {
       `peak layer ${peak.layer} (${pc(peak.rel_median)}); layer ${best.layer} dose ${best.dose}: ${pc(best.delta.closed)} (${pc(ci[0])} to ${pc(ci[1])}), random at most ${pc(best.random.closed_max)}`);
     claim('w6-diff', 'no layer or dose tested closes more than a few percent', d.steer.every((r) => r.delta.closed < 0.05),
       d.steer.map((r) => `L${r.layer}x${r.dose} ${pc(r.delta.closed)}`).join(', '));
+    const b9 = packOf('qwen35-9b-diff-post-training'), d9 = b9.data;
+    const peak9 = d9.rows.reduce((a, r) => (r.rel_median > a.rel_median ? r : a));
+    const best9 = d9.steer.reduce((a, r) => (r.delta.closed_fit > a.delta.closed_fit ? r : a)), ci9 = best9.delta.closed_ci;
+    claim('w6-diff', 'the 9B: the change peaks at layer 29 (52%); the shift there closes 14% (8% to 21%) on held-out prompts, random at most 2%, supported',
+      peak9.layer === 29 && Math.round(100 * peak9.rel_median) === 52 && best9.layer === 29 && Math.round(100 * best9.delta.closed) === 14 &&
+      Math.round(100 * ci9[0]) === 8 && Math.round(100 * ci9[1]) === 21 && Math.round(100 * best9.random.closed_max) <= 2 &&
+      d9.steer_split.held_out && status(b9, /^Adding one vector/) === 'supported',
+      `peak layer ${peak9.layer} (${pc(peak9.rel_median)}); layer ${best9.layer} dose ${best9.dose}: ${pc(best9.delta.closed)} (${pc(ci9[0])} to ${pc(ci9[1])}), random at most ${pc(best9.random.closed_max)}`);
   },
 
   async 'w7-leak'() {

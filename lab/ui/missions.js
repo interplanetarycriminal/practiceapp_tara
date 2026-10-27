@@ -181,11 +181,13 @@ export const MISSIONS = [
     look: 'Pushing along the direction moves "great versus terrible" by about 8 logits at dose +1; random directions of the same length move it by at most about 2. Big pushes also break grammar, which the bench measures as the rise in loss on ordinary text.',
     result: 'gpt2-steer-sentiment', nodes: ['steering-vector', 'rlhf', 'reward-model'] },
   { id: 'w6-diff', week: 6, title: 'What did RLHF change inside?', tool: null, result: 'qwen35-2b-diff-post-training',
+    more: [['qwen35-9b-diff-post-training', 'The 9B result']],
     why: 'Post-training turns a base model into an assistant. Model diffing asks where in the network that change lives and what it pushes.',
     steps: ['Open the Qwen 3.5 2B base-versus-instruct result.',
       'Find the layers where the activations moved most.',
-      'Read the steering test: does adding the average shift to the base model close the gap with the instruct model, more than a random vector does?'],
-    look: 'The change peaks around layer 22, where the median token\'s state moves by half its size. But adding the average shift there to the base model closes none of the gap on prompts it was not made from (−2%, interval −7% to 3%), no better than random vectors, so the claim is marked not supported. Post-training did not install one direction you can add at the late layers. A failed claim like this is a finding, and a capstone question: where, if anywhere, is the change simple?',
+      'Read the steering test: does adding the average shift to the base model close the gap with the instruct model, more than a random vector does?',
+      'Open the 9B result and ask the same two questions.'],
+    look: 'In the 2B the change peaks around layer 22, where the median token\'s state moves by half its size. But adding the average shift there to the base model closes none of the gap on prompts it was not made from (−2%, interval −7% to 3%), no better than random vectors, so the claim is marked not supported. The 9B is different. Its change peaks at layer 29 (52%), and one shift vector there closes 14% of the gap on held-out prompts (8% to 21%), while random vectors close at most 2%. So part of the 9B\'s post-training is a single direction you can add, and the 2B shows none at its late layers. That contrast is a capstone question: what does the 9B\'s direction do, and why is there none in the 2B?',
     nodes: ['model-diffing', 'rlhf', 'reference-model'] },
 
   /* ---------------- week 7 */

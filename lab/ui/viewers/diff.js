@@ -102,12 +102,18 @@ at that layer.</p>`,
     const fit = (s) => (s.delta.closed_fit ?? s.delta.closed);
     const star = d.steer.reduce((a, s) => (fit(s) > fit(a) ? s : a), d.steer[0]);
     const R = (d.steer[0].random && (d.steer[0].random.n || (d.steer[0].random.closed_all || []).length)) || 1;
+    // a push that overshoots (−200% at the last layer, say) would squash every other row against zero, so the scale
+    // stops at −60% (or the lowest random control, if lower) and an arrow at the edge carries anything beyond it
+    const ctrls = d.steer.flatMap((s) => (s.random ? (s.random.closed_all || [s.random.closed]) : [])).filter(Number.isFinite);
+    const lowest = Math.min(...d.steer.flatMap((s) => [s.delta.closed, ...(s.delta.closed_ci || [])]).filter(Number.isFinite), ...ctrls);
+    const floor = lowest < -0.6 ? Math.min(-0.6, ...ctrls) : undefined;
     intervals(c, {
-      rows: d.steer.map((s) => ({ label: `layer ${s.layer}, dose ${fmt(s.dose, 1)}${ss.held_out && s === star ? ' ★' : ''}`, est: s.delta.closed, lo: s.delta.closed_ci && s.delta.closed_ci[0],
+      rows: d.steer.map((s) => ({ label: `layer ${s.layer}, dose ${fmt(s.dose, 1)}${ss.held_out && s === star ? ' ★' : ''}`,
+        short: `L${s.layer} dose ${fmt(s.dose, 1)}${ss.held_out && s === star ? ' ★' : ''}`, est: s.delta.closed, lo: s.delta.closed_ci && s.delta.closed_ci[0],
         hi: s.delta.closed_ci && s.delta.closed_ci[1], ctrl: s.random ? (s.random.closed_all || [s.random.closed]) : [] })),
-      x: { label: `share of the KL gap closed${ss.held_out ? ', on held-out prompts' : ''}`, fmt: (v) => pct(v) }, ref: 0,
+      x: { label: `share of the KL gap closed${ss.held_out ? ', on held-out prompts' : ''}`, fmt: (v) => pct(v), min: floor }, ref: 0,
       estName: 'average shift (95% interval)', ctrlName: `${R === 1 ? 'a random vector' : R + ' random vectors'}, same size`,
-      caption: `Further right is better; gray dots are the random controls.${ss.held_out ? ' ★ marks the layer and dose picked on the fitting prompts.' : ''}`,
+      caption: `Further right is better; gray dots are the random controls.${ss.held_out ? ' ★ marks the layer and dose picked on the fitting prompts.' : ''}${floor !== undefined ? ` The scale stops at ${pct(floor)}; an arrow at the edge marks a push that went further, with its value.` : ''}`,
     });
   }
 

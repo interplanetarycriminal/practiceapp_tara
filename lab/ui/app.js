@@ -132,6 +132,7 @@ function missionCard(m) {
     h('div.row', null,
       h('a.btn.accent', { href }, m.tool ? 'Open the tool' : m.result ? 'Open the result' : 'How to run the bench'),
       m.tool && m.result ? h('a.btn.ghost', { href: `#results/${m.result}` }, 'The bench result') : null,
+      (m.more || []).map(([id, label]) => h('a.btn.ghost', { href: `#results/${id}` }, label)),
       h('label.done-box', null, box, 'Done')),
     m.nodes && m.nodes.length ? h('div.links', null) : null);
   box.addEventListener('change', () => {
