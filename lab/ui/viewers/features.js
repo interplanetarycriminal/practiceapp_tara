@@ -4,7 +4,7 @@
 
 import { h, mount, fmt, pct, tokText } from '../dom.js';
 import { columns, tokens, stat, tipRow, col } from '../charts.js';
-import { section, lensLists } from './common.js';
+import { section, lensLists, corpusName } from './common.js';
 
 const FIRST = 12;
 
@@ -19,7 +19,7 @@ export async function render(el, p) {
 <b>features</b> picked from a big vocabulary of ${d.width ? d.width.toLocaleString() : 'many'} features, about ${fmt(q.l0, 0)} at a time. Before
 trusting any single feature, check the rewrite keeps the meaning: "variance explained" says how much of the original
 survives. Below about 60%, a single feature is a shaky guide.</p>`,
-    2: `<p>Measured on ${q.rows ? q.rows.toLocaleString() : 'the'} tokens of ${d.corpus && d.corpus.source || 'a reference corpus'} at layer ${d.layer}.
+    2: `<p>Measured on ${q.rows ? q.rows.toLocaleString() : 'the'} tokens of ${corpusName(d.corpus && d.corpus.source)} at layer ${d.layer}.
 <b>Variance explained</b> is 1 − (reconstruction error ÷ the stream's own variance); <b>cosine</b> compares each reconstructed
 vector with the original; <b>L0</b> is how many features are active per token (a TopK dictionary fixes it at k = ${d.k ?? '?'}).
 The histogram shows how often each feature fires: very common features are not specific, and dead ones never fire.</p>`,

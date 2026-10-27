@@ -26,10 +26,17 @@ dictionaries were trained on the base models; reading the instruct model with th
 features engine measures before showing anything. DeepSeek's small models (R1-0528-Qwen3-8B, the R1 distills) and
 Z.ai's GLM-4 9B and GLM-Z1 9B run in every engine that does not need a dictionary.
 
-Memory on a shared 24 GB card: precision `auto` looks at free memory when the model loads. A 2B model in bf16 takes
-about 4.5 GB. A 9B model takes about 19 GB in bf16, so with ComfyUI holding its models it loads in 4-bit NF4 (about
-6.5 GB). A 9B dictionary is about 1 GB per layer in bf16; when several do not fit beside the model, the engines keep
-them on the CPU instead, which is slower but works.
+Memory on a shared 24 GB card: precision `auto` looks at free memory when the model loads and picks float32 when
+it fits, then bf16, then 4-bit NF4. Float32 is exact: batched and single runs agree to about 1e-5. In bf16 a batch
+takes different kernels through the whole network, so a log-prob moves by about 0.02 nats on average (0.2 at most,
+Qwen 3.5 2B on the 3090), and an effect smaller than a few hundredths of a nat is below bf16's resolution;
+`setup_check.py` measures it for each model. Qwen 3.5 2B in float32 peaks at about 7 GB, so its specs pin
+`"precision": "fp32"`. A 9B model takes about 19 GB in bf16, so with ComfyUI holding its models it loads in 4-bit
+NF4 (about 6.5 GB). Dictionaries follow the model's precision when they fit beside it; a 9B dictionary is about 1 GB
+per layer in bf16, and when several do not fit the engines keep them on the CPU instead, which is slower but works.
+
+Probes hold matched pairs out whole (every built-in contrast set is one: the same city, task or message once with
+each label), and report held-out accuracy with an exact binomial interval, which stays honest at a perfect score.
 
 ## On the 3090 PC
 

@@ -55,10 +55,14 @@ export function bytes(n) {
   return n + ' B';
 }
 
-/* how a token looks on screen: spaces visible, newlines as a return sign */
+/* how a token looks on screen: spaces visible, newlines as a return sign, invisible characters as their code point */
+// characters that draw nothing on their own (controls, zero-width and format characters, variation selectors)
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Co}\p{Variation_Selector}]/gu;
+const codePoint = (c) => `‹U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}›`;
 export function tokText(s) {
   if (s === null || s === undefined) return '';
-  return String(s).replace(/\n/g, '⏎').replace(/\t/g, '⇥').replace(/^ /, '␣').replace(/ /g, ' ');
+  const t = String(s).replace(/\n/g, '⏎').replace(/\t/g, '⇥').replace(/^ /, '␣').replace(/ /g, ' ').replace(HIDDEN, codePoint);
+  return /^\p{M}+$/u.test(t) ? [...t].map(codePoint).join('') : t;     // a lone combining mark would join its neighbour
 }
 
 export function debounce(fn, ms) {

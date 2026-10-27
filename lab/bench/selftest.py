@@ -19,12 +19,13 @@ sys.path.insert(0, str(HERE))
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from tarabench import tiny  # noqa: E402
+from tarabench import data, tiny  # noqa: E402
 from tarabench.common import say  # noqa: E402
 from tarabench.models import LM, load  # noqa: E402
 from tarabench.packs import DTYPES  # noqa: E402
 from tarabench.runner import run_spec  # noqa: E402
 from tarabench.sae import TopKSAE  # noqa: E402
+from tarabench.stats import binom_ci, null_labels, split  # noqa: E402
 
 RESULTS = []
 
@@ -32,6 +33,23 @@ RESULTS = []
 def check(name, ok, detail=''):
     RESULTS.append((name, bool(ok), detail))
     say(f"{'PASS' if ok else 'FAIL'} {name} {detail}")
+
+
+def statistics():
+    # exact binomial intervals against published Clopper-Pearson values; a perfect score must not collapse
+    got = [binom_ci(42, 42), binom_ci(5, 10), binom_ci(0, 10)]
+    want = [(0.91592, 1.0), (0.18709, 0.81291), (0.0, 0.30850)]
+    check('exact intervals match Clopper-Pearson', all(abs(a - b) < 1e-4 for g, w in zip(got, want) for a, b in zip(g, w)),
+          f'42 of 42: {got[0][0]:.4f} to {got[0][1]:.4f}; 5 of 10: {got[1][0]:.4f} to {got[1][1]:.4f}')
+    # matched pairs are held out whole, the test set stays balanced, and the paired null keeps one of each label
+    xs, ys, g = data.labelled('builtin:cities', 0, groups=True)
+    ys, g = np.asarray(ys), np.asarray(g)
+    tr, te = split(len(xs), 0.3, 0, ys, g)
+    check('matched pairs are held out whole', not set(g[tr]) & set(g[te]) and 2 * int(ys[te].sum()) == len(te),
+          f'{len(te)} held out of {len(xs)}')
+    yp = null_labels(ys, np.random.default_rng(1), g)
+    check('the paired null swaps labels within pairs', all(sorted(yp[g == v]) == [0, 1] for v in np.unique(g)) and
+          (yp != ys).any())
 
 
 def invariants(lm, dict_dir):
@@ -218,6 +236,12 @@ def engines(out, dict_dir):
                 comp = meta['data']['completeness']['2']
                 check('integrated gradients add up to the real gap', comp is not None and abs(comp - 1) < 0.1,
                       f'ratio {comp}')
+            if spec['id'] == 'selftest-probe':
+                pd = meta['data']
+                check('the probe holds matched pairs out whole, with exact intervals',
+                      pd.get('paired') is True and pd['n_test'] % 2 == 0 and 'exact' in pd.get('interval', '') and
+                      all(0 <= r['logreg_ci'][0] <= r['logreg'] <= r['logreg_ci'][1] <= 1 for r in pd['rows']),
+                      f"{pd['n_test']} of {pd['n']} held out")
             if spec['engine'] == 'circuit':
                 g = json.loads((Path(d) / meta['data']['graph']).read_text(encoding='utf-8'))
                 ids = {n['node_id'] for n in g['nodes']}
@@ -240,6 +264,11 @@ def engines(out, dict_dir):
 
 def main():
     torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
+    try:
+        statistics()
+    except Exception:
+        traceback.print_exc()
+        check('statistics', False, 'raised')
     with tempfile.TemporaryDirectory() as tmp:
         dict_dir = tiny.write_dictionaries(Path(tmp) / 'dict')
         lm = load('tiny-qwen3.5', device='cpu')

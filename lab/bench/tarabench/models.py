@@ -90,6 +90,10 @@ def choose_precision(entry, precision, device, revision=None, headroom_gb=2.5):
     free = torch.cuda.mem_get_info()[0] / 2 ** 30
     need = weights_gb(entry, revision)
     note = f'{free:.1f} GB free on the GPU; bf16 weights need about {need:.1f} GB'
+    # float32 whenever it fits: batched and single runs then agree to about 1e-5, where bf16 arithmetic in the body
+    # moves a log-prob by about 0.02 (Qwen 3.5 2B on the 3090, 27 October 2026)
+    if 2 * need + headroom_gb <= free:
+        return 'fp32', note + '; float32 fits, so it runs in float32'
     if need + headroom_gb <= free:
         return 'bf16', note
     try:

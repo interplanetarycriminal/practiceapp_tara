@@ -146,7 +146,8 @@ export function sweepView(el, { S, base, u, names, unitLabel }) {
       h('code.tok-inline', null, tokText(piece(names, w.t))), ` ${w.n}/${th.R}`)))
     : h('p.small.muted', null, 'No word turns up in its rollouts much more often than in the random pushes\', so it has no clear theme at these doses.');
   // at the sweep's doses a random push often changes every rollout too, and then the count says nothing
-  const ctrl = th.ctrlChanged >= th.R ? `all ${th.R} rollouts, for each of ${S.C} random directions` : `${fmt(th.ctrlChanged, 1)} of ${th.R} rollouts on average, over ${S.C} random directions`;
+  const all = S.C * th.R, tot = Math.round(th.ctrlChanged * S.C), n = (x) => x.toLocaleString('en');
+  const ctrl = `${tot >= all ? 'every one' : n(tot)} of the ${n(all)} rollouts of ${S.C} random directions`;
   const lead = th.ctrlChanged >= 0.9 * th.R
     ? `At these doses any push changes the text, random ones included (${ctrl}), so the test is which words pushing ${unitLabel} brings in.`
     : `Pushing ${unitLabel} changes the start of the text in ${th.changed} of its ${th.R} rollouts; random directions pushed just as hard change ${fmt(th.ctrlChanged, 1)} on average (${S.C} of them).`;

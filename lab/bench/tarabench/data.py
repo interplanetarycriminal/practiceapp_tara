@@ -87,6 +87,32 @@ CITIES = [
     ("Auckland", "New Zealand"), ("Tehran", "Iran"), ("Istanbul", "Turkey"), ("Riyadh", "Saudi Arabia"),
     ("Moscow", "Russia"), ("Kyiv", "Ukraine"), ("Baghdad", "Iraq"), ("Kathmandu", "Nepal"), ("Havana", "Cuba"),
     ("Reykjavik", "Iceland"),
+    # a second set (27 October 2026), so a held-out test reads 100 sentences rather than 42
+    ("Marseille", "France"), ("Toulouse", "France"), ("Hamburg", "Germany"), ("Cologne", "Germany"),
+    ("Seville", "Spain"), ("Bilbao", "Spain"), ("Naples", "Italy"), ("Florence", "Italy"), ("Turin", "Italy"),
+    ("Salzburg", "Austria"), ("Gdansk", "Poland"), ("Prague", "the Czech Republic"), ("Brno", "the Czech Republic"),
+    ("Bratislava", "Slovakia"), ("Bucharest", "Romania"), ("Sofia", "Bulgaria"), ("Belgrade", "Serbia"),
+    ("Zagreb", "Croatia"), ("Thessaloniki", "Greece"), ("Cork", "Ireland"), ("Bergen", "Norway"),
+    ("Gothenburg", "Sweden"), ("Rotterdam", "the Netherlands"), ("Antwerp", "Belgium"), ("Geneva", "Switzerland"),
+    ("London", "the United Kingdom"), ("Liverpool", "the United Kingdom"), ("Edinburgh", "the United Kingdom"),
+    ("Tallinn", "Estonia"), ("Riga", "Latvia"), ("Vilnius", "Lithuania"), ("Saint Petersburg", "Russia"),
+    ("Lviv", "Ukraine"), ("Montreal", "Canada"), ("Calgary", "Canada"), ("New York", "the United States"),
+    ("Los Angeles", "the United States"), ("Seattle", "the United States"), ("Monterrey", "Mexico"),
+    ("Sao Paulo", "Brazil"), ("Brasilia", "Brazil"), ("Bogota", "Colombia"), ("Medellin", "Colombia"),
+    ("Caracas", "Venezuela"), ("Quito", "Ecuador"), ("Montevideo", "Uruguay"), ("Asuncion", "Paraguay"),
+    ("Valparaiso", "Chile"), ("Cusco", "Peru"), ("Santo Domingo", "the Dominican Republic"), ("Abuja", "Nigeria"),
+    ("Mombasa", "Kenya"), ("Kumasi", "Ghana"), ("Marrakesh", "Morocco"), ("Durban", "South Africa"),
+    ("Dakar", "Senegal"), ("Tunis", "Tunisia"), ("Algiers", "Algeria"), ("Kampala", "Uganda"),
+    ("Dar es Salaam", "Tanzania"), ("Luanda", "Angola"), ("Harare", "Zimbabwe"), ("Lusaka", "Zambia"),
+    ("Kyoto", "Japan"), ("Sapporo", "Japan"), ("Incheon", "South Korea"), ("Guangzhou", "China"),
+    ("Shenzhen", "China"), ("Chengdu", "China"), ("Kolkata", "India"), ("Chennai", "India"),
+    ("Islamabad", "Pakistan"), ("Chittagong", "Bangladesh"), ("Chiang Mai", "Thailand"),
+    ("Ho Chi Minh City", "Vietnam"), ("Surabaya", "Indonesia"), ("Cebu", "the Philippines"),
+    ("Ulaanbaatar", "Mongolia"), ("Tashkent", "Uzbekistan"), ("Almaty", "Kazakhstan"), ("Colombo", "Sri Lanka"),
+    ("Isfahan", "Iran"), ("Ankara", "Turkey"), ("Jeddah", "Saudi Arabia"), ("Dubai", "the United Arab Emirates"),
+    ("Doha", "Qatar"), ("Amman", "Jordan"), ("Beirut", "Lebanon"), ("Basra", "Iraq"), ("Pokhara", "Nepal"),
+    ("Adelaide", "Australia"), ("Wellington", "New Zealand"), ("Christchurch", "New Zealand"),
+    ("Akureyri", "Iceland"),
 ]
 
 EVAL_DEPLOY_TASKS = [
@@ -220,9 +246,11 @@ def texts(src):
     raise ValueError(f'cannot read texts from {src!r}')
 
 
-def labelled(src, seed=0):
+def labelled(src, seed=0, groups=False):
     """(texts, labels) for probes. Accepts 'builtin:<contrast set>', {'positive': .., 'negative': ..} (each anything
-    texts() accepts) or {'jsonl': path, 'text': key, 'label': key}."""
+    texts() accepts; add 'paired': true when positive i and negative i are versions of the same item) or
+    {'jsonl': path, 'text': key, 'label': key}. With groups=True it returns (texts, labels, groups): one id per text,
+    shared by the two halves of a matched pair (every built-in contrast set is one), otherwise unique."""
     if isinstance(src, str) and src.startswith('builtin:'):
         name = src.split(':', 1)[1]
         pos, neg = BUILTIN[name]() if name != 'cities' else cities(seed)
@@ -237,7 +265,13 @@ def labelled(src, seed=0):
         neg = [r[t] for r in rows if int(r[lab]) == 0]
     else:
         raise ValueError(f'cannot read a labelled set from {src!r}')
-    return list(pos) + list(neg), [1] * len(pos) + [0] * len(neg)
+    xs, ys = list(pos) + list(neg), [1] * len(pos) + [0] * len(neg)
+    if not groups:
+        return xs, ys
+    paired = (isinstance(src, str) and src.startswith('builtin:')) or (isinstance(src, dict) and bool(src.get('paired')))
+    if paired and len(pos) != len(neg):
+        raise ValueError('a paired set needs as many positive texts as negative ones')
+    return xs, ys, (list(range(len(pos))) * 2 if paired else list(range(len(xs))))
 
 
 def pairs(src, seed=0):

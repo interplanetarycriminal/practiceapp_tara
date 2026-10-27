@@ -50,7 +50,7 @@ def run(spec, ctx):
     seed_all(seed)
     ds = dictionary_spec(spec['dictionary'])
     L = int(ds['layer'])
-    dtype = torch.float32 if lm.device.type == 'cpu' else torch.bfloat16
+    dtype = torch.float32 if lm.device.type == 'cpu' or lm.dtype == torch.float32 else torch.bfloat16
     sae = TopKSAE.load(ds['repo'], L, ds.get('k'), ds.get('revision'), lm.device, dtype)
     F = sae.F
     cs = spec.get('corpus') or {}

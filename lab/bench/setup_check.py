@@ -131,19 +131,26 @@ def real_model(name, dict_layer, lock):
     single = torch.cat([lm.last_logprobs([s]) for s in seqs])
     gap = (single - lp).abs()
     d, dm, same = float(gap.max()), float(gap.mean()), bool((single.argmax(-1) == lp.argmax(-1)).all())
-    # float32 is exact; in bf16 a batch runs through different matrix kernels, so the stream differs by rounding
-    ok = d < 1e-3 if lm.dtype == torch.float32 else dm < 0.02 and d < 0.3 and same
-    note('batching is exact on this model', ok,
-         f'log-prob difference, batched against single: max {d:.3g}, mean {dm:.2g}, same top token: {same} '
-         f'({lm.precision}{"; float32 head " + ("on" if lm._head32 else "off") if lm.dtype != torch.float32 else ""})',
-         'report this: batched runs disagree with single runs by more than rounding')
+    # float32 is exact. In bf16 a batch takes different matrix kernels through the whole network, so scores differ by
+    # rounding (about 0.02 nats on average for Qwen 3.5 2B); a padding bug changes the top token or moves a score by
+    # whole nats, which is what this looks for there, and the rounding is reported as the run's resolution
+    gap_s = f'log-prob difference, batched against single: max {d:.3g}, mean {dm:.2g}, same top token: {same}'
+    if lm.dtype == torch.float32:
+        note('batching is exact on this model', d < 1e-3, f'{gap_s} (fp32)',
+             'report this: batched runs disagree with single runs by more than rounding')
+    else:
+        bug = not same or d >= 0.5
+        note('batching agrees up to bf16 rounding', False if bug else None if dm > 0.01 else True,
+             f'{gap_s} ({lm.precision}; float32 head {"on" if lm._head32 else "off"})' +
+             ('' if bug else f'; effects smaller than about {3 * dm:.2g} nats are below bf16 rounding here'),
+             'report this: batched runs disagree with single runs by more than rounding' if bug else
+             'set "precision": "fp32" in a spec when the model fits in float32 (Qwen 3.5 2B does)')
     REPORT['model'] = lm.info()
     if dict_layer is not None and lm.entry.get('sae'):
         from tarabench.sae import TopKSAE, qwen_scope_repo
         repo = qwen_scope_repo(lm.id)
         t0 = time.time()
-        sae = TopKSAE.load(repo, dict_layer, device=lm.device, dtype=torch.bfloat16 if lm.device.type == 'cuda'
-                           else torch.float32)
+        sae = TopKSAE.load(repo, dict_layer, device=lm.device, dtype=lm.dtype if lm.device.type == 'cuda' else torch.float32)
         acts = []
         for b in lm.batches(lm.encode(NEUTRAL)):
             h = lm.capture(b, [dict_layer])[dict_layer]
