@@ -34,9 +34,18 @@ class Server:
     def __init__(self, base, model=None):
         self.base, self.model = base.rstrip('/'), model
 
-    def info(self):
-        with urllib.request.urlopen(self.base + '/v1/info', timeout=30) as r:
+    def info(self, timeout=120):
+        with urllib.request.urlopen(self.base + '/v1/info', timeout=timeout) as r:
             return json.loads(r.read())
+
+    def ready(self, wait=600):
+        """/v1/info once the server has finished starting (it reads each model's config and tokeniser first)."""
+        t = time.time()
+        info = self.info()
+        while info.get('warming') and time.time() - t < wait:
+            time.sleep(2)
+            info = self.info()
+        return info
 
     def call(self, op, args=None, channel=None, on=None, origin=None, stages=None):
         body = pack({'op': op, 'args': args or {}, 'model': self.model, 'channel': channel})
@@ -82,7 +91,10 @@ class Report:
 
 
 def run(s, rep, quick=False):
-    info = s.info()
+    t = time.time()
+    info = s.ready()
+    rep.check('the server answers /v1/info at once, and is ready to work', not info.get('warming') and time.time() - t < 600,
+              f'started in {info.get("warmS")} s')
     offered = [m['id'] for m in info['models']]
     s.model = s.model or offered[0]
     real = not s.model.startswith('tiny')

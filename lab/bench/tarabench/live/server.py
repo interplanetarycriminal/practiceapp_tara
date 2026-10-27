@@ -456,19 +456,38 @@ class Live:
         self.state = {'loaded': None, 'loading': None, 'cfg': None, 'pid': None}
         self.words, self.words_lock, self.shapes = {}, threading.Lock(), {}
         self.tell_lock = threading.Lock()
+        self.warmed, self.warm_s, self.t_start = threading.Event(), None, time.time()
+        threading.Thread(target=self.warm, name='warm', daemon=True).start()
         threading.Thread(target=self.dispatch, name='dispatch', daemon=True).start()
         threading.Thread(target=self.reaper, name='idle', daemon=True).start()
 
+    def warm(self):
+        """The slow first-time work, done at start instead of inside a page's first request: importing transformers
+        from the NAS and reading each model's config and tokeniser take about a minute there."""
+        try:
+            for k in self.offer:
+                self.shape(k)
+            gpu_info()
+        except Exception as e:  # noqa: BLE001
+            say(f'warming up: {e}')
+        finally:
+            self.warm_s = round(time.time() - self.t_start, 1)
+            self.warmed.set()
+            say(f'ready to answer in {self.warm_s} s')
+
     # ---- what the page sees ------------------------------------------------------------------------------------
     def info(self):
-        return {'server': 'tara-live', 'version': VERSION,
+        warm = self.warmed.is_set()        # until then the shapes are being read: answer at once without them
+        return {'server': 'tara-live', 'version': VERSION, 'warming': not warm,
+                'warmS': self.warm_s if warm else round(time.time() - self.t_start, 1),
                 'models': [{'id': k, 'label': v['label'], 'note': v['note'], 'gb': v['gb'], 'loadS': v['load_s'],
-                            'precision': v['precision'], 'sae': bool(v['sae']), 'cfg': self.shape(k)}
+                            'precision': v['precision'], 'sae': bool(v['sae']), 'cfg': self.shape(k) if warm else None}
                            for k, v in self.offer.items()],
                 'loaded': self.state['loaded'], 'loading': self.state['loading'], 'cfg': self.state['cfg'],
                 'card': self.proc is not None and self.proc.is_alive(), 'busy': self.running is not None,
                 'queued': self.q.qsize(), 'idleS': self.idle, 'idleFor': round(time.time() - self.last),
-                'lock': self.locked, 'gpu': gpu_info(), 'mem': self.state.get('mem'), 'peak': self.state.get('peak')}
+                'lock': self.locked, 'gpu': gpu_info() if warm else _GPU['v'], 'mem': self.state.get('mem'),
+                'peak': self.state.get('peak')}
 
     def shape(self, mid):
         """The model's shape before it loads (None when its config is not on this computer), with the dose unit once
@@ -745,15 +764,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply_json(self, obj, code=200):
         body = json.dumps(obj).encode()
-        self.send_response(code)
-        self.cors()
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
-        self.end_headers()
         try:
+            self.send_response(code)
+            self.cors()
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+        except ConnectionError:
             pass                         # the page stopped waiting
 
     def do_GET(self):
@@ -818,11 +837,20 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        e = sys.exc_info()[1]
+        if isinstance(e, ConnectionError):
+            return                       # a page that stopped waiting (Windows: WinError 10053): nothing to report
+        say(f'request from {client_address[0]} failed:\n{traceback.format_exc()}')
+
+
 def serve(live, host='127.0.0.1', port=8790, extra_hosts=()):
     Handler.live = live
     Handler.hosts = LOCAL_HOSTS + tuple(extra_hosts)
-    srv = ThreadingHTTPServer((host, port), Handler)
-    srv.daemon_threads = True
+    srv = Server((host, port), Handler)
     say(f'TARA live lab on http://{host}:{port} offering {", ".join(live.offer)}; GPU lock '
         f'{"on" if live.locked else "off"}; the card is let go after {live.idle:.0f} s without requests')
     try:
