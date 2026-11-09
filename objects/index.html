@@ -6,6 +6,8 @@
 <title>Model Room · Object Lessons</title>
 <meta name="description" content="Every hard idea in TARA as an object you can hold: 28 models in a round room, fourteen bays in TARA’s week order.">
 <link rel="stylesheet" href="kit.css">
+<link rel="stylesheet" href="../shared/tara-bar.css">
+<script src="../shared/tara-bar.js"></script>
 <!-- The Model Room (objects/index.html): the 3D hub of Object Lessons.
      A rotunda: The Machine (00) on a tall plinth in the centre, 14 bays in a ring around it in
      course order (clockwise from the brass start line in the north), chapter zones as soft coloured
@@ -28,6 +30,14 @@
   }
   .h-listbtn[aria-expanded="true"]{background:var(--ink); border-color:var(--ink); color:var(--surface)}
   .h-listbtn[hidden]{display:none}
+  /* in the TARA bar's tools slot the List button is the brand's chip (.fu-chip) */
+  .tara-bar .h-listbtn{
+    display:inline-flex; align-items:center; justify-content:center; min-height:36px; min-width:44px; margin:0; padding:0 14px;
+    font:800 14px/1 var(--font-ui); color:var(--ink); background:var(--card); border:0; border-radius:var(--r-pill);
+    box-shadow:inset 0 0 0 2px var(--line), 2px 2px 0 var(--line); cursor:pointer;
+  }
+  .tara-bar .h-listbtn:hover{background:var(--gold-hi)}
+  .tara-bar .h-listbtn[aria-expanded="true"]{background:var(--ink); color:var(--paper); box-shadow:inset 0 0 0 2px var(--line)}
 
   /* first-visit one-liner */
   .h-hint{
@@ -177,6 +187,28 @@
     <h1 class="k-title">Model Room</h1>
     <button type="button" class="h-listbtn" id="listBtn" aria-expanded="false" aria-controls="list">List</button>
   </header>
+  <script>
+  /* the TARA bar (shared/tara-bar.js): lockup, five tabs, the Model Room's title and List, tier,
+     2D | 3D. Inside the V2 shell's viewer: a slim row (title, List). Without the script the
+     header above stays as it was. */
+  (function () {
+    var TB = window.TaraBar, bar = document.querySelector('.k-bar'), btn = document.getElementById('listBtn');
+    if (!TB || !bar) return;
+    var back = ''; try { back = sessionStorage.getItem('tara.dim.back') || ''; } catch (e) {}
+    btn.classList.add('fu-chip');
+    var B = TB.mount({ host: bar, tab: 'library', title: 'Model Room', titleTag: 'h1', tools: [btn],
+      dim: TB.inViewer() ? null : { active: '3d', href: TB.shellHref(back || '#today'), title: 'Back to the course (2D)' } });
+    if (B.mode === 'none') return;
+    var html = document.documentElement;
+    html.classList.add('k-has-bar');
+    function fit() {
+      var h = B.el.getBoundingClientRect().height - (parseFloat(getComputedStyle(B.el).paddingTop) || 0);
+      html.style.setProperty('--bar-h', Math.max(0, Math.round(h)) + 'px');
+    }
+    fit();
+    if (window.ResizeObserver) new ResizeObserver(function () { fit(); dispatchEvent(new Event('resize')); }).observe(B.el);
+  })();
+  </script>
   <div class="h-hint" id="hint" role="note" hidden>
     <span>Every hard idea in TARA as an object you can hold. Tap one.</span>
     <button type="button" id="hintX" aria-label="Dismiss">✕</button>
@@ -275,8 +307,10 @@ async function main() {
   /* ============================================================ page chrome */
   const app = $('app'), bar = document.querySelector('.k-bar'), card = $('card');
   const backTo = SS.get('tara.dim.back') || '#today';
-  $('back').href = '../index.html' + backTo;
-  bar.appendChild(dimToggle('3d', { back2d: '#today' }));
+  if (!document.documentElement.classList.contains('k-has-bar') && $('back')) {   // no TARA bar: the old header
+    $('back').href = '../index.html' + backTo;
+    bar.appendChild(dimToggle('3d', { back2d: '#today' }));
+  }
 
   const seenMap = () => { try { return JSON.parse(localStorage.getItem('tara.objects.seen') || '{}') || {}; } catch (e) { return {}; } };
   let SEEN = seenMap();
