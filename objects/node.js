@@ -254,6 +254,9 @@ async function main() {
     id: `node-${id}`, num: node.week_label || (node.section || '').replace(/[\[\]]/g, '') || '·', week: node.week || 0, kind: 'deep',
     title: o.title || spec.title, subtitle: o.subtitle || spec.allegory || '',
     back2d: `#map/node=${id}`, film: filmHref,
+    // the 2D side of this object is its film, not a week page; up goes to the Model Room's concepts
+    dim2d: filmHref, dim2dTitle: 'Watch this idea as a film (2D)',
+    up: { href: 'index.html#concepts', label: 'Model Room', title: 'Every concept in the Model Room' },
     knobs, beats,
     predict: (o.predict || []).slice(0, 4).map((p) => ({ q: p.q, options: (p.options || []).map((x) => ({ t: x.t, ok: !!x.ok })), why: p.why || '' })),
     where: o.where || (spec.where_else || []).join(' · '),
@@ -263,8 +266,6 @@ async function main() {
     rebuild(S) { try { impl.rebuild(S); } catch (e) { console.error(e); } },
     frame(S, t, dt) { try { return impl.frame ? impl.frame(S, t, dt) : false; } catch (e) { console.error(e); return false; } },
   });
-  // the 2D side of this object is its film, not a week page
-  requestAnimationFrame(() => { const a = document.querySelector('.dim-toggle a'); if (a) { a.href = filmHref; a.title = 'Watch this idea as a film (2D)'; } });
   try { const seen = JSON.parse(localStorage.getItem('tara.objects.nodes') || '{}'); seen[id] = Date.now(); localStorage.setItem('tara.objects.nodes', JSON.stringify(seen)); } catch (e) { /* private mode */ }
 }
 main();

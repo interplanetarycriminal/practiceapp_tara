@@ -523,30 +523,57 @@
   }
   function setTier(v) { try { localStorage.setItem('tara.tier', v); localStorage.setItem('tara.resolution', v); } catch (e) {} }
 
-  /* 2D | 3D pill (Object Lessons): the same corner control as the app and the 3D
-     pages. It shows only when a finished 3D object lists this film in objects.json. */
-  function dimPill(top) {
-    if (!top || !window.fetch) return;
-    var m = location.pathname.match(/films\/[^\/]+\.html$/); if (!m) return;
-    fetch('../../objects/objects.json').then(function (r) { return r.ok ? r.json() : []; }).then(function (reg) {
+  /* ------------------------------------------------------------ the TARA bar
+     shared/tara-bar.js gives every film the app's one top bar: the lockup, the five tabs, the
+     tier control (Plain / Generalist / Expert, keys 1/2/3) and the 2D | 3D switch. It loads
+     beside the film; until it arrives its room is held, and if it cannot load (offline on a
+     first visit) the film keeps its own small top row. Inside the V2 shell's viewer there is
+     no bar at all: the shell's chrome is around the film. */
+  var ENGINE_SRC = '';
+  try { ENGINE_SRC = (document.currentScript && document.currentScript.src) || ''; } catch (e) {}
+  var SITE = ENGINE_SRC ? new URL('../', ENGINE_SRC).href : null;     // engine.js lives in intuition/
+  function inViewer() { try { return window.top !== window.self && window.top.TARA_SHELL === 'v2'; } catch (e) { return false; } }
+  var VIEWER = inViewer();
+  var barReady = (function () {
+    if (window.TaraBar) return Promise.resolve(window.TaraBar);
+    if (!SITE || !document.head || !window.Promise) return { then: function (f) { f(null); } };
+    function load(tag, attrs) {
+      return new Promise(function (res) {
+        var n = document.createElement(tag); for (var k in attrs) n[k] = attrs[k];
+        n.onload = function () { res(true); }; n.onerror = function () { res(false); };
+        document.head.appendChild(n);
+      });
+    }
+    var css = load('link', { rel: 'stylesheet', href: SITE + 'shared/tara-bar.css' });
+    var js = load('script', { src: SITE + 'shared/tara-bar.js' });
+    return Promise.all([css, js]).then(function () { return window.TaraBar || null; });
+  })();
+
+  /* the 3D object that holds this film's idea, if a finished one lists it in objects.json */
+  function findObject() {
+    var m = location.pathname.match(/films\/[^\/]+\.html$/);
+    if (!m || !window.fetch) return Promise.resolve(null);
+    return fetch('../../objects/objects.json').then(function (r) { return r.ok ? r.json() : []; }).then(function (reg) {
       var hit = null;
       (Array.isArray(reg) ? reg : []).forEach(function (o) {
         if (o && o.ready !== false && o.film === m[0] && (!hit || (hit.kind !== 'weekly' && o.kind === 'weekly'))) hit = o;
       });
-      if (!hit || top.querySelector('.dimp')) return;
-      var st = document.createElement('style');
-      st.textContent = '#ifilm .dimp{display:inline-flex;gap:2px;padding:2px;background:#1b1e25;border:1px solid #2f343e;border-radius:999px;flex:none}' +
-        '#ifilm .dimp span,#ifilm .dimp a{font:600 12.5px/1 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:7px 10px;border-radius:999px;color:#9aa2b1;text-decoration:none}' +
-        '#ifilm .dimp [aria-current]{background:#8fa8ff;color:#1b1e25}' +
-        '@media (max-width:420px){#ifilm .dimp span,#ifilm .dimp a{padding:7px 7px}}';
-      document.head.appendChild(st);
-      var p = document.createElement('div'); p.className = 'dimp';
-      p.setAttribute('role', 'group'); p.setAttribute('aria-label', 'View in 2D or 3D');
-      var a2 = document.createElement('span'); a2.textContent = '2D'; a2.setAttribute('aria-current', 'page');
-      var a3 = document.createElement('a'); a3.textContent = '3D'; a3.href = '../../objects/' + hit.path;
-      a3.title = 'Hold this idea in 3D: ' + hit.title;
-      p.appendChild(a2); p.appendChild(a3); top.appendChild(p);
-    }).catch(function () {});
+      return hit ? { active: '2d', href: '../../objects/' + hit.path, title: 'Hold this idea in 3D: ' + hit.title } : null;
+    }).catch(function () { return null; });
+  }
+  /* the old corner pill, for the fallback top row only */
+  var DIMP_CSS = '#ifilm .dimp{display:inline-flex;gap:2px;padding:2px;background:#1b1e25;border:1px solid #2f343e;border-radius:999px;flex:none}' +
+    '#ifilm .dimp span,#ifilm .dimp a{font:600 12.5px/1 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:7px 10px;border-radius:999px;color:#9aa2b1;text-decoration:none}' +
+    '#ifilm .dimp [aria-current]{background:#8fa8ff;color:#1b1e25}' +
+    '@media (max-width:420px){#ifilm .dimp span,#ifilm .dimp a{padding:7px 7px}}';
+  function dimPill(top, d) {
+    if (!top || !d || top.querySelector('.dimp')) return;
+    var st = document.createElement('style'); st.textContent = DIMP_CSS; document.head.appendChild(st);
+    var p = document.createElement('div'); p.className = 'dimp';
+    p.setAttribute('role', 'group'); p.setAttribute('aria-label', 'View in 2D or 3D');
+    var a2 = document.createElement('span'); a2.textContent = '2D'; a2.setAttribute('aria-current', 'page');
+    var a3 = document.createElement('a'); a3.textContent = '3D'; a3.href = d.href; a3.title = d.title || 'Hold this idea in 3D';
+    p.appendChild(a2); p.appendChild(a3); top.appendChild(p);
   }
 
   /* ------------------------------------------------------------ player */
@@ -555,8 +582,8 @@
     "#ifilm .top{height:44px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;background:#161a35}" +
     "#ifilm .top a.back{color:#f7e3a0;text-decoration:none;font-size:14px;white-space:nowrap}" +
     "#ifilm .top .ttl{flex:1;min-width:0;font:700 16px " + HAND + ";white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center}" +
-    "#ifilm button{font:inherit;color:#1c2140;background:#f7f0e1;border:0;border-radius:8px;min-height:32px;min-width:32px;padding:0 9px;cursor:pointer}" +
-    "#ifilm button[aria-pressed=true]{background:#f7e3a0;font-weight:700}" +
+    "#ifilm button:not(.tb-t):not(.fu-lamp){font:inherit;color:#1c2140;background:#f7f0e1;border:0;border-radius:8px;min-height:32px;min-width:32px;padding:0 9px;cursor:pointer}" +
+    "#ifilm button:not(.tb-t):not(.fu-lamp)[aria-pressed=true]{background:#f7e3a0;font-weight:700}" +
     "#ifilm .tiers{display:flex;gap:3px}#ifilm .tiers button{min-width:30px;padding:0}" +
     "#ifilm .stage{flex:1;position:relative;min-height:0}#ifilm canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block}" +
     "#ifilm .bot{flex:none;background:#161a35;padding:8px 12px calc(8px + env(safe-area-inset-bottom))}" +
@@ -571,7 +598,22 @@
     "#ifilm .coda{display:none;max-width:760px;margin:0 auto}#ifilm.in-coda .coda{display:block}#ifilm.in-coda .cap,#ifilm.in-coda .ctl .scr,#ifilm.in-coda .pp,#ifilm.in-coda .skip{display:none}#ifilm .skip{white-space:nowrap}" +
     "#ifilm .links{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}#ifilm .links a{color:#1c2140;background:#b9e3cc;text-decoration:none;border-radius:14px;padding:5px 10px;font-size:13px}" +
     "#ifilm .hint{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);background:rgba(22,26,53,.8);padding:4px 10px;border-radius:12px;font-size:13px;pointer-events:none;transition:opacity .4s}" +
-    "@media (max-width:420px){#ifilm .skip .lg{display:none}#ifilm .dots{gap:3px}#ifilm .dots i{width:8px;height:8px}#ifilm .ctl{gap:6px}#ifilm .cap{height:92px;font-size:14px}#ifilm .top .ttl{font-size:14px}}";
+    "@media (max-width:420px){#ifilm .skip .lg{display:none}#ifilm .dots{gap:3px}#ifilm .dots i{width:8px;height:8px}#ifilm .ctl{gap:6px}#ifilm .cap{height:92px;font-size:14px}#ifilm .top .ttl{font-size:14px}}" +
+    /* the TARA bar takes the top row: its room is held (same heights as shared/tara-bar.css) until it
+       arrives; the film's own row comes back only if the bar cannot load; none inside the shell's viewer */
+    "#ifilm.tb-pending .top{visibility:hidden;padding:0;height:calc(99px + env(safe-area-inset-top,0px))}" +
+    "@media (min-width:1080px){#ifilm.tb-pending .top{height:calc(67px + env(safe-area-inset-top,0px))}}" +
+    "@media (max-width:1079.98px) and (max-height:500px){#ifilm.tb-pending .top{height:calc(51px + env(safe-area-inset-top,0px))}}" +
+    "#ifilm.has-bar .top{display:block;height:auto;padding:0;background:none}" +
+    "#ifilm.in-viewer .top{display:none}" +
+    "#ifilm .ctl .mute{flex:none;padding:0}" +
+    /* the film's controls are 44px targets; the scrub bar's hit area is 44px too (its track stays thin) */
+    "#ifilm .ctl button:not(.tb-t):not(.fu-lamp){min-height:44px;min-width:44px}" +
+    "#ifilm .ctl input[type=range]{height:44px;margin:0;background:transparent}" +
+    /* a phone held upright: the chapter dots get a line of their own above the controls, so they all fit */
+    "@media (max-width:560px){#ifilm .ctl{flex-wrap:wrap;row-gap:4px}#ifilm .ctl .dots{order:-1;flex:1 0 100%;justify-content:center}}" +
+    /* a phone on its side: a caption box of three lines (it scrolls past them), so the stage keeps its room */
+    "@media (max-height:500px){#ifilm .cap{height:4.2em}}";
 
   var NEED = { core: 'Core skill: for your whole career', exercise: "Needed for this week\u2019s exercise", library: 'Library call: know what it does, skip the internals', contested: 'Open research question' };
   var NEED_ALIAS = { context: 'library' };
@@ -580,17 +622,18 @@
   function play(cfg) {
     var st = el('style'); st.textContent = CSS +
       /* long deep dives have 15+ chapter dots: let dots shrink so the scrub bar stays usable on a phone */
-      '#ifilm .dots{flex:0 1 auto;min-width:0}#ifilm .dots i{flex:0 1 9px;min-width:4px}#ifilm input[type=range]{min-width:96px}'; document.head.appendChild(st);
-    var root = el('div', { id: 'ifilm' });
+      '#ifilm .dots{flex:0 1 auto;min-width:0}#ifilm .dots i{flex:0 1 9px;min-width:4px}#ifilm input[type=range]{min-width:96px}' +
+      '@media (max-width:420px){#ifilm .dots{gap:2px}#ifilm .dots i{min-width:3px}#ifilm input[type=range]{min-width:76px}}' +
+      '@media (max-width:374px){#ifilm input[type=range]{min-width:56px}#ifilm .ctl{gap:5px}}'; document.head.appendChild(st);
+    var root = el('div', { id: 'ifilm', 'class': VIEWER ? 'in-viewer' : 'tb-pending' });
     root.innerHTML = '<div class="top"><a class="back" href="' + (cfg.back || '../index.html') + '">&larr; films</a><div class="ttl"></div>' +
-      '<div class="tiers" role="group" aria-label="Caption depth"><button data-t="1" title="Plain">1</button><button data-t="2" title="Generalist">2</button><button data-t="3" title="Expert">3</button></div>' +
-      '<button class="mute" aria-label="Mute">&#9835;</button></div>' +
+      '<div class="tiers" role="group" aria-label="Caption depth"><button data-t="1" title="Plain">1</button><button data-t="2" title="Generalist">2</button><button data-t="3" title="Expert">3</button></div></div>' +
       '<div class="stage"><canvas></canvas><div class="hint">tap to pause</div></div>' +
       '<div class="bot"><div class="need" aria-hidden="false"></div><div class="cap" aria-live="polite"></div><div class="coda"><div class="cpanel"></div><div class="links"></div></div>' +
       '<div class="ctl"><button class="pp" aria-label="Pause">&#10074;&#10074;</button><div class="dots scr"></div><input class="scr" type="range" min="0" step="0.01" aria-label="Scrub">' +
-      '<button class="rep" aria-label="Replay" title="Replay">&#8634;</button><button class="skip">Skip<span class="lg"> to play</span> &#9654;</button></div></div>';
+      '<button class="rep" aria-label="Replay" title="Replay">&#8634;</button><button class="mute" aria-label="Mute" title="Music (M)">&#9835;</button>' +
+      '<button class="skip">Skip<span class="lg"> to play</span> &#9654;</button></div></div>';
     document.body.appendChild(root);
-    dimPill(root.querySelector('.top'));
     var $ = function (s) { return root.querySelector(s); };
     $('.ttl').textContent = cfg.title || '';
     var cv = $('canvas'), ctx = cv.getContext('2d'), stage = $('.stage'), cap = $('.cap'), scr = $('input[type=range]'), dots = $('.dots');
@@ -599,7 +642,31 @@
     ch.forEach(function (c, i) { var d = el('i', { title: c.name }); d.onclick = function () { seek(c.start + .01); }; dots.appendChild(d); });
     var links = $('.links'); (cfg.links || []).forEach(function (l) { var a = el('a', { href: l.href }); a.textContent = l.label; links.appendChild(a); });
     var audio = new Audio(), W = 0, H = 0, dpr = 1, t = 0, playing = true, mode = 'film', last = 0, cur = -1, tier = getTier(), coda = cfg.coda, codaT = 0;
-    var api = { audio: audio, P: P, get W() { return W; }, get H() { return H; }, seek: seek, root: root };
+    var api = { audio: audio, P: P, get W() { return W; }, get H() { return H; }, seek: seek, root: root, bar: null };
+    var BAR = null;     // the TARA bar, once it has loaded: it owns the tier control and the keys 1/2/3
+
+    /* the top: the TARA bar (up to the films hub, the film's title, the tier control, 2D | 3D) */
+    var up = cfg.up || { href: cfg.back || '../index.html', label: 'Films', title: 'Back to every film' };
+    var dim = cfg.dim || null;
+    var dimLookup = cfg.dim === undefined ? findObject() : Promise.resolve(cfg.dim);
+    barReady.then(function (TB) {
+      root.classList.remove('tb-pending');
+      if (!TB) {            // no bar: the film's own small top row, as before the bar existed
+        if (!VIEWER) dimLookup.then(function (d) { dimPill($('.top'), d); });
+        return;
+      }
+      BAR = TB;
+      if (!VIEWER) root.classList.add('has-bar');
+      api.bar = TB.mount({ host: $('.top'), tab: 'library', title: cfg.title || '', up: up, dim: dim, slim: false,
+        onTier: function (n) { applyT(String(n)); } });
+      if (String(TB.tier()) !== tier) applyT(String(TB.tier()));
+      dimLookup.then(function (d) { if (d && api.bar && api.bar.setDim) api.bar.setDim(d); });
+    });
+    /* the coda offers the 3D twin too (inside the viewer it is the only way to it) */
+    dimLookup.then(function (d) {
+      if (!d || links.querySelector('a[href*="objects/"]')) return;
+      var a = el('a', { href: d.href, title: d.title || '' }); a.textContent = 'Hold it in 3D'; links.insertBefore(a, links.firstChild);
+    });
 
     function resize() {
       var r = stage.getBoundingClientRect(); dpr = Math.min(2.5, window.devicePixelRatio || 1);
@@ -616,7 +683,8 @@
       if (nk && NEED[nk]) { nd.className = 'need on ' + nk; nd.textContent = NEED[nk]; } else { nd.className = 'need'; nd.textContent = ''; }
       if (mode === 'coda' && coda && coda.caption) cap.innerHTML = coda.caption[tier] || '';
     }
-    function setT(v) { tier = v; setTier(v); paintTier(); if (coda && coda.onTier && mode === 'coda') coda.onTier(v); }
+    function applyT(v) { tier = v; paintTier(); if (coda && coda.onTier && mode === 'coda') coda.onTier(v); }
+    function setT(v) { if (BAR) { BAR.setTier(Number(v)); return; } setTier(v); applyT(v); }
     [].forEach.call(root.querySelectorAll('.tiers button'), function (b) { b.onclick = function (e) { e.stopPropagation(); setT(b.dataset.t); }; });
     function paintMute() { $('.mute').innerHTML = audio.muted ? '&#128263;' : '&#9835;'; $('.mute').setAttribute('aria-pressed', audio.muted ? 'false' : 'true'); }
     $('.mute').onclick = function () { audio.setMute(!audio.muted); paintMute(); }; paintMute();
@@ -639,7 +707,7 @@
       if (e.target && e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
       if (e.key === ' ') { e.preventDefault(); if (mode === 'film') setPlaying(!playing); }
       else if (e.key === 'ArrowRight') { e.preventDefault(); seek(t + 3); } else if (e.key === 'ArrowLeft') { e.preventDefault(); seek(t - 3); }
-      else if (e.key === '1' || e.key === '2' || e.key === '3') setT(e.key);
+      else if ((e.key === '1' || e.key === '2' || e.key === '3') && !BAR && !e.ctrlKey && !e.metaKey && !e.altKey) setT(e.key);
       else if (e.key === 'm' || e.key === 'M') { audio.setMute(!audio.muted); paintMute(); }
     });
     // pointer on canvas

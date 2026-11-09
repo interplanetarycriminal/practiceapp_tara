@@ -236,6 +236,40 @@ addEventListener('storage', (e) => {
     if (n !== TIER) setTierGlobal(n, false);
   }
 });
+/* ------------------------------------------------------------- the TARA bar
+   shared/tara-bar.js gives every object (and the Model Room) the app's one top bar: the lockup,
+   the five tabs, the tier control and the 2D | 3D switch. It owns the tier once it has loaded
+   (one control: the card's own 1/2/3 pill steps aside). Inside the V2 shell's viewer there is
+   no bar at all (the shell's chrome, title and 2D | 3D are around the page). If the bar cannot
+   load (offline on a first visit), the kit's own small bar stays. */
+export const VIEWER = (() => { try { return window.top !== window.self && window.top.TARA_SHELL === 'v2'; } catch (e) { return false; } })();
+let BAR = null;     // window.TaraBar, once it has loaded
+export const barReady = (() => {
+  if (window.TaraBar) return Promise.resolve(window.TaraBar);
+  if (!document.head) return Promise.resolve(null);
+  const load = (tag, attrs) => new Promise((res) => {
+    const n = document.createElement(tag);
+    Object.assign(n, attrs);
+    n.onload = () => res(true); n.onerror = () => res(false);
+    document.head.appendChild(n);
+  });
+  return Promise.all([
+    load('link', { rel: 'stylesheet', href: new URL('../shared/tara-bar.css', KIT_URL).href }),
+    load('script', { src: new URL('../shared/tara-bar.js', KIT_URL).href }),
+  ]).then(() => window.TaraBar || null);
+})().then((TB) => {
+  if (TB) {
+    BAR = TB;
+    TB.onTier((n) => { if (n !== TIER) setTierGlobal(n, false); });
+    if (TB.tier() !== TIER) setTierGlobal(TB.tier(), false);
+  }
+  return TB;
+}, () => null);
+/* every tier change goes through the bar when there is one, so the bar, the page and the
+   stored tier never disagree */
+function setTierAny(n) { if (BAR) BAR.setTier(n); else setTierGlobal(n); }
+if (VIEWER) document.documentElement.classList.add('k-viewer');
+
 function tr(x, S) {
   if (x == null) return '';
   if (typeof x === 'function') return String(x(S || CUR_S));
@@ -1398,16 +1432,44 @@ export function run(spec) {
   const app = el('div', 'k-app');
   document.body.appendChild(app);
 
-  /* ---- top bar ---- */
+  /* ---- top bar: the TARA bar (up to the Model Room, the title, tier, 2D | 3D); the kit's own
+     small bar only if the TARA bar cannot load ---- */
   const bar = el('header', 'k-bar');
+  const upTo = spec.up || { href: hubHref('#' + spec.id), label: 'Model Room', title: 'Back to the Model Room' };
   const back = el('a', 'k-back');
-  back.href = hubHref('#' + spec.id);
-  back.innerHTML = '<span aria-hidden="true">◀</span> Model Room';
+  back.href = upTo.href;
+  back.innerHTML = '<span aria-hidden="true">◀</span> ';
+  back.appendChild(document.createTextNode(upTo.label || 'Model Room'));
   const title = el('div', 'k-title');
   title.innerHTML = `<span class="k-num">${esc(spec.num || '')}</span><span class="k-dot" aria-hidden="true">·</span><span class="k-name">${esc(spec.title || '')}</span>`;
   title.title = spec.subtitle || '';
-  bar.append(back, title, dimToggle('3d', { back2d: spec.back2d }));
+  const pill = dimToggle('3d', { back2d: spec.back2d });
+  if (spec.dim2d) { const a = pill.querySelector('a'); a.href = spec.dim2d; a.title = spec.dim2dTitle || 'The film (2D)'; }
+  bar.append(back, title, pill);
   app.appendChild(bar);
+  const htmlEl = document.documentElement;
+  if (!VIEWER) htmlEl.classList.add('k-tb-pending');
+  barReady.then((TB) => {
+    htmlEl.classList.remove('k-tb-pending');
+    if (!TB) return;
+    const t = el('span', 'tb-objt');
+    t.innerHTML = (spec.num ? `<span class="tb-num">${esc(spec.num)}</span>` : '') + esc(spec.title || '');
+    if (spec.subtitle) t.title = String(spec.subtitle).replace(/[*_`]/g, '');
+    const back2d = ssGet('tara.dim.back') || spec.back2d || '';
+    const dim = spec.dim2d
+      ? { active: '3d', href: spec.dim2d, title: spec.dim2dTitle || 'The film (2D)' }
+      : { active: '3d', href: TB.shellHref(back2d), title: 'Back to the course (2D)' };
+    const B = TB.mount({ host: bar, tab: 'library', title: t, up: upTo, dim, slim: false });
+    if (B.mode === 'none') return;
+    htmlEl.classList.add('k-has-bar');
+    const fit = () => {
+      const h = B.el.getBoundingClientRect().height - (parseFloat(getComputedStyle(B.el).paddingTop) || 0);
+      htmlEl.style.setProperty('--bar-h', Math.max(0, Math.round(h)) + 'px');
+      if (S._relayout) S._relayout(false);
+    };
+    fit();
+    if (window.ResizeObserver) new ResizeObserver(fit).observe(B.el);
+  });
   const hud = el('div', 'k-hud');
   app.appendChild(hud);
 
@@ -1786,7 +1848,7 @@ export function run(spec) {
   }
   function setTier(n) {
     if (n === S.tier) return;
-    setTierGlobal(n);
+    setTierAny(n);
   }
   K.onTier((n) => {
     S.tier = n;
@@ -1805,7 +1867,7 @@ export function run(spec) {
     if (typing) return;
     if (e.key === 'ArrowRight') { goBeat(S.beat + 1); e.preventDefault(); }
     else if (e.key === 'ArrowLeft') { goBeat(S.beat - 1); e.preventDefault(); }
-    else if (e.key === '1' || e.key === '2' || e.key === '3') setTier(Number(e.key));
+    else if ((e.key === '1' || e.key === '2' || e.key === '3') && !BAR) setTier(Number(e.key));   // the bar has its own keys
   });
 
   /* ---- go ---- */
@@ -1842,7 +1904,7 @@ function fallback(app, spec) {
     <p class="k-sub">${md(spec.subtitle || '')}</p>
     <p>This one is a 3D object you turn in your hands, and this browser has 3D graphics (WebGL) switched off, so it can't be drawn here.</p>
     <p>Everything it teaches is also in these:</p>
-    <p class="k-fl"><a class="k-btn" href="${esc(appHref(spec.back2d || ''))}">Week pack (2D)</a>
+    <p class="k-fl"><a class="k-btn" href="${esc(spec.dim2d || appHref(spec.back2d || ''))}">${spec.dim2d ? 'The film (2D)' : 'Week pack (2D)'}</a>
     ${film ? `<a class="k-btn" href="${esc(/^\.\.|^http/.test(film) ? film : appHref('') .replace(/index\.html$/, '') + 'intuition/films/' + film + '.html')}">Watch the film</a>` : ''}</p>
     <p class="k-credit">Tip: WebGL is usually back after enabling hardware acceleration or updating the browser.</p>`;
   app.appendChild(f);

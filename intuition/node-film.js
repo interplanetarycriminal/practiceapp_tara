@@ -533,9 +533,7 @@
     '#ifilm .nf-sl{display:flex;align-items:center;gap:8px;flex:1 1 220px;min-width:0;font-size:13px}#ifilm .nf-sl span{flex:none;max-width:40%;color:#fbf6ea}#ifilm .nf-sl input{flex:1;min-width:80px}#ifilm .nf-sl b{font:600 12px ' + MONO + ';color:#f7e3a0;min-width:44px;text-align:right}' +
     '#ifilm .nf-read{display:flex;flex-wrap:wrap;gap:4px 12px;font:600 12.5px ' + MONO + ';color:#b9e3cc}#ifilm .nf-read i{font-style:normal;color:#b8bcd8;font-family:system-ui,sans-serif;font-weight:400}' +
     '#ifilm details.nf-ham{margin:4px 10px 0;font-size:13px;color:#e6e2d6}#ifilm details.nf-ham summary{cursor:pointer;color:#f7e3a0;font-weight:600}#ifilm details.nf-ham p{margin:4px 0}' +
-    '#ifilm .dimp{display:inline-flex;gap:2px;padding:2px;background:#1b1e25;border:1px solid #2f343e;border-radius:999px;flex:none}' +
-    '#ifilm .dimp span,#ifilm .dimp a{font:600 12.5px/1 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:7px 10px;border-radius:999px;color:#9aa2b1;text-decoration:none}' +
-    '#ifilm .dimp [aria-current]{background:#8fa8ff;color:#1b1e25}@media (max-width:420px){#ifilm .dimp span,#ifilm .dimp a{padding:7px 7px}#ifilm .nf-sl span{max-width:46%}}';
+    '@media (max-width:420px){#ifilm .nf-sl span{max-width:46%}}';
 
   function missing(msg) {
     document.body.innerHTML = '<div style="font:16px system-ui;color:#fbf6ea;background:#1c2140;min-height:100vh;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px">' +
@@ -566,18 +564,16 @@
     if (spec.linked_film) links.push({ label: 'The long film', href: spec.linked_film });
     if (node.week != null) links.push({ label: 'Open week ' + node.week, href: '../index.html#today/week-' + (node.week < 10 ? '0' : '') + node.week });
     if (spec._case) links.push({ label: 'Case study', href: '../index.html#cases/' + spec._case });
-    var film = F.play({ title: spec.title || node.label, back: 'index.html#concepts', chapters: chapters, coda: coda, links: links });
-    var st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
-    // opened from the app (the concept map's node panel): the back link returns to that node on the map
+    // the bar's up link: back to the concept films, or, when opened from the app (the concept map's
+    // node panel), back to that node on the map. The bar's 2D | 3D switch leads to the 3D twin.
+    var up = { href: 'index.html#concepts', label: 'Films', title: 'Every concept film' };
     try {
-      var ref = document.referrer ? new URL(document.referrer) : null, bk = film.root.querySelector('.top a.back');
-      if (bk && ref && ref.origin === location.origin && !/\/(intuition|objects)\//.test(ref.pathname)) { bk.href = '../index.html#map/node=' + encodeURIComponent(id); bk.innerHTML = '&larr; map'; }
+      var ref = document.referrer ? new URL(document.referrer) : null;
+      if (ref && ref.origin === location.origin && !/\/(intuition|objects)\//.test(ref.pathname)) up = { href: '../index.html#map/node=' + encodeURIComponent(id), label: 'Map', title: 'Back to this idea on the concept map' };
     } catch (e) {}
-    // 2D | 3D pill
-    if (objHref) {
-      var top = film.root.querySelector('.top'), pill = document.createElement('div'); pill.className = 'dimp'; pill.setAttribute('role', 'group'); pill.setAttribute('aria-label', 'View in 2D or 3D');
-      pill.innerHTML = '<span aria-current="page">2D</span><a href="' + esc(objHref) + '" title="Hold this idea in 3D">3D</a>'; top.appendChild(pill);
-    }
+    var film = F.play({ title: spec.title || node.label, back: up.href, up: up, chapters: chapters, coda: coda, links: links,
+      dim: objHref ? { active: '2d', href: objHref, title: 'Hold this idea in 3D' } : null });
+    var st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
     // Hamming card + where else, in the coda panel
     var ham = spec.hamming || {}, we = spec.where_else || [];
     if (ham.what || we.length) {

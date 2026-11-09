@@ -770,7 +770,7 @@ button:focus-visible,a:focus-visible,[tabindex]:focus-visible{
 
   /* --------------------------------------------------------- tier engine  */
 
-  var TIER_LABEL = { 1: 'Plain', 2: 'Practitioner', 3: 'Expert' };
+  var TIER_LABEL = { 1: 'Plain', 2: 'Generalist', 3: 'Expert' };
   var TIER_HINT = {
     1: 'Short sentences. No jargon left standing.',
     2: 'Assumes you can code. Explains the maths and the shapes.',
@@ -998,7 +998,7 @@ button:focus-visible,a:focus-visible,[tabindex]:focus-visible{
 
   function skipSubtree(node) {
     if (!node || node.nodeType !== 1) return false;
-    var tag = node.tagName;
+    var tag = String(node.tagName).toUpperCase();   // SVG elements report lowercase tag names
     if (SKIP_TAGS[tag]) return true;
     if (node.classList && (node.classList.contains('tara-term') || node.classList.contains('tara-angles'))) return true;
     if (node.hasAttribute('data-tara-noglossary')) return true;

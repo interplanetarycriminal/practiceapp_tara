@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Intuition films</title>
 <meta name="theme-color" content="#f6efe1">
+<link rel="stylesheet" href="../shared/tara-bar.css">
+<script src="../shared/tara-bar.js"></script>
 <style>
 :root{
   --paper:#f6efe1; --paper2:#fffaf0; --ink:#2f2a36; --muted:#6c6474; --line:#e3d8c3;
@@ -35,12 +37,19 @@ body{
 }
 a{color:inherit}
 .wrap{max-width:1180px;margin:0 auto;padding:12px 16px 64px}
-header.top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:6px 0 4px}
 .back{font-size:14px;text-decoration:none;color:var(--muted);padding:8px 0;min-height:40px;display:inline-flex;align-items:center}
 .back:hover{color:var(--ink)}
-.tier{display:inline-flex;border:1.5px solid var(--line);border-radius:999px;overflow:hidden;background:var(--paper2)}
-.tier button{border:0;background:transparent;color:var(--muted);font:600 13px system-ui;padding:8px 12px;min-width:40px;min-height:36px;cursor:pointer}
-.tier button[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+/* the title area wears the brand (src/brand/BRAND.md) through the bar's scoped tokens (.tb-scope, from
+   shared/tara-bar.css): a stencil label, Nunito for the title and the intro, the six-colour trail.
+   The films below keep their own paper. Ink on this paper: 15:1 light, 14:1 dark; ink-2: 8.7:1 and 10.7:1. */
+.hub-head{padding:18px 0 2px}
+.hub-head .hub-label{display:block;margin:0 0 8px;font:800 14px/1.1 var(--font-label);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.hub-head h1{margin:0 0 4px;font:900 clamp(28px,4.2vw,40px)/1.08 var(--font-ui);letter-spacing:-.03em;color:var(--ink)}
+.hub-head h1 .tape{background:var(--butter);color:var(--ink);padding:0 10px 2px;box-shadow:2px 2px 0 var(--line)}
+.hub-head .intro{margin:8px 0 14px;font:600 16px/1.55 var(--font-ui);color:var(--ink-2)}
+.hub-head .hub-trail{display:block;height:6px;width:min(280px,60%);margin:0 0 6px;border:0;border-radius:2px;
+  background:linear-gradient(90deg,var(--trail-1) 0 16.66%,var(--trail-2) 0 33.33%,var(--trail-3) 0 50%,var(--trail-4) 0 66.66%,var(--trail-5) 0 83.33%,var(--trail-6) 0);
+  box-shadow:inset 0 0 0 1.5px #141A24}
 h1,h2,h3{font-family:var(--hand);font-weight:700;letter-spacing:.2px}
 h1{font-size:clamp(30px,7vw,46px);margin:10px 0 2px;line-height:1.1}
 h1 .tape{display:inline-block;background:var(--butter);padding:0 10px;transform:rotate(-1.5deg);box-shadow:0 2px 0 rgba(0,0,0,.06)}
@@ -103,17 +112,12 @@ details.how li{margin:3px 0}
 </head>
 <body>
 <div class="wrap">
-  <header class="top">
-    <a class="back" href="../index.html#today">&larr; Back to TARA</a>
-    <div class="tier" role="group" aria-label="Detail level">
-      <button type="button" data-tier="1" aria-pressed="false">1</button>
-      <button type="button" data-tier="2" aria-pressed="false">2</button>
-      <button type="button" data-tier="3" aria-pressed="false">3</button>
-    </div>
-  </header>
-
-  <h1><span class="tape">Intuition</span> films</h1>
-  <p class="intro" id="intro"></p>
+  <div class="hub-head tb-scope fu-scope">
+    <span class="hub-label">Library · films</span>
+    <h1><span class="tape">Intuition</span> films</h1>
+    <p class="intro" id="intro"></p>
+    <hr class="hub-trail">
+  </div>
 
   <section aria-labelledby="films-h">
     <h2 id="films-h">Films <small id="films-sub"></small></h2>
@@ -193,19 +197,27 @@ details.how li{margin:3px 0}
   }
   var SAT = thisSaturdayWeek();
 
-  // tier
-  function getTier(){ try { var t = localStorage.getItem('tara.tier'); if (t==='1'||t==='2'||t==='3') return t; } catch(e){} return '2'; }
-  function setTier(t){ try { localStorage.setItem('tara.tier', t); } catch(e){} applyTier(t); }
-  function applyTier(t){
-    document.getElementById('intro').textContent = INTRO[t];
-    Array.prototype.forEach.call(document.querySelectorAll('.tier button'), function(b){ b.setAttribute('aria-pressed', String(b.dataset.tier === t)); });
+  // tier: the one control is the TARA bar (shared/tara-bar.js); the intro follows it
+  function applyTier(t){ t = String(t); document.getElementById('intro').textContent = INTRO[t] || INTRO['2']; }
+  if (window.TaraBar) {
+    TaraBar.mount({ tab: 'library', title: 'Films', slim: false, onTier: applyTier });
+    applyTier(TaraBar.tier());
+    // "Library" is V2's word; V1's nav calls this page Films
+    if (!TaraBar.isV2()) document.querySelector('.hub-label').textContent = 'TARA \u00b7 films';
+  } else {
+    // the bar's script did not load (offline, first visit): a plain way back and the tier keys
+    var getTier = function(){ try { var t = localStorage.getItem('tara.tier') || localStorage.getItem('tara.resolution'); if (t==='1'||t==='2'||t==='3') return t; } catch(e){} return '2'; };
+    var inViewer = false; try { inViewer = window.top !== window.self && window.top.TARA_SHELL === 'v2'; } catch(e){}
+    if (!inViewer) {
+      var back = el('a', {class:'back', href:'../index.html#today', text:'\u2190 Back to TARA'});
+      document.querySelector('.wrap').insertBefore(back, document.querySelector('.wrap').firstChild);
+    }
+    document.addEventListener('keydown', function(e){
+      if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
+      if (e.key==='1'||e.key==='2'||e.key==='3') { try { localStorage.setItem('tara.tier', e.key); localStorage.setItem('tara.resolution', e.key); } catch(err){} applyTier(e.key); }
+    });
+    applyTier(getTier());
   }
-  Array.prototype.forEach.call(document.querySelectorAll('.tier button'), function(b){ b.addEventListener('click', function(){ setTier(b.dataset.tier); }); });
-  document.addEventListener('keydown', function(e){
-    if (e.target && /input|textarea/i.test(e.target.tagName)) return;
-    if (e.key==='1'||e.key==='2'||e.key==='3') setTier(e.key);
-  });
-  applyTier(getTier());
 
   // films
   function normFilms(d){

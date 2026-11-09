@@ -119,6 +119,8 @@ function niceTicks(lo, hi, n = 5) {
 const SVGNS = 'http://www.w3.org/2000/svg';
 function s(tag, attrs = {}, ...kids) {
   const el = document.createElementNS(SVGNS, tag);
+  /* the reading layer's glossary must not wrap SVG text in HTML spans (they would not render) */
+  if (tag === 'svg' || tag === 'text') el.setAttribute('data-tara-noglossary', '');
   for (const [k, v] of Object.entries(attrs)) if (v !== undefined && v !== null) el.setAttribute(k, String(v));
   for (const k of kids) if (k) el.appendChild(typeof k === 'string' ? document.createTextNode(k) : k);
   return el;

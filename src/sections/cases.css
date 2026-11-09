@@ -1,0 +1,442 @@
+/* app/sections/cases.css — Worker C
+ * Every selector is prefixed .cases- (SPEC §10). Colours come from the shell's
+ * five tokens (--accent --paper --surface --ink --rule); everything else is a
+ * .cases- scoped derivation so this file never fights the shell or the engine.
+ */
+
+.cases-root{
+  --cs-surface-2: color-mix(in srgb, var(--ink) 5%, var(--surface));
+  --cs-ink-2: color-mix(in srgb, var(--ink) 68%, var(--paper));
+  --cs-ink-3: color-mix(in srgb, var(--ink) 48%, var(--paper));
+  --cs-rule-2: color-mix(in srgb, var(--ink) 22%, var(--paper));
+  --cs-accent-soft: color-mix(in srgb, var(--accent) 15%, var(--surface));
+  --cs-up: color-mix(in srgb, var(--accent) 35%, #5b76a8);
+  --cs-up-soft: color-mix(in srgb, var(--cs-up) 14%, var(--surface));
+  --cs-warn: #8a5712;
+  --cs-warn-soft: color-mix(in srgb, var(--cs-warn) 14%, var(--surface));
+  --cs-shadow: 0 1px 2px rgba(0,0,0,.07), 0 10px 30px rgba(0,0,0,.08);
+  --cs-serif: Georgia, "Times New Roman", "Iowan Old Style", serif;
+  --cs-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --cs-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 26px;
+  align-items: start;
+  color: var(--ink);
+  font-family: var(--cs-serif);
+  font-size: 16.5px;
+  line-height: 1.62;
+  padding: 0 0 120px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .cases-root{
+    --cs-warn: #d8a45c;
+    --cs-up: color-mix(in srgb, var(--accent) 35%, #93aacd);
+    --cs-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"] .cases-root{
+  --cs-warn: #d8a45c;
+  --cs-up: color-mix(in srgb, var(--accent) 35%, #93aacd);
+  --cs-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+}
+@media (min-width: 1120px){
+  .cases-root{ grid-template-columns: 206px minmax(0, 1fr); }
+}
+
+.cases-root *{ box-sizing: border-box; }
+.cases-root a{ color: var(--accent); text-underline-offset: 2px; }
+
+/* ---------------------------------------------------------------- rail --- */
+.cases-rail{
+  display: none;
+  position: sticky;
+  top: 8px;
+  max-height: calc(100dvh - var(--chrome-h, 64px) - 24px);
+  overflow-y: auto;
+  padding: 4px 10px 24px 0;
+  border-right: 1px solid var(--rule);
+  font-family: var(--cs-sans);
+}
+@media (min-width: 1120px){ .cases-rail{ display: block; } }
+.cases-rail-top{
+  font-family: var(--cs-mono); font-size: 10px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--cs-ink-3); margin-bottom: 14px;
+}
+.cases-rail-ch{
+  display: block; font-size: 12.5px; font-weight: 600; color: var(--ink);
+  text-decoration: none; margin: 16px 0 5px; line-height: 1.3; cursor: pointer;
+  background: none; border: 0; padding: 0; text-align: left; width: 100%;
+  font-family: inherit;
+}
+.cases-rail-ch:hover{ color: var(--accent); }
+.cases-rail-wk{
+  display: flex; gap: 8px; align-items: baseline; width: 100%;
+  font-family: var(--cs-mono); font-size: 11px; color: var(--cs-ink-2);
+  background: none; border: 0; border-left: 1px solid var(--rule);
+  padding: 3px 0 3px 10px; cursor: pointer; text-align: left;
+}
+.cases-rail-wk:hover{ color: var(--accent); border-left-color: var(--accent); }
+.cases-rail-wk b{ font-weight: 500; color: var(--ink); }
+.cases-rail-wk .cases-n{ margin-left: auto; color: var(--cs-ink-3); font-variant-numeric: tabular-nums; }
+.cases-rail-wk.is-zero{ opacity: .34; }
+
+/* ----------------------------------------------------------------- hud --- */
+.cases-hud{
+  position: sticky; top: 0; z-index: 12;
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+  padding: 10px 0 9px;
+  margin-bottom: 18px;
+  font-family: var(--cs-sans);
+}
+.cases-hud-row{ display: flex; flex-wrap: wrap; gap: 7px 10px; align-items: center; }
+.cases-hud-row + .cases-hud-row{ margin-top: 7px; }
+.cases-lab{
+  font-family: var(--cs-mono); font-size: 9.5px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--cs-ink-3); flex: 0 0 auto;
+  min-width: 52px;
+}
+.cases-chip{
+  font-family: var(--cs-sans); font-size: 12px; font-weight: 500;
+  color: var(--cs-ink-2); background: var(--surface);
+  border: 1px solid var(--rule); border-radius: 999px;
+  padding: 4px 11px; min-height: 30px; cursor: pointer; white-space: nowrap;
+}
+.cases-chip:hover{ color: var(--ink); border-color: var(--cs-rule-2); }
+.cases-chip[aria-pressed="true"]{
+  background: var(--cs-accent-soft); color: var(--accent); border-color: var(--accent);
+}
+.cases-chip .cases-n{
+  font-family: var(--cs-mono); font-size: 10px; color: var(--cs-ink-3); margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.cases-count{
+  margin-left: auto; font-family: var(--cs-mono); font-size: 11px;
+  color: var(--cs-ink-2); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.cases-count.is-filtered{ color: var(--accent); }
+.cases-nav{ display: flex; gap: 6px; }
+.cases-nav button{
+  font-family: var(--cs-mono); font-size: 12px; color: var(--cs-ink-2);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 7px;
+  min-height: 30px; min-width: 34px; cursor: pointer;
+}
+.cases-nav button:hover:not([disabled]){ color: var(--accent); border-color: var(--accent); }
+.cases-nav button[disabled]{ opacity: .4; cursor: default; }
+
+/* ------------------------------------------------------------ structure --- */
+.cases-lib{ min-width: 0; }
+.cases-flow{ max-width: 812px; }
+.cases-chapter + .cases-chapter{ margin-top: 60px; }
+.cases-ch-head{ padding-bottom: 9px; border-bottom: 2px solid var(--ink); }
+.cases-ch-eyebrow{
+  font-family: var(--cs-mono); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--cs-ink-3); display: block; margin-bottom: 4px;
+}
+.cases-ch-title{
+  font-family: var(--cs-serif); font-size: 26px; font-weight: 600;
+  letter-spacing: -.015em; margin: 0; line-height: 1.15; text-wrap: balance;
+}
+.cases-week{ margin-top: 30px; scroll-margin-top: 90px; }
+.cases-wk-head{
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  padding-bottom: 7px; border-bottom: 1px solid var(--rule); margin-bottom: 20px;
+  font-family: var(--cs-sans);
+}
+.cases-wk-n{
+  font-family: var(--cs-mono); font-size: 12px; color: var(--paper);
+  background: var(--ink); padding: 2px 7px; border-radius: 2px;
+}
+.cases-wk-date{ font-size: 15px; font-weight: 600; color: var(--ink); }
+.cases-wk-note{ font-size: 12.5px; color: var(--cs-ink-2); }
+.cases-wk-count{
+  margin-left: auto; font-family: var(--cs-mono); font-size: 11px;
+  color: var(--cs-ink-3); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.cases-cards{ display: flex; flex-direction: column; gap: 20px; }
+
+/* ---------------------------------------------------------------- card --- */
+.cases-card{
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 5px;
+  padding: 22px 24px 20px; scroll-margin-top: 96px; position: relative;
+  overflow-wrap: break-word;
+  transition: opacity .18s ease, box-shadow .25s ease;
+}
+@media (max-width: 620px){ .cases-card{ padding: 18px 15px 16px; } }
+/* Filtering DIMS in place. It never sets display:none, never sorts, never
+   re-appends: a card's position is fixed for the life of the mount. */
+.cases-card.is-off{ opacity: .22; pointer-events: none; }
+.cases-card.is-hit{ box-shadow: 0 0 0 2px var(--accent); border-color: var(--accent); }
+.cases-c-head{ display: flex; align-items: flex-start; gap: 12px; margin-bottom: 9px; }
+.cases-tags{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1; }
+.cases-tag{
+  font-family: var(--cs-mono); font-size: 10px; letter-spacing: .05em;
+  color: var(--cs-ink-2); border: 1px solid var(--rule); border-radius: 2px;
+  padding: 1px 5px; white-space: nowrap;
+}
+.cases-tag.is-workflow{ color: var(--accent); border-color: var(--accent); background: var(--cs-accent-soft); }
+.cases-tag.is-breakthrough{ color: var(--cs-up); border-color: var(--cs-up); background: var(--cs-up-soft); }
+.cases-tag.is-debugging{ color: var(--cs-warn); border-color: var(--cs-warn); background: var(--cs-warn-soft); }
+.cases-permalink{
+  font-family: var(--cs-mono); font-size: 10.5px; color: var(--cs-ink-3);
+  text-decoration: none; border-bottom: 1px dotted var(--cs-rule-2); flex: 0 0 auto;
+}
+.cases-permalink:hover{ color: var(--accent); border-bottom-color: var(--accent); }
+@media (max-width: 620px){ .cases-permalink{ display: none; } }
+.cases-title{
+  font-family: var(--cs-serif); font-size: 21px; font-weight: 600; line-height: 1.24;
+  letter-spacing: -.012em; margin: 0 0 10px; max-width: 34em; text-wrap: balance;
+}
+.cases-lede{ font-size: 17px; line-height: 1.55; margin: 0 0 8px; max-width: 64ch; }
+.cases-def{
+  font-family: var(--cs-sans); font-size: 13px; line-height: 1.55;
+  color: var(--cs-ink-2); margin: 0 0 18px; max-width: 72ch;
+}
+.cases-def b{
+  font-family: var(--cs-mono); font-size: 9.5px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--cs-ink-3); font-weight: 400; margin-right: 8px;
+}
+
+/* ---- the three-tier story slot ------------------------------------------
+ * All three tiers live in the DOM at once, stacked in ONE grid cell, so the
+ * slot's height is the max of the three and NOTHING moves when the tier
+ * changes — the swap is a visibility flip, not a re-render. SPEC rule 1.
+ */
+.cases-story{ display: grid; max-width: 68ch; }
+.cases-tier{ grid-area: 1 / 1; visibility: hidden; }
+.cases-root[data-tier="1"] .cases-tier[data-t="1"],
+.cases-root[data-tier="2"] .cases-tier[data-t="2"],
+.cases-root[data-tier="3"] .cases-tier[data-t="3"]{ visibility: visible; }
+.cases-tier p{ margin: 0 0 14px; line-height: 1.68; }
+.cases-tier p:last-child{ margin-bottom: 0; }
+.cases-terms{ margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cases-terms .cases-lab{ min-width: 0; }
+
+/* glossary — only ever rendered inside the expert tier block, so hover
+   explainers exist at tier 3 and nowhere else. */
+.cases-g{
+  display: inline; border: 0; border-bottom: 1px dotted var(--accent); cursor: help;
+  background: none; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left;
+}
+.cases-terms .cases-g{
+  border: 1px dashed var(--cs-rule-2); border-radius: 2px; padding: 1px 6px;
+  font-family: var(--cs-sans); font-size: 11.5px; color: var(--cs-ink-2); display: inline-block;
+}
+.cases-terms .cases-g:hover{ border-color: var(--accent); color: var(--accent); }
+.cases-pop{
+  position: fixed; z-index: 90; max-width: min(330px, calc(100vw - 16px)); background: var(--surface);
+  border: 1px solid var(--cs-rule-2); border-radius: 4px; box-shadow: var(--cs-shadow);
+  padding: 11px 13px; font-family: var(--cs-sans); font-size: 13px; line-height: 1.5;
+  color: var(--ink);
+}
+.cases-pop .cases-pt{
+  font-family: var(--cs-mono); font-size: 11.5px; color: var(--accent);
+  display: block; margin-bottom: 2px;
+}
+.cases-pop .cases-pe{
+  font-style: italic; color: var(--cs-ink-2); font-family: var(--cs-serif);
+  font-size: 13.5px; display: block; margin-bottom: 5px;
+}
+
+/* ------------------------------------------------------------- blocks --- */
+.cases-block{ margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--rule); }
+.cases-block-lab{
+  font-family: var(--cs-mono); font-size: 9.5px; letter-spacing: .15em;
+  text-transform: uppercase; color: var(--cs-ink-3); display: block; margin-bottom: 8px;
+}
+.cases-paper-t{ font-size: 16.5px; font-weight: 500; line-height: 1.35; margin: 0 0 4px; max-width: 60ch; }
+.cases-paper-m{ font-family: var(--cs-sans); font-size: 12.5px; color: var(--cs-ink-2); margin: 0 0 9px; }
+.cases-paper-w{ font-size: 15.5px; line-height: 1.6; color: var(--cs-ink-2); margin: 0; max-width: 66ch; }
+.cases-nostory{ background: var(--cs-surface-2); border-radius: 3px; padding: 13px 15px; }
+.cases-nostory .cases-nlab{
+  font-family: var(--cs-sans); font-size: 13px; font-weight: 600; color: var(--ink);
+  margin: 0 0 5px; display: block;
+}
+.cases-nostory p{ margin: 0; font-size: 15px; line-height: 1.6; color: var(--cs-ink-2); max-width: 66ch; }
+.cases-block.is-promoted .cases-sym{ border-left-color: var(--cs-warn); }
+.cases-sym{
+  font-size: 16px; line-height: 1.6; margin: 0; padding-left: 14px;
+  border-left: 2px solid var(--cs-rule-2); max-width: 66ch;
+}
+.cases-root details{ margin-top: 12px; }
+.cases-root details > summary{
+  font-family: var(--cs-sans); font-size: 12.5px; font-weight: 500; color: var(--accent);
+  cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 2px 0;
+}
+.cases-root details > summary::-webkit-details-marker{ display: none; }
+.cases-root details > summary::before{ content: "+"; font-family: var(--cs-mono); font-size: 13px; line-height: 1; color: var(--cs-ink-3); }
+.cases-root details[open] > summary::before{ content: "\2212"; }
+.cases-dl{ margin: 11px 0 0; padding-left: 14px; border-left: 1px solid var(--rule); }
+.cases-dl dt{
+  font-family: var(--cs-mono); font-size: 9.5px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--cs-ink-3); margin-bottom: 3px;
+}
+.cases-dl dd{ margin: 0 0 13px; font-size: 15.5px; line-height: 1.62; color: var(--cs-ink-2); max-width: 66ch; }
+.cases-dl dd:last-child{ margin-bottom: 0; }
+.cases-steps{ margin: 11px 0 0; padding-left: 0; list-style: none; counter-reset: cs-s; }
+.cases-steps li{
+  counter-increment: cs-s; font-family: var(--cs-sans); font-size: 13.5px; line-height: 1.55;
+  color: var(--cs-ink-2); padding-left: 26px; position: relative; margin-bottom: 7px; max-width: 72ch;
+}
+.cases-steps li::before{
+  content: counter(cs-s); position: absolute; left: 0; top: 1px;
+  font-family: var(--cs-mono); font-size: 10px; color: var(--cs-ink-3);
+  border: 1px solid var(--rule); border-radius: 2px; width: 17px; height: 17px;
+  display: grid; place-items: center;
+}
+.cases-src{
+  font-family: var(--cs-mono); font-size: 10.5px; color: var(--cs-ink-3);
+  margin: 16px 0 0; padding-top: 11px; border-top: 1px dotted var(--rule); line-height: 1.65;
+}
+.cases-src .cases-vf{ color: var(--accent); }
+
+/* --------------------------------------------------- where this fits --- */
+.cases-fits{ margin-top: 18px; background: var(--cs-surface-2); border-radius: 3px; padding: 14px 15px 13px; }
+.cases-fits-wrap{ overflow-x: auto; margin: 2px 0 4px; }
+.cases-fits svg{ display: block; width: 100%; min-width: 520px; max-width: 680px; height: auto; }
+.cases-fits-lines{ margin: 10px 0 0; padding: 0; list-style: none; }
+.cases-fits-lines li{
+  font-family: var(--cs-sans); font-size: 13px; line-height: 1.55; color: var(--cs-ink-2);
+  padding-left: 14px; position: relative; margin-bottom: 6px; max-width: 76ch;
+}
+.cases-fits-lines li::before{
+  content: ""; position: absolute; left: 0; top: .62em; width: 6px; height: 1px; background: var(--cs-rule-2);
+}
+.cases-fits-lines li:last-child{ margin-bottom: 0; }
+.cases-fcap{ font-family: var(--cs-mono); font-size: 8.5px; letter-spacing: .14em; fill: var(--cs-ink-3); }
+.cases-fct{ font-family: var(--cs-sans); font-size: 11.5px; fill: var(--ink); }
+.cases-fcc{ font-family: var(--cs-sans); font-size: 12.5px; font-weight: 600; }
+.cases-fnone{ font-family: var(--cs-sans); font-size: 11px; fill: var(--cs-ink-3); font-style: italic; }
+.cases-fchip{ cursor: pointer; }
+.cases-fchip:hover rect{ fill: var(--surface); stroke-width: 1.7; }
+.cases-fchip:hover text{ fill: var(--accent); }
+.cases-fchip:focus{ outline: none; }
+.cases-fchip:focus-visible rect{ stroke: var(--accent); stroke-width: 2.2; }
+
+/* --------------------------------------------------------------- back --- */
+.cases-back{
+  position: fixed; left: 16px; bottom: 16px; z-index: 60; display: none;
+  align-items: center; gap: 8px; font-family: var(--cs-sans); font-size: 12.5px;
+  color: var(--ink); background: var(--surface); border: 1px solid var(--cs-rule-2);
+  border-radius: 4px; padding: 8px 12px; box-shadow: var(--cs-shadow); cursor: pointer;
+  max-width: 280px;
+}
+.cases-back.is-on{ display: flex; }
+.cases-back .cases-bt{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cases-back .cases-bx{ font-family: var(--cs-mono); color: var(--cs-ink-3); }
+
+@media (prefers-reduced-motion: reduce){
+  .cases-card{ transition: none; }
+}
+
+/* ======================================================= V2 (next.html) ===
+   The brand layer for V2 (BRAND.md): side gutters (V1 had none), the brand's
+   faces, cards with the brand's line and hard shadow, picked = gold, the way
+   back in flow at the top of the card you landed on (V1 floated it over the
+   content). Scoped to .v2-shell so V1's look is untouched. */
+.v2-shell .cases-root{
+  --cs-serif: var(--font-ui);
+  --cs-sans: var(--font-ui);
+  --cs-mono: var(--font-mono);
+  --cs-shadow: 3px 3px 0 var(--line);
+  max-width: 1180px; margin: 0 auto;
+  padding: 0 var(--s4) var(--s6);
+  font-size: 16px; line-height: 1.6;
+}
+.v2-shell .cases-hud{
+  margin-left: calc(-1 * var(--s4)); margin-right: calc(-1 * var(--s4));
+  padding: var(--s3) var(--s4) var(--s2);
+  border-bottom: var(--lw) solid var(--line);
+}
+.v2-shell .cases-lab{ font-family: var(--font-label); font-weight: 800; font-size: 12px; letter-spacing: .1em; color: var(--ink-2); }
+.v2-shell .cases-chip{
+  font-family: var(--font-ui); font-weight: 800; font-size: 13.5px; color: var(--ink);
+  background: var(--card); border: 0; border-radius: var(--r-pill);
+  box-shadow: inset 0 0 0 2px var(--line); min-height: 44px; padding: 4px 12px;
+}
+.v2-shell .cases-chip:hover{ background: var(--gold-hi); }
+.v2-shell .cases-chip[aria-pressed="true"]{
+  color: var(--gold-ink); background: var(--gold-grad);
+  box-shadow: var(--gold-bevel), inset 0 0 0 2px #141A24;
+}
+.v2-shell .cases-chip .cases-n{ color: var(--ink-2); font-size: 11px; }
+.v2-shell .cases-count{ font-family: var(--font-ui); font-weight: 700; font-size: 13px; color: var(--ink-2); }
+.v2-shell .cases-count.is-filtered{ color: var(--accent-text, var(--accent)); }
+.v2-shell .cases-nav button{
+  font-family: var(--font-ui); font-weight: 800; color: var(--ink);
+  background: var(--card); border: 0; border-radius: var(--r-btn);
+  box-shadow: inset 0 0 0 2px var(--line); min-height: 44px; min-width: 44px;
+}
+.v2-shell .cases-ch-head{ border-bottom: var(--lw) solid var(--line); }
+.v2-shell .cases-ch-eyebrow{ font-family: var(--font-label); font-weight: 800; font-size: 13px; letter-spacing: .1em; color: var(--ink-2); }
+.v2-shell .cases-ch-title{ font-family: var(--font-ui); font-weight: 900; font-size: clamp(24px, 3vw, 30px); letter-spacing: -.02em; }
+.v2-shell .cases-wk-head{ border-bottom: 2px dashed var(--line-soft); }
+.v2-shell .cases-wk-n{
+  font-family: var(--font-ui); font-weight: 900; font-size: 14px; color: var(--ink);
+  background: var(--fu-bg, var(--card)); border-radius: var(--r-small, 8px);
+  box-shadow: inset 0 0 0 2px var(--line); padding: 3px 9px;
+}
+.v2-shell .cases-wk-date{ font-family: var(--font-ui); font-weight: 800; font-size: 16px; }
+.v2-shell .cases-wk-count{ font-family: var(--font-ui); font-weight: 700; font-size: 13px; color: var(--ink-2); }
+.v2-shell .cases-card{
+  background: var(--card); border: 0; border-radius: var(--r-card);
+  box-shadow: inset 0 0 0 2.5px var(--line), 3px 3px 0 var(--line);
+}
+.v2-shell .cases-card.is-hit{ box-shadow: inset 0 0 0 2.5px var(--line), 0 0 0 3px var(--gold), 3px 3px 0 var(--line); }
+.v2-shell .cases-tag{ font-family: var(--font-mono); font-size: 11px; border-radius: 6px; padding: 1px 6px; color: var(--ink-2); border-color: var(--line-soft); }
+.v2-shell .cases-tag.is-week{ color: var(--ink); background: var(--fu-bg, var(--card)); border-color: var(--line); font-weight: 600; }
+.v2-shell .cases-title{ font-weight: 900; font-size: 21px; letter-spacing: -.015em; }
+.v2-shell .cases-lede{ font-size: 16.5px; }
+.v2-shell .cases-def b{ font-family: var(--font-label); font-weight: 800; font-size: 11.5px; color: var(--ink-2); }
+.v2-shell .cases-rail{ border-right: 2px dashed var(--line-soft); top: var(--s2); max-height: calc(100% - 16px); }
+.v2-shell .cases-rail-top{ font-family: var(--font-label); font-weight: 800; font-size: 12px; color: var(--ink-2); }
+.v2-shell .cases-rail-ch{ font-family: var(--font-ui); font-weight: 900; font-size: 14px; }
+.v2-shell .cases-rail-wk{ font-family: var(--font-ui); font-size: 13px; color: var(--ink-2); border-left: 2px solid var(--line-soft); }
+.v2-shell .cases-rail-wk b{ font-weight: 900; }
+.v2-shell .cases-back{
+  position: static; z-index: auto; display: none;
+  margin: 0 0 var(--s3); max-width: 100%; min-height: 44px;
+  font-family: var(--font-ui); font-weight: 800; font-size: 14px;
+  box-shadow: inset 0 0 0 2px var(--line), 2px 2px 0 var(--line);
+  border: 0; border-radius: var(--r-pill); background: var(--card); color: var(--ink);
+}
+.v2-shell .cases-back.is-on{ display: inline-flex; }
+.v2-shell .cases-back .cases-bx{ font-family: var(--font-ui); color: var(--ink); }
+@media (max-width: 620px){
+  .v2-shell .cases-card{ padding: 18px 16px 16px; }
+}
+/* every target 44px tall: the disclosure lines too */
+.v2-shell .cases-root details > summary{ min-height: 44px; }
+
+/* "where this fits" as a list of buttons (cases.js fitsList): on a phone the
+   diagram's chips are 17px tall, so below 720px the list stands in for it */
+.cases-fits-list{ display: none; }
+.v2-shell .cases-frow{ display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: 0 0 var(--s3); }
+.v2-shell .cases-frow:last-child{ margin-bottom: var(--s1); }
+.v2-shell .cases-frow-lab{
+  flex: 0 0 100%;
+  font-family: var(--font-label); font-weight: 800; font-size: 12px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.v2-shell .cases-frow-none{ font: italic 500 16px/1.3 var(--font-voice); color: var(--ink-2); }
+.v2-shell .cases-fbtn{
+  display: inline-flex; align-items: center; min-height: 44px; max-width: 100%;
+  padding: 6px 14px; text-align: left;
+  font: 800 14px/1.25 var(--font-ui); color: var(--ink);
+  background: var(--card); border: 0; border-radius: var(--r-pill); cursor: pointer;
+  box-shadow: inset 0 0 0 2px var(--line);
+}
+.v2-shell .cases-fbtn.is-up{ box-shadow: inset 0 0 0 2px var(--line), inset 5px 0 0 var(--cs-up); padding-left: 16px; }
+.v2-shell .cases-fbtn.is-down{ box-shadow: inset 0 0 0 2px var(--line), inset 5px 0 0 var(--accent); padding-left: 16px; }
+.v2-shell .cases-fbtn:hover{ background: var(--gold-hi); }
+.v2-shell .cases-fbtn:focus-visible{ outline: 3px dashed var(--focus); outline-offset: 2px; }
+
+/* below 720px the HUD scrolls away with the cards (sticky, it took a third of
+   a phone), and the list replaces the diagram */
+@media (max-width: 719.98px){
+  .v2-shell .cases-hud{ position: static; }
+  .v2-shell .cases-fits-list{ display: block; }
+  .v2-shell .cases-fits-wrap{ display: none; }
+}

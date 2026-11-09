@@ -1,7 +1,14 @@
 /* intuition/hook.js: joins the Intuition films to the app shell without touching
    the generated shell code. Adds a "Films" nav item and a floating "this week's
-   film" chip on #today and #week-NN. Fixed-position, so it never moves layout. */
+   film" chip on #today and #week-NN. Fixed-position, so it never moves layout.
+
+   V2 (window.TARA_SHELL === 'v2', next.html): no nav item and no floating chip
+   at all (V2 has five tabs, and nothing floats over content); films are reached
+   from Weeks and the Library and open in the shell's viewer. The map's node panel
+   keeps its "Watch the film" / "Hold it in 3D" doors (second block), opening them
+   in the viewer. Without the flag (V1, index.html) everything is as before. */
 (function () {
+  if (window.TARA_SHELL === 'v2') return;
   var FILMS = null, chip = null, closed = {};
   /* TARA week now (0-14, week 0 is the online start): the app's own answer when it
      has one, so the chip and the Now page agree; otherwise the same calendar rule. */
@@ -67,6 +74,7 @@
    Inside the map frame the node panel gets a "Watch the film · Hold it in 3D" row;
    on #map/node=<id> and #cases/<id> the floating chip offers the same two doors. */
 (function () {
+  var V2 = window.TARA_SHELL === 'v2';
   var IDX = null, BYLAB = {}, BYID = {}, chip = null, closed = {};
   function load() {
     return fetch('intuition/nodes/index.json').then(function (r) { return r.ok ? r.json() : { nodes: [] }; }).then(function (j) {
@@ -76,12 +84,26 @@
   function hrefs(n) {
     return { film: n.film ? 'intuition/' + n.film : null, obj: n.object ? 'objects/' + n.object : null };
   }
+  /* V1: the page itself (target=_top). V2: the shell's own URL + #view/<path>, so
+     even a plain navigation stays in the shell; a click is routed by the shell
+     (its viewer's capture-phase handler) or, failing that, by viewer() below. */
+  function door(rel) {
+    if (!V2) return new URL(rel, location.href).href;
+    var u = new URL(location.href); u.hash = 'view/' + rel; return u.href;
+  }
+  function viewer(a, rel) {
+    if (!V2) return;
+    a.addEventListener('click', function (e) {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      if (window.APP && APP.navigate) { e.preventDefault(); APP.navigate('view/' + rel); }
+    });
+  }
   function row(doc, n) {
     var h = hrefs(n), d = doc.createElement('div'); d.className = 'nf-doors';
     d.setAttribute('style', 'display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px');
     var css = 'display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:6px 12px;border-radius:999px;font:600 13px/1.2 system-ui,sans-serif;text-decoration:none;';
-    if (h.film) { var a = doc.createElement('a'); a.href = new URL(h.film, location.href).href; a.target = '_top'; a.textContent = '▶ Watch the film'; a.title = n.title || ''; a.setAttribute('style', css + 'background:#1c2140;color:#f7e3a0'); d.appendChild(a); }
-    if (h.obj) { var b = doc.createElement('a'); b.href = new URL(h.obj, location.href).href; b.target = '_top'; b.textContent = 'Hold it in 3D'; b.setAttribute('style', css + 'background:#f2ede4;color:#2b2a33;border:1px solid #d9cdb8'); d.appendChild(b); }
+    if (h.film) { var a = doc.createElement('a'); a.href = door(h.film); a.target = '_top'; a.textContent = '▶ Watch the film'; a.title = n.title || ''; a.setAttribute('style', css + 'background:#1c2140;color:#f7e3a0'); viewer(a, h.film); d.appendChild(a); }
+    if (h.obj) { var b = doc.createElement('a'); b.href = door(h.obj); b.target = '_top'; b.textContent = 'Hold it in 3D'; b.setAttribute('style', css + 'background:#f2ede4;color:#2b2a33;border:1px solid #d9cdb8'); viewer(b, h.obj); d.appendChild(b); }
     if (!h.film && !h.obj) { var w = doc.createElement('span'); w.textContent = 'Film and 3D twin: being written'; w.setAttribute('style', 'font:12.5px system-ui,sans-serif;opacity:.65'); d.appendChild(w); }
     return d;
   }
@@ -107,6 +129,7 @@
     return BYID[id] || null;
   }
   function paintChip() {
+    if (V2) return;                                   /* V2: nothing floats over content */
     var n = IDX && pickNode(), h = n && hrefs(n);
     if (!n || !h.film || closed[n.id]) { if (chip) chip.hidden = true; return; }
     var weekChip = document.getElementById('intuition-chip'); if (weekChip) weekChip.hidden = true;
